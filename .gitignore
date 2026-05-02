@@ -73,5 +73,6 @@ Testing/
 /android/
 
 # LLM specific ignores
-model/
-module/
+models/
+modules/
+*.gguf
