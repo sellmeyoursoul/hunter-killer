@@ -45,4 +45,11 @@ rule "test-coverage: {
     then = "respond to embedded prompts with the following formant:
       - <<Question: * >> This is where I am asking the agent a question for additional information or clarification when next the agent reviews the draft document.
       - <<Comment: * >> This is where I raise a comment about an area where further thought or work is required. This may be a reminder for myself or a call out for something the agent and I need to work on together."
-  } 
+  }
+
+# Logging & sensitive data (oLog / game output)
+
+- **PII & secrets:** Do not log personally identifiable information, credentials, API keys, session tokens, or secrets. If diagnostic output might include paths, redact usernames in home-directory paths when feasible.
+- **Volume:** Do not log huge payloads (full model prompts, entire perception grids, raw binary). Prefer short summaries, counts, or bounded excerpts; large debug blobs belong behind explicit dev-only flags and truncation.
+- **Line length:** Treat **`MAX_LOG_LINE_CHARS`** (default **2048** characters per logical line of user-visible message text) as a soft cap in implementation; truncate long strings with a suffix such as ` [truncated]` rather than writing megabytes to disk.
+- **Cursor hub:** For context-specific AI/tooling docs, see [`Project Docs/AI_INSTRUCTIONS.md`](../../Project%20Docs/AI_INSTRUCTIONS.md). Future enhancements are listed in [`Project Docs/ENHANCEMENT_BACKLOG.md`](../../Project%20Docs/ENHANCEMENT_BACKLOG.md).

@@ -16,21 +16,21 @@
 
 ## 2. Context for agents
 
-**Repo / project root:**  "C:\Users\mikea\Documents\Proj Git Repo\Dodge the creeps"
+**Repo / project root:**  `C:\Users\mikea\Documents\Git Proj\dodge-the-creeps` (authoritative for this repository clone; adjust `{projectHome}` if you open a copy elsewhere).
 **Engine & version:**  Godot 4.6.2
 **Main scenes / entry:**  Only one scene for this iteration
 **Key scripts (paths):**  
-    A. {projectHome}/dodge-the-creeps/main.gd
-    B. {projectHome}/dodge-the-creeps/Player.gd
-    C. {projectHome}/dodge-the-creeps/mob.gd
-    D. {projectHome}/dodge-the-creeps/hud.gd
+    A. `{projectHome}/main.gd`
+    B. `{projectHome}/player.gd`
+    C. `{projectHome}/mob.gd`
+    D. `{projectHome}/hud.gd`
 -  
 
 **Existing patterns to follow:** (naming, signals, groups, layers, file layout)  
     **formatting** 
-    A. We are following the instructions in the "{projectHome}\dodge-the-creeps\.cursor\rules\instructions.md" file. From there apply Godot script best practices for the GDScript and C++ best practices for the C++ code. 
-    B. We are going to comment every function we touch based on the documentation instructions in the "{projectHome}\dodge-the-creeps\.cursor\rules\instructions.md" file.
-    c. Where possible we will use the same root names for the objects in different files. If there is a need to differentate them add an _ and a short descriptor (for example mobVariable_cpp and mobVariable_gd)
+    A. We are following the instructions in the `{projectHome}\.cursor\rules\instructions.md` file. From there apply Godot script best practices for GDScript. **C++:** No native C++ gameplay modules are in scope for this phase; if C++ is added later for TL inference glue, apply standard C++ practices then.
+    B. We are going to comment every function we touch based on the documentation instructions in the `{projectHome}\.cursor\rules\instructions.md` file.
+    c. Where possible we will use the same root names for the objects in different files. If there is a need to differentiate them add an `_` and a short descriptor (for example mobVariable_cpp and mobVariable_gd)
 
 -  
 
@@ -40,25 +40,24 @@
 
 ### Must have
     A. TinyLlama (TL) must be able to interact with the application as a player at runtime.
-    B. TL must be able to use the keypad enter key to start the game.
-    C. TL must be able to singnal the use of the up arrow key to move up, the down arrow key to move down, the left arrow key to move left, and the right arrow key to move right.
-    This Action parse should be done by returning a single token for the key it choses to press to minimize load. The tokesn should map the following way
-        i.      Right arrow -> Godot Input map move_right
-        ii.     Left arrow -> Godot Input map move_left
-        iii.    Up arrow -> Godot Input map move_up
-        iv.     Down arrow -> Godot Input map move_down
-        v.      Keypad Enter -> Godot Input map start_game
+    B. TL must be able to start the game when given the token to do so.
+    C. TL must be able to simulate the use of the up arrow key to move up, the down arrow key to move down, the left arrow key to move left, and the right arrow key to move right.
+    This simulation should return a single token for the key it chooses to press to minimize load. The token should map the following way
+        i.      Right  -> Godot Input map move_right
+        ii.     Left  -> Godot Input map move_left
+        iii.    Up  -> Godot Input map move_up
+        iv.     Down  -> Godot Input map move_down
+        v.      Start -> Godot Input map start_game
     D. TL is instructed that the point of the game is to avoid collisions for as long as possible within the confines of the four available direction keys and the bounds of screen.
 
-<<Question: Injection vs simulation
-Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI driver” node that mimics _physics_process input?>>
+
 -  
 
 ### Should have
-    A. TL should be collision aware so that it is capable of avoiding the mobs.
-    <<AI Note: “Collision aware” vs architecture: Should-have A asks for mob avoidance; the architecture (section 4) only describes start → play until collision → end, with no mention of what observations TL receives (positions, velocities, distances, raster, etc.). Without that, “collision aware” is not implementable.>>
-    B. A way for human observer to end the game if TL proves to be too good at the game. It can't go on forever. This could be as simple as a Ctrl-C user input from the observer (me while running the debugger) or an "End" button outside of the play area. It should trigger a func_game_over()
-    C. A way for an external party to notify TL that it is time to start again. (See 4.A. for the start state where main.gd starts as if new.)
+    A. A clear perception contract policy for TL (see **§4.2 Perception contract**): each simulation tick the Godot/AI driver builds an occupancy **grid map** of the playfield plus **kinematics computed in Godot** (positions/cells and velocities). TL consumes that snapshot (not raw scene-tree access) to choose moves. *Future enhancement:* restrict awareness to a proximity radius around the player; low priority for a small playfield.
+    B. A way for human observer to end the game if TL proves to be too good at the game. It can't go on forever. This could be as simple as Ctrl+C while running under the debugger, or an **End** button outside the play area. It must end play by invoking **`Main.game_over()`** in [`main.gd`](../main.gd) (which stops timers/music and calls **`HUD.show_game_over()`** in [`hud.gd`](../hud.gd)). Do not introduce a separate `func_game_over` unless it wraps these existing calls.
+    C. A way for an external party to notify TL that it is time to start again (see **§4.4 Session lifecycle & restart**).
+
 -  
 
 ### Nice to have
@@ -71,44 +70,89 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 
 ### Architecture / data flow
 (Diagram in words: who calls whom, new nodes, autoloads, resources.)
-    A. The game is started using the existing scenes and resources and files. 
-    B. An external user clicks the "AI Player" button. The main.gd calls the TL interface and notifies TL that it is ready to begin.
-    B. TL passes in a value to simulate the keypad enter key being pressed and the game begins.
-    C. TL plays and dodges the mobs for as long as possible until a collision occurs.
-    D. show_game_over() notifies TL that the game is over.
+    A. The game is started using the existing scenes and resources and files.
+    B. An external user clicks the **AI Player** button. `main.gd` (orchestration) tells the **AI driver** that a session is armed; the driver notifies TL / loads the model as needed; TL emits the **start_game** token once.
+    C. **Observation sampling:** On every Godot physics frame (`_physics_process`), the AI driver samples the playfield and writes the latest **snapshot** into a **thread-safe slot** (overwrite with newest only). Sampling is cheap; no LLM call happens on the main thread.
+    D. **Inference cadence:** A **worker thread** runs TL inference on a timer **no faster than once per `INFERENCE_PERIOD_MS`** (start conservatively e.g. **250 ms**; tune by measurement). Each wake takes the **latest** snapshot only (drop intermediate frames). **Velocity** and positions in that snapshot are **computed in Godot** from scene state (RigidBody2D `linear_velocity`, player velocity from movement logic); TL does **not** infer velocity by differencing grids for this phase (that remains an optional fallback if kinematics are disabled).
+    E. **Action handling:** When inference completes, the driver posts the chosen action token to the main thread (Godot `call_deferred` or a thread-safe queue drained in `_process`). Until a new token arrives, **reuse the last applied action**. If inference times out or fails, apply **fallback: noop / stay stationary** (no simulated key held unless the game already applies continuous motion—match existing player controls).
+    F. TL plays until a mob–player collision triggers **`game_over()`** on `Main`; the stack calls **`HUD.show_game_over()`**. The AI driver transitions to **WAITING** (no automatic inference).
+    G. To run again, the **restart contract** (§4.4) runs: scene reset via existing **`new_game()`** path, then TL is armed again.
 
--  
+### 4.2 Perception contract — grid “vector map”
+
+These values are normative for implementers unless a later phase revises them.
+
+| Item | Specification |
+|------|----------------|
+| Playfield | Aligned to the visible game viewport (project **480×720** px in `project.godot`; if changed, derive grid from the same rectangle the player is clamped to). |
+| Cell size | Constant **`CELL_SIZE`** world pixels (default **24**): grid width **`ceil(480 / CELL_SIZE)`**, height **`ceil(720 / CELL_SIZE)`** → default **20×30**. |
+| Origin | Top-left of the playfield; **row index increases downward**, **column increases rightward** (matches Godot screen Y-down). |
+| Cell encoding (occupancy) | Integer **0–3**: **`0`** empty, **`1`** player only (hitbox center cell), **`2`** one or more mobs and no player center in that cell, **`3`** player center and ≥1 mob center map to the **same** cell (imminent/overlap—treat as highest priority). If multiple mobs share a cell, still encode **`2`**. Entity centers map to cells via `floor(world_pos / CELL_SIZE)` clamped to grid bounds. |
+| Bounds | Cells outside the playfield are not emitted; TL is instructed that the grid covers the whole playable window so **edges are walls**. |
+| Kinematics block (Godot-computed) | After the grid, snapshot includes **player**: cell row/col (redundant with grid but aids parsing) and velocity **`(vx, vy)`** in **pixels per second**. Then **each mob** (no hard cap needed for Dodge phase; optional sort by distance to player for stable prompts): cell row/col and **`(vx, vy)`**. Velocities come from gameplay state (`linear_velocity` / movement), not from TL differencing past frames. |
+
+**Serialization / tokens (minimize prompt size)**  
+- **Wire format (recommended):** One UTF-8 text blob per inference: header line `tick_ms score cols rows cell_size` then **`rows` lines** of **`cols` digits** `0–3` (no spaces). Then line `PLAYER r c vx vy`. Then one line per mob: `MOB r c vx vy`.  
+- **System prompt (once):** Static instructions (goal, legal tokens, encoding legend).  
+- **User message (each inference):** Only the blob above plus optional one-line **`LAST_ACTION`** echo for coherence.  
+- **Future:** binary or base64 grid for smaller wire size; out of scope unless TL glue supports it.
+
+### 4.3 Inference / threading parameters (normative defaults)
+
+| Parameter | Default | Notes |
+|-----------|---------|--------|
+| `INFERENCE_PERIOD_MS` | 250 | Increase if TL cannot keep up; decrease if actions feel sluggish. |
+| Worker model | Background thread + `call_deferred` action | Never block `_physics_process` on LLM. |
+| Snapshot selection | Latest-only | Intermediate frames discarded. |
+| Max output tokens | Tight cap (set in driver, e.g. single-token or few tokens) | Forces `UP`/`DOWN`/… style answers. |
+| Inference timeout | Start e.g. 2× period | On timeout → fallback noop; log in nice-to-have debug channel. |
+| Action sticky | Yes | New token replaces previous; until then repeat last **simulated** intent per driver policy. |
+
+**Blocking vs async (summary):** Blocking the main loop on TL **per frame** is rejected: it cannot match 60 FPS. Async worker + periodic inference + sticky action is the baseline; tune period, timeout, and max tokens empirically.
+
+### 4.4 Session lifecycle & restart
+
+**Parties:** For this phase the “external party” is **in-process**: human via HUD/debugger driving Godot.
+
+**States (AI driver):** `IDLE` → `ARMED` (session ready, waiting for TL start token) → `PLAYING` → `WAITING` (after game over).
+
+**Restart sequence:**  
+1. **`Main.new_game()`** runs (existing flow: reposition player, timers, HUD message).  
+2. Orchestration calls **`ai_driver.notify_session_reset()`** (name illustrative) with payload **`{ phase = "NEW_GAME", score = 0 }`** so TL clears stale history if any.  
+3. Human clicks **AI Player** again **or** a dedicated **Restart AI** control arms **`ARMED`**; TL issues **`start_game`** token exactly once per round.
+
+**Future extension:** A stdin/socket line protocol (e.g. `RESTART\n`) for headless harnesses—not required for this phase.
 
 ### Scene & file changes
 | Action | Path | Notes |
-|--------|------|--------|
-| create | `res://dodge-the-creeps/AI_int_lib/` | Dicrectory where all of the files needed for the TL interface will be created/reside <<Comment: We will need to go into this in more detail and I will need to understand more about our options to flesh it out. >> |
-| modify | `res://dodge-the-creeps/main.gd` | Add the TL interface and communication code. |
-| modify | `res://dodge-the-creeps/player.gd` | Add the TL interface and communication code specifically required for TL to control the player. NOTE: This should not disable the ability for a non-TL player to play the game as well |
-| modify | `res://dodge-the-creeps/hud.gd` | Add a button ("AI Player") to trigger TL to play the game. |
+|--------|------|-------|
+| create | `res://AI_int_lib/` | Directory for TL interface, snapshot builders, and threading glue. |
+| modify | `res://main.gd` | Hook `game_over()` / `new_game()` to AI driver; TL orchestration. |
+| modify | `res://player.gd` | TL control path without blocking human player input. |
+| modify | `res://hud.gd` | **AI Player** button; optional **End** button calling `Main.game_over()`. |
 
 ### Collision / input / signals (if relevant)
-- Layers/masks:  
-    Defined in mob.gd and player.gd
-- New signals:  
-    TL's enter, up, down, left, and right keys
-- Groups:  
+- Layers/masks: Defined in `mob.gd` and `player.gd`.
+- **Action surface:** TL output maps to Godot **InputMap** actions (`move_*`, `start_game`) via the driver (same token contract as §3 Must-have C).
+- **Observation surface:** Driver builds §4.2 snapshots on the main thread; worker reads snapshots (no direct scene queries from TL).
+- **Lifecycle hooks:** `Main.game_over()` notifies driver → `WAITING`; `Main.new_game()` notifies driver → reset session payload.
+- **Optional signals** (emit from driver if useful): `ai_session_state_changed(state_enum)`, `ai_inference_started`, `ai_inference_finished(action_token)`.
 
 ### Dependencies
-- Assets:  TinyLLama ({projectHome}/dodge-the-creeps/models/tinyllama-Q4_K_M.gguf) Quantized 4 bit, grouped with medium precision
-           Visual and audio files ({projectHome}/dodge-the-creeps/art)
-           <<Question: tell me more about "Prompt contract: System + user message shape; how game state is serialized to text (or if you avoid text and use structured logits — unlikely for TL)." I don't think we want to prompt TL every frame with text. Can we give a base set of instruction in text and then provide a way to represent what it's environment is programattically to minimize the number of tokens required for it to choose it's next moove?>>
-- Plugins:  
-- External APIs:  
+- Assets: TinyLlama (`{projectHome}/models/tinyllama-Q4_K_M.gguf`) quantized 4-bit; visual/audio under `{projectHome}/art`.
+- Prompt contract is resolved for this phase by **§4.2**: static system prompt + compact per-tick user blob (grid + kinematics). Structured logits bypassing text are **not** in scope unless the TL runtime supports them later.
+- Plugins: —
+- External APIs: —
 
 ---
 
 ## 5. Implementation plan (ordered)
 
-1.  Define and implement the TL interface
-2.  Define and implement the TL signal path for understanind objects in the game
-3.  Define and implement the TL instruction set for avoiding collisions
-4.  Define and implement the TL control messaging protocols
+1. Define **§4.2 perception contract** (constants + serializer) and implement snapshot builder on the main thread.
+2. Implement **AI driver**: thread/worker, `INFERENCE_PERIOD_MS`, timeout, sticky action, fallback noop.
+3. Implement **TL runtime interface** (load model, system prompt, parse single action token from completion).
+4. Wire **`main.gd` / `player.gd` / `hud.gd`**: AI Player button, session ARMED/PLAYING/WAITING, `game_over()` / `new_game()` hooks per **§4.4**.
+5. Tune **period, max tokens, timeout** using runtime measurement.
 
 ---
 
@@ -116,11 +160,10 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 
 (Checklist — agent treats unchecked items as incomplete.)
 
-- [ ]  Interface between Godot and TL is created
-- [ ]  Collision detection logic written so TL is aware of nearby objects in Godot. Actual collision impact effects are already defined in main.gd, this is a method for communicating it to TL.
-<<Question: What are some of our most performant options. For this pbase I don't explect a large number of objects to track, but in later phases there will be obsticals that obstruct line of sight and we should try and implement for the future if possible.>>
-- [ ]  TL should be prompted at the start to avoid collisions with other mobs and to only use the keys provided.  There is no explcity need for it to learn or alter behavior based on external variables at this point. <<Comment: future enhancement for behavioral preferences once we have things like objects to hide behind and mobs that will actively track the player. Out of scope for this phase. >>
-- [ ]  Key bindings or other mechanism for TL to interact with Godot are defined.
+- [ ] Interface between Godot and TL is created (driver + model load + thread boundary).
+- [ ] Snapshot pipeline implemented: occupancy grid per **§4.2** plus **Godot-computed** velocities for player and each mob; communicated to TL each inference tick (not full scene dumps). Collision **effects** remain as today in `main.gd`; this criterion is perception only.
+- [ ] TL receives a **static** system prompt at session start (avoid collisions, legal keys/tokens, encoding legend); per-tick user messages use the compact serialization from **§4.2**.
+- [ ] Key bindings or equivalent mechanism maps TL output tokens to Godot **InputMap** actions.
 
 ---
 
@@ -128,30 +171,33 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 
 | Risk | Mitigation |
 |------|------------|
-| TL performance. Will it be able to keep up with the godot engine? Will it be so effective that it isn't possible for it to lose?
-    <<Question: Threading / frame budget
-"**AI Comment**you still need a policy: blocking LLM call per frame, background thread + queued action, max tokens, timeout, fallback action."
-Help me understand the pros and cons of the options. I expect we are going to need to tune them. I think we probably want TL to run in a background thread, the the call per frame (or alternately frames per call), max tokens, timeouts, I don't know. We should start conservitively and then measure the performance to find the right values. For this phase the fallback action should be no action (stay stationary)>> | We will need to tuen LLM calls per frame, max tokens, and timeouts to ensure that the LLM can play competitavely however, not be ununable to lose |
-| TL tries to accomplish "winning" the game by devising a mechanism other than using the 5 available keys | Limit TL's ability to interact with the rest of the game to only the permitted 5 keys. Limit TL's awareness of the environment to the UI context of the game. |
-<<Question: What are some other risks I should be considering? >>
+| TL cannot keep up with Godot | **§4.3**: worker thread, bounded inference rate, latest snapshot, sticky actions; measure and adjust `INFERENCE_PERIOD_MS`, timeout, max tokens. |
+| TL never loses | Keep gameplay rules unchanged; tune timers/spawn if needed for fairness (design-only—still no mob AI changes per §1). |
+| TL “cheats” outside keys | Interface exposes only action tokens + §4.2 snapshots; no unrestricted scene access from TL code paths. |
+| Regression for human players | Dual-input path in `player.gd`; automated checks per **§8**. |
+
+**Residual risks to monitor:** Model nondeterminism / hallucinated tokens → validate parser maps unknown strings to noop; memory growth from queues → latest-only snapshot; threading bugs → stress-test start/stop/restart.
 
 ---
 
 ## 8. Testing / verification
 
 **Manual steps:**  
-    A. Run in debugger so a user can watch TL play
--  
+    A. Run in debugger so a user can watch TL play  
+    B. Verify **End** control calls `Main.game_over()` and driver enters WAITING  
+    C. Restart round via **§4.4** (new_game + arm TL + start token)
 
-**Automated (if any):**  
-    A. Automated tests to exercise every code path should be written and run as part of development, to ensure manual input from non-AI players has no gaps. 
+**Automated (minimal for this phase):**  
+    A. Unit-test **snapshot encoding**: known fake positions/velocities produce deterministic grid + kinematics lines.  
+    B. Integration smoke: toggle AI vs human input flag does not break existing movement tests if present; otherwise manual checklist above suffices until test harness exists.
 
 ---
 
 ## 9. Open questions
-    A. 
 
--  
+    A. Exact **`CELL_SIZE`** / grid dimensions if art or viewport aspect changes—derive mechanically from viewport settings.
+    B. Whether **`INFERENCE_PERIOD_MS`** should synchronize with `MobTimer` spawn cadence for fairness experiments.
+    C. Headless **stdin/socket restart** protocol for CI vs keeping everything HUD-driven.
 
 ---
 
@@ -160,3 +206,4 @@ Help me understand the pros and cons of the options. I expect we are going to ne
 | Date | Change |
 |------|--------|
 | 5/2/26 | Initial Plan doc written |
+| 5/4/26 | Closed perception/async gaps: §4.2 grid + kinematics contract, §4.3 threading defaults, §4.4 restart; aligned paths (`player.gd`, repo root), `game_over`/`show_game_over`, signals/deps; implementation plan reordered; §6–8 tightened; questions moved to §9. |
