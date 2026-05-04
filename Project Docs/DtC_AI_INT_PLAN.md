@@ -42,7 +42,12 @@
     A. TinyLlama (TL) must be able to interact with the application as a player at runtime.
     B. TL must be able to use the keypad enter key to start the game.
     C. TL must be able to singnal the use of the up arrow key to move up, the down arrow key to move down, the left arrow key to move left, and the right arrow key to move right.
-    This Action parse should be done by returning a single token for the key it choses to press to minimize load.
+    This Action parse should be done by returning a single token for the key it choses to press to minimize load. The tokesn should map the following way
+        i.      Right arrow -> Godot Input map move_right
+        ii.     Left arrow -> Godot Input map move_left
+        iii.    Up arrow -> Godot Input map move_up
+        iv.     Down arrow -> Godot Input map move_down
+        v.      Keypad Enter -> Godot Input map start_game
     D. TL is instructed that the point of the game is to avoid collisions for as long as possible within the confines of the four available direction keys and the bounds of screen.
 
 <<Question: Injection vs simulation
@@ -52,12 +57,12 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 ### Should have
     A. TL should be collision aware so that it is capable of avoiding the mobs.
     <<AI Note: “Collision aware” vs architecture: Should-have A asks for mob avoidance; the architecture (section 4) only describes start → play until collision → end, with no mention of what observations TL receives (positions, velocities, distances, raster, etc.). Without that, “collision aware” is not implementable.>>
-    B. A way for an external party to end the game if TL prooves to be too good at the game. It can't go on forever. This could be as simple as a Ctrl-C user input from the observer (me while running the debugger). It should trigger a func_game_over()
+    B. A way for human observer to end the game if TL proves to be too good at the game. It can't go on forever. This could be as simple as a Ctrl-C user input from the observer (me while running the debugger) or an "End" button outside of the play area. It should trigger a func_game_over()
     C. A way for an external party to notify TL that it is time to start again. (See 4.A. for the start state where main.gd starts as if new.)
 -  
 
 ### Nice to have
-    A. A way for TL to show its thinking.
+    A. A way for TL to show its thinking. For this phase let's put the output into the terminal window for realtime observation. 
 -  
 
 ---
@@ -77,7 +82,7 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 ### Scene & file changes
 | Action | Path | Notes |
 |--------|------|--------|
-| create | `res://dodge-the-creeps/AI_int_lib/` | Dicrectory where all of the files needed for the TL interface will be created/reside |
+| create | `res://dodge-the-creeps/AI_int_lib/` | Dicrectory where all of the files needed for the TL interface will be created/reside <<Comment: We will need to go into this in more detail and I will need to understand more about our options to flesh it out. >> |
 | modify | `res://dodge-the-creeps/main.gd` | Add the TL interface and communication code. |
 | modify | `res://dodge-the-creeps/player.gd` | Add the TL interface and communication code specifically required for TL to control the player. NOTE: This should not disable the ability for a non-TL player to play the game as well |
 | modify | `res://dodge-the-creeps/hud.gd` | Add a button ("AI Player") to trigger TL to play the game. |
@@ -112,8 +117,9 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
 (Checklist — agent treats unchecked items as incomplete.)
 
 - [ ]  Interface between Godot and TL is created
-- [ ]  Collisiion detection logic written so TL is awayre of the objects in Godot it is avoiding.
-- [ ]  TL play parameters defined to keep it focused on solving the problem present.
+- [ ]  Collision detection logic written so TL is aware of nearby objects in Godot. Actual collision impact effects are already defined in main.gd, this is a method for communicating it to TL.
+<<Question: What are some of our most performant options. For this pbase I don't explect a large number of objects to track, but in later phases there will be obsticals that obstruct line of sight and we should try and implement for the future if possible.>>
+- [ ]  TL should be prompted at the start to avoid collisions with other mobs and to only use the keys provided.  There is no explcity need for it to learn or alter behavior based on external variables at this point. <<Comment: future enhancement for behavioral preferences once we have things like objects to hide behind and mobs that will actively track the player. Out of scope for this phase. >>
 - [ ]  Key bindings or other mechanism for TL to interact with Godot are defined.
 
 ---
@@ -126,7 +132,8 @@ Feed Input.parse_input_event(...), call methods on Player, or a dedicated “AI 
     <<Question: Threading / frame budget
 "**AI Comment**you still need a policy: blocking LLM call per frame, background thread + queued action, max tokens, timeout, fallback action."
 Help me understand the pros and cons of the options. I expect we are going to need to tune them. I think we probably want TL to run in a background thread, the the call per frame (or alternately frames per call), max tokens, timeouts, I don't know. We should start conservitively and then measure the performance to find the right values. For this phase the fallback action should be no action (stay stationary)>> | We will need to tuen LLM calls per frame, max tokens, and timeouts to ensure that the LLM can play competitavely however, not be ununable to lose |
-|<<Question: What are some other risks I should be considering? >>
+| TL tries to accomplish "winning" the game by devising a mechanism other than using the 5 available keys | Limit TL's ability to interact with the rest of the game to only the permitted 5 keys. Limit TL's awareness of the environment to the UI context of the game. |
+<<Question: What are some other risks I should be considering? >>
 
 ---
 
@@ -137,7 +144,7 @@ Help me understand the pros and cons of the options. I expect we are going to ne
 -  
 
 **Automated (if any):**  
-    A. Automated tests to exersize every code path should be written and run as part of development.
+    A. Automated tests to exercise every code path should be written and run as part of development, to ensure manual input from non-AI players has no gaps. 
 
 ---
 
