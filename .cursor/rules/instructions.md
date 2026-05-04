@@ -16,7 +16,7 @@ rule "consistent-formatting"{
     - Add spaces around operators"
 }
 
-# Documenting/COmments
+# Documenting/Comments
 rule "function-documentation" {
     Description = "Ensure proper function documentation"
     when = "writing or modifying functions"
@@ -37,3 +37,12 @@ rule "test-coverage: {
       - Follow AAA pattern
       - Use meaningful test names"
 }
+
+# Project Docs interations
+  rule "Agentic assisted design: {
+    description = "iterative design document development"
+    when = "writing design docs for an agentic developer to implement"
+    then = "respond to embedded prompts with the following formant:
+      - <<Question: * >> This is where I am asking the agent a question for additional information or clarification when next the agent reviews the draft document.
+      - <<Comment: * >> This is where I raise a comment about an area where further thought or work is required. This may be a reminder for myself or a call out for something the agent and I need to work on together."
+  } 
