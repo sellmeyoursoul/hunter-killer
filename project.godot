@@ -15,6 +15,10 @@ run/main_scene="uid://cgb226hqsuv23"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
+[autoload]
+
+OLog="*res://oLog_lib/olog.gd"
+
 [display]
 
 window/size/viewport_width=480

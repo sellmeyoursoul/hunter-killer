@@ -19,8 +19,11 @@ func new_game():
 	$Music.play()
 
 # Called when the node enters the scene tree for the first time.
+# Emits an info-level startup line for `OLog` validation (`user://logs/…`). Requires
+# `LOG_LEVEL` of Info or Debug in `user://config.json` → `logging_params` (see Project Docs/LOGGING_PLAN.md).
 func _ready() -> void:
-	pass
+	var project_title: String = str(ProjectSettings.get_setting("application/config/name", "Game"))
+	OLog.info("%s is starting" % project_title, false, "Main")
 
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
