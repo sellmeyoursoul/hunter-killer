@@ -1,6 +1,6 @@
 extends Node
-## Autoload singleton **OLog**: file logging with bounded queue, mutex, and `user://config.json` settings.
-## Design: `Project Docs/LOGGING_PLAN.md`.
+## Autoload singleton **OLog**: file logging with bounded queue, mutex, and logging settings from **GameConfig** (`user://game_config.json` merged with defaults).
+## Design: `Project_Docs/Completed_Features/LOGGING_PLAN.md`.
 
 #region Constants (match LOGGING_PLAN / instructions)
 const MAX_LOG_LINE_CHARS := 2048
@@ -87,29 +87,20 @@ func debug(message: String, push_to_editor: bool = false, source_tag: String = "
 
 
 #region Config
-## Loads [code]user://config.json[/code] and applies [code]logging_params[/code] with plan fallbacks.
+## Loads merged [code]logging_params[/code] from the **GameConfig** autoload (never reads the JSON file directly).
 func _load_config() -> void:
-	var path := "user://config.json"
-	if not FileAccess.file_exists(path):
+	var gc: Node = get_node_or_null("/root/GameConfig")
+	if gc == null:
 		_apply_default_config()
-		_notify_missing_config("user://config.json is missing")
+		_notify_missing_config("GameConfig autoload missing — check project.godot Autoload order")
 		return
-	var txt := FileAccess.get_file_as_string(path)
-	var json := JSON.new()
-	var err := json.parse(txt)
-	if err != OK:
-		_apply_default_config()
-		_notify_missing_config("user://config.json JSON parse error (code %s)" % err)
-		return
-	var root = json.data
-	if typeof(root) != TYPE_DICTIONARY:
-		_apply_default_config()
-		_notify_missing_config("user://config.json root must be an object")
-		return
-	var lp = root.get("logging_params", null)
+	var diag: String = gc.get_config_load_diagnostic()
+	if diag != "":
+		_notify_missing_config(diag)
+	var lp: Variant = gc.get_logging_params()
 	if typeof(lp) != TYPE_DICTIONARY:
 		_apply_default_config()
-		_notify_missing_config("user://config.json has no logging_params object")
+		_notify_missing_config("GameConfig.get_logging_params() returned non-object")
 		return
 	_apply_logging_params(lp)
 
@@ -306,6 +297,9 @@ func _write_record(rec: Dictionary) -> void:
 
 
 func _ensure_logs_dir() -> void:
+	var mk_err := DirAccess.make_dir_recursive_absolute("user://logs")
+	if mk_err != OK and mk_err != ERR_ALREADY_EXISTS:
+		push_warning("OLog: user://logs mkdir failed: %s" % mk_err)
 	var d := DirAccess.open("user://")
 	if d == null:
 		push_warning("OLog: DirAccess.open user:// failed")
@@ -350,7 +344,8 @@ func _char_is_ascii_alnum(c: String) -> bool:
 
 
 func _open_log_file_append() -> void:
-	_log_file = FileAccess.open(_log_path, FileAccess.READ_WRITE)
+	var mode := FileAccess.READ_WRITE if FileAccess.file_exists(_log_path) else FileAccess.WRITE_READ
+	_log_file = FileAccess.open(_log_path, mode)
 	if _log_file == null:
 		push_error("OLog: cannot open log file at %s" % _log_path)
 		return
@@ -385,6 +380,7 @@ func _fraction_to_ms_four_digits(frac: float) -> int:
 
 
 ## Coerces a datetime field from [Time] dictionaries to int without narrowing warnings.
+@warning_ignore("narrowing_conversion")
 func _dict_int(d: Dictionary, key: StringName, fallback: int) -> int:
 	var v: Variant = d.get(key, fallback)
 	if typeof(v) == TYPE_FLOAT:

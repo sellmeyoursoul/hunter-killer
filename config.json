@@ -1,7 +1,0 @@
-{
-  "logging_params": {
-    "LOG_LEVEL": "Debug",
-    "MAX_LINES_PER_PROCESS": 128,
-    "MAX_QUEUE_ENTRIES": 1024
-  }
-}

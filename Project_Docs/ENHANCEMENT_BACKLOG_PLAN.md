@@ -17,6 +17,17 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
+## AI integration (Dodge the Creeps)
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| **Perception: cap mob list in prompt** | Medium | When many mobs are **near** the player, serializing **all** `MOB` lines grows tokens and noise. Consider a **max count** (keep **distance-sorted** nearest *K*, drop or aggregate the rest) with a deterministic rule in §4.2 — tune *K* and “near” radius after POC. |
+
+---
+
 ## Other
 
-*(None yet.)*
+| Item | Priority | Notes |
+|------|----------|--------|
+| Centralized doc path index | Low | Stable links across renames: historical **`Project Docs/`** vs **`Project_Docs/`**, completed vs active plans — reduces broken cross-references in comments and AGENTS rules |
+

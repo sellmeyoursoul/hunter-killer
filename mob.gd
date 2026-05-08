@@ -4,6 +4,7 @@ extends RigidBody2D
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
+	add_to_group(&"mobs")
 	var mob_animations: Array[StringName] = [&"fly", &"swim", &"walk"]
 	$AnimatedSprite2D.animation = mob_animations.pick_random()
 	$AnimatedSprite2D.play()

@@ -1,7 +1,7 @@
 extends Node
 
 @export var mob_scene: PackedScene
-var score
+var score: int = 0
 
 func game_over():
 	$ScoreTimer.stop()
@@ -10,7 +10,13 @@ func game_over():
 	$Music.stop()
 	$DeathSound.play()
 	
-func new_game():
+# Starts a fresh round: same end state as the first run of this function—no leftover
+# mobs or running mob/score timers from a prior round.
+func new_game() -> void:
+	$MobTimer.stop()
+	$ScoreTimer.stop()
+	$StartTimer.stop()
+	get_tree().call_group(&"mobs", &"queue_free")
 	score = 0
 	$Player.start($StartPosition.position)
 	$StartTimer.start()
@@ -20,7 +26,7 @@ func new_game():
 
 # Called when the node enters the scene tree for the first time.
 # Emits an info-level startup line for `OLog` validation (`user://logs/…`). Requires
-# `LOG_LEVEL` of Info or Debug in `user://config.json` → `logging_params` (see Project Docs/LOGGING_PLAN.md).
+# `LOG_LEVEL` of Info or Debug in `user://game_config.json` → `logging_params` (see Project_Docs/Completed_Features/LOGGING_PLAN.md).
 func _ready() -> void:
 	var project_title: String = str(ProjectSettings.get_setting("application/config/name", "Game"))
 	OLog.info("%s is starting" % project_title, false, "Main")
