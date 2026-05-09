@@ -73,6 +73,6 @@ Testing/
 /android/
 
 # LLM specific ignores
-models/
+inference/
 modules/
 *.gguf
