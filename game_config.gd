@@ -15,7 +15,7 @@ func _ready() -> void:
 
 ## Reloads config from disk (e.g. after the user fixes JSON). Called once at startup by default.
 func _reload_from_disk() -> void:
-  var result: Dictionary = _Merge.load_merge_from_path(CONFIG_PATH)
+  var result: Dictionary = _Merge.load_merged_config(CONFIG_PATH)
   _merged = result["merged"]
   _diagnostic = str(result.get("diagnostic", ""))
 

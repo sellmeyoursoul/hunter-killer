@@ -60,9 +60,42 @@ theme_override_font_sizes/font_size = 64
 shortcut = SubResource("Shortcut_8sq4i")
 text = "Start"
 
+[node name="AIPlayerButton" type="Button" parent="." unique_id=207169490]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -140.0
+offset_right = -20.0
+offset_bottom = -40.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_font_sizes/font_size = 32
+text = "AI Player"
+
+[node name="EndAIButton" type="Button" parent="." unique_id=207169491]
+visible = false
+anchors_preset = 9
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -140.0
+offset_right = -20.0
+offset_bottom = -40.0
+grow_horizontal = 0
+grow_vertical = 0
+theme_override_font_sizes/font_size = 32
+text = "End AI"
+
 [node name="MessageTimer" type="Timer" parent="." unique_id=1993260872]
 wait_time = 2.0
 one_shot = true
 
+[connection signal="pressed" from="AIPlayerButton" to="." method="_on_ai_player_button_pressed"]
+[connection signal="pressed" from="EndAIButton" to="." method="_on_end_ai_button_pressed"]
 [connection signal="pressed" from="StartButton" to="." method="_on_start_button_pressed"]
 [connection signal="timeout" from="MessageTimer" to="." method="_on_message_timer_timeout"]

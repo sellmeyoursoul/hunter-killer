@@ -23,7 +23,7 @@
 -  
 
 **Existing patterns to follow:** (naming, signals, groups, layers, file layout)  
--  
+- Follow [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md) and relevant files under [`.cursor/rules/focus/`](../.cursor/rules/focus/).  
 
 ---
 

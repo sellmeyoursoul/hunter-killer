@@ -18,6 +18,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 GameConfig="*res://game_config.gd"
+AiDriver="*res://AI_int_lib/ai_driver.gd"
 OLog="*res://oLog_lib/olog.gd"
 
 [display]

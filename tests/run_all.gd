@@ -5,6 +5,8 @@ const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 const _Tokens := preload("res://AI_int_lib/ai_action_tokens.gd")
 const _Wire := preload("res://AI_int_lib/perception_wire.gd")
 const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
+const _Driver := preload("res://AI_int_lib/ai_driver.gd")
+const _Bundle := preload("res://AI_int_lib/bundled_inference_launcher.gd")
 
 var _failures: int = 0
 
@@ -16,9 +18,12 @@ func _init() -> void:
 
 func _run_all() -> void:
   _test_merge_defaults_and_override()
+  _test_load_merged_config_repo_fallback()
   _test_tokens()
   _test_perception_snippet()
   _test_perception_sampling()
+  _test_ai_driver_helpers()
+  _test_bundled_inference_helpers()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -48,11 +53,30 @@ func _test_merge_defaults_and_override() -> void:
   _assert(m2["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 1, "missing file perception default")
 
 
+func _test_load_merged_config_repo_fallback() -> void:
+  var res: Dictionary = _Merge.load_merged_config("user://__does_not_exist_merged_test__.json")
+  var merged: Dictionary = res["merged"]
+  var ic: Dictionary = merged["inference_client"]
+  _assert(str(ic.get("INFERENCE_BASE_URL", "")).begins_with("http"), "merged config pulls inference URL from repo template")
+
+
 func _test_tokens() -> void:
   _assert(_Tokens.normalize_completion_token("  left\nnoise") == "LEFT", "token first line")
   _assert(_Tokens.normalize_completion_token("START") == "START", "START")
   _assert(_Tokens.normalize_completion_token("xyzzy") == "noop", "unknown → noop")
   _assert(_Tokens.normalize_completion_token("") == "noop", "empty → noop")
+  _assert(
+    _Tokens.normalize_completion_token_armed_handshake("Okay.\nSTART") == "START",
+    "handshake finds START on a later line"
+  )
+  _assert(
+    _Tokens.normalize_completion_token_armed_handshake("Sure, START") == "START",
+    "handshake word START in prose"
+  )
+  _assert(
+    _Tokens.normalize_completion_token_armed_handshake("RESTART") == "noop",
+    "RESTART does not match START word"
+  )
 
 
 func _test_perception_snippet() -> void:
@@ -90,3 +114,21 @@ func _test_perception_sampling() -> void:
   var he: Vector3 = s.get("half_extents", Vector3.ZERO)
   _assert(p.is_equal_approx(Vector2(200, 300)), "capsule sampling center")
   _assert(he.x > 5.0 and he.y > 15.0, "capsule half-extents plausible")
+
+
+func _test_ai_driver_helpers() -> void:
+  _assert(_Driver.should_apply_response_id(7, 7), "latest-enqueued response applies")
+  _assert(not _Driver.should_apply_response_id(6, 7), "older response is stale")
+  var d := _Driver.new()
+  _assert(d.get_armed_handshake_user() == "ARMED", "armed handshake literal")
+  _assert(_Driver.http_request_result_label(HTTPRequest.RESULT_CANT_CONNECT) == "CANT_CONNECT", "HTTP label")
+
+
+func _test_bundled_inference_helpers() -> void:
+  var ic_off := {"INFERENCE_AUTO_START_ENABLED": false}
+  _assert(not _Bundle.should_attempt_auto_start(ic_off, "http://127.0.0.1:8080"), "auto-start off")
+  var ic_on := {"INFERENCE_AUTO_START_ENABLED": true}
+  _assert(_Bundle.should_attempt_auto_start(ic_on, "http://127.0.0.1:8080"), "loopback + auto")
+  _assert(not _Bundle.should_attempt_auto_start(ic_on, "https://api.example.com"), "remote URL no spawn")
+  _assert(_Bundle.port_from_base_url("http://127.0.0.1:9090/") == 9090, "port parse")
+  _assert(_Bundle.port_from_base_url("http://127.0.0.1") == 8080, "default port when omitted")

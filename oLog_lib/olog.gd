@@ -355,10 +355,16 @@ func _open_log_file_append() -> void:
 
 
 #region Formatting
+## Whole-second UNIX timestamp for [method Time.get_datetime_dict_from_unix_time] (expects int, not float).
+@warning_ignore("narrowing_conversion")
+func _unix_seconds_floor(unix_time: float) -> int:
+	return int(floor(unix_time))
+
+
 ## Primary line: `[timestamp] | LEVEL | source_tag | message` with UTC from unix_time.
 func _format_primary_line(unix_time: float, level: int, source_tag: String, message: String) -> String:
 	# Godot returns UTC components for get_datetime_dict_from_unix_time (single-arg API).
-	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(unix_time) as Dictionary
+	var dt: Dictionary = Time.get_datetime_dict_from_unix_time(_unix_seconds_floor(unix_time)) as Dictionary
 	var frac: float = absf(fmod(unix_time, 1.0))
 	var ms_val: int = _fraction_to_ms_four_digits(frac)
 	var dd := "%02d" % _dict_int(dt, "day", 1)

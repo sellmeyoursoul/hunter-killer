@@ -106,7 +106,7 @@ Match **`INFERENCE_BASE_URL`** to `http://host:8080` (no path) and **`CHAT_COMPL
 
 - Hold config at runtime: **base URL**, **request timeout** (start ≥ inference timeout in §4.3), optional **`Authorization`** / API key header (placeholder for POC).
 - On each inference tick (worker thread): build an API request payload carrying **system prompt** (§4.1d) + **user** content (**§4.2 ARMED vs PLAYING**); **never** touch the scene tree off-thread. **HTTP dispatch (pattern C):** worker prepares payload; **main thread** performs **`HTTPRequest`**; response text is queued back with a **monotonic request ID** (see below).
-- **Request ordering:** Assign each outbound inference an incrementing **`request_id`**. When a response arrives, apply it **only if** `response_id == current_latest_id`; otherwise **discard** (a newer request was already sent or scheduled — avoids out-of-order sticky intent). On driver **shutdown** / scene exit, **clear pending queues** and cancel/ignore in-flight callbacks so no late responses mutate intent.
+- **Request ordering (latest enqueued wins):** Assign each outbound inference an incrementing **`request_id`** and track **`latest_enqueued_request_id`** at enqueue time. When a response arrives, apply it **only if** `response_id == latest_enqueued_request_id`; otherwise **discard** as stale. On driver **shutdown** / scene exit, **clear pending queues** and cancel/ignore in-flight callbacks so no late responses mutate intent.
 - Parse **only** the **action token** from the response (§4.2); on **HTTP error**, **timeout**, or **malformed body** → **noop** (ignored for intent; see architecture **E**).
 - **TLS:** Use HTTPS in any non-local deployment; tolerates plain HTTP only for **`localhost`** dev.
 
@@ -167,7 +167,16 @@ The **system** message is the **stable instruction layer** of every chat request
 ### 4.1b Control mode: Human vs AI (exclusive) — **virtual intent**
 
 - **No merged / competing input:** Either **`ControlMode.HUMAN`** or **`ControlMode.AI`**, never both driving `Player` at once.
-- **AI session priority (HUD Start suppressed):** While the driver is **`ARMED`** (waiting for **`START`**) or **`PLAYING`**, the usual human **Start** button path that calls **`Main.new_game()`** must be a **noop**—the armed AI session owns starting the round via TL’s **`START`** → **`new_game()`**. **Exception:** **End AI** (**`Main.game_over()`**) remains **always** wired and is **not** suppressed. After **`WAITING`** (post-**game_over**), the human may arm again (**AI Player**) or use normal **Start** if **`IDLE`** / human-only flow applies as implemented.
+- **AI session priority (HUD Start suppressed):** While the driver is **`ARMED`** (waiting for **`START`**) or **`PLAYING`**, the usual human **Start** button path that calls **`Main.new_game()`** must be a **noop**—the armed AI session owns starting the round via TL’s **`START`** → **`new_game()`**. **Exception:** **End AI** (**`Main.game_over()`**) remains **always** wired and is **not** suppressed.
+- **State transition clarification (normative):**
+  - `IDLE` + Human **Start** => normal human round start path (outside AI flow).
+  - `IDLE` + **AI Player** => `ARMED`.
+  - `ARMED` + Human **Start** => **noop** (remain `ARMED`).
+  - `ARMED` + TL `START` => call `Main.new_game()` once, then `PLAYING`.
+  - `PLAYING` + Human **Start** => **noop** (remain `PLAYING`).
+  - `PLAYING` + **End AI** or collision => `Main.game_over()` => `WAITING`.
+  - `WAITING` + **AI Player** => `ARMED` for next AI round.
+  - `WAITING` + Human **Start** => normal human round start path, and AI driver returns to `IDLE` (or equivalent non-armed human mode).
 - **No mid-game mode switch:** While **`PLAYING`** under **`ControlMode.AI`**, the human must **not** take over movement or flip back to human input until the round ends (**`Main.game_over()`** or **`new_game()`** path). The only human action during AI play is **early termination** via **§3 Should have B** (**`Main.game_over()`**). Switching to human control again happens only after that flow (e.g. from **game over** UI or an explicit future “human round” entry point), not as an instantaneous toggle mid-round.
 - **Human mode:** Read **`Input`** for `move_*` actions exactly as today (refactored into **`_physics_process`** — see **§4.1c**).
 - **AI mode:** The driver maintains **sticky** directional intent per §4 architecture **E** and writes it into **`Player`** fields (e.g. normalized `ai_move_dir: Vector2` or separate `ai_wants_*` booleans). **`player.gd`** applies **movement from virtual intent only** — **no** `Input.action_press` simulation for movement.
@@ -188,7 +197,7 @@ The **system** message is the **stable instruction layer** of every chat request
     B. **Human flow (normative):** Human presses **AI Player** → driver **`ARMED`** → TL returns **`START`** → **`Main.new_game()`** runs once → **`PLAYING`**. There is **no dual control** (see **§4.1b**). **Duplicate** **`START`** before transition to **`PLAYING`** / duplicate **AI Player** presses → **noop**. While **`ARMED`** or **`PLAYING`**, HUD **Start** is **noop** (§3.B, §4.1b); **End AI** still calls **`game_over()`**.
     C. **Observation sampling:** After **`PLAYING`** begins (i.e. **`Main.new_game()`** has run for this round), on each physics frame when **`physics_ticks % SNAPSHOT_PHYSICS_STRIDE == 0`**, the driver samples the playfield and overwrites the latest **§4.2 snapshot** in a **thread-safe slot**. **No** full §4.2 grid blob exists before that — there is no valid playfield context to serialize (§4.2 **User message by phase**).
     D. **Inference cadence:** A **worker thread** schedules **remote HTTP requests** on **`INFERENCE_PERIOD_MS`**. Each request uses **`system`** + **`user`** (§4.1d, §4.2): while **`ARMED`**, **`user`** is the minimal **arm handshake** string only; once **`PLAYING`**, **`user`** is the **latest** §4.2 blob (first such blob only after **`new_game()`**). **`Velocity`** and positions in that snapshot are **computed in Godot** from scene state (`RigidBody2D` `linear_velocity`, player velocity from movement logic); TL does **not** infer velocity by differencing grids for this phase (that remains an optional fallback if kinematics are disabled).
-    E. **Action handling:** When the HTTP response is parsed, the driver posts results to the main thread (`call_deferred` / queue) **with `request_id`**. **Discard** results whose id is stale (§4.1). **Valid** directional tokens update **virtual intent** (sticky until replaced). **`noop`**, errors, and timeouts **do not** change intent. **`START`** when **`ARMED`** triggers **`Main.new_game()`** once (then **`PLAYING`**). **Do not** leave phantom `Input` actions pressed in AI mode.
+    E. **Action handling:** When the HTTP response is parsed, the driver posts results to the main thread (`call_deferred` / queue) **with `request_id`**. **Discard** results whose id is not the **latest enqueued** id (§4.1). **Valid** directional tokens update **virtual intent** (sticky until replaced). **`noop`**, errors, and timeouts **do not** change intent. **`START`** when **`ARMED`** triggers **`Main.new_game()`** once (then **`PLAYING`**). **Do not** leave phantom `Input` actions pressed in AI mode.
     F. TL plays until a mob–player collision triggers **`game_over()`** on `Main`; the stack calls **`HUD.show_game_over()`**. The AI driver transitions to **WAITING** (no automatic inference).
     G. To run again, the **restart contract** (§4.4) runs: scene reset via existing **`new_game()`** path, then TL is armed again.
 
@@ -220,7 +229,7 @@ If **no** usable collision shape exists, fall back to **`body.global_position`**
   - **`tick_ms`:** `Time.get_ticks_msec()` (uint64 truncated/sent as decimal) at snapshot time — monotonic, comparable across frames.
   - **`score`:** **`Main.score`** in [`main.gd`](../main.gd) (typed **`int`**); HUD is updated via **`HUD.update_score(score)`** from **`Main`** (push contract).  
 - **User message by phase**
-  - **`ARMED`** (waiting for **`START`**): **`user`** is **not** the grid blob. Use a **short fixed handshake string** (e.g. a single line `ARMED` or “Session ready; output START to begin.”) so TL can respond with **`START`** without fabricating a playfield. **Inference may run** on the same **`INFERENCE_PERIOD_MS`** cadence as **`PLAYING`**.
+  - **`ARMED`** (waiting for **`START`**): **`user`** is **not** the grid blob. Use this exact fixed handshake string: **`ARMED`** (single line, uppercase) so TL can respond with **`START`** without fabricating a playfield. **Inference may run** on the same **`INFERENCE_PERIOD_MS`** cadence as **`PLAYING`**.
   - **`PLAYING`:** **`user`** is **only** the full §4.2 blob from the **latest** snapshot. The **first** such blob is produced **after** **`Main.new_game()`** has run for that round (Get Ready / initial state is valid context); **do not** send a full grid before that.
 - **TL action tokens (machine parsing):** The completion must normalize to **exactly one** of **`UP` `DOWN` `LEFT` `RIGHT` `START`** (ASCII upper case). The driver trims whitespace, takes the **first line** or **first token**, upper-cases, then maps via §3.C. **Any other string** → **`noop`** (**ignored**; does not update virtual intent).
 - **System prompt:** §4.1d (same **`system`** string every request; stateless serving).
@@ -364,8 +373,8 @@ Passed through to **`OLog`** after merge. Missing file or invalid JSON still yie
 
 - [ ] **`GameConfig`** autoload (**before** **`OLog`**) loads merged **`user://game_config.json`**; **`OLog`** uses **`get_logging_params()`** only.
 - [ ] **`AiDriver`** (or chosen name) **autoload** registered **after** **`GameConfig`**, **before** **`OLog`** in **`project.godot`**.
-- [ ] **Remote inference client** in Godot: HTTP pattern **C**, config via **`GameConfig.get_inference_client()`**; **no** local model load; **stateless** `messages` (`system` + `user` only); **`"stream": false`**; **monotonic `request_id`** with **stale response drop** and **queue purge on shutdown** (§4.1).
-- [ ] Snapshot pipeline: §4.2 grid + **`Vector3`** kinematics + **`_EXT`** half-extents; stride from **`GameConfig.get_perception_params()`**; **first** full §4.2 **`user`** blob only **after** **`Main.new_game()`**; **`ARMED`** uses handshake **`user`** only (§4.2).
+- [ ] **Remote inference client** in Godot: HTTP pattern **C**, config via **`GameConfig.get_inference_client()`**; **no** local model load; **stateless** `messages` (`system` + `user` only); **`"stream": false`**; **monotonic `request_id`** with **latest-enqueued-wins** stale response drop and **queue purge on shutdown** (§4.1).
+- [ ] Snapshot pipeline: §4.2 grid + **`Vector3`** kinematics + **`_EXT`** half-extents; stride from **`GameConfig.get_perception_params()`**; **first** full §4.2 **`user`** blob only **after** **`Main.new_game()`**; **`ARMED`** uses exact handshake **`user = "ARMED"`** only (§4.2).
 - [ ] **§4.1d** system prompt in code; **no** `LAST_ACTION` in **`user`** this phase.
 - [ ] **HUD Start** noop while **`ARMED`** or **`PLAYING`**; **End AI** still **`game_over()`** (§3.B, §4.1b).
 - [ ] TL static system prompt + correct **`user`** per phase (no full scene dumps).
@@ -397,7 +406,14 @@ Passed through to **`OLog`** after merge. Missing file or invalid JSON still yie
 
 Exit code **0** means tests passed. Tests cover **`GameConfigMerge`**, **action token normalization**, **perception header** formatting (**§4.2** helpers), and **`perception_sampling`** AABB helpers.
 
-**Automated (future AI driver):** snapshot grid integration from known fake positions/velocities; Human vs AI mode integration smoke.
+**Automated (future AI driver):**
+- Snapshot grid integration from known fake positions/velocities.
+- Human vs AI mode integration smoke.
+- **HUD Start suppression test:** when driver is `ARMED` or `PLAYING`, human Start press is noop and does not call `Main.new_game()`.
+- **End AI path test:** while `PLAYING`, End AI still calls `Main.game_over()` and transitions to `WAITING`.
+- **Handshake contract test:** in `ARMED`, outbound `user` message is exactly `ARMED`; no grid blob is sent.
+- **First-blob timing test:** first full §4.2 blob is not sent until after `Main.new_game()` for that round.
+- **Latest-enqueued request ordering test:** if responses arrive out of order, only response with `request_id == latest_enqueued_request_id` is applied.
 
 **Manual steps:**  
     A. Run in debugger so a user can watch TL play  
@@ -419,7 +435,7 @@ Exit code **0** means tests passed. Tests cover **`GameConfigMerge`**, **action 
 
 | Date | Change |
 |------|--------|
-| 5/8/26 | **`AI_int_lib/system_prompt.txt`** default **§4.1d** prompt. §3.B / §4.1b: AI session priority — HUD **Start** noop while **ARMED/PLAYING**; **End AI** retained. §4.2: first full blob after **`new_game()`**; **ARMED** handshake **`user`** only; **no** `LAST_ACTION` (future `<<Comment>>`). **§4.1d** explainer + **`AiDriver`** autoload + §6. |
+| 5/8/26 | **`AI_int_lib/system_prompt.txt`** default **§4.1d** prompt. §3.B / §4.1b: AI session priority — HUD **Start** noop while **ARMED/PLAYING**; **End AI** retained; explicit state-transition table. §4.2: first full blob after **`new_game()`**; exact handshake **`user = "ARMED"`**; **no** `LAST_ACTION` (future `<<Comment>>`). §4.1 request ordering clarified as **latest enqueued wins**; §8 future tests expanded. **§4.1d** explainer + **`AiDriver`** autoload + §6. |
 | 5/2/26 | Initial Plan doc written |
 | 5/4/26 | Closed perception/async gaps: §4.2 grid + kinematics contract, §4.3 threading defaults, §4.4 restart; aligned paths (`player.gd`, repo root), `game_over`/`show_game_over`, signals/deps; implementation plan reordered; §6–8 tightened; questions moved to §9. |
 | 5/6/26 | **Remote inference locked in** (§4.1); **virtual intent** for AI movement + **`START`** via `main`/driver; **mandatory `player.gd` → `_physics_process`**; dependencies + acceptance criteria updated; dev trace = Godot Output first pass. |

@@ -1,18 +1,25 @@
 {
   "logging_params": {
     "LOG_LEVEL": "Debug",
-    "MAX_LINES_PER_PROCESS": 128,
-    "MAX_QUEUE_ENTRIES": 1024
+    "MAX_LINES_PER_PROCESS": 256,
+    "MAX_QUEUE_ENTRIES": 2048
   },
   "inference_client": {
     "INFERENCE_BASE_URL": "http://127.0.0.1:8080",
     "CHAT_COMPLETIONS_PATH": "/v1/chat/completions",
     "MODEL_ID": "tinyllama",
     "API_KEY": "",
-    "HTTP_TIMEOUT_MS": 500,
+    "HTTP_TIMEOUT_MS": 8000,
     "INFERENCE_PERIOD_MS": 250,
     "MAX_OUTPUT_TOKENS": 8,
-    "TEMPERATURE": 0.0
+    "TEMPERATURE": 0.0,
+    "INFERENCE_AUTO_START_ENABLED": true,
+    "BUNDLE_ROOT_OVERRIDE": "",
+    "BUNDLED_SERVER_EXE": "bin/llama-server.exe",
+    "BUNDLED_MODEL_GGUF": "tinyllama-Q4_K_M.gguf",
+    "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
+    "INFERENCE_PROBE_PATH": "/health",
+    "INFERENCE_START_TIMEOUT_MS": 300000
   },
   "perception": {
     "SNAPSHOT_PHYSICS_STRIDE": 1

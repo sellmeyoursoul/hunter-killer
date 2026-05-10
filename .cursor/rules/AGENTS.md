@@ -7,6 +7,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 ## Behavioral instructions
 
 - **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. Project Documents = `./Project_Docs/*.md` (excluding `./Project_Docs/Completed_Features/*`) plus files in `./.cursor/rules/*`.
+- **Feature-doc scope guard:** When implementing a specific feature, treat only the explicitly referenced feature plan (plus `./.cursor/rules/*`) as authoritative. Any other files in `./Project_Docs/*.md` that are not explicitly referenced by the active feature request should be treated as **feature drafts** and must not override the active feature requirements.
 - **Refactoring:** Do not rename or move files once they have been created. Renaming files will break the contextual rule application and is strictly prohibited.
 
 ## Formatting

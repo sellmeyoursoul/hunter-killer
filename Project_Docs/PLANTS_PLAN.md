@@ -29,8 +29,8 @@
 
 **Existing patterns to follow:** (naming, signals, groups, layers, file layout)  
     **formatting** 
-    A. We are following the instructions in the `{projectHome}\.cursor\rules\instructions.md` file. From there apply Godot script best practices for GDScript. **C++:** No native C++ gameplay modules are in scope for this phase; if C++ is added later for TL inference glue, apply standard C++ practices then.
-    B. We are going to comment every function we touch based on the documentation instructions in the `{projectHome}\.cursor\rules\instructions.md` file.
+    A. We are following [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md) (and referenced **focus** files under [`.cursor/rules/focus/`](../.cursor/rules/focus/)). From there apply Godot script best practices for GDScript. **C++:** No native C++ gameplay modules are in scope for this phase; if C++ is added later for TL inference glue, apply standard C++ practices then.
+    B. We are going to comment every function we touch per **AGENTS.md** documenting rules.
     c. Where possible we will use the same root names for the objects in different files. If there is a need to differentiate them add an `_` and a short descriptor (for example mobVariable_cpp and mobVariable_gd) 
 -  
 

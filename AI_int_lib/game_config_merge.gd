@@ -26,10 +26,17 @@ static func default_inference_client() -> Dictionary:
     "CHAT_COMPLETIONS_PATH": "/v1/chat/completions",
     "MODEL_ID": "",
     "API_KEY": "",
-    "HTTP_TIMEOUT_MS": 500,
+    "HTTP_TIMEOUT_MS": 8000,
     "INFERENCE_PERIOD_MS": 250,
     "MAX_OUTPUT_TOKENS": 8,
     "TEMPERATURE": 0.0,
+    "INFERENCE_AUTO_START_ENABLED": false,
+    "BUNDLE_ROOT_OVERRIDE": "",
+    "BUNDLED_SERVER_EXE": "",
+    "BUNDLED_MODEL_GGUF": "",
+    "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
+    "INFERENCE_PROBE_PATH": "/health",
+    "INFERENCE_START_TIMEOUT_MS": 300000,
   }
 
 
@@ -63,6 +70,42 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
   if file_root.has("perception"):
     r["perception"] = _merge_dict_shallow(r["perception"], file_root["perception"])
   return r
+
+
+## Loads [code]user://game_config.json[/code] merged over [code]res://game_config.json[/code] (repo template) over hardcoded defaults.
+## Use this for runtime so a missing user file still picks up dev inference defaults from the repo template.
+## Params:
+## - user_path: Optional override (mainly for tests).
+## Returns:
+## - [code]{ "merged": Dictionary, "diagnostic": String }[/code]; [param diagnostic] empty when user file loaded OK.
+static func load_merged_config(user_path: String = "user://game_config.json") -> Dictionary:
+  const repo_template := "res://game_config.json"
+  var merged: Dictionary = default_root()
+  if FileAccess.file_exists(repo_template):
+    var rtxt := FileAccess.get_file_as_string(repo_template)
+    var rjson := JSON.new()
+    if rjson.parse(rtxt) == OK and typeof(rjson.data) == TYPE_DICTIONARY:
+      merged = merge_root(merged, rjson.data)
+  if not FileAccess.file_exists(user_path):
+    return {
+      "merged": merged,
+      "diagnostic": "%s is missing — merged [code]res://game_config.json[/code] template when present." % user_path,
+    }
+  var utxt := FileAccess.get_file_as_string(user_path)
+  var ujson := JSON.new()
+  var err := ujson.parse(utxt)
+  if err != OK:
+    return {
+      "merged": merged,
+      "diagnostic": "%s JSON parse error (code %s) — kept merged defaults + repo template." % [user_path, err],
+    }
+  if typeof(ujson.data) != TYPE_DICTIONARY:
+    return {
+      "merged": merged,
+      "diagnostic": "%s root must be a JSON object — kept merged defaults + repo template." % user_path,
+    }
+  merged = merge_root(merged, ujson.data)
+  return {"merged": merged, "diagnostic": ""}
 
 
 ## Loads JSON from [param path], merges into defaults, returns [code]{ "merged": Dictionary, "diagnostic": String }[/code].
