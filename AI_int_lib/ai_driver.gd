@@ -44,6 +44,12 @@ var _last_inference_url: String = ""
 
 var _bundled_launcher: Node
 
+## True while [method arm_ai_session] is in progress (awaiting bundled inference). Prevents overlapping arms.
+var _arm_session_in_progress: bool = false
+
+## Monotonic id for each [method arm_ai_session] entry; helps detect overlapping arms in NDJSON (debug).
+static var _debug_arm_invoke_seq: int = 0
+
 
 func _ready() -> void:
   _system_prompt = FileAccess.get_file_as_string(_SYSTEM_PROMPT_PATH).strip_edges()
@@ -156,6 +162,20 @@ func get_armed_handshake_user() -> String:
 ## Usage:
 ## - Call when HUD "AI Player" is pressed (await from an async caller — this function uses [code]await[/code] internally).
 func arm_ai_session() -> bool:
+  if _arm_session_in_progress:
+    #region agent log
+    _AgentNdjson.write({
+      "runId": "ai-arm",
+      "hypothesisId": "H4",
+      "location": "ai_driver.gd:arm_rejected_reentrant",
+      "message": "arm_ai_session_skipped_already_in_progress",
+      "data": {},
+    })
+    #endregion
+    return false
+  _arm_session_in_progress = true
+  _debug_arm_invoke_seq += 1
+  var invoke_id := _debug_arm_invoke_seq
   _refresh_inference_client_config()
   var base_url := str(_inference_client.get("INFERENCE_BASE_URL", "")).strip_edges()
   var model_id := str(_inference_client.get("MODEL_ID", "")).strip_edges()
@@ -165,7 +185,11 @@ func arm_ai_session() -> bool:
     "hypothesisId": "H4",
     "location": "ai_driver.gd:arm_enter",
     "message": "arm_ai_session_entry",
-    "data": {"base_url_nonempty": not base_url.is_empty(), "model_id_nonempty": not model_id.is_empty()},
+    "data": {
+      "invoke_id": invoke_id,
+      "base_url_nonempty": not base_url.is_empty(),
+      "model_id_nonempty": not model_id.is_empty(),
+    },
   })
   #endregion
   if base_url.is_empty() or model_id.is_empty():
@@ -175,6 +199,7 @@ func arm_ai_session() -> bool:
       true,
       "AiDriver"
     )
+    _arm_session_in_progress = false
     return false
   var inf_ok: bool = await _bundled_launcher.ensure_inference_endpoint_ready(_inference_client)
   #region agent log
@@ -183,10 +208,20 @@ func arm_ai_session() -> bool:
     "hypothesisId": "H1,H3,H4",
     "location": "ai_driver.gd:after_ensure",
     "message": "ensure_inference_endpoint_ready_returned",
-    "data": {"ok": inf_ok},
+    "data": {"invoke_id": invoke_id, "ok": inf_ok},
   })
   #endregion
   if not inf_ok:
+    #region agent log
+    _AgentNdjson.write({
+      "runId": "ai-arm",
+      "hypothesisId": "H1,H3,H5",
+      "location": "ai_driver.gd:arm_failed_inference",
+      "message": "arm_ai_session_inference_not_ready",
+      "data": {"invoke_id": invoke_id},
+    })
+    #endregion
+    _arm_session_in_progress = false
     return false
   _set_state(State.ARMED)
   if _player != null and _player.has_method("set_control_mode"):
@@ -202,9 +237,10 @@ func arm_ai_session() -> bool:
     "hypothesisId": "H4",
     "location": "ai_driver.gd:arm_success",
     "message": "arm_ai_session_complete",
-    "data": {"emit_state_enum": get_state()},
+    "data": {"invoke_id": invoke_id, "emit_state_enum": get_state()},
   })
   #endregion
+  _arm_session_in_progress = false
   return true
 
 

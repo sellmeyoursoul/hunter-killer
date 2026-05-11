@@ -37,6 +37,7 @@ static func default_inference_client() -> Dictionary:
     "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
     "INFERENCE_PROBE_PATH": "/health",
     "INFERENCE_START_TIMEOUT_MS": 300000,
+    "BUNDLED_SERVER_ATTACH_CONSOLE": true,
   }
 
 
