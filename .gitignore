@@ -73,6 +73,6 @@ Testing/
 /android/
 
 # LLM specific ignores
-inference/
+inference/windows/bin/
 modules/
 *.gguf
