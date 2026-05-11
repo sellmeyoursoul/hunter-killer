@@ -63,6 +63,8 @@ func _test_load_merged_config_repo_fallback() -> void:
 func _test_tokens() -> void:
   _assert(_Tokens.normalize_completion_token("  left\nnoise") == "LEFT", "token first line")
   _assert(_Tokens.normalize_completion_token("START") == "START", "START")
+  _assert(_Tokens.normalize_completion_token("I'll go UP now") == "UP", "prose contains UP word")
+  _assert(_Tokens.normalize_completion_token("<|im_end|> LEFT") == "LEFT", "strip span then direction")
   _assert(_Tokens.normalize_completion_token("xyzzy") == "noop", "unknown → noop")
   _assert(_Tokens.normalize_completion_token("") == "noop", "empty → noop")
   _assert(
@@ -76,6 +78,14 @@ func _test_tokens() -> void:
   _assert(
     _Tokens.normalize_completion_token_armed_handshake("RESTART") == "noop",
     "RESTART does not match START word"
+  )
+  _assert(
+    _Tokens.normalize_completion_token_armed_handshake("START <|im_end|>") == "START",
+    "strip trailing chat marker after START"
+  )
+  _assert(
+    _Tokens.normalize_completion_token_armed_handshake("<|im_end|>") == "noop",
+    "chat markers alone → noop"
   )
 
 
@@ -122,6 +132,40 @@ func _test_ai_driver_helpers() -> void:
   var d := _Driver.new()
   _assert(d.get_armed_handshake_user() == "ARMED", "armed handshake literal")
   _assert(_Driver.http_request_result_label(HTTPRequest.RESULT_CANT_CONNECT) == "CANT_CONNECT", "HTTP label")
+  _assert(
+    _Driver.extract_openai_chat_choice_text({
+      "choices": [{"message": {"content": [{"type": "text", "text": "LEFT"}]}}],
+    })
+    == "LEFT",
+    "OpenAI array-shaped message.content",
+  )
+  _assert(
+    _Driver.extract_openai_chat_choice_text({"choices": [{"message": {"content": "RIGHT"}, "text": ""}]})
+    == "RIGHT",
+    "string message.content",
+  )
+  _assert(
+    _Driver.extract_openai_chat_choice_text({"choices": [{"text": "legacy DOWN"}]}) == "legacy DOWN",
+    "legacy choices[0].text fallback",
+  )
+  _assert(
+    _Driver.extract_openai_chat_choice_text({
+      "choices": [{"message": {"content": [{"type": "output_text", "text": "UP"}]}}],
+    })
+    == "UP",
+    "OpenAI output_text content block (llama-server)",
+  )
+  _assert(
+    _Driver.extract_openai_completion_choice_text({"choices": [{"text": "LEFT"}]}) == "LEFT",
+    "OpenAI /v1/completions choices[0].text",
+  )
+  _assert(
+    _Driver.extract_openai_completion_choice_text({"choices": [{}]}) == "",
+    "empty completion text",
+  )
+  _assert(_Driver.gbnf_for_completion_state_enum(1).contains("START"), "gbnf ARMED")
+  _assert(_Driver.gbnf_for_completion_state_enum(2).contains("RIGHT"), "gbnf PLAYING")
+  _assert(_Driver.gbnf_for_completion_state_enum(0).is_empty(), "gbnf IDLE empty")
 
 
 func _test_bundled_inference_helpers() -> void:

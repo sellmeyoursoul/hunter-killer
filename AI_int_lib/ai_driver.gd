@@ -20,10 +20,69 @@ const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
+## Separates system rules from handshake / observation in one [code]/v1/completions[/code] prompt (no chat roles).
+const _COMPLETION_PROMPT_SEPARATOR := "\n\n---\n\n"
+## Appended after the user blob so the last tokens prime a single-token reply (completions continue from context end).
+const _COMPLETION_OUTPUT_TRAILER_ARMED := (
+  "\n\n=== YOUR_TURN ===\n"
+  + "The line above is the handshake payload only.\n"
+  + "Reply with exactly one token: START in ALL CAPS. No other characters or words.\n"
+)
+const _COMPLETION_OUTPUT_TRAILER_PLAYING := (
+  "\n\n=== YOUR_TURN ===\n"
+  + "The block above is the observation snapshot for this tick.\n"
+  + "Reply with exactly one movement token: UP, DOWN, LEFT, or RIGHT in ALL CAPS. No other characters or words.\n"
+)
+
+
+## GBNF passed to llama.cpp [code]/v1/completions[/code] as [code]grammar[/code] so tiny models cannot drift into newlines or prompt echo.
+## Params:
+## - state_enum: [enum State] encoded as int ([code]1[/code] ARMED, [code]2[/code] PLAYING).
+## Returns:
+## - Grammar string, or empty when grammar does not apply.
+static func gbnf_for_completion_state_enum(state_enum: int) -> String:
+  match state_enum:
+    1:
+      return "root ::= \"START\"\n"
+    2:
+      return "root ::= \"UP\" | \"DOWN\" | \"LEFT\" | \"RIGHT\"\n"
+    _:
+      return ""
 const _LauncherScript := preload("res://AI_int_lib/bundled_inference_launcher.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 ## Max characters of model [code]content[/code] included in [method OLog.debug] lines (avoid huge perception blobs in logs).
 const _TL_DEBUG_CONTENT_MAX_CHARS: int = 200
+
+#region agent log
+const _DBG46_SESSION := "46c25f"
+const _DBG46_REL := "res://debug-46c25f.log"
+
+
+## Appends one NDJSON line for debug session 46c25f (no API keys, no full blobs).
+static func _dbg46_emit(run_id: String, hypothesis_id: String, location: String, message: String, data: Dictionary) -> void:
+  var payload := {
+    "sessionId": _DBG46_SESSION,
+    "runId": run_id,
+    "hypothesisId": hypothesis_id,
+    "location": location,
+    "message": message,
+    "data": data,
+    "timestamp": int(Time.get_unix_time_from_system() * 1000.0),
+  }
+  var line := JSON.stringify(payload)
+  var abs_path := ProjectSettings.globalize_path(_DBG46_REL).replace("\\", "/")
+  var f: FileAccess = null
+  if FileAccess.file_exists(abs_path):
+    f = FileAccess.open(abs_path, FileAccess.READ_WRITE)
+    if f != null:
+      f.seek_end()
+  else:
+    f = FileAccess.open(abs_path, FileAccess.WRITE)
+  if f == null:
+    return
+  f.store_line(line)
+  f.close()
+#endregion
 
 var _state: State = State.IDLE
 var _main: Node = null
@@ -41,6 +100,15 @@ var _latest_enqueued_request_id: int = -1
 var _inflight_request_id: int = -1
 var _next_inference_ms: int = 0
 var _last_inference_url: String = ""
+
+## Throttles editor-facing [code]noop[/code] diagnostics so tiny models at high cadence do not flood Output.
+var _noop_diag_last_ms: int = 0
+
+## Last completions request shape for Cursor NDJSON debug (session 46c25f).
+var _last_request_used_completions: bool = false
+var _last_prompt_tail: String = ""
+var _last_user_head: String = ""
+var _last_completion_grammar: String = ""
 
 var _bundled_launcher: Node
 
@@ -80,9 +148,9 @@ func attach_main(main_node: Node) -> void:
 ## Params:
 ## - none
 ## Returns:
-## - true only while a round is already running ([enum State.PLAYING]); false in [enum State.ARMED] so the player can press Start to begin the AI round if the model did not emit [code]START[/code] alone.
+## - true while [enum State.ARMED] (round begins after **AI Player** without a separate Start) or [enum State.PLAYING].
 func is_human_start_suppressed() -> bool:
-  return _state == State.PLAYING
+  return _state == State.ARMED or _state == State.PLAYING
 
 
 ## Returns current AI session state enum encoded as int.
@@ -141,6 +209,71 @@ static func http_request_result_label(result: int) -> String:
       return "TIMEOUT"
     _:
       return "UNKNOWN_%s" % result
+
+
+## Flattens OpenAI-style [code]message.content[/code] (string, array of typed blocks, or null) to plain text.
+## Params:
+## - v: Raw JSON value from [code]choices[0].message.content[/code].
+## Returns:
+## - Concatenated assistant-visible text; empty string when absent.
+static func coerce_openai_message_content_value(v: Variant) -> String:
+  if v == null:
+    return ""
+  var t := typeof(v)
+  if t == TYPE_STRING:
+    return str(v)
+  if t == TYPE_ARRAY:
+    var out := ""
+    for item in v as Array:
+      if typeof(item) == TYPE_DICTIONARY:
+        var d: Dictionary = item
+        var typ := str(d.get("type", "text"))
+        # llama.cpp OAI paths may emit output_text / input_text blocks, not only "text".
+        if typ == "text" or typ == "output_text" or typ == "input_text":
+          out += str(d.get("text", ""))
+        elif typ == "refusal":
+          out += str(d.get("refusal", ""))
+      elif typeof(item) == TYPE_STRING:
+        out += str(item)
+    return out
+  return str(v)
+
+
+## Extracts generated text from an OpenAI-compatible [code]/v1/completions[/code] JSON object.
+## Params:
+## - resp: Parsed top-level response object.
+## Returns:
+## - [code]choices[0].text[/code] when present.
+static func extract_openai_completion_choice_text(resp: Dictionary) -> String:
+  var choices: Variant = resp.get("choices", [])
+  if typeof(choices) != TYPE_ARRAY or choices.is_empty():
+    return ""
+  var first: Variant = choices[0]
+  if typeof(first) != TYPE_DICTIONARY:
+    return ""
+  return str((first as Dictionary).get("text", ""))
+
+
+## Extracts assistant text from an OpenAI-compatible [code]/v1/chat/completions[/code] JSON object.
+## Params:
+## - resp: Parsed top-level response object.
+## Returns:
+## - Non-empty string when [code]choices[0].message.content[/code] (or legacy [code]choices[0].text[/code]) carries text.
+static func extract_openai_chat_choice_text(resp: Dictionary) -> String:
+  var choices: Variant = resp.get("choices", [])
+  if typeof(choices) != TYPE_ARRAY or choices.is_empty():
+    return ""
+  var first: Variant = choices[0]
+  if typeof(first) != TYPE_DICTIONARY:
+    return ""
+  var choice: Dictionary = first
+  var message: Variant = choice.get("message", {})
+  if typeof(message) == TYPE_DICTIONARY:
+    var msg: Dictionary = message
+    var c := coerce_openai_message_content_value(msg.get("content", ""))
+    if not c.strip_edges().is_empty():
+      return c
+  return str(choice.get("text", ""))
 
 
 ## Returns the exact ARMED handshake payload string.
@@ -361,19 +494,89 @@ func _enqueue_inference_request() -> void:
   _request_id_counter += 1
   _latest_enqueued_request_id = rid
   var base_url := str(_inference_client.get("INFERENCE_BASE_URL", "")).rstrip("/")
-  var path := str(_inference_client.get("CHAT_COMPLETIONS_PATH", "/v1/chat/completions"))
-  var url := "%s%s" % [base_url, path]
+  var completions_path := str(_inference_client.get("COMPLETIONS_PATH", "/v1/completions")).strip_edges()
+  var url: String
+  var req: Dictionary
+  if not completions_path.is_empty():
+    url = "%s%s" % [base_url, completions_path]
+    var trailer := ""
+    match _state:
+      State.ARMED:
+        trailer = _COMPLETION_OUTPUT_TRAILER_ARMED
+      State.PLAYING:
+        trailer = _COMPLETION_OUTPUT_TRAILER_PLAYING
+      _:
+        trailer = ""
+    var prompt := _system_prompt + _COMPLETION_PROMPT_SEPARATOR + user_content + trailer
+    _last_request_used_completions = true
+    _last_prompt_tail = prompt.substr(maxi(0, prompt.length() - 220), 220)
+    _last_user_head = (
+      user_content.get_slice("\n", 0).strip_edges().substr(0, 120)
+      if not user_content.is_empty()
+      else ""
+    )
+    #region agent log
+    _last_completion_grammar = ""
+    if bool(_inference_client.get("LLAMA_COMPLETION_GRAMMAR_ENABLED", true)):
+      _last_completion_grammar = gbnf_for_completion_state_enum(int(_state))
+    _dbg46_emit(
+      "ai-inf",
+      "H-A",
+      "ai_driver.gd:_enqueue_inference_request",
+      "enqueue_completions",
+      {
+        "state_enum": int(_state),
+        "url_tail": url.substr(maxi(0, url.length() - 96), 96),
+        "prompt_chars": prompt.length(),
+        "trailer_chars": trailer.length(),
+        "grammar_chars": _last_completion_grammar.length(),
+        "prompt_tail": _last_prompt_tail,
+        "user_head": _last_user_head,
+      },
+    )
+    #endregion
+    req = {
+      "model": str(_inference_client.get("MODEL_ID", "")),
+      "prompt": prompt,
+      "max_tokens": int(_inference_client.get("MAX_OUTPUT_TOKENS", 48)),
+      "temperature": float(_inference_client.get("TEMPERATURE", 0.0)),
+      "stream": false,
+      "echo": false,
+    }
+    if not _last_completion_grammar.is_empty():
+      req["grammar"] = _last_completion_grammar
+  else:
+    var chat_path := str(_inference_client.get("CHAT_COMPLETIONS_PATH", "/v1/chat/completions")).strip_edges()
+    if chat_path.is_empty():
+      chat_path = "/v1/chat/completions"
+    url = "%s%s" % [base_url, chat_path]
+    _last_request_used_completions = false
+    _last_prompt_tail = ""
+    _last_user_head = (
+      user_content.get_slice("\n", 0).strip_edges().substr(0, 120)
+      if not user_content.is_empty()
+      else ""
+    )
+    #region agent log
+    _dbg46_emit(
+      "ai-inf",
+      "H-A",
+      "ai_driver.gd:_enqueue_inference_request",
+      "enqueue_chat",
+      {"state_enum": int(_state), "url_tail": url.substr(maxi(0, url.length() - 96), 96), "user_head": _last_user_head},
+    )
+    #endregion
+    req = {
+      "model": str(_inference_client.get("MODEL_ID", "")),
+      "messages": [
+        {"role": "system", "content": _system_prompt},
+        {"role": "user", "content": user_content},
+      ],
+      "max_tokens": int(_inference_client.get("MAX_OUTPUT_TOKENS", 48)),
+      "temperature": float(_inference_client.get("TEMPERATURE", 0.0)),
+      "stream": false,
+    }
   _last_inference_url = url
-  var req := {
-    "model": str(_inference_client.get("MODEL_ID", "")),
-    "messages": [
-      {"role": "system", "content": _system_prompt},
-      {"role": "user", "content": user_content},
-    ],
-    "max_tokens": int(_inference_client.get("MAX_OUTPUT_TOKENS", 8)),
-    "temperature": float(_inference_client.get("TEMPERATURE", 0.0)),
-    "stream": false,
-  }
   var headers := ["Content-Type: application/json"]
   var api_key := str(_inference_client.get("API_KEY", "")).strip_edges()
   if not api_key.is_empty():
@@ -403,6 +606,14 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
   if typeof(parsed) != TYPE_DICTIONARY:
     _fail_inference_response("inference response JSON was not an object")
     return
+  var choice0_keys: Array = []
+  var ch: Variant = (parsed as Dictionary).get("choices", [])
+  if typeof(ch) == TYPE_ARRAY and not (ch as Array).is_empty():
+    var z: Variant = (ch as Array)[0]
+    if typeof(z) == TYPE_DICTIONARY:
+      for k in (z as Dictionary).keys():
+        choice0_keys.append(str(k))
+  var cmpl_raw := extract_openai_completion_choice_text(parsed)
   var content := _extract_message_content(parsed)
   var token: String = (
     _TOKENS.normalize_completion_token_armed_handshake(content)
@@ -410,9 +621,45 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
     else _TOKENS.normalize_completion_token(content)
   )
   var excerpt := content.strip_edges().replace("\n", " ").replace("\r", " ")
+  var content_empty := content.strip_edges().is_empty()
   if excerpt.length() > _TL_DEBUG_CONTENT_MAX_CHARS:
     excerpt = excerpt.substr(0, _TL_DEBUG_CONTENT_MAX_CHARS) + " [truncated]"
   OLog.debug("TL completion raw=\"%s\" → token=%s" % [excerpt, token], true, "AiDriver")
+  #region agent log
+  _dbg46_emit(
+    "ai-inf",
+    "H-B",
+    "ai_driver.gd:_on_http_request_completed",
+    "completion_parsed",
+    {
+      "state_enum": int(_state),
+      "used_completions": _last_request_used_completions,
+      "prompt_tail": _last_prompt_tail,
+      "user_head": _last_user_head,
+      "choice0_keys": choice0_keys,
+      "cmpl_len": cmpl_raw.length(),
+      "cmpl_head": cmpl_raw.substr(0, mini(80, cmpl_raw.length())).replace("\n", "\\n"),
+      "cmpl_nonempty_stripped": not cmpl_raw.strip_edges().is_empty(),
+      "grammar_sent_chars": _last_completion_grammar.length(),
+      "content_head": content.substr(0, mini(100, content.length())).replace("\n", "\\n"),
+      "token": token,
+    },
+  )
+  #endregion
+  if token == "noop" and (_state == State.ARMED or _state == State.PLAYING):
+    var now_ms := Time.get_ticks_msec()
+    if now_ms - _noop_diag_last_ms >= 2000:
+      _noop_diag_last_ms = now_ms
+      OLog.info(
+        (
+          "AiDriver: TL noop (state_enum=%d, content_empty=%s). raw_excerpt=\"%s\". "
+          + "If content_empty: raise inference_client.MAX_OUTPUT_TOKENS or fix server JSON. "
+          + "Else: model/template issue; see OLog debug for each completion."
+        )
+        % [int(_state), content_empty, excerpt],
+        true,
+        "AiDriver"
+      )
   _apply_action_token(token)
   emit_signal("ai_inference_finished", token)
 
@@ -426,16 +673,10 @@ func _fail_inference_response(reason: String) -> void:
 
 
 func _extract_message_content(resp: Dictionary) -> String:
-  var choices: Variant = resp.get("choices", [])
-  if typeof(choices) != TYPE_ARRAY or choices.is_empty():
-    return ""
-  var first: Variant = choices[0]
-  if typeof(first) != TYPE_DICTIONARY:
-    return ""
-  var message: Variant = first.get("message", {})
-  if typeof(message) != TYPE_DICTIONARY:
-    return ""
-  return str(message.get("content", ""))
+  var from_cmpl := extract_openai_completion_choice_text(resp)
+  if not from_cmpl.strip_edges().is_empty():
+    return from_cmpl
+  return extract_openai_chat_choice_text(resp)
 
 
 func _apply_action_token(token: String) -> void:

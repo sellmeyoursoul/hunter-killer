@@ -119,6 +119,8 @@ func _on_hud_ai_player_game() -> void:
 	if not ok:
 		$HUD.show_message("Could not start AI. See logs.")
 		$HUD.set_ai_session_state(0)
+		return
+	new_game()
 
 
 ## Handles HUD End-AI button presses.

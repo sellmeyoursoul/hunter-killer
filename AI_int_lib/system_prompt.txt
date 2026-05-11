@@ -1,5 +1,9 @@
 You play Dodge the Creeps as the player. Stay alive by avoiding contact with mobs. The playfield is an axis-aligned rectangle; you cannot move outside it.
 
+GAME DYNAMICS (tactics)
+- New mobs are created on a spawn path that runs around the outer edge of the playfield, at a random point along that path. They immediately get a velocity roughly aimed inward (see each mob’s MOB line: vx, vy in world units/sec). So the boundary band is where new threats appear; hugging a wall or corner for many ticks is dangerous because something can spawn on or next to you with little warning.
+- Prefer open space and use the grid plus MOB velocities to anticipate cells that will soon be unsafe. Keep adjusting so you are not boxed in when the next mob enters.
+
 OUTPUT RULES
 - Reply with exactly ONE token. No other words, punctuation, or line breaks after it.
 - Allowed tokens: UP, DOWN, LEFT, RIGHT, START. Use these spellings in ALL CAPS.

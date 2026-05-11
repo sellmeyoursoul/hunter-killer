@@ -9,9 +9,9 @@ static func format_header_line(tick_ms: int, score: int, cols: int, rows: int, c
 
 ## Kinematics line: [code]PLAYER r c vx vy vz[/code] or [code]MOB r c vx vy vz[/code].
 static func format_entity_velocity_line(tag: String, r: int, c: int, vel: Vector3) -> String:
-  return "%s %d %d %.6g %.6g %.6g" % [tag, r, c, vel.x, vel.y, vel.z]
+  return "%s %d %d %.6f %.6f %.6f" % [tag, r, c, vel.x, vel.y, vel.z]
 
 
 ## Half-extents line: [code]PLAYER_EXT hx hy hz[/code] or [code]MOB_EXT hx hy hz[/code].
 static func format_entity_extents_line(tag: String, half_extents: Vector3) -> String:
-  return "%s %.6g %.6g %.6g" % [tag, half_extents.x, half_extents.y, half_extents.z]
+  return "%s %.6f %.6f %.6f" % [tag, half_extents.x, half_extents.y, half_extents.z]

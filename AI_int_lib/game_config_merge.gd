@@ -23,12 +23,14 @@ static func default_perception_params() -> Dictionary:
 static func default_inference_client() -> Dictionary:
   return {
     "INFERENCE_BASE_URL": "",
+    "COMPLETIONS_PATH": "/v1/completions",
     "CHAT_COMPLETIONS_PATH": "/v1/chat/completions",
     "MODEL_ID": "",
     "API_KEY": "",
     "HTTP_TIMEOUT_MS": 8000,
     "INFERENCE_PERIOD_MS": 250,
-    "MAX_OUTPUT_TOKENS": 8,
+    "MAX_OUTPUT_TOKENS": 48,
+    "LLAMA_COMPLETION_GRAMMAR_ENABLED": true,
     "TEMPERATURE": 0.0,
     "INFERENCE_AUTO_START_ENABLED": false,
     "BUNDLE_ROOT_OVERRIDE": "",
