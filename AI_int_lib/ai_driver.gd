@@ -16,7 +16,9 @@ enum State {
 const CELL_SIZE: int = 24
 const _TOKENS := preload("res://AI_int_lib/ai_action_tokens.gd")
 const _WIRE := preload("res://AI_int_lib/perception_wire.gd")
+const _RISK := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
+const _MOTOR := preload("res://creature/motor/cardinal_avoidance.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -31,6 +33,7 @@ const _COMPLETION_OUTPUT_TRAILER_ARMED := (
 const _COMPLETION_OUTPUT_TRAILER_PLAYING := (
   "\n\n=== YOUR_TURN ===\n"
   + "The block above is the observation snapshot for this tick.\n"
+  + "Read PLAIN_HINT and RISK_HINTS before interpreting the ASCII grid.\n"
   + "Reply with exactly one movement token: UP, DOWN, LEFT, or RIGHT in ALL CAPS. No other characters or words.\n"
 )
 
@@ -86,7 +89,7 @@ static func _dbg46_emit(run_id: String, hypothesis_id: String, location: String,
 
 var _state: State = State.IDLE
 var _main: Node = null
-var _player: Area2D = null
+var _creature: Area2D = null
 var _inference_client: Dictionary = {}
 var _system_prompt: String = ""
 
@@ -140,7 +143,7 @@ func _ready() -> void:
 ## - Call once from Main._ready().
 func attach_main(main_node: Node) -> void:
   _main = main_node
-  _player = _main.get_node_or_null("Player") as Area2D
+  _creature = _main.get_node_or_null("Player") as Area2D
   emit_signal("ai_session_state_changed", int(_state))
 
 
@@ -357,10 +360,10 @@ func arm_ai_session() -> bool:
     _arm_session_in_progress = false
     return false
   _set_state(State.ARMED)
-  if _player != null and _player.has_method("set_control_mode"):
-    _player.call("set_control_mode", 1) # Player.ControlMode.AI
-  if _player != null and _player.has_method("set_ai_move_dir"):
-    _player.call("set_ai_move_dir", Vector2.ZERO)
+  if _creature != null and _creature.has_method("set_control_mode"):
+    _creature.call("set_control_mode", 1) # Player.ControlMode.ENGINE — Main scene node remains "Player".
+  if _creature != null and _creature.has_method("set_creature_move_intent"):
+    _creature.call("set_creature_move_intent", Vector2.ZERO)
   _has_snapshot = false
   _latest_snapshot = ""
   _next_inference_ms = Time.get_ticks_msec()
@@ -389,10 +392,10 @@ func cancel_armed_session() -> void:
     return
   _http_request.cancel_request()
   _inflight_request_id = -1
-  if _player != null and _player.has_method("set_control_mode"):
-    _player.call("set_control_mode", 0)
-  if _player != null and _player.has_method("set_ai_move_dir"):
-    _player.call("set_ai_move_dir", Vector2.ZERO)
+  if _creature != null and _creature.has_method("set_control_mode"):
+    _creature.call("set_control_mode", 0)
+  if _creature != null and _creature.has_method("set_creature_move_intent"):
+    _creature.call("set_creature_move_intent", Vector2.ZERO)
   _set_state(State.IDLE)
 
 
@@ -411,15 +414,15 @@ func notify_main_new_game() -> void:
   match _state:
     State.ARMED:
       _set_state(State.PLAYING)
-      if _player != null and _player.has_method("set_control_mode"):
-        _player.call("set_control_mode", 1)
+      if _creature != null and _creature.has_method("set_control_mode"):
+        _creature.call("set_control_mode", 1)
     State.WAITING:
       _set_state(State.IDLE)
-      if _player != null and _player.has_method("set_control_mode"):
-        _player.call("set_control_mode", 0)
+      if _creature != null and _creature.has_method("set_control_mode"):
+        _creature.call("set_control_mode", 0)
     _:
-      if _player != null and _player.has_method("set_control_mode"):
-        _player.call("set_control_mode", 0)
+      if _creature != null and _creature.has_method("set_control_mode"):
+        _creature.call("set_control_mode", 0)
 
 
 ## Notifies the driver that Main.game_over() completed.
@@ -430,8 +433,8 @@ func notify_main_new_game() -> void:
 ## Usage:
 ## - Call from Main.game_over().
 func notify_main_game_over() -> void:
-  if _player != null and _player.has_method("set_ai_move_dir"):
-    _player.call("set_ai_move_dir", Vector2.ZERO)
+  if _creature != null and _creature.has_method("set_creature_move_intent"):
+    _creature.call("set_creature_move_intent", Vector2.ZERO)
   _set_state(State.WAITING)
   _next_inference_ms = 0
   _has_snapshot = false
@@ -451,6 +454,8 @@ func _exit_tree() -> void:
 func _process(_delta: float) -> void:
   if _state != State.ARMED and _state != State.PLAYING:
     return
+  if _state == State.PLAYING and _creature_motor_mode() == "scripted":
+    return
   if _inflight_request_id != -1:
     return
   var now_ms := Time.get_ticks_msec()
@@ -459,16 +464,68 @@ func _process(_delta: float) -> void:
   _enqueue_inference_request()
 
 
+## Returns merged [code]creature_motor.mode[/code]: [code]scripted[/code] or [code]llm[/code] (case-insensitive).
+## Params:
+## - none
+## Returns:
+## - Lowercase mode string; unknown values treated as [code]scripted[/code] for safety (local motor).
+func _creature_motor_mode() -> String:
+  var cm := GameConfig.get_creature_motor_params()
+  var m := str(cm.get("mode", "scripted")).to_lower().strip_edges()
+  if m == "llm":
+    return "llm"
+  return "scripted"
+
+
+## Builds the dictionary consumed by [code]cardinal_avoidance.pick_best_move_intent[/code].
+## Params:
+## - motor_p: Merged [code]creature_motor[/code] params from [code]GameConfig[/code].
+## Returns:
+## - Context dict with creature position (playable entity body), bounds, mob samples, and tunables.
+func _build_motor_context(motor_p: Dictionary) -> Dictionary:
+  var pos := _creature.global_position
+  var spd := 400.0
+  var spv: Variant = _creature.get("speed")
+  if typeof(spv) == TYPE_FLOAT or typeof(spv) == TYPE_INT:
+    spd = float(spv)
+  var ss := _creature.get("screen_size") as Vector2
+  if ss == Vector2.ZERO:
+    ss = _creature.get_viewport_rect().size
+  var mobs: Array = []
+  for n in _main.get_tree().get_nodes_in_group("mobs"):
+    if n is RigidBody2D:
+      var rb := n as RigidBody2D
+      mobs.append({"position": rb.global_position, "velocity": rb.linear_velocity})
+  return {
+    "creature_position": pos,
+    "creature_speed": spd,
+    "lookahead_sec": float(motor_p.get("lookahead_sec", 0.15)),
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": ss,
+    "mobs": mobs,
+    "weight_dist": float(motor_p.get("weight_dist", 1.0)),
+    "weight_closing": float(motor_p.get("weight_closing", 0.5)),
+    "penalty_oob": float(motor_p.get("penalty_oob", 1e7)),
+    "distance_eps": float(motor_p.get("distance_eps", 8.0)),
+  }
+
+
 func _physics_process(_delta: float) -> void:
-  if _state != State.PLAYING or _main == null or _player == null:
+  if _state != State.PLAYING or _main == null or _creature == null:
     return
   _physics_ticks += 1
   var p: Dictionary = GameConfig.get_perception_params()
   var stride := maxi(1, int(p.get("SNAPSHOT_PHYSICS_STRIDE", 1)))
-  if _physics_ticks % stride != 0:
-    return
-  _latest_snapshot = _build_snapshot_blob()
-  _has_snapshot = not _latest_snapshot.is_empty()
+  if _physics_ticks % stride == 0:
+    _latest_snapshot = _build_snapshot_blob()
+    _has_snapshot = not _latest_snapshot.is_empty()
+
+  if _creature_motor_mode() == "scripted" and int(_creature.get("control_mode")) == 1:
+    var motor_p := GameConfig.get_creature_motor_params()
+    var ctx := _build_motor_context(motor_p)
+    var intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
+    if _creature.has_method("set_creature_move_intent"):
+      _creature.call("set_creature_move_intent", intent)
 
 
 func _refresh_inference_client_config() -> void:
@@ -684,7 +741,7 @@ func _apply_action_token(token: String) -> void:
     if _state == State.ARMED and _main != null and _main.has_method("new_game"):
       _main.call_deferred("new_game")
     return
-  if _player == null or not _player.has_method("set_ai_move_dir"):
+  if _creature == null or not _creature.has_method("set_creature_move_intent"):
     return
   var dir := Vector2.ZERO
   match token:
@@ -698,15 +755,15 @@ func _apply_action_token(token: String) -> void:
       dir = Vector2(1, 0)
     _:
       return
-  _player.call("set_ai_move_dir", dir)
+  _creature.call("set_creature_move_intent", dir)
 
 
 func _build_snapshot_blob() -> String:
-  if _main == null or _player == null:
+  if _main == null or _creature == null:
     return ""
-  var viewport_size := (_player.get("screen_size") as Vector2)
+  var viewport_size := (_creature.get("screen_size") as Vector2)
   if viewport_size == Vector2.ZERO:
-    viewport_size = _player.get_viewport_rect().size
+    viewport_size = _creature.get_viewport_rect().size
   var cols := int(ceil(viewport_size.x / float(CELL_SIZE)))
   var rows := int(ceil(viewport_size.y / float(CELL_SIZE)))
   if cols <= 0 or rows <= 0:
@@ -718,10 +775,10 @@ func _build_snapshot_blob() -> String:
     row.resize(cols)
     grid.append(row)
 
-  var player_sample := _SAMPLING.sampling_from_collision_object(_player)
-  var player_point: Vector2 = player_sample.get("point", _player.global_position)
-  var player_ext: Vector3 = player_sample.get("half_extents", Vector3.ZERO)
-  var player_cell := _world_to_cell(player_point, cols, rows)
+  var creature_sample := _SAMPLING.sampling_from_collision_object(_creature)
+  var creature_point: Vector2 = creature_sample.get("point", _creature.global_position)
+  var creature_ext: Vector3 = creature_sample.get("half_extents", Vector3.ZERO)
+  var creature_cell := _world_to_cell(creature_point, cols, rows)
 
   var mobs: Array[Dictionary] = []
   for n in _main.get_tree().get_nodes_in_group("mobs"):
@@ -732,7 +789,7 @@ func _build_snapshot_blob() -> String:
       mobs.append({
         "node": mob,
         "sample": mob_sample,
-        "dist": mob_point.distance_to(player_point),
+        "dist": mob_point.distance_to(creature_point),
         "id": mob.get_instance_id(),
       })
   mobs.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
@@ -743,31 +800,68 @@ func _build_snapshot_blob() -> String:
     return da < db
   )
 
+  var mob_hint_entries: Array = []
+  for info in mobs:
+    var mob_rb: RigidBody2D = info["node"]
+    var hint_point: Vector2 = info["sample"].get("point", mob_rb.global_position)
+    mob_hint_entries.append({"point": hint_point, "velocity": mob_rb.linear_velocity})
+
+  var creature_vel2 := Vector2.ZERO
+  if _creature.has_method("get"):
+    creature_vel2 = _creature.get("current_velocity") as Vector2
+
+  var patch_band: Dictionary = (
+    Callable(_RISK, &"classify_creature_patch_and_band").call(
+      creature_cell.x,
+      creature_cell.y,
+      rows,
+      cols,
+      creature_vel2
+    )
+    as Dictionary
+  )
+  var prio: Dictionary = Callable(_RISK, &"pick_priority_closing_mob").call(mob_hint_entries, creature_point) as Dictionary
+
   for info in mobs:
     var mob_point: Vector2 = info["sample"].get("point", Vector2.ZERO)
     var mob_cell := _world_to_cell(mob_point, cols, rows)
     var cur := int(grid[mob_cell.x][mob_cell.y])
-    if mob_cell == player_cell:
+    if mob_cell == creature_cell:
       grid[mob_cell.x][mob_cell.y] = 3
     elif cur == 0:
       grid[mob_cell.x][mob_cell.y] = 2
 
-  var pcur := int(grid[player_cell.x][player_cell.y])
-  grid[player_cell.x][player_cell.y] = 3 if pcur == 2 else 1
+  var pcur := int(grid[creature_cell.x][creature_cell.y])
+  grid[creature_cell.x][creature_cell.y] = 3 if pcur == 2 else 1
 
   var lines: PackedStringArray = []
   lines.append(_WIRE.format_header_line(Time.get_ticks_msec(), int(_main.get("score")), cols, rows, CELL_SIZE))
+  lines.append(
+    (
+      Callable(_WIRE, &"format_risk_hints_line").call(
+        int(prio["idx_1"]),
+        float(prio["t_approx_sec"]),
+        str(patch_band["patch"]),
+        str(patch_band["band"])
+      )
+      as String
+    )
+  )
+  lines.append(
+    (
+      Callable(_WIRE, &"format_plain_hint_line").call(int(prio["idx_1"]), str(patch_band["patch"]), str(patch_band["band"]))
+      as String
+    )
+  )
   for r in rows:
     var s := ""
     var row_arr: PackedInt32Array = grid[r]
     for c in cols:
       s += str(row_arr[c])
     lines.append(s)
-  var player_vel := Vector3.ZERO
-  if _player.has_method("get"):
-    player_vel = Vector3((_player.get("current_velocity") as Vector2).x, (_player.get("current_velocity") as Vector2).y, 0.0)
-  lines.append(_WIRE.format_entity_velocity_line("PLAYER", player_cell.x, player_cell.y, player_vel))
-  lines.append(_WIRE.format_entity_extents_line("PLAYER_EXT", player_ext))
+  var creature_vel := Vector3(creature_vel2.x, creature_vel2.y, 0.0)
+  lines.append(_WIRE.format_entity_velocity_line("PLAYER", creature_cell.x, creature_cell.y, creature_vel))
+  lines.append(_WIRE.format_entity_extents_line("PLAYER_EXT", creature_ext))
 
   for info in mobs:
     var mob: RigidBody2D = info["node"]

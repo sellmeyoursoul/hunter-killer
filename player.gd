@@ -2,14 +2,14 @@ extends Area2D
 signal hit
 
 @export var isHostile = false
-@export var speed = 400 # How fast the player will move (pixels/sec)
-var screen_size # Size of the game window
-var ai_move_dir: Vector2 = Vector2.ZERO
+@export var speed = 400 # How fast this creature moves (pixels/sec); human-held or scripted under same rules.
+var screen_size # Size of the game window (playfield clamp rectangle).
+var creature_move_intent: Vector2 = Vector2.ZERO ## Sticky direction when ENGINE drives movement.
 var current_velocity: Vector2 = Vector2.ZERO
 
 enum ControlMode {
   HUMAN,
-  AI,
+  ENGINE,
 }
 
 var control_mode: ControlMode = ControlMode.HUMAN
@@ -20,7 +20,7 @@ func _ready() -> void:
   hide()
 
 
-## Computes one movement intent vector from either keyboard input (human) or sticky AI intent.
+## Computes movement intent from human [code]Input[/code] or sticky engine-held intent ([enum ControlMode.ENGINE]).
 ## Params:
 ## - none
 ## Returns:
@@ -28,8 +28,8 @@ func _ready() -> void:
 ## Usage:
 ## - Called by _physics_process() before integrating velocity.
 func _read_move_intent() -> Vector2:
-  if control_mode == ControlMode.AI:
-    return ai_move_dir
+  if control_mode == ControlMode.ENGINE:
+    return creature_move_intent
   var move := Vector2.ZERO
   if Input.is_action_pressed("move_right"):
     move.x += 1
@@ -42,7 +42,7 @@ func _read_move_intent() -> Vector2:
   return move.normalized() if move.length() > 0.0 else Vector2.ZERO
 
 
-## Integrates player movement on the physics tick for deterministic AI/human parity.
+## Integrates this creature's movement each physics tick (human vs engine-held uses the same clamps).
 ## Params:
 ## - delta: Physics step duration in seconds.
 ## Returns / side effects:
@@ -71,17 +71,17 @@ func _physics_process(delta: float) -> void:
 
 func _on_body_entered(body: Node2D) -> void:
   if body.get("isHostile"):
-    hide() # Player disappears after being hit
+    hide() # Creature disappears after being hit.
     hit.emit()
     # Must be deferred as we can't change physics properties on a physics callback.
     $CollisionShape2D.set_deferred("disabled", true)
 
 
-## Resets player runtime state for a new round.
+## Resets this creature's runtime state for a new round.
 ## Params:
 ## - pos: Spawn position in world space.
 ## Returns / side effects:
-## - Repositions and enables collision, shows player, clears velocity.
+## - Repositions and enables collision, shows this creature node, clears velocity.
 ## Usage:
 ## - Called from Main.new_game().
 func start(pos: Vector2) -> void:
@@ -93,24 +93,24 @@ func start(pos: Vector2) -> void:
 
 ## Sets exclusive control mode for movement source selection.
 ## Params:
-## - mode: HUMAN or AI.
+## - mode: [enum ControlMode.HUMAN] (local input) or [enum ControlMode.ENGINE] (game code / inference motor).
 ## Returns / side effects:
-## - Switches intent source in _read_move_intent().
+## - Switches intent source in [_read_move_intent].
 ## Usage:
 ## - Called by AiDriver as session state changes.
 func set_control_mode(mode: ControlMode) -> void:
   control_mode = mode
 
 
-## Updates sticky AI move intent used only when control_mode == AI.
+## Updates sticky move intent used when [member control_mode] is [enum ControlMode.ENGINE].
 ## Params:
-## - dir: Intended direction vector (will be normalized or zeroed).
+## - dir: Intended direction vector (normalized or zeroed).
 ## Returns / side effects:
-## - Stores ai_move_dir for later physics ticks.
+## - Stores [member creature_move_intent] for later physics ticks.
 ## Usage:
-## - Called by AiDriver on valid directional tokens.
-func set_ai_move_dir(dir: Vector2) -> void:
-  ai_move_dir = dir.normalized() if dir.length() > 0.0 else Vector2.ZERO
+## - Called by AiDriver scripted motor or LLM token handlers.
+func set_creature_move_intent(dir: Vector2) -> void:
+  creature_move_intent = dir.normalized() if dir.length() > 0.0 else Vector2.ZERO
 
 # func game_over() -> void:
 #	pass # Replace with function body.

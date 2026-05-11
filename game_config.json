@@ -1,6 +1,6 @@
 {
   "logging_params": {
-    "LOG_LEVEL": "Debug",
+    "LOG_LEVEL": "Info",
     "MAX_LINES_PER_PROCESS": 256,
     "MAX_QUEUE_ENTRIES": 2048
   },
@@ -26,5 +26,13 @@
   },
   "perception": {
     "SNAPSHOT_PHYSICS_STRIDE": 1
+  },
+  "creature_motor": {
+    "mode": "scripted",
+    "lookahead_sec": 0.15,
+    "weight_dist": 1.0,
+    "weight_closing": 0.5,
+    "penalty_oob": 10000000,
+    "distance_eps": 8.0
   }
 }

@@ -10,7 +10,8 @@
 **One-line objective:**  This phase will introduce a new element to the game. This is plants/food. 
 
 **Out of scope (explicit non-goals):**  providing independence for mobs. At the moment, they don't experience hunger or non-linear movement
--  
+
+**Related long-term design:** Full plant fields (regrowth, seeds, brush slowdown) live in [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md). Creature vitals naming for hunger alignment: [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md). Vision umbrella: [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
 
 ---
 
@@ -122,4 +123,5 @@
 
 | Date | Change |
 |------|--------|
+| 2026-05-11 | Linked PLANT_ECOLOGY, CREATURE_MODEL, VISION plans for forward-compatible fields. |
 | | |

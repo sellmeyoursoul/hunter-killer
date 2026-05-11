@@ -1,6 +1,6 @@
 extends Node
 ## Autoload **GameConfig**: loads and merges [code]user://game_config.json[/code] before **OLog** initializes.
-## Provides merged [code]logging_params[/code], [code]inference_client[/code], and [code]perception[/code] with safe defaults.
+## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], and [code]creature_motor[/code] with safe defaults.
 
 const CONFIG_PATH := "user://game_config.json"
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -47,6 +47,14 @@ func get_perception_params() -> Dictionary:
   if typeof(p) != TYPE_DICTIONARY:
     return _Merge.default_perception_params()
   return p.duplicate(true)
+
+
+## Merged [code]creature_motor[/code] ([code]mode[/code]: [code]scripted[/code] or [code]llm[/code], plus avoidance tunables).
+func get_creature_motor_params() -> Dictionary:
+  var cm: Variant = _merged.get("creature_motor", {})
+  if typeof(cm) != TYPE_DICTIONARY:
+    return (_Merge.default_root()["creature_motor"] as Dictionary).duplicate(true)
+  return cm.duplicate(true)
 
 
 ## Full merged root (advanced callers / tests).

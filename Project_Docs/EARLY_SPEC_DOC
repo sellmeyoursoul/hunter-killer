@@ -1,0 +1,148 @@
+# Early spec archive
+
+Superseded for agent work by the split plans in this folder; start at [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
+
+| Topic | Plan |
+|-------|------|
+| Vision / roadmap | [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md) |
+| Creature stats, motivations, hunger, reproduction | [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) |
+| Full plant ecology (beyond POC) | [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) |
+| Plants + hunger POC | [PLANTS_PLAN.md](PLANTS_PLAN.md) |
+| Terrain / environment props | [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) |
+| stat → point pool math | [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md) |
+| LLM scope (conversation, not motor) | [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md) |
+| Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](MOB_AVOIDANCE_PLAN.md) |
+| Blank template for new features | [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) |
+
+---
+
+## Original draft
+
+       Project Document: World Builder (v1.0)
+
+    1. Project Overview
+This is the core world building app for a massively multiplayer online role-playing game. We will start with smaller games and iterate to expand the scope so that the core code can be well exercised before we invite the masses. The World Builder component builds out how basic NPCs interact with their environment and respond to one another.
+    2. System Architecture
+    3. Technical Stack
+        3.1. Godot game engine for UI/physics
+    4. Core Components
+        4.1. Core/Global Data Elements
+        4.2. Class Definitions
+            a) Creature: <Abstract >
+This defines all of the basic elements of a creature in the world.
+                • Properties:
+##### Stat based properties
+                    ◦ statFit <int> : Your general physical fitness (strength)
+                    ◦ currPointFit <num> : Current amount of fit available to exert
+                    ◦ maxPointFit <num> : Maximum amount of fit available to exert
+                    ◦ statEndurance <int> : The amount of physical exertion that you can spend before fatigue sets in
+                    ◦ currPointEnd <num> : Current amount of Endurance available to exert
+                    ◦ maxPointEnd <num> : Maximum amount of Endurance available to exert
+                    ◦ statWill <int> : The ability to continue pushing through exhaustion or injury just through sheer stubbornness
+                    ◦ currPointWill <num> : Current amount of Will available to exert
+                    ◦ maxPointWill <num> : Maximum amount of Will available to exert
+                    ◦ statComposure <int> : The ability to keep your head during stressful situations
+                    ◦ curPointComp <num> : Current amount of composure available to exert
+                    ◦ maxPointComp <num> : Maximum amount of composure available to exert
+                    ◦ statObservation <int> : The ability to observe the world around you and react effectively in response
+                    ◦ currPointObserv <num> : Current amount of Observation available to exert
+                    ◦ maxPointObserv <num> : Maximum amount of Observation available to exert
+                    ◦ statCharm <int> : The ability to convince others to assist you
+                    ◦ currPointCharm <num> : Current amount of charm available to exert
+                    ◦ maxPointCharm <num> : Maximum amount of charm available to exert
+                    ◦ statWit <int> : The ability to think fast on your feet and stay unpredictable in conversation and in combat
+                    ◦ currPointWit <num> : Current amount of wit available to exert
+                    ◦ maxPointWit <num> : Maximum amount of wit available to exert
+                    ◦ statDexterity <int> : The degree to which you can may us quick reflexes to act or react
+                    ◦ currpointDex <num> : Current amount of dexterity available to exert
+                    ◦ maxPointDex <num> : Maximum amount of dexterity available to exert
+
+#### Motivation traits for NPCs. These will drive there reaction to stimulus in the world, including players, and other NPCs
+                    ◦ explorerBuilder <int> : The the degree to which you want to go out and explore the work vs staying home making things pleasant
+                    ◦ changeStability <int> : The degree to which you value experiencing new things vs the desire to keep things as they are
+                    ◦ compassionSelfInterest <int> : The level to which you will consider the needs of others vs maximizing what’s best for yourself at all costs
+                    ◦ communityIndividual <Int> : The amount you feel society should support everyone in it regardless of contribution vs the idea that members of a community should be expected to rely on themselves
+
+			###### Basic info about the NPC
+                    ◦ age <int> : Age in game days of this creature
+                    ◦ maxAge <int> : the maximum age this type of creature lives
+                    ◦ size <num> : The average distance of the longest dimension of the creature in feet.
+                    ◦ weight <num> : The unencumbered weight of the creature
+                    ◦ speed <num> : The base speed at which the creature moves in feet per second 
+####### Hunger details
+                    ◦ caloricNeeds <num> : the number of calories the creature needs to consume to be full
+                    ◦  <num> : the number of calories the creature has in his system currently
+                    ◦ hunger <num> : the percentage below full the creature currently is (currentCalories/caloricNeeds)
+
+###### Reproduction info
+                    ◦ reproductionMinAge <int> : the minimum age in game days that this creature can  reproduce
+                    ◦ reproductionMaxAge <int> : the maximum age in game days that this creature can reproduce
+                    ◦ gestationLength <int> : the number of game days that it will take for this creature to go from getting pregnant to giving birth
+                    ◦ gender <char> : the gender of the creature. M for male F for female O for other.
+
+                • Methods:
+                    ◦ generatePoints() <internal> This method takes the stat value for all of the stats and initializes the min and max values.
+                        ▪ Logic:
+currPointFit <num> : Current amount of fit available to exert
+maxPointFit = statEndurance = statToPoint(currPointFit)
+currPointEnd = maxPointEnd = statToPoint(currPointFEnd)
+currPointWill = maxPointWill  = statToPoint(statWill)
+curPointComp = maxPointComp = statToPoint(statComposure)
+currPointObserv = maxPointObserv = statToPoint(statObservation)
+currPointCharm = maxPointCharm = statToPoint(statCharm)
+currPointWit  = maxPointWit = statToPoint(statWit) currpointDex = maxPointDex = statToPoint(statDexterity)
+
+                    ◦ initializeOutlook() <internal> : This function sets the start values of the sliders for the creatures outlook/behavior.
+[[COMMENT: to be implemented, perhaps in concrete classes only? ]]
+            b) Plant : <Abstract >
+This defines the basic properties and methods for any plant life in the world
+                • Properties :
+                    ◦ edible <bool> : determines if a creature can eat this plant
+                    ◦ currentCalories <num> : The amount of calories available for any creature to who consumes it
+                    ◦ maxCalories <num> : The maximum amount of calories available for this plant
+                    ◦ growthRate <num> : the number of calories that get restored per game day, up to the value of maxCalories.
+                    ◦ size <num> : the area in square feet this plant takes up.
+                    ◦ seedSpread <num>: the area in feed from the center of this plant that a seed can take root away from this plant
+                    ◦ seedRate <num> : number of game days that it takes for the plant to spread seeds
+                    ◦ seedCalReq <num> : the minimum number of callories required on the day the seed is spread that are required for the seed to be released
+                    ◦ seedChokeRake <num> : the rate at which this plant’s seeds will replace any plants already in place
+                    ◦ movementImpact <num> : the % reduction in speed for a creature passing through
+                    ◦ fitSize <num> : if the size of the creature < this value, the creature can move through at normal speed.
+                    ◦ crushWeight <num> : The weight at which a creature passing through will destroy this object
+                • Methods :
+                    ◦ spreadSeed(spread, currCals, reqCals) <internal> : 
+			
+This function is called by the concrete Plan object when it is time to spread seeds. It first checks to see if the currCals value is >= reqCals. If not it returns. If so it checks the spread distance, generating a random distance and direction where the distance is < spread feet from this plant object.
+
+            c) Environment : <Abstract>
+This defines the properties and methods for all environmental objects such as stone, dirt, or water.
+                • Properties :
+                    ◦ passible <bool> : If false, this is a solid object that creatures can not pass through
+                    ◦ movementImpact <num> : the % reduction in speed for a creature passing through
+                    ◦ fitSize <num> : if the size of the creature < this value, the creature can move through at normal speed.
+                    ◦ crushWeight <num> : The weight at which a creature passing through will destroy this object. 0 means it’s unbreakable
+                • Methods :
+
+
+
+        4.3. Shared Function definitions
+            a) statToPoint(statNum:int) <function> This function takes the input and compares it against an array or calculates if it exceeds the precalculated values.
+                • Logic:
+statList <num list> = [132.82, 158.62, 187.29, 219.15, 254.54, 293.87, 337.56, 386.11, 440.06, 500.00, 559.94, 613.89, 662.44, 706.13, 745.46, 780.85, 812.71, 841.38, 867.18, 890.40, 911.30, 930.11, 947.04, 962.28, 975.99 ]
+if statNum> 25
+{
+currPoints <num> = 975.99
+modifier <num> = 13.71
+diff <int> :  statNum – 25
+
+for (diff > 0;  --diff)  {currPoints = currPoints + (modifier *.9) and modifier = modifier – (modifier * .1)}}
+}
+else{ currPoints  = statList[statNum -1]}
+return  currPoints
+            b) xx
+
+    5. Known Limitations & Compromises
+    6. Future Enhancements (Backlog)
+        6.1. Add Sentient Creatures
+        6.2. Add player characters
+    7. 

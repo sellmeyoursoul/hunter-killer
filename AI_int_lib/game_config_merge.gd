@@ -19,6 +19,18 @@ static func default_perception_params() -> Dictionary:
   }
 
 
+## Defaults for scripted vs LLM creature motor; see MOB_AVOIDANCE_PLAN.md under Project_Docs.
+static func default_creature_motor_params() -> Dictionary:
+  return {
+    "mode": "scripted",
+    "lookahead_sec": 0.15,
+    "weight_dist": 1.0,
+    "weight_closing": 0.5,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+  }
+
+
 ## Defaults for [code]inference_client[/code]; empty [code]INFERENCE_BASE_URL[/code] means AI cannot arm until set.
 static func default_inference_client() -> Dictionary:
   return {
@@ -49,6 +61,7 @@ static func default_root() -> Dictionary:
     "logging_params": default_logging_params(),
     "inference_client": default_inference_client(),
     "perception": default_perception_params(),
+    "creature_motor": default_creature_motor_params(),
   }
 
 
@@ -72,6 +85,8 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
     r["inference_client"] = _merge_dict_shallow(r["inference_client"], file_root["inference_client"])
   if file_root.has("perception"):
     r["perception"] = _merge_dict_shallow(r["perception"], file_root["perception"])
+  if file_root.has("creature_motor"):
+    r["creature_motor"] = _merge_dict_shallow(r["creature_motor"], file_root["creature_motor"])
   return r
 
 

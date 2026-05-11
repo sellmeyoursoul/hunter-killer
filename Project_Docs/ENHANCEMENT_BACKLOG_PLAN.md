@@ -30,4 +30,5 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | Item | Priority | Notes |
 |------|----------|--------|
 | Centralized doc path index | Low | Stable links across renames: historical **`Project Docs/`** vs **`Project_Docs/`**, completed vs active plans — reduces broken cross-references in comments and AGENTS rules |
+| World-model feature index | Low | Entry: [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md); archive table: [EARLY_SPEC_DOC](EARLY_SPEC_DOC) |
 
