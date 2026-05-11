@@ -93,6 +93,7 @@ func _on_start_timer_timeout() -> void:
 ## Usage:
 ## - Connected in _ready().
 func _on_hud_ai_player_game() -> void:
+	$HUD/AIPlayerButton.disabled = true
 	#region agent log
 	_AgentNdjson.write({
 		"runId": "ai-arm",
@@ -104,6 +105,7 @@ func _on_hud_ai_player_game() -> void:
 	#endregion
 	$HUD.show_message("Connecting to AI…")
 	var ok: bool = await _ai_driver().arm_ai_session()
+	$HUD/AIPlayerButton.disabled = false
 	#region agent log
 	_AgentNdjson.write({
 		"runId": "ai-arm",

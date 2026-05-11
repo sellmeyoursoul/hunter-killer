@@ -1,10 +1,10 @@
 extends RefCounted
-## Appends one JSON line to Cursor debug NDJSON (`res://debug-e132f7.log`). Also mirrors to `user://` when project write fails or always for redundancy. No secrets.
+## Appends one JSON line to Cursor debug NDJSON (`res://debug-e87b37.log`). Also mirrors to `user://` when project write fails or always for redundancy. No secrets.
 
 
-const SESSION_ID := "e132f7"
-const _REL_PATH := "res://debug-e132f7.log"
-const _USER_MIRROR := "user://debug-e132f7.log"
+const SESSION_ID := "e87b37"
+const _REL_PATH := "res://debug-e87b37.log"
+const _USER_MIRROR := "user://debug-e87b37.log"
 
 
 static func write(entry: Dictionary) -> void:

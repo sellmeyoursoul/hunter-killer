@@ -18,6 +18,7 @@
     "BUNDLED_SERVER_EXE": "bin/llama-server.exe",
     "BUNDLED_MODEL_GGUF": "tinyllama-Q4_K_M.gguf",
     "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
+    "BUNDLED_SERVER_ATTACH_CONSOLE": false,
     "INFERENCE_PROBE_PATH": "/health",
     "INFERENCE_START_TIMEOUT_MS": 300000
   },

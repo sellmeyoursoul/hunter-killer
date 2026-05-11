@@ -8,6 +8,45 @@ const _PROBE_HTTP_MIN_SEC := 15.0
 const _PROBE_HTTP_AFTER_503_SEC := 90.0
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 
+## One-shot hint per [method ensure_inference_endpoint_ready] run: editor+Windows console spawn PID is often not the llama-server PID.
+var _did_log_editor_console_pid_hint: bool = false
+
+
+## Maps [constant HTTPRequest.RESULT_*] to a short label for NDJSON (avoid preload cycle with [code]AiDriver[/code]).
+static func _http_request_result_label(result: int) -> String:
+  match result:
+    HTTPRequest.RESULT_SUCCESS:
+      return "SUCCESS"
+    HTTPRequest.RESULT_CHUNKED_BODY_SIZE_MISMATCH:
+      return "CHUNKED_BODY_SIZE_MISMATCH"
+    HTTPRequest.RESULT_CANT_CONNECT:
+      return "CANT_CONNECT"
+    HTTPRequest.RESULT_CANT_RESOLVE:
+      return "CANT_RESOLVE"
+    HTTPRequest.RESULT_CONNECTION_ERROR:
+      return "CONNECTION_ERROR"
+    HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+      return "TLS_HANDSHAKE_ERROR"
+    HTTPRequest.RESULT_NO_RESPONSE:
+      return "NO_RESPONSE"
+    HTTPRequest.RESULT_BODY_SIZE_LIMIT_EXCEEDED:
+      return "BODY_SIZE_LIMIT_EXCEEDED"
+    HTTPRequest.RESULT_BODY_DECOMPRESS_FAILED:
+      return "BODY_DECOMPRESS_FAILED"
+    HTTPRequest.RESULT_REQUEST_FAILED:
+      return "REQUEST_FAILED"
+    HTTPRequest.RESULT_DOWNLOAD_FILE_CANT_OPEN:
+      return "DOWNLOAD_FILE_CANT_OPEN"
+    HTTPRequest.RESULT_DOWNLOAD_FILE_WRITE_ERROR:
+      return "DOWNLOAD_FILE_WRITE_ERROR"
+    HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED:
+      return "REDIRECT_LIMIT_REACHED"
+    HTTPRequest.RESULT_TIMEOUT:
+      return "TIMEOUT"
+    _:
+      return "UNKNOWN_%s" % result
+
+
 ## Absolute directory containing the player executable (exported) or dev fallback under the project.
 static func get_bundle_root(inference_client: Dictionary) -> String:
   var o := str(inference_client.get("BUNDLE_ROOT_OVERRIDE", "")).strip_edges()
@@ -36,6 +75,21 @@ static func should_attempt_auto_start(inference_client: Dictionary, base_url: St
   if not _truthy(inference_client.get("INFERENCE_AUTO_START_ENABLED", false)):
     return false
   return _is_loopback_http_url(base_url)
+
+
+## True when Windows editor runs should pass [code]open_console=true[/code] to [method OS.create_process] for the bundled server.
+## Params:
+## - inference_client: merged inference dict; optional [code]BUNDLED_SERVER_ATTACH_CONSOLE[/code] (default true when absent).
+## Returns:
+## - false when not Windows editor, or when attach-console is disabled (clearer [method OS.is_process_running] PID on Windows).
+static func editor_windows_attach_console(inference_client: Dictionary) -> bool:
+  if not OS.has_feature("editor"):
+    return false
+  if OS.get_name() != "Windows":
+    return false
+  if inference_client.has("BUNDLED_SERVER_ATTACH_CONSOLE"):
+    return _truthy(inference_client["BUNDLED_SERVER_ATTACH_CONSOLE"])
+  return true
 
 
 static func _truthy(v: Variant) -> bool:
@@ -76,6 +130,7 @@ static func port_from_base_url(base_url: String) -> int:
 ## Returns:
 ## - [code]true[/code] when the probe succeeds within [code]INFERENCE_START_TIMEOUT_MS[/code].
 func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
+  _did_log_editor_console_pid_hint = false
   var base_url := str(inference_client.get("INFERENCE_BASE_URL", "")).strip_edges().rstrip("/")
   var probe_rel := str(inference_client.get("INFERENCE_PROBE_PATH", "/health")).strip_edges()
   if not probe_rel.begins_with("/"):
@@ -93,6 +148,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
     "message": "ensure_inference_endpoint_ready_start",
     "data": {
       "probe_url": probe_url,
+      "bundle_root": get_bundle_root(inference_client),
       "timeout_ms": timeout_ms,
       "configured_http_sec": configured_http_sec,
       "probe_http_sec": probe_http_sec,
@@ -113,6 +169,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
       "probe_url": probe_url,
       "ok": initial_pr["ok"],
       "http_request_result": initial_pr["result"],
+      "http_result_label": _http_request_result_label(int(initial_pr["result"])),
       "response_code": initial_pr["response_code"],
     },
   })
@@ -166,13 +223,29 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
   argv.append("--port")
   argv.append(str(port))
 
-  var open_console := OS.has_feature("editor") and OS.get_name() == "Windows"
+  var open_console: bool = editor_windows_attach_console(inference_client)
+  if OS.has_feature("editor") and OS.get_name() == "Windows" and not open_console:
+    OLog.debug(
+      "BundledInference: spawning without attached console (BUNDLED_SERVER_ATTACH_CONSOLE false) — PID matches llama-server for exit detection.",
+      true,
+      "BundledInference"
+    )
+
+  var argv_display: String = ""
+  for i in range(argv.size()):
+    if i > 0:
+      argv_display += " "
+    argv_display += argv[i]
+  OLog.debug("BundledInference: spawn argv: %s" % argv_display, true, "BundledInference")
 
   OLog.info(
     "BundledInference: starting server (pid TBD) — %s" % exe_abs.get_file(),
     true,
     "BundledInference"
   )
+  var argv_preview: String = argv_display
+  if argv_preview.length() > 2000:
+    argv_preview = argv_preview.substr(0, 2000) + "…"
   var pid := OS.create_process(exe_abs, argv, open_console)
   #region agent log
   _AgentNdjson.write({
@@ -185,6 +258,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
       "exe_file": exe_abs.get_file(),
       "open_console_spawn": open_console,
       "argv_count": argv.size(),
+      "argv_preview": argv_preview,
     },
   })
   #endregion
@@ -228,6 +302,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
           "poll_index": post_spawn_polls,
           "ok": poll_pr["ok"],
           "http_request_result": poll_pr["result"],
+          "http_result_label": _http_request_result_label(int(poll_pr["result"])),
           "response_code": poll_pr["response_code"],
           "probe_seconds": probe_seconds,
           "extend_after_503": extend_probe_after_loading,
@@ -239,6 +314,21 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
         },
       })
     #endregion
+    if (
+      open_console
+      and OS.get_name() == "Windows"
+      and not poll_pr["ok"]
+      and not _did_log_editor_console_pid_hint
+    ):
+      _did_log_editor_console_pid_hint = true
+      OLog.info(
+        (
+          "BundledInference: editor console spawn on Windows — create_process PID may not be llama-server; "
+          + "`process_running` in logs can be false while the server is still starting. Continuing probes."
+        ),
+        true,
+        "BundledInference"
+      )
     if poll_pr["ok"]:
       OLog.info("BundledInference: inference endpoint ready.", true, "BundledInference")
       return true
