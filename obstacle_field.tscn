@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=4 uid="uid://hkobstaclfield01"]
+[gd_scene format=4 uid="uid://r5m3msxv6uke"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ra"]
 size = Vector2(140, 110)
