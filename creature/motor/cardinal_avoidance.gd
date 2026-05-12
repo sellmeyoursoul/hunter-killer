@@ -13,6 +13,41 @@ static var _tie_order: Array[Vector2] = [
 ]
 
 
+## World-space distance from mob point to creature footprint ([param creature_center], [param creature_half]) used for awareness gating (matches clearance reference frame).
+static func awareness_gate_distance(creature_center: Vector2, creature_half: Vector2, mob_pos: Vector2) -> float:
+  var half := creature_half
+  if half.x <= 0.0 or half.y <= 0.0:
+    return creature_center.distance_to(mob_pos)
+  var closest_c := closest_point_on_aabb(creature_center, half, mob_pos)
+  return mob_pos.distance_to(closest_c)
+
+
+## Effective reach: [param base_radius] plus [param cone_extra] when [param mob_pos] lies in forward sector about [param facing].
+static func effective_awareness_reach(
+  creature_center: Vector2,
+  mob_pos: Vector2,
+  base_radius: float,
+  cone_extra: float,
+  cone_cos_threshold: float,
+  facing: Vector2,
+) -> float:
+  var reach := base_radius
+  if cone_extra > 0.0 and cone_cos_threshold >= -1.0001:
+    var delta := mob_pos - creature_center
+    var dist := delta.length()
+    var u := Vector2.RIGHT
+    if dist > 1e-4:
+      u = delta / dist
+    var f := facing
+    if f.length() < 1e-4:
+      f = Vector2.RIGHT
+    else:
+      f = f.normalized()
+    if u.dot(f) >= cone_cos_threshold:
+      reach = base_radius + cone_extra
+  return reach
+
+
 ## Builds evaluation order: fixed [member _tie_order] or **shuffled cardinals** + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
 ## Params:
 ## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code] (force [member _tie_order]), [code]tie_shuffle_seed[/code], [code]creature_position[/code].
@@ -66,12 +101,21 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var eps: float = float(ctx.get("distance_eps", 12.0))
   var w_interior: float = float(ctx.get("weight_interior", 0.0))
   var w_edge: float = float(ctx.get("weight_edge", 0.0))
+  var w_obs: float = float(ctx.get("weight_obstacle", 0.0))
+  var static_obs: Array = ctx.get("static_obstacles", []) as Array
   var half_ext_raw: Variant = ctx.get("creature_half_extents", Vector2.ZERO)
   var footprint_half: Vector2 = (
     Vector2.ZERO
     if typeof(half_ext_raw) != TYPE_VECTOR2
     else half_ext_raw as Vector2
   )
+  var awareness_r: float = float(ctx.get("awareness_radius", 0.0))
+  var cone_extra: float = float(ctx.get("awareness_cone_extra", 0.0))
+  var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
+  var facing_raw: Variant = ctx.get("creature_facing", Vector2.RIGHT)
+  var facing_v: Vector2 = Vector2.RIGHT
+  if typeof(facing_raw) == TYPE_VECTOR2:
+    facing_v = facing_raw as Vector2
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
@@ -91,7 +135,14 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       footprint_half,
       w_interior,
       w_dist_sq,
-      w_edge
+      w_edge,
+      creature_pos,
+      awareness_r,
+      cone_extra,
+      cone_cos,
+      facing_v,
+      static_obs,
+      w_obs
     )
     if cost < best_cost:
       best_cost = cost
@@ -161,16 +212,50 @@ static func _edge_clearance_cost(
   return weight / maxf(eps, margin)
 
 
+static func _add_mob_cost_terms(
+  predicted: Vector2,
+  half: Vector2,
+  mob_pos: Vector2,
+  mob_vel: Vector2,
+  w_dist: float,
+  w_close: float,
+  w_dist_sq: float,
+  eps: float,
+  scale: float,
+) -> float:
+  if scale <= 0.0:
+    return 0.0
+  var closest: Vector2
+  var dist: float
+  if half == Vector2.ZERO:
+    closest = predicted
+    dist = predicted.distance_to(mob_pos)
+  else:
+    closest = closest_point_on_aabb(predicted, half, mob_pos)
+    var delta_f := closest - mob_pos
+    dist = delta_f.length()
+  var inv := 1.0 / maxf(eps, dist)
+  var add := 0.0
+  add += scale * w_dist * inv
+  if w_dist_sq > 0.0:
+    add += scale * w_dist_sq * inv * inv
+  if dist > 1e-4:
+    var toward_creature := closest - mob_pos
+    var u := toward_creature / dist
+    var closing := mob_vel.dot(u)
+    if closing > 0.0:
+      add += scale * w_close * closing * inv
+  return add
+
+
 ## Accumulates inverse-clearance, closing-speed, and optional interior posture costs for one predicted pose.
 ## Params:
 ## - predicted: Candidate creature **center** after `lookahead`.
 ## - creature_half_extents: Axis-aligned half-size in world space; [code]Vector2.ZERO[/code] uses center-point geometry (legacy/tests).
-## - mobs: Array of dicts with `position` and `velocity` (world).
-## - bounds_min/max: Axis-aligned clamp rectangle; whole predictive footprint must fit inside.
-## - w_dist / w_close / penalty_oob / eps: Tunables from ctx.
-## - weight_interior: Scale for posture term toward playfield center (0 disables).
-## - weight_dist_sq: Per-mob scale for [code]inv * inv[/code] ([code]inv = 1/max(eps, dist)[/code]); punishes slipping into tight gaps / second bodies (0 disables).
-## - weight_edge: Scale for inverse clearance to [param bounds_min]/[param bounds_max] (0 disables).
+## - mobs: Array of dicts with `position` and `velocity` (world); optional [code]cost_scale[/code].
+## - awareness_radius: If `<= 0`, no distance gating (legacy). Else skip mobs farther than effective cone reach from [param creature_center_aware].
+## - awareness_cone_cos_threshold: If `< -1`, cone extra disabled; else forward sector uses [method effective_awareness_reach].
+## - static_obstacles: Array of dicts with `position` (center) and `half_extents` (half size of AABB); zero velocity repulsion via [param weight_obstacle].
 ## Returns:
 ## - Scalar cost (higher = worse).
 static func cost_at_prediction(
@@ -185,7 +270,14 @@ static func cost_at_prediction(
   creature_half_extents: Vector2 = Vector2.ZERO,
   weight_interior: float = 0.0,
   weight_dist_sq: float = 0.0,
-  weight_edge: float = 0.0
+  weight_edge: float = 0.0,
+  creature_center_aware: Vector2 = Vector2.ZERO,
+  awareness_radius: float = 0.0,
+  awareness_cone_extra: float = 0.0,
+  awareness_cone_cos_threshold: float = -2.0,
+  creature_facing: Vector2 = Vector2.RIGHT,
+  static_obstacles: Array = [],
+  weight_obstacle: float = 0.0,
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -203,30 +295,89 @@ static func cost_at_prediction(
     return penalty_oob
 
   var total := 0.0
+  var gate_half := half
   for item in mobs:
     if typeof(item) != TYPE_DICTIONARY:
       continue
     var mob_pos: Vector2 = item.get("position", Vector2.ZERO)
     var mob_vel: Vector2 = item.get("velocity", Vector2.ZERO)
-    var closest: Vector2
-    var dist: float
-    if half == Vector2.ZERO:
-      closest = predicted
-      dist = predicted.distance_to(mob_pos)
-    else:
-      closest = closest_point_on_aabb(predicted, half, mob_pos)
-      var delta_f := closest - mob_pos
-      dist = delta_f.length()
-    var inv := 1.0 / maxf(eps, dist)
-    total += w_dist * inv
-    if weight_dist_sq > 0.0:
-      total += weight_dist_sq * inv * inv
-    if dist > 1e-4:
-      var toward_creature := closest - mob_pos
-      var u := toward_creature / dist
-      var closing := mob_vel.dot(u)
-      if closing > 0.0:
-        total += w_close * closing * inv
+    var c_scale: float = float(item.get("cost_scale", 1.0))
+    if awareness_radius > 0.0:
+      var gd := awareness_gate_distance(creature_center_aware, gate_half, mob_pos)
+      var eff_r := effective_awareness_reach(
+        creature_center_aware,
+        mob_pos,
+        awareness_radius,
+        awareness_cone_extra,
+        awareness_cone_cos_threshold,
+        creature_facing,
+      )
+      if gd > eff_r:
+        continue
+    total += _add_mob_cost_terms(
+      predicted, half, mob_pos, mob_vel, w_dist, w_close, weight_dist_sq, eps, c_scale
+    )
+
+  if weight_obstacle > 0.0:
+    for ob in static_obstacles:
+      if typeof(ob) != TYPE_DICTIONARY:
+        continue
+      var op: Vector2 = ob.get("position", Vector2.ZERO)
+      var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+      var ohe := Vector2.ZERO
+      if typeof(ohe_raw) == TYPE_VECTOR2:
+        ohe = ohe_raw as Vector2
+      if ohe.x <= 0.0 or ohe.y <= 0.0:
+        continue
+      total += _add_mob_cost_terms(
+        predicted, half, op, Vector2.ZERO, w_dist, w_close, weight_dist_sq, eps, weight_obstacle
+      )
+
   total += _interior_posture_cost(predicted, bounds_min, bounds_max, weight_interior, eps)
   total += _edge_clearance_cost(predicted, half, bounds_min, bounds_max, weight_edge, eps)
   return total
+
+
+## Alias for [method cost_at_prediction] with all optional fields explicit — easier for headless tests than long positional argument lists.
+static func cost_at_prediction_aware(
+  predicted: Vector2,
+  mobs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  w_dist: float,
+  w_close: float,
+  penalty_oob: float,
+  eps: float,
+  creature_half_extents: Vector2,
+  weight_interior: float,
+  weight_dist_sq: float,
+  weight_edge: float,
+  creature_center_aware: Vector2,
+  awareness_radius: float,
+  awareness_cone_extra: float,
+  awareness_cone_cos_threshold: float,
+  creature_facing: Vector2,
+  static_obstacles: Array = [],
+  weight_obstacle: float = 0.0,
+) -> float:
+  return cost_at_prediction(
+    predicted,
+    mobs,
+    bounds_min,
+    bounds_max,
+    w_dist,
+    w_close,
+    penalty_oob,
+    eps,
+    creature_half_extents,
+    weight_interior,
+    weight_dist_sq,
+    weight_edge,
+    creature_center_aware,
+    awareness_radius,
+    awareness_cone_extra,
+    awareness_cone_cos_threshold,
+    creature_facing,
+    static_obstacles,
+    weight_obstacle,
+  )

@@ -1,0 +1,93 @@
+[gd_scene load_steps=11 format=4 uid="uid://hkobstaclfield01"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_ra"]
+size = Vector2(140, 110)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rb"]
+size = Vector2(120, 100)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rc"]
+size = Vector2(260, 160)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rd"]
+size = Vector2(180, 120)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_re"]
+size = Vector2(160, 100)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rf"]
+size = Vector2(130, 95)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rg"]
+size = Vector2(280, 220)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rh"]
+size = Vector2(200, 170)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_ri"]
+size = Vector2(150, 110)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_rj"]
+size = Vector2(110, 90)
+
+[node name="ObstacleField" type="Node2D" groups=["obstacles_root"]]
+
+[node name="RockA" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(120, 140)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockA"]
+shape = SubResource("RectangleShape2D_ra")
+
+[node name="RockB" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(90, 940)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockB"]
+shape = SubResource("RectangleShape2D_rb")
+
+[node name="RockC" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(400, 880)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockC"]
+shape = SubResource("RectangleShape2D_rc")
+
+[node name="RockD" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(945, 560)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockD"]
+shape = SubResource("RectangleShape2D_rd")
+
+[node name="RockE" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(1020, 160)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockE"]
+shape = SubResource("RectangleShape2D_re")
+
+[node name="RockF" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(1620, 130)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockF"]
+shape = SubResource("RectangleShape2D_rf")
+
+[node name="RockG" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(1520, 480)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockG"]
+shape = SubResource("RectangleShape2D_rg")
+
+[node name="RockH" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(1710, 900)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockH"]
+shape = SubResource("RectangleShape2D_rh")
+
+[node name="RockI" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(720, 320)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockI"]
+shape = SubResource("RectangleShape2D_ri")
+
+[node name="RockJ" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(320, 520)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockJ"]
+shape = SubResource("RectangleShape2D_rj")

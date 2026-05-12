@@ -86,6 +86,10 @@ func _test_merge_defaults_and_override() -> void:
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist_sq", 0.0)), 55.0), "default weight_dist_sq")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
   _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
+  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_radius", 0.0)), 1500.0), "default awareness_radius")
+  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_cone_extra", 0.0)), 3000.0), "default awareness_cone_extra")
+  _assert(int(base["creature_motor"].get("awareness_memory_ticks", -1)) == 3, "default awareness_memory_ticks")
+  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_memory_weight", 0.0)), 0.35), "default awareness_memory_weight")
 
 
 func _test_load_merged_config_repo_fallback() -> void:
@@ -305,6 +309,152 @@ func _test_cardinal_avoidance() -> void:
   }
   var off_edge := _Motor.pick_best_move_intent(wall_hug)
   _assert(off_edge.is_equal_approx(Vector2.RIGHT), "edge clearance pulls away from boundary without interior term")
+
+  ## Awareness gating: mobs beyond radius contribute no incremental mob cost.
+  var ctr := Vector2(400.0, 400.0)
+  var pred := Vector2(400.0, 400.0)
+  var c_no_mob: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.5,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    500.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+  )
+  var c_far_mob: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.5,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    500.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+  )
+  _assert(is_equal_approx(c_no_mob, c_far_mob), "mob outside awareness radius adds no cost")
+
+  ## Sector cone: forward mob inside extended reach counts; aft mob beyond base only does not.
+  var cos45 := cos(deg_to_rad(45.0))
+  var c_behind: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(-200.0, 400.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    100.0,
+    500.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  var c_ahead: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(1000.0, 400.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    100.0,
+    500.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  _assert(c_behind < c_ahead - 0.01, "cone lets forward mob contribute more than aft mob at same distance class")
+
+  ## Per-entry cost_scale scales mob contribution.
+  var c_full := _Motor.cost_at_prediction(
+    pred,
+    [{"position": Vector2(400.0, 460.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+  )
+  var c_half := _Motor.cost_at_prediction(
+    pred,
+    [{"position": Vector2(400.0, 460.0), "velocity": Vector2.ZERO, "cost_scale": 0.5}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+  )
+  _assert(is_equal_approx(c_full, c_half * 2.0), "cost_scale halves mob cost contribution")
+
+  ## Static obstacles add repulsion via weight_obstacle.
+  var obs := [{"position": Vector2(400.0, 500.0), "half_extents": Vector2(40.0, 40.0)}]
+  var c_plain := _Motor.cost_at_prediction(
+    pred, [], Vector2.ZERO, Vector2(2000.0, 2000.0), 1.0, 0.0, 1e7, 12.0, Vector2.ZERO
+  )
+  var c_block: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    obs,
+    2.5,
+  )
+  _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
 
 
 func _test_mob_avoidance_acceptance() -> void:

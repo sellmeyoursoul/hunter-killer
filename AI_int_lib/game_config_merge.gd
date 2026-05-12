@@ -36,6 +36,13 @@ static func default_creature_motor_params() -> Dictionary:
     "weight_interior": 0.65,
     "shuffle_tie_break": true,
     "weight_edge": 0.48,
+    "awareness_radius": 1500.0,
+    "awareness_cone_extra": 3000.0,
+    "awareness_cone_half_angle_deg": 45.0,
+    "awareness_memory_ticks": 3,
+    "awareness_memory_weight": 0.35,
+    "awareness_memory_horizon_sec": 0.0,
+    "weight_obstacle": 1.25,
   }
 
 

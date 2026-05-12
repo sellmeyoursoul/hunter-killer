@@ -10,7 +10,7 @@ config_version=5
 
 [application]
 
-config/name="Dodge the Creeps"
+config/name="Hunter Killer"
 run/main_scene="uid://cgb226hqsuv23"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
@@ -23,8 +23,8 @@ OLog="*res://oLog_lib/olog.gd"
 
 [display]
 
-window/size/viewport_width=480
-window/size/viewport_height=720
+window/size/viewport_width=1890
+window/size/viewport_height=1050
 window/stretch/mode="canvas_items"
 
 [editor]

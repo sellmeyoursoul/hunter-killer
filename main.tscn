@@ -4,12 +4,13 @@
 [ext_resource type="PackedScene" uid="uid://drx8gkc8yay1y" path="res://mob.tscn" id="2_1bvp3"]
 [ext_resource type="PackedScene" uid="uid://d2c1s3qmdi4ti" path="res://player.tscn" id="3_lquwl"]
 [ext_resource type="PackedScene" uid="uid://cvqvw7ypmtpn2" path="res://hud.tscn" id="4_1bvp3"]
-[ext_resource type="Texture2D" uid="uid://b3pj532mdmtmt" path="res://art/2025-12-07 19.16.42.jpg" id="5_lquwl"]
+[ext_resource type="PackedScene" uid="uid://hkobstaclfield01" path="res://obstacle_field.tscn" id="7_obstacles"]
+[ext_resource type="Texture2D" path="res://art/Creep_field.png" id="5_lquwl"]
 [ext_resource type="AudioStream" uid="uid://td2mgko63p61" path="res://art/gameover.wav" id="6_7mycd"]
 
 [sub_resource type="Curve2D" id="Curve2D_7mycd"]
 _data = {
-"points": PackedVector2Array(0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 480, 16, 0, 0, 0, 0, 480, 712, 0, 0, 0, 0, 0, 712, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0)
+"points": PackedVector2Array(0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 1890, 23, 0, 0, 0, 0, 1890, 1038, 0, 0, 0, 0, 0, 1038, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0)
 }
 point_count = 6
 
@@ -48,35 +49,36 @@ one_shot = true
 curve = SubResource("Curve2D_7mycd")
 
 [node name="MobSpawnLocation" type="PathFollow2D" parent="MobPath" unique_id=1097984100]
-position = Vector2(0, 16)
+position = Vector2(0, 23)
 
 [node name="StartPosition" type="Marker2D" parent="." unique_id=319570007]
-position = Vector2(240, 450)
-rotation = 1.19029
-scale = Vector2(0.99999994, 0.99999994)
+position = Vector2(945, 525)
+rotation = 0.0
+scale = Vector2(1, 1)
 
 [node name="Player" parent="." unique_id=543889992 instance=ExtResource("3_lquwl")]
 z_index = 1
 
 [node name="HUD" parent="." unique_id=573548739 instance=ExtResource("4_1bvp3")]
 
+[node name="ObstacleField" parent="." instance=ExtResource("7_obstacles")]
+
 [node name="TextureRect" type="TextureRect" parent="." unique_id=997498119]
-show_behind_parent = true
+layout_mode = 0
+anchors_preset = 0
+anchor_right = 0.0
+anchor_bottom = 0.0
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 1890.0
+offset_bottom = 1050.0
+grow_horizontal = 0
+grow_vertical = 0
 z_index = -1
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = 240.00006
-offset_top = -360.0
-offset_right = 7439.9985
-offset_bottom = 4424.0005
-grow_horizontal = 2
-grow_vertical = 2
-rotation = 1.5707964
-scale = Vector2(0.1, 0.1)
+show_behind_parent = true
 texture = ExtResource("5_lquwl")
+expand_mode = 1
+stretch_mode = 0
 
 [node name="Music" type="AudioStreamPlayer" parent="." unique_id=154937832]
 stream = SubResource("AudioStreamOggVorbis_272bh")

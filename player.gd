@@ -6,6 +6,8 @@ signal hit
 var screen_size # Size of the game window (playfield clamp rectangle).
 var creature_move_intent: Vector2 = Vector2.ZERO ## Sticky direction when ENGINE or AI owns movement.
 var current_velocity: Vector2 = Vector2.ZERO
+## Last non-zero movement direction (normalized), for motor cone awareness; unchanged while idle.
+var last_move_direction: Vector2 = Vector2.RIGHT
 
 enum ControlMode {
   HUMAN,
@@ -77,6 +79,9 @@ func _physics_process(delta: float) -> void:
   position += current_velocity * delta
   position = position.clamp(Vector2.ZERO, screen_size)
 
+  if current_velocity.length() > 1.0:
+    last_move_direction = current_velocity.normalized()
+
   if current_velocity.x != 0.0:
     $AnimatedSprite2D.animation = "walk"
     $AnimatedSprite2D.flip_v = false
@@ -104,6 +109,7 @@ func _on_body_entered(body: Node2D) -> void:
 func start(pos: Vector2) -> void:
   position = pos
   current_velocity = Vector2.ZERO
+  last_move_direction = Vector2.RIGHT
   show()
   $CollisionShape2D.disabled = false
 

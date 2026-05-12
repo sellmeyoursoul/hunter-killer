@@ -132,6 +132,9 @@ var _bundled_launcher: Node
 ## Persisted challenger streak state for scripted motor oscillation damping (keys `challenger`, `frames`; see scripted_intent_hold.gd).
 var _scripted_intent_hold_state: Dictionary = {}
 
+## Ring buffer of mob snapshots for motor memory: each entry maps [code]RigidBody2D.get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
+var _mob_hist: Array = []
+
 ## True while [method arm_ai_session] is in progress (awaiting bundled inference). Prevents overlapping arms.
 var _arm_session_in_progress: bool = false
 
@@ -162,6 +165,7 @@ func attach_main(main_node: Node) -> void:
   _main = main_node
   _creature = _main.get_node_or_null("Player") as Area2D
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  _mob_hist.clear()
   emit_signal("ai_session_state_changed", int(_state))
 
 
@@ -431,6 +435,7 @@ func notify_main_new_game() -> void:
   _latest_snapshot = ""
   _physics_ticks = 0
   _next_inference_ms = Time.get_ticks_msec()
+  _mob_hist.clear()
   match _state:
     State.ARMED:
       _set_state(State.PLAYING)
@@ -462,6 +467,7 @@ func notify_main_game_over() -> void:
   _next_inference_ms = 0
   _has_snapshot = false
   _latest_snapshot = ""
+  _mob_hist.clear()
 
 
 func _exit_tree() -> void:
@@ -516,6 +522,164 @@ func _motor_bool_default_true(motor_p: Dictionary, key: String) -> bool:
   return s not in ["0", "false", "no", "off", ""]
 
 
+## Distance from mob to creature footprint for awareness gating; mirrors [method CardinalAvoidance.awareness_gate_distance] using [member _MOTOR] for AABB math.
+func _awareness_gate_distance_for_driver(
+  creature_center: Vector2, creature_half: Vector2, mob_pos: Vector2
+) -> float:
+  var half := creature_half
+  if half.x <= 0.0 or half.y <= 0.0:
+    return creature_center.distance_to(mob_pos)
+  var closest_c := _MOTOR.closest_point_on_aabb(creature_center, half, mob_pos)
+  return mob_pos.distance_to(closest_c)
+
+
+## Effective reach with forward cone; mirrors [method CardinalAvoidance.effective_awareness_reach].
+func _effective_awareness_reach_for_driver(
+  creature_center: Vector2,
+  mob_pos: Vector2,
+  base_radius: float,
+  cone_extra: float,
+  cone_cos_threshold: float,
+  facing: Vector2,
+) -> float:
+  var reach := base_radius
+  if cone_extra > 0.0 and cone_cos_threshold >= -1.0001:
+    var delta := mob_pos - creature_center
+    var dist := delta.length()
+    var u := Vector2.RIGHT
+    if dist > 1e-4:
+      u = delta / dist
+    var f := facing
+    if f.length() < 1e-4:
+      f = Vector2.RIGHT
+    else:
+      f = f.normalized()
+    if u.dot(f) >= cone_cos_threshold:
+      reach = base_radius + cone_extra
+  return reach
+
+
+## Appends a mob field snapshot for memory ghosts ([member _mob_hist]). Drops oldest entries past [code]awareness_memory_ticks[/code].
+func _record_mob_history_if_playing() -> void:
+  if _main == null:
+    return
+  var motor_p_hist := GameConfig.get_creature_motor_params()
+  var max_t := int(motor_p_hist.get("awareness_memory_ticks", 3))
+  if max_t <= 0:
+    _mob_hist.clear()
+    return
+  var snap: Dictionary = {}
+  for n in _main.get_tree().get_nodes_in_group("mobs"):
+    if n is RigidBody2D:
+      var rb := n as RigidBody2D
+      snap[rb.get_instance_id()] = {
+        "position": rb.global_position,
+        "velocity": rb.linear_velocity,
+      }
+  _mob_hist.append(snap)
+  while _mob_hist.size() > max_t:
+    _mob_hist.pop_front()
+
+
+## Collects static obstacles (group [code]obstacles[/code]) as AABBs for the motor ([code]position[/code] + [code]half_extents[/code]).
+func _static_obstacles_for_motor() -> Array:
+  var out: Array = []
+  if _main == null:
+    return out
+  for n in _main.get_tree().get_nodes_in_group("obstacles"):
+    if not n is StaticBody2D:
+      continue
+    var sb := n as StaticBody2D
+    for ch in sb.get_children():
+      if ch is CollisionShape2D:
+        var cs := ch as CollisionShape2D
+        if cs.shape is RectangleShape2D:
+          var r := cs.shape as RectangleShape2D
+          var he := r.size * 0.5
+          out.append({"position": cs.global_position, "half_extents": he})
+  return out
+
+
+## Builds [param mobs] array for [code]CardinalAvoidance[/code]: live entries, unreachable live with memory scale, despawned ghosts.
+## Params:
+## - motor_p: Merged [code]creature_motor[/code].
+## - creature_pos: Creature center (world).
+## - he_xy: Footprint half-extents for gating.
+## Returns:
+## - Array of [code]{ "position", "velocity", "cost_scale" }[/code] dicts.
+func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2) -> Array:
+  var out: Array = []
+  if _main == null:
+    return out
+  var awareness_r: float = float(motor_p.get("awareness_radius", 0.0))
+  var cone_extra: float = float(motor_p.get("awareness_cone_extra", 0.0))
+  var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
+  var cone_cos: float = cos(deg_to_rad(half_deg))
+  var facing_v := Vector2.RIGHT
+  if _creature != null:
+    var fd: Variant = _creature.get("last_move_direction")
+    if typeof(fd) == TYPE_VECTOR2:
+      var fv := fd as Vector2
+      if fv.length() > 1e-4:
+        facing_v = fv.normalized()
+
+  var mem_ticks := maxi(0, int(motor_p.get("awareness_memory_ticks", 3)))
+  var mem_w: float = float(motor_p.get("awareness_memory_weight", 0.35))
+  var horizon: float = float(motor_p.get("awareness_memory_horizon_sec", 0.0))
+  if horizon <= 0.0 and mem_ticks > 0:
+    horizon = float(mem_ticks) / maxf(1.0, float(Engine.physics_ticks_per_second))
+
+  var live_ids: Dictionary = {}
+
+  for n in _main.get_tree().get_nodes_in_group("mobs"):
+    if n is RigidBody2D:
+      var rb := n as RigidBody2D
+      var id := rb.get_instance_id()
+      live_ids[id] = true
+      var p := rb.global_position
+      var v := rb.linear_velocity
+      var gated := false
+      if awareness_r > 0.0:
+        var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, p)
+        var eff := _effective_awareness_reach_for_driver(
+          creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v
+        )
+        gated = gd > eff
+      if gated:
+        if mem_ticks > 0 and mem_w > 0.0:
+          var pred := p + v * horizon
+          out.append({"position": pred, "velocity": v, "cost_scale": mem_w})
+      else:
+        out.append({"position": p, "velocity": v, "cost_scale": 1.0})
+
+  if mem_ticks > 0 and mem_w > 0.0 and _mob_hist.size() > 0:
+    var ghost_added: Dictionary = {}
+    var i := _mob_hist.size() - 1
+    while i >= 0:
+      var snap: Dictionary = _mob_hist[i]
+      for id in snap:
+        if live_ids.has(id):
+          continue
+        if ghost_added.has(id):
+          continue
+        var e: Dictionary = snap[id]
+        var gp: Vector2 = e.get("position", Vector2.ZERO)
+        var gv: Vector2 = e.get("velocity", Vector2.ZERO)
+        var pred := gp + gv * horizon
+        if awareness_r > 0.0:
+          var gd2 := _awareness_gate_distance_for_driver(creature_pos, he_xy, pred)
+          var eff2 := _effective_awareness_reach_for_driver(
+            creature_pos, pred, awareness_r, cone_extra, cone_cos, facing_v
+          )
+          if gd2 > eff2:
+            continue
+        out.append({"position": pred, "velocity": gv, "cost_scale": mem_w})
+        ghost_added[id] = true
+      i -= 1
+
+  return out
+
+
 ## Builds the dictionary consumed by [code]cardinal_avoidance.pick_best_move_intent[/code].
 ## Half-extents: JSON [code]creature_half_extent_*[/code] are clamped with [code]maxf(0, …)[/code]; capsule-derived values use the same clamp. Use **positive** JSON values for real footprint scoring ([code]Vector2.ZERO[/code] in context falls back to center-point motor math).
 ## Params:
@@ -531,11 +695,6 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
   var ss := _creature.get("screen_size") as Vector2
   if ss == Vector2.ZERO:
     ss = _creature.get_viewport_rect().size
-  var mobs: Array = []
-  for n in _main.get_tree().get_nodes_in_group("mobs"):
-    if n is RigidBody2D:
-      var rb := n as RigidBody2D
-      mobs.append({"position": rb.global_position, "velocity": rb.linear_velocity})
   var he_xy := Vector2(
     maxf(0.0, float(motor_p.get("creature_half_extent_x", 27.0))),
     maxf(0.0, float(motor_p.get("creature_half_extent_y", 61.0))),
@@ -548,13 +707,20 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
         maxf(0.0, cap.radius),
         maxf(0.0, cap.radius + cap.height * 0.5),
       )
+  var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
+  var facing_display := Vector2.RIGHT
+  var fd0: Variant = _creature.get("last_move_direction")
+  if typeof(fd0) == TYPE_VECTOR2:
+    var fv0 := fd0 as Vector2
+    if fv0.length() > 1e-4:
+      facing_display = fv0.normalized()
   return {
     "creature_position": pos,
     "creature_speed": spd,
     "lookahead_sec": float(motor_p.get("lookahead_sec", 0.15)),
     "bounds_min": Vector2.ZERO,
     "bounds_max": ss,
-    "mobs": mobs,
+    "mobs": _motor_mobs_array(motor_p, pos, he_xy),
     "weight_dist": float(motor_p.get("weight_dist", 0.45)),
     "weight_dist_sq": float(motor_p.get("weight_dist_sq", 55.0)),
     "weight_closing": float(motor_p.get("weight_closing", 1.05)),
@@ -565,6 +731,12 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "weight_edge": float(motor_p.get("weight_edge", 0.48)),
     "shuffle_tie_break": _motor_bool_default_true(motor_p, "shuffle_tie_break"),
     "tie_shuffle_seed": _physics_ticks,
+    "awareness_radius": float(motor_p.get("awareness_radius", 0.0)),
+    "awareness_cone_extra": float(motor_p.get("awareness_cone_extra", 0.0)),
+    "awareness_cone_cos_threshold": cos(deg_to_rad(half_deg)),
+    "creature_facing": facing_display,
+    "static_obstacles": _static_obstacles_for_motor(),
+    "weight_obstacle": float(motor_p.get("weight_obstacle", 0.0)),
   }
 
 
@@ -593,6 +765,8 @@ func _physics_process(_delta: float) -> void:
     ) as Vector2
     if _creature.has_method("set_creature_move_intent"):
       _creature.call("set_creature_move_intent", intent)
+
+  _record_mob_history_if_playing()
 
 
 func _refresh_inference_client_config() -> void:
