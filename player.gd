@@ -4,15 +4,32 @@ signal hit
 @export var isHostile = false
 @export var speed = 400 # How fast this creature moves (pixels/sec); human-held or scripted under same rules.
 var screen_size # Size of the game window (playfield clamp rectangle).
-var creature_move_intent: Vector2 = Vector2.ZERO ## Sticky direction when ENGINE drives movement.
+var creature_move_intent: Vector2 = Vector2.ZERO ## Sticky direction when ENGINE or AI owns movement.
 var current_velocity: Vector2 = Vector2.ZERO
 
 enum ControlMode {
   HUMAN,
   ENGINE,
+  AI,
 }
 
 var control_mode: ControlMode = ControlMode.HUMAN
+
+
+## Stable int backing for [enum ControlMode.HUMAN]; use with [method Object.call] from autoload drivers.
+static func human_control_as_int() -> int:
+  return ControlMode.HUMAN
+
+
+## Stable int backing for [enum ControlMode.ENGINE].
+static func engine_control_as_int() -> int:
+  return ControlMode.ENGINE
+
+
+## Stable int backing for [enum ControlMode.AI].
+static func ai_control_as_int() -> int:
+  return ControlMode.AI
+
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
@@ -20,7 +37,7 @@ func _ready() -> void:
   hide()
 
 
-## Computes movement intent from human [code]Input[/code] or sticky engine-held intent ([enum ControlMode.ENGINE]).
+## Computes movement intent from human [code]Input[/code] or sticky non-human intent ([enum ControlMode.ENGINE], [enum ControlMode.AI]).
 ## Params:
 ## - none
 ## Returns:
@@ -28,7 +45,7 @@ func _ready() -> void:
 ## Usage:
 ## - Called by _physics_process() before integrating velocity.
 func _read_move_intent() -> Vector2:
-  if control_mode == ControlMode.ENGINE:
+  if control_mode == ControlMode.ENGINE or control_mode == ControlMode.AI:
     return creature_move_intent
   var move := Vector2.ZERO
   if Input.is_action_pressed("move_right"):
@@ -93,7 +110,7 @@ func start(pos: Vector2) -> void:
 
 ## Sets exclusive control mode for movement source selection.
 ## Params:
-## - mode: [enum ControlMode.HUMAN] (local input) or [enum ControlMode.ENGINE] (game code / inference motor).
+## - mode: [enum ControlMode.HUMAN] (local input), [enum ControlMode.ENGINE] (scripted motor), or [enum ControlMode.AI] (LLM / TM via same intent API).
 ## Returns / side effects:
 ## - Switches intent source in [_read_move_intent].
 ## Usage:
@@ -102,7 +119,7 @@ func set_control_mode(mode: ControlMode) -> void:
   control_mode = mode
 
 
-## Updates sticky move intent used when [member control_mode] is [enum ControlMode.ENGINE].
+## Updates sticky move intent used when [member control_mode] is [enum ControlMode.ENGINE] or [enum ControlMode.AI].
 ## Params:
 ## - dir: Intended direction vector (normalized or zeroed).
 ## Returns / side effects:

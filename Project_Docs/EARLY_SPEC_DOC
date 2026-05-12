@@ -11,7 +11,7 @@ Superseded for agent work by the split plans in this folder; start at [VISION_WO
 | Terrain / environment props | [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) |
 | stat → point pool math | [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md) |
 | LLM scope (conversation, not motor) | [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md) |
-| Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](MOB_AVOIDANCE_PLAN.md) |
+| Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) |
 | Blank template for new features | [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) |
 
 ---

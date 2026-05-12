@@ -7,7 +7,9 @@ const _Wire := preload("res://AI_int_lib/perception_wire.gd")
 const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
+const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 const _Driver := preload("res://AI_int_lib/ai_driver.gd")
+const _PlayerScr := preload("res://player.gd")
 const _Bundle := preload("res://AI_int_lib/bundled_inference_launcher.gd")
 
 var _failures: int = 0
@@ -26,6 +28,8 @@ func _run_all() -> void:
   _test_perception_sampling()
   _test_perception_risk_hints()
   _test_cardinal_avoidance()
+  _test_scripted_intent_hold()
+  _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
   _test_bundled_inference_helpers()
   if _failures > 0:
@@ -54,6 +58,18 @@ func _test_merge_defaults_and_override() -> void:
   _assert(merged["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 3, "merge perception stride")
   _assert(str(merged["creature_motor"].get("mode", "")) == "llm", "merge creature_motor.mode override")
   _assert(
+    is_equal_approx(float(merged["creature_motor"].get("weight_interior", 0.0)), 0.65),
+    "merge creature_motor keeps default weight_interior when not overridden",
+  )
+  _assert(
+    is_equal_approx(float(merged["creature_motor"].get("weight_dist_sq", 0.0)), 55.0),
+    "merge creature_motor keeps default weight_dist_sq when not overridden",
+  )
+  _assert(
+    is_equal_approx(float(merged["creature_motor"].get("weight_edge", 0.0)), 0.48),
+    "merge creature_motor keeps default weight_edge when not overridden",
+  )
+  _assert(
     float(merged["creature_motor"].get("lookahead_sec", 0.0)) > 0.0,
     "merge creature_motor keeps default lookahead when not overridden"
   )
@@ -62,6 +78,14 @@ func _test_merge_defaults_and_override() -> void:
   var m2: Dictionary = res["merged"]
   _assert(m2["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 1, "missing file perception default")
   _assert(str(base["creature_motor"].get("mode", "")) == "scripted", "default creature_motor.mode scripted")
+  _assert(int(base["creature_motor"].get("scripted_intent_hold_physics_ticks", -1)) == 5, "default scripted intent hold")
+  _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
+  _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
+  _assert(is_equal_approx(float(base["creature_motor"].get("weight_closing", 0.0)), 1.05), "default weight_closing")
+  _assert(is_equal_approx(float(base["creature_motor"].get("distance_eps", 0.0)), 12.0), "default distance_eps")
+  _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist_sq", 0.0)), 55.0), "default weight_dist_sq")
+  _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
+  _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
 
 
 func _test_load_merged_config_repo_fallback() -> void:
@@ -126,6 +150,10 @@ func _test_cardinal_avoidance() -> void:
     "weight_closing": 0.5,
     "penalty_oob": 1e7,
     "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.0,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.0,
   }
   var idle := _Motor.pick_best_move_intent(base_ctx)
   _assert(idle.is_equal_approx(Vector2(0.0, -1.0)), "no mobs tie picks UP first")
@@ -144,15 +172,187 @@ func _test_cardinal_avoidance() -> void:
     1.0,
     0.5,
     1e7,
-    8.0
+    8.0,
+    Vector2.ZERO
   )
   _assert(oob_pen >= 1e6, "OOB prediction gets huge cost")
+
+  var q := _Motor.closest_point_on_aabb(Vector2(100.0, 100.0), Vector2(10.0, 10.0), Vector2(200.0, 100.0))
+  _assert(q.is_equal_approx(Vector2(110.0, 100.0)), "nearest AABB point clamps to east face")
+
+  var c_point := _Motor.cost_at_prediction(
+    Vector2(100.0, 100.0),
+    [{"position": Vector2(100.0, 130.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(480.0, 720.0),
+    1.0,
+    0.5,
+    1e7,
+    8.0,
+    Vector2.ZERO
+  )
+  var c_foot := _Motor.cost_at_prediction(
+    Vector2(100.0, 100.0),
+    [{"position": Vector2(100.0, 130.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(480.0, 720.0),
+    1.0,
+    0.5,
+    1e7,
+    8.0,
+    Vector2(20.0, 20.0)
+  )
+  _assert(c_foot > c_point, "nonzero footprint clears mob at center more aggressively than point model")
+
+  var threat := base_ctx.duplicate(true)
+  threat["creature_position"] = Vector2(200.0, 200.0)
+  threat["mobs"] = [{"position": Vector2(200.0, 200.0), "velocity": Vector2.ZERO}]
+  var c_idle := _Motor.cost_at_prediction(
+    Vector2(200.0, 200.0),
+    threat["mobs"],
+    Vector2.ZERO,
+    Vector2(480.0, 720.0),
+    1.0,
+    0.5,
+    1e7,
+    8.0,
+    Vector2(20.0, 20.0)
+  )
+  var c_step := _Motor.cost_at_prediction(
+    Vector2(200.0, 200.0) + Vector2(0.0, -1.0) * 400.0 * 0.15,
+    threat["mobs"],
+    Vector2.ZERO,
+    Vector2(480.0, 720.0),
+    1.0,
+    0.5,
+    1e7,
+    8.0,
+    Vector2(20.0, 20.0)
+  )
+  _assert(c_step < c_idle, "mob overlap favors moving off center vs standing still (affirmative dodge cost)")
+
+  var pair := [
+    {"position": Vector2(170.0, 200.0), "velocity": Vector2.ZERO},
+    {"position": Vector2(230.0, 200.0), "velocity": Vector2.ZERO},
+  ]
+  var mid := Vector2(200.0, 200.0)
+  var c_pair_lin := _Motor.cost_at_prediction(
+    mid, pair, Vector2.ZERO, Vector2(480.0, 720.0), 0.45, 1.05, 1e7, 12.0, Vector2.ZERO, 0.0, 0.0
+  )
+  var c_pair_sq := _Motor.cost_at_prediction(
+    mid, pair, Vector2.ZERO, Vector2(480.0, 720.0), 0.45, 1.05, 1e7, 12.0, Vector2.ZERO, 0.0, 55.0
+  )
+  _assert(c_pair_sq > c_pair_lin + 0.05, "weight_dist_sq adds crowding penalty between two mobs")
 
   var corner := base_ctx.duplicate(true)
   corner["creature_position"] = Vector2(2.0, 360.0)
   corner["mobs"] = []
   var away_from_oob := _Motor.pick_best_move_intent(corner)
   _assert(not away_from_oob.is_equal_approx(Vector2(-1.0, 0.0)), "near left wall avoids stepping OOB")
+
+  # Callable: static exists on script; analyzer sometimes misses it on preload() type (see _test_perception_snippet).
+  var o_det: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
+    {"creature_position": Vector2.ONE, "deterministic_tie_order": true, "shuffle_tie_break": true}
+  ) as Array
+  _assert((o_det[0] as Vector2).is_equal_approx(Vector2(0.0, -1.0)), "deterministic tie order starts UP")
+  var o_a: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
+    {"creature_position": Vector2(3.0, 4.0), "tie_shuffle_seed": 7, "shuffle_tie_break": true}
+  ) as Array
+  var o_b: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
+    {"creature_position": Vector2(3.0, 4.0), "tie_shuffle_seed": 999, "shuffle_tie_break": true}
+  ) as Array
+  _assert((o_a[4] as Vector2).is_equal_approx(Vector2.ZERO) and (o_b[4] as Vector2).is_equal_approx(Vector2.ZERO), "ZERO always last in shuffled order")
+  var perm_diff := false
+  for i in range(4):
+    if not (o_a[i] as Vector2).is_equal_approx(o_b[i] as Vector2):
+      perm_diff = true
+  _assert(perm_diff, "different tie_shuffle_seed permutes cardinals")
+
+  var left_open := {
+    "creature_position": Vector2(20.0, 360.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [],
+    "weight_dist": 1.0,
+    "weight_closing": 0.5,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 3.0,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.0,
+  }
+  var inward := _Motor.pick_best_move_intent(left_open)
+  _assert(inward.is_equal_approx(Vector2.RIGHT), "interior posture pulls toward playfield center from left edge")
+
+  var wall_hug := {
+    "creature_position": Vector2(24.0, 360.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [],
+    "weight_dist": 1.0,
+    "weight_closing": 0.5,
+    "penalty_oob": 1e7,
+    "distance_eps": 12.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.0,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 2.6,
+  }
+  var off_edge := _Motor.pick_best_move_intent(wall_hug)
+  _assert(off_edge.is_equal_approx(Vector2.RIGHT), "edge clearance pulls away from boundary without interior term")
+
+
+func _test_mob_avoidance_acceptance() -> void:
+  for a in ["move_up", "move_down", "move_left", "move_right"]:
+    _assert(InputMap.has_action(a), "InputMap defines %s for HUMAN movement" % a)
+  var repo := _Merge.load_merged_config("user://__mob_avoid_accept_repo__.json")
+  var cm: Dictionary = repo["merged"]["creature_motor"]
+  _assert(str(cm.get("mode", "")).to_lower() == "scripted", "repo game_config creature_motor.mode scripted")
+  _assert(
+    _Driver.playing_control_mode_int_for_motor_mode_string("llm") == _PlayerScr.ai_control_as_int(),
+    "PLAYING branch: llm motor → AI control int",
+  )
+  _assert(
+    _Driver.playing_control_mode_int_for_motor_mode_string("LLM") == _PlayerScr.ai_control_as_int(),
+    "motor mode comparison is case-insensitive",
+  )
+  _assert(
+    _Driver.playing_control_mode_int_for_motor_mode_string("scripted") == _PlayerScr.engine_control_as_int(),
+    "PLAYING branch: scripted motor → ENGINE control int",
+  )
+  _assert(
+    _Driver.playing_control_mode_int_for_motor_mode_string("unknown_mode") == _PlayerScr.engine_control_as_int(),
+    "unknown motor mode maps to ENGINE (safe scripted motor)",
+  )
+
+
+func _test_scripted_intent_hold() -> void:
+  var fh := Callable(IntentHoldScr, &"filtered_intent")
+  var st: Dictionary = {}
+  var incumbent := Vector2(0.0, 1.0)
+  var challenger := Vector2(0.0, -1.0)
+  for _i in range(4):
+    _assert(
+      (fh.call(challenger, incumbent, 5, st) as Vector2).is_equal_approx(incumbent),
+      "intent hold ignores single-tick challenger"
+    )
+  var switched: Vector2 = fh.call(challenger, incumbent, 5, st) as Vector2
+  _assert(switched.is_equal_approx(challenger), "intent hold adopts after streak")
+
+  Callable(IntentHoldScr, &"reset_state").call(st)
+  var right := Vector2(1.0, 0.0)
+  _assert((fh.call(right, incumbent, 5, st) as Vector2).is_equal_approx(incumbent), "new challenger resets streak frame 1")
+  var left := Vector2(-1.0, 0.0)
+  _assert((fh.call(left, incumbent, 5, st) as Vector2).is_equal_approx(incumbent), "challenger swap restarts accumulation")
+
+  Callable(IntentHoldScr, &"reset_state").call(st)
+  var cold: Vector2 = fh.call(right, Vector2.ZERO, 3, st) as Vector2
+  _assert(cold.is_equal_approx(right), "idle incumbent skips hold")
 
 
 func _test_perception_risk_hints() -> void:

@@ -19,15 +19,23 @@ static func default_perception_params() -> Dictionary:
   }
 
 
-## Defaults for scripted vs LLM creature motor; see MOB_AVOIDANCE_PLAN.md under Project_Docs.
+## Defaults for scripted vs LLM creature motor; see [Completed_Features/MOB_AVOIDANCE_PLAN.md](../Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md).
+## `creature_half_extent_x` / `creature_half_extent_y` must be **positive** in authored JSON; runtime clamps at max(0, …).
 static func default_creature_motor_params() -> Dictionary:
   return {
     "mode": "scripted",
     "lookahead_sec": 0.15,
-    "weight_dist": 1.0,
-    "weight_closing": 0.5,
+    "weight_dist": 0.45,
+    "weight_dist_sq": 55.0,
+    "weight_closing": 1.05,
     "penalty_oob": 1e7,
-    "distance_eps": 8.0,
+    "distance_eps": 12.0,
+    "creature_half_extent_x": 27.0,
+    "creature_half_extent_y": 61.0,
+    "scripted_intent_hold_physics_ticks": 5,
+    "weight_interior": 0.65,
+    "shuffle_tie_break": true,
+    "weight_edge": 0.48,
   }
 
 

@@ -19,6 +19,8 @@ const _WIRE := preload("res://AI_int_lib/perception_wire.gd")
 const _RISK := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
 const _MOTOR := preload("res://creature/motor/cardinal_avoidance.gd")
+const _PlayerScr := preload("res://player.gd")
+const _IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -51,6 +53,18 @@ static func gbnf_for_completion_state_enum(state_enum: int) -> String:
       return "root ::= \"UP\" | \"DOWN\" | \"LEFT\" | \"RIGHT\"\n"
     _:
       return ""
+
+
+## Maps merged [code]creature_motor.mode[/code] to [code]player.gd[/code] control int when **ARMED → PLAYING** ([method notify_main_new_game]); unknown modes map to ENGINE (same rule as [code]_creature_motor_mode[/code]).
+## Params:
+## - motor_mode: Raw [code]mode[/code] string from merged config (case-insensitive).
+## Returns:
+## - [code]ai_control_as_int()[/code] for [code]llm[/code], else [code]engine_control_as_int()[/code] on the preloaded player script.
+static func playing_control_mode_int_for_motor_mode_string(motor_mode: String) -> int:
+  var norm := str(motor_mode).to_lower().strip_edges()
+  return _PlayerScr.ai_control_as_int() if norm == "llm" else _PlayerScr.engine_control_as_int()
+
+
 const _LauncherScript := preload("res://AI_int_lib/bundled_inference_launcher.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 ## Max characters of model [code]content[/code] included in [method OLog.debug] lines (avoid huge perception blobs in logs).
@@ -115,6 +129,9 @@ var _last_completion_grammar: String = ""
 
 var _bundled_launcher: Node
 
+## Persisted challenger streak state for scripted motor oscillation damping (keys `challenger`, `frames`; see scripted_intent_hold.gd).
+var _scripted_intent_hold_state: Dictionary = {}
+
 ## True while [method arm_ai_session] is in progress (awaiting bundled inference). Prevents overlapping arms.
 var _arm_session_in_progress: bool = false
 
@@ -144,6 +161,7 @@ func _ready() -> void:
 func attach_main(main_node: Node) -> void:
   _main = main_node
   _creature = _main.get_node_or_null("Player") as Area2D
+  Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   emit_signal("ai_session_state_changed", int(_state))
 
 
@@ -361,9 +379,10 @@ func arm_ai_session() -> bool:
     return false
   _set_state(State.ARMED)
   if _creature != null and _creature.has_method("set_control_mode"):
-    _creature.call("set_control_mode", 1) # Player.ControlMode.ENGINE — Main scene node remains "Player".
+    _creature.call("set_control_mode", _PlayerScr.engine_control_as_int())
   if _creature != null and _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
+  Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   _has_snapshot = false
   _latest_snapshot = ""
   _next_inference_ms = Time.get_ticks_msec()
@@ -393,9 +412,10 @@ func cancel_armed_session() -> void:
   _http_request.cancel_request()
   _inflight_request_id = -1
   if _creature != null and _creature.has_method("set_control_mode"):
-    _creature.call("set_control_mode", 0)
+    _creature.call("set_control_mode", _PlayerScr.human_control_as_int())
   if _creature != null and _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
+  Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   _set_state(State.IDLE)
 
 
@@ -415,14 +435,17 @@ func notify_main_new_game() -> void:
     State.ARMED:
       _set_state(State.PLAYING)
       if _creature != null and _creature.has_method("set_control_mode"):
-        _creature.call("set_control_mode", 1)
+        _creature.call(
+          "set_control_mode",
+          playing_control_mode_int_for_motor_mode_string(_creature_motor_mode())
+        )
     State.WAITING:
       _set_state(State.IDLE)
       if _creature != null and _creature.has_method("set_control_mode"):
-        _creature.call("set_control_mode", 0)
+        _creature.call("set_control_mode", _PlayerScr.human_control_as_int())
     _:
       if _creature != null and _creature.has_method("set_control_mode"):
-        _creature.call("set_control_mode", 0)
+        _creature.call("set_control_mode", _PlayerScr.human_control_as_int())
 
 
 ## Notifies the driver that Main.game_over() completed.
@@ -477,7 +500,24 @@ func _creature_motor_mode() -> String:
   return "scripted"
 
 
+## Parses [code]creature_motor[/code] boolean that defaults to [code]true[/code] when the key is absent (JSON may use bool or string).
+## Params:
+## - motor_p: Merged motor section.
+## - key: Field name (e.g. [code]shuffle_tie_break[/code]).
+## Returns:
+## - [code]false[/code] only when the value is explicitly falsey ([code]false[/code], [code]"false"[/code], [code]0[/code], etc.).
+func _motor_bool_default_true(motor_p: Dictionary, key: String) -> bool:
+  if not motor_p.has(key):
+    return true
+  var v: Variant = motor_p[key]
+  if typeof(v) == TYPE_BOOL:
+    return bool(v)
+  var s := str(v).to_lower().strip_edges()
+  return s not in ["0", "false", "no", "off", ""]
+
+
 ## Builds the dictionary consumed by [code]cardinal_avoidance.pick_best_move_intent[/code].
+## Half-extents: JSON [code]creature_half_extent_*[/code] are clamped with [code]maxf(0, …)[/code]; capsule-derived values use the same clamp. Use **positive** JSON values for real footprint scoring ([code]Vector2.ZERO[/code] in context falls back to center-point motor math).
 ## Params:
 ## - motor_p: Merged [code]creature_motor[/code] params from [code]GameConfig[/code].
 ## Returns:
@@ -496,6 +536,18 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     if n is RigidBody2D:
       var rb := n as RigidBody2D
       mobs.append({"position": rb.global_position, "velocity": rb.linear_velocity})
+  var he_xy := Vector2(
+    maxf(0.0, float(motor_p.get("creature_half_extent_x", 27.0))),
+    maxf(0.0, float(motor_p.get("creature_half_extent_y", 61.0))),
+  )
+  if _creature != null:
+    var cs := _creature.get_node_or_null("CollisionShape2D") as CollisionShape2D
+    if cs != null and cs.shape is CapsuleShape2D:
+      var cap := cs.shape as CapsuleShape2D
+      he_xy = Vector2(
+        maxf(0.0, cap.radius),
+        maxf(0.0, cap.radius + cap.height * 0.5),
+      )
   return {
     "creature_position": pos,
     "creature_speed": spd,
@@ -503,10 +555,16 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "bounds_min": Vector2.ZERO,
     "bounds_max": ss,
     "mobs": mobs,
-    "weight_dist": float(motor_p.get("weight_dist", 1.0)),
-    "weight_closing": float(motor_p.get("weight_closing", 0.5)),
+    "weight_dist": float(motor_p.get("weight_dist", 0.45)),
+    "weight_dist_sq": float(motor_p.get("weight_dist_sq", 55.0)),
+    "weight_closing": float(motor_p.get("weight_closing", 1.05)),
     "penalty_oob": float(motor_p.get("penalty_oob", 1e7)),
-    "distance_eps": float(motor_p.get("distance_eps", 8.0)),
+    "distance_eps": float(motor_p.get("distance_eps", 12.0)),
+    "creature_half_extents": he_xy,
+    "weight_interior": float(motor_p.get("weight_interior", 0.65)),
+    "weight_edge": float(motor_p.get("weight_edge", 0.48)),
+    "shuffle_tie_break": _motor_bool_default_true(motor_p, "shuffle_tie_break"),
+    "tie_shuffle_seed": _physics_ticks,
   }
 
 
@@ -520,10 +578,19 @@ func _physics_process(_delta: float) -> void:
     _latest_snapshot = _build_snapshot_blob()
     _has_snapshot = not _latest_snapshot.is_empty()
 
-  if _creature_motor_mode() == "scripted" and int(_creature.get("control_mode")) == 1:
+  if _creature_motor_mode() == "scripted" and int(_creature.get("control_mode")) == _PlayerScr.engine_control_as_int():
     var motor_p := GameConfig.get_creature_motor_params()
     var ctx := _build_motor_context(motor_p)
-    var intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
+    var raw_intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
+    var incumbent_v: Variant = _creature.get("creature_move_intent")
+    var incumbent: Vector2 = incumbent_v if typeof(incumbent_v) == TYPE_VECTOR2 else Vector2.ZERO
+    var hold_ticks := maxi(
+      1,
+      int(motor_p.get("scripted_intent_hold_physics_ticks", 5))
+    )
+    var intent := Callable(_IntentHoldScr, &"filtered_intent").call(
+      raw_intent, incumbent, hold_ticks, _scripted_intent_hold_state
+    ) as Vector2
     if _creature.has_method("set_creature_move_intent"):
       _creature.call("set_creature_move_intent", intent)
 
@@ -535,6 +602,8 @@ func _refresh_inference_client_config() -> void:
 func _set_state(next_state: State) -> void:
   if _state == next_state:
     return
+  if _state == State.PLAYING and next_state != State.PLAYING:
+    Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   _state = next_state
   emit_signal("ai_session_state_changed", int(_state))
 
