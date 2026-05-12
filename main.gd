@@ -1,6 +1,7 @@
 extends Node
 
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
+const _Brand := preload("res://product_brand.gd")
 
 @export var mob_scene: PackedScene
 var score: int = 0
@@ -36,8 +37,11 @@ func new_game() -> void:
 # Emits an info-level startup line for `OLog` validation (`user://logs/…`). Requires
 # `LOG_LEVEL` of Info or Debug in `user://game_config.json` → `logging_params` (see Project_Docs/Completed_Features/LOGGING_PLAN.md).
 func _ready() -> void:
-	var project_title: String = str(ProjectSettings.get_setting("application/config/name", "Game"))
-	OLog.info("%s is starting" % project_title, false, "Main")
+	OLog.info(
+		"%s is starting — %s, %s" % [_Brand.GAME_TITLE, _Brand.AUTHOR, _Brand.COMPANY],
+		false,
+		"Main",
+	)
 	_ai_driver().attach_main(self)
 	$HUD.ai_player_game.connect(_on_hud_ai_player_game)
 	$HUD.end_ai_game.connect(_on_hud_end_ai_game)

@@ -4,7 +4,7 @@ This document tracks the **Hunter-Killer** fork goals: enlarged playfield (`art/
 
 **Baseline motor contract (delivered earlier):** [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md).
 
-**Fork workflow (GitHub + local clone):** [FORK_HUNTER_KILLER.md](FORK_HUNTER_KILLER.md).
+**Fork workflow (GitHub + local clone):** [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md).
 
 ## Playfield and scene
 
