@@ -46,8 +46,7 @@ static func format_plain_hint_line(idx_1: int, creature_patch: String, creature_
     focus = (
       "Dodge perpendicular to Mob list index %d (that index is numbered from nearest MOB first). "
       + "Treat it as the top interception risk this observation."
-      % idx_1
-    )
+    ) % idx_1
   else:
     focus = (
       "No interceptor tag this tick; still drift toward emptier lanes and widen gaps from nearest MOB lines."
