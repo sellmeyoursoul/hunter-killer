@@ -11,6 +11,9 @@ const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 const _Driver := preload("res://AI_int_lib/ai_driver.gd")
 const _PlayerScr := preload("res://player.gd")
 const _Bundle := preload("res://AI_int_lib/bundled_inference_launcher.gd")
+const _EnvCell := preload("res://environment/environment_cell_data.gd")
+const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
+const _EnvBake := preload("res://environment/environment_grid_bake.gd")
 
 var _failures: int = 0
 
@@ -33,6 +36,7 @@ func _run_all() -> void:
   _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
   _test_bundled_inference_helpers()
+  _test_environment_baked_grid()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -570,6 +574,65 @@ func _test_cardinal_avoidance() -> void:
     2.5,
   )
   _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
+
+
+func _test_environment_baked_grid() -> void:
+  var open := _EnvCell.new()
+  open.passible = true
+  open.movement_impact = 0.0
+  open.fit_size = -1.0
+  _assert(open.can_enter(99.0), "open passible all sizes")
+  _assert(is_equal_approx(open.movement_speed_multiplier(99.0), 1.0), "open no movement impact")
+
+  var mud := _EnvCell.new()
+  mud.passible = true
+  mud.movement_impact = 0.3
+  mud.fit_size = -1.0
+  _assert(is_equal_approx(mud.movement_speed_multiplier(1.0), 0.7), "mud slows everyone when no shrub fit_size")
+
+  var shrub := _EnvCell.new()
+  shrub.passible = true
+  shrub.movement_impact = 0.4
+  shrub.fit_size = 2.0
+  _assert(is_equal_approx(shrub.movement_speed_multiplier(1.0), 1.0), "shrub exempt when size strictly below fit_size")
+  _assert(is_equal_approx(shrub.movement_speed_multiplier(2.0), 0.6), "shrub applies at size == fit_size (strict < exemption)")
+
+  var wall := _EnvCell.new()
+  wall.passible = false
+  wall.fit_size = 0.0
+  _assert(not wall.can_enter(0.1), "squeeze wall blocks everyone when fit_size <= 0")
+
+  var gap := _EnvCell.new()
+  gap.passible = false
+  gap.fit_size = 3.0
+  gap.movement_impact = 0.2
+  _assert(gap.can_enter(3.0), "squeeze inclusive creature_size <= fit_size")
+  _assert(not gap.can_enter(3.01), "squeeze rejects creature_size > fit_size")
+  _assert(is_equal_approx(gap.movement_speed_multiplier(2.0), 0.8), "squeeze interior applies impact to all legal sizes")
+
+  var presets: Array = []
+  var k0 := _EnvCell.new()
+  k0.passible = true
+  var k1 := _EnvCell.new()
+  k1.passible = false
+  k1.fit_size = 1.0
+  presets.append(k0)
+  presets.append(k1)
+  var img := Image.create(4, 2, false, Image.FORMAT_RGBA8)
+  img.fill(Color.WHITE)
+  for x in range(2, 4):
+    img.set_pixel(x, 0, Color.BLACK)
+    img.set_pixel(x, 1, Color.BLACK)
+  var cmap := {Color.WHITE: 0, Color.BLACK: 1}
+  var baked = _EnvBake.bake_from_image(img, 2, Vector2.ZERO, 32.0, cmap, presets, 0)
+  _assert(baked != null, "bake_from_image returns grid")
+  _assert(baked.cell_width == 2 and baked.cell_height == 1, "bake cell dims from 4x2 image with pixels_per_cell 2")
+  _assert(baked.get_kind_id_at(0, 0) == 0 and baked.get_kind_id_at(1, 0) == 1, "bake maps top-left pixel per cell")
+  _assert(baked.is_valid_shape(), "baked buffer matches dimensions")
+  var wc: Vector2i = baked.world_to_cell(Vector2(33.0, 10.0))
+  _assert(wc == Vector2i(1, 0), "world_to_cell uses floor division by cell_size_px")
+  var d1 = baked.sample_cell_data_at_world(Vector2(50.0, 0.0))
+  _assert(d1 != null and d1.get("passible") == false, "sample_cell_data_at_world returns squeeze preset")
 
 
 func _test_mob_avoidance_acceptance() -> void:
