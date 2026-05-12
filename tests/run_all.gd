@@ -23,6 +23,7 @@ func _init() -> void:
 func _run_all() -> void:
   _test_merge_defaults_and_override()
   _test_load_merged_config_repo_fallback()
+  _test_hunter_killer_debug_project_settings()
   _test_tokens()
   _test_perception_snippet()
   _test_perception_sampling()
@@ -97,6 +98,17 @@ func _test_load_merged_config_repo_fallback() -> void:
   var merged: Dictionary = res["merged"]
   var ic: Dictionary = merged["inference_client"]
   _assert(str(ic.get("INFERENCE_BASE_URL", "")).begins_with("http"), "merged config pulls inference URL from repo template")
+
+
+func _test_hunter_killer_debug_project_settings() -> void:
+  _assert(
+    ProjectSettings.has_setting("hunter_killer_debug/draw_awareness"),
+    "project defines hunter_killer_debug/draw_awareness",
+  )
+  _assert(
+    ProjectSettings.get_setting("hunter_killer_debug/draw_awareness") == false,
+    "draw_awareness defaults to off",
+  )
 
 
 func _test_tokens() -> void:
@@ -402,6 +414,109 @@ func _test_cardinal_avoidance() -> void:
     0.0,
   )
   _assert(c_behind < c_ahead - 0.01, "cone lets forward mob contribute more than aft mob at same distance class")
+
+  ## awareness_radius <= 0: no finite distance gate (HK perception plan).
+  var c_far_open: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    0.0,
+    0.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  _assert(c_far_open > c_no_mob + 0.001, "nonpositive awareness_radius still applies mob repulsion from far mobs")
+  var c_far_neg: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    -10.0,
+    500.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  _assert(c_far_neg > c_no_mob + 0.001, "negative awareness_radius skips distance gate like zero")
+
+  ## awareness_cone_extra <= 0: forward sector does not extend reach beyond base radius.
+  var c_cone_off: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(520.0, 400.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    100.0,
+    0.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  var c_cone_on: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred,
+    [{"position": Vector2(520.0, 400.0), "velocity": Vector2.ZERO}],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    100.0,
+    400.0,
+    cos45,
+    Vector2(1.0, 0.0),
+    [],
+    0.0,
+  )
+  _assert(is_equal_approx(c_cone_off, c_no_mob), "zero cone_extra drops forward mob beyond base radius")
+  _assert(c_cone_on > c_no_mob + 0.001, "positive cone_extra pulls forward mob into reach")
+
+  ## Half-angle 180°: forward sector covers full circle; behind mob still gets base+extra reach.
+  var cos180 := cos(deg_to_rad(180.0))
+  var r_behind := Callable(_Motor, &"effective_awareness_reach").call(
+    ctr, Vector2(-200.0, 400.0), 100.0, 500.0, cos180, Vector2(1.0, 0.0)
+  ) as float
+  var r_narrow := Callable(_Motor, &"effective_awareness_reach").call(
+    ctr, Vector2(-200.0, 400.0), 100.0, 500.0, cos45, Vector2(1.0, 0.0)
+  ) as float
+  _assert(is_equal_approx(r_behind, 600.0), "180° half-angle extends cone extra behind creature")
+  _assert(is_equal_approx(r_narrow, 100.0), "45° half-angle does not extend extra behind creature")
 
   ## Per-entry cost_scale scales mob contribution.
   var c_full := _Motor.cost_at_prediction(

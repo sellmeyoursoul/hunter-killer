@@ -7,6 +7,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 ## Behavioral instructions
 
 - **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. Project Documents = `./Project_Docs/*.md` (excluding `./Project_Docs/Completed_Features/*`) plus files in `./.cursor/rules/*`.
+- **Completed_Features scope:** Do not treat `./Project_Docs/Completed_Features/**` as authoritative requirements when implementing, reviewing, or reconciling behavior unless the user explicitly asks to use them. Those files are archived; active specs live in non-archived `Project_Docs` and `.cursor/rules`.
 - **Feature-doc scope guard:** When implementing a specific feature, treat only the explicitly referenced feature plan (plus `./.cursor/rules/*`) as authoritative. Any other files in `./Project_Docs/*.md` that are not explicitly referenced by the active feature request should be treated as **feature drafts** and must not override the active feature requirements.
 - **Refactoring:** Do not rename or move files once they have been created. Renaming files will break the contextual rule application and is strictly prohibited.
 
@@ -66,7 +67,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 
 Detailed rules live only in these files; add more pointers here as new focus areas appear (e.g. UI).
 
-**Ignore inconsistencies in historical files** Files defined in `./Project_Docs/Completed_Features` are historical feature design docs. We expect cross-doc drift with those files. Only call this out in a situation where explicitly asked to include them.
+**Ignore inconsistencies in historical files:** Files under `./Project_Docs/Completed_Features` are archived; see **Completed_Features scope** under Behavioral instructions. Do not treat them as active requirements unless a maintainer explicitly asks. Cross-doc drift with those files is expected.
 
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)

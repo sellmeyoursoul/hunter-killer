@@ -120,9 +120,10 @@ static func load_merged_config(user_path: String = "user://game_config.json") ->
     if rjson.parse(rtxt) == OK and typeof(rjson.data) == TYPE_DICTIONARY:
       merged = merge_root(merged, rjson.data)
   if not FileAccess.file_exists(user_path):
+    ## First run (or user data cleared): repo template + defaults are still valid; do not surface as OLog error.
     return {
       "merged": merged,
-      "diagnostic": "%s is missing — merged [code]res://game_config.json[/code] template when present." % user_path,
+      "diagnostic": "",
     }
   var utxt := FileAccess.get_file_as_string(user_path)
   var ujson := JSON.new()

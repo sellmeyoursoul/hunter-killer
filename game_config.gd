@@ -20,7 +20,7 @@ func _reload_from_disk() -> void:
   _diagnostic = str(result.get("diagnostic", ""))
 
 
-## Non-empty if the file was missing, unreadable, or invalid JSON (defaults still applied).
+## Non-empty when [code]user://game_config.json[/code] failed to load (parse error, wrong root type). A missing user file is normal on first run: [code]load_merged_config[/code] still merges [code]res://game_config.json[/code] plus defaults and leaves this diagnostic empty.
 func get_config_load_diagnostic() -> String:
   return _diagnostic
 

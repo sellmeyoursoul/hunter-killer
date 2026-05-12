@@ -10,9 +10,9 @@
 
 [sub_resource type="Curve2D" id="Curve2D_7mycd"]
 _data = {
-"points": PackedVector2Array(0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 1890, 23, 0, 0, 0, 0, 1890, 1038, 0, 0, 0, 0, 0, 1038, 0, 0, 0, 0, 0, 23, 0, 0, 0, 0, 0, 0)
+"points": PackedVector2Array(0, 0, 0, 0, 12, 12, 0, 0, 0, 0, 1878, 12, 0, 0, 0, 0, 1878, 1038, 0, 0, 0, 0, 12, 1038, 0, 0, 0, 0, 12, 12)
 }
-point_count = 6
+point_count = 5
 
 
 
@@ -49,7 +49,7 @@ one_shot = true
 curve = SubResource("Curve2D_7mycd")
 
 [node name="MobSpawnLocation" type="PathFollow2D" parent="MobPath" unique_id=1097984100]
-position = Vector2(0, 23)
+position = Vector2(0, 0)
 
 [node name="StartPosition" type="Marker2D" parent="." unique_id=319570007]
 position = Vector2(945, 525)

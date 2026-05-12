@@ -112,6 +112,9 @@ var _latest_snapshot: String = ""
 var _has_snapshot: bool = false
 var _physics_ticks: int = 0
 
+## Last mob samples passed to the cardinal motor ([method _build_motor_context]); duplicated for the awareness debug overlay.
+var _debug_last_motor_mobs: Array = []
+
 var _request_id_counter: int = 0
 var _latest_enqueued_request_id: int = -1
 var _inflight_request_id: int = -1
@@ -134,6 +137,9 @@ var _scripted_intent_hold_state: Dictionary = {}
 
 ## Ring buffer of mob snapshots for motor memory: each entry maps [code]RigidBody2D.get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
 var _mob_hist: Array = []
+
+## Instance ids of mobs that have been inside effective awareness at least once this round; gates extrapolated [code]gated[/code] samples and [code]ghost[/code] entries to observed mobs only.
+var _mob_ids_ever_observed: Dictionary = {}
 
 ## True while [method arm_ai_session] is in progress (awaiting bundled inference). Prevents overlapping arms.
 var _arm_session_in_progress: bool = false
@@ -166,6 +172,7 @@ func attach_main(main_node: Node) -> void:
   _creature = _main.get_node_or_null("Player") as Area2D
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   _mob_hist.clear()
+  _mob_ids_ever_observed.clear()
   emit_signal("ai_session_state_changed", int(_state))
 
 
@@ -187,6 +194,15 @@ func is_human_start_suppressed() -> bool:
 ## - HUD/Main use this for initial control sync.
 func get_state() -> int:
   return int(_state)
+
+
+## Debug-only copy of [member _debug_last_motor_mobs] (deep duplicate safe for overlay readers).
+## Params:
+## - none
+## Returns:
+## - Array of mob dicts with [code]position[/code], [code]velocity[/code], [code]cost_scale[/code], optional [code]_motor_debug_source[/code] ([code]live[/code] | [code]gated[/code] | [code]ghost[/code]).
+func get_debug_motor_mobs_snapshot() -> Array:
+  return _debug_last_motor_mobs.duplicate(true)
 
 
 ## Pure helper for latest-enqueued request ordering checks.
@@ -436,6 +452,7 @@ func notify_main_new_game() -> void:
   _physics_ticks = 0
   _next_inference_ms = Time.get_ticks_msec()
   _mob_hist.clear()
+  _mob_ids_ever_observed.clear()
   match _state:
     State.ARMED:
       _set_state(State.PLAYING)
@@ -468,6 +485,7 @@ func notify_main_game_over() -> void:
   _has_snapshot = false
   _latest_snapshot = ""
   _mob_hist.clear()
+  _mob_ids_ever_observed.clear()
 
 
 func _exit_tree() -> void:
@@ -567,6 +585,7 @@ func _record_mob_history_if_playing() -> void:
   var max_t := int(motor_p_hist.get("awareness_memory_ticks", 3))
   if max_t <= 0:
     _mob_hist.clear()
+    _mob_ids_ever_observed.clear()
     return
   var snap: Dictionary = {}
   for n in _main.get_tree().get_nodes_in_group("mobs"):
@@ -600,13 +619,13 @@ func _static_obstacles_for_motor() -> Array:
   return out
 
 
-## Builds [param mobs] array for [code]CardinalAvoidance[/code]: live entries, unreachable live with memory scale, despawned ghosts.
+## Builds [param mobs] array for [code]CardinalAvoidance[/code]: live entries, unreachable live with memory scale (only if that mob was previously inside effective awareness this round), despawned ghosts (same observed rule).
 ## Params:
 ## - motor_p: Merged [code]creature_motor[/code].
 ## - creature_pos: Creature center (world).
 ## - he_xy: Footprint half-extents for gating.
 ## Returns:
-## - Array of [code]{ "position", "velocity", "cost_scale" }[/code] dicts.
+## - Array of [code]{ "position", "velocity", "cost_scale", "_motor_debug_source?" }[/code] dicts. [code]_motor_debug_source[/code] is overlay-only; motor ignores it.
 func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2) -> Array:
   var out: Array = []
   if _main == null:
@@ -645,12 +664,24 @@ func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector
           creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v
         )
         gated = gd > eff
+      if not gated:
+        _mob_ids_ever_observed[id] = true
       if gated:
-        if mem_ticks > 0 and mem_w > 0.0:
+        if mem_ticks > 0 and mem_w > 0.0 and _mob_ids_ever_observed.has(id):
           var pred := p + v * horizon
-          out.append({"position": pred, "velocity": v, "cost_scale": mem_w})
+          out.append({
+            "position": pred,
+            "velocity": v,
+            "cost_scale": mem_w,
+            "_motor_debug_source": "gated",
+          })
       else:
-        out.append({"position": p, "velocity": v, "cost_scale": 1.0})
+        out.append({
+          "position": p,
+          "velocity": v,
+          "cost_scale": 1.0,
+          "_motor_debug_source": "live",
+        })
 
   if mem_ticks > 0 and mem_w > 0.0 and _mob_hist.size() > 0:
     var ghost_added: Dictionary = {}
@@ -661,6 +692,8 @@ func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector
         if live_ids.has(id):
           continue
         if ghost_added.has(id):
+          continue
+        if not _mob_ids_ever_observed.has(id):
           continue
         var e: Dictionary = snap[id]
         var gp: Vector2 = e.get("position", Vector2.ZERO)
@@ -673,7 +706,12 @@ func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector
           )
           if gd2 > eff2:
             continue
-        out.append({"position": pred, "velocity": gv, "cost_scale": mem_w})
+        out.append({
+          "position": pred,
+          "velocity": gv,
+          "cost_scale": mem_w,
+          "_motor_debug_source": "ghost",
+        })
         ghost_added[id] = true
       i -= 1
 
@@ -714,13 +752,15 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     var fv0 := fd0 as Vector2
     if fv0.length() > 1e-4:
       facing_display = fv0.normalized()
+  var mobs_arr: Array = _motor_mobs_array(motor_p, pos, he_xy)
+  _debug_last_motor_mobs = mobs_arr.duplicate(true)
   return {
     "creature_position": pos,
     "creature_speed": spd,
     "lookahead_sec": float(motor_p.get("lookahead_sec", 0.15)),
     "bounds_min": Vector2.ZERO,
     "bounds_max": ss,
-    "mobs": _motor_mobs_array(motor_p, pos, he_xy),
+    "mobs": mobs_arr,
     "weight_dist": float(motor_p.get("weight_dist", 0.45)),
     "weight_dist_sq": float(motor_p.get("weight_dist_sq", 55.0)),
     "weight_closing": float(motor_p.get("weight_closing", 1.05)),
