@@ -277,7 +277,7 @@ Use a single **memory-backed classification** per distinct environmental feature
 - <<Question: Define **nearby mob threat** — reuse **`awareness_radius` / cone / memory ghosts`**, or a separate **`env_threat_radius`**?>>  
 - <<Question: “Known non-impeding + mobs cannot pass” — confirm this means **Mode A squeeze** or **Mode B shrub** or **open passible** tile inside a larger static footprint; how does motor get **mob passability** (mob `creature_size`) without duplicating world query logic?>>  
 - <<Question: When **both** slow terrain **and** unknown object compete on the same cardinal, what is the **merge order** (additive vs max vs lexicographic)?>>  
-- <<Question: **ENGINE** vs **HUMAN** control — apply exploration biases only under **ENGINE**, or also nudge **HUMAN** via optional HUD (probably ENGINE only)?>>
+- **ENGINE** vs **HUMAN:** **This phase** — apply interior env / exploration motor biases **only** when the creature is **ENGINE**-controlled; **do not** apply those nudges to **HUMAN** input. <<Comment: A future **skill-based** mechanism (e.g. optional HUD / tutor hints) could nudge humans toward safer probing or corridor use; keep that as a **separate** feature, **out of scope** for cardinal §8.2 v1.>>
 
 **Deliverable (implementation):**
 
@@ -290,7 +290,7 @@ Use a single **memory-backed classification** per distinct environmental feature
 
 - <<Question: Footprint rule — single **center point** vs **collision shape overlap fraction** for “inside difficult terrain”?>>  
 - <<Question: When player overlaps multiple cells, **max** vs **multiplicative** combine for `movement_impact`?>>  
-- <<Question: (Motor §8.2.5) See §8.2.5 — unknown vs unexplored, validation rule, threat radius, mob passability source, merge order, ENGINE-only.>>
+- <<Question: (Motor §8.2.5) See §8.2.5 — unknown vs unexplored, validation rule, threat radius, mob passability source, merge order.>>
 
 ---
 
@@ -310,6 +310,7 @@ Use a single **memory-backed classification** per distinct environmental feature
 
 | Date | Change |
 |------|--------|
+| 2026-05-12 | §8.2.5: **ENGINE**-only motor nudges this phase; human skill-based nudge deferred (comment). §9 index updated. |
 | 2026-05-12 | §8.2 motor vs environment: belief buckets, mob>object ordering, slow terrain context, memory, §8.2.5 questions; §10 LOS note. |
 | 2026-05-12 | Baked grid resources + palette authoring under **res://art/env/** (OBJECT §8.1). |
 | 2026-05-12 | Expanded §3.3 / §3.5: explicit `fit_size` truth table, implementation rules, anti-patterns, invalid numeric handling, reference `can_enter` sketch. |
