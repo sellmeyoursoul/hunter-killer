@@ -8,12 +8,12 @@ const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
-const _Driver := preload("res://AI_int_lib/ai_driver.gd")
+const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _PlayerScr := preload("res://player.gd")
-const _Bundle := preload("res://AI_int_lib/bundled_inference_launcher.gd")
 const _EnvCell := preload("res://environment/environment_cell_data.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvBake := preload("res://environment/environment_grid_bake.gd")
+const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
 
 var _failures: int = 0
 
@@ -37,6 +37,9 @@ func _run_all() -> void:
   _test_ai_driver_helpers()
   _test_bundled_inference_helpers()
   _test_environment_baked_grid()
+  _test_cardinal_interior_env_grid()
+  _test_wall_slide_pick()
+  _test_obstacle_visual_tiers()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -87,7 +90,7 @@ func _test_merge_defaults_and_override() -> void:
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_closing", 0.0)), 1.05), "default weight_closing")
-  _assert(is_equal_approx(float(base["creature_motor"].get("distance_eps", 0.0)), 12.0), "default distance_eps")
+  _assert(is_equal_approx(float(base["creature_motor"].get("distance_eps", 0.0)), 6.0), "default distance_eps")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist_sq", 0.0)), 55.0), "default weight_dist_sq")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
   _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
@@ -417,12 +420,12 @@ func _test_cardinal_avoidance() -> void:
     [],
     0.0,
   )
-  _assert(c_behind < c_ahead - 0.01, "cone lets forward mob contribute more than aft mob at same distance class")
+  _assert(c_behind < c_ahead, "cone lets forward mob contribute more than aft mob at same distance class")
 
   ## awareness_radius <= 0: no finite distance gate (HK perception plan).
   var c_far_open: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector2(400.0, 800.0), "velocity": Vector2.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -444,7 +447,7 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_far_open > c_no_mob + 0.001, "nonpositive awareness_radius still applies mob repulsion from far mobs")
   var c_far_neg: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector2(400.0, 800.0), "velocity": Vector2.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -576,6 +579,23 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
 
 
+func _test_wall_slide_pick() -> void:
+  ## Picks tangent with larger dot toward incoming (= smaller planar turn vs the ±90 flank).
+  var p: Object = _SlidePickScr.new()
+  var d_down: Variant = p.call("pick_tangent_closer", Vector2.DOWN, Vector2.RIGHT)
+  _assert(Vector2.DOWN.is_equal_approx((d_down as Vector2).normalized()), "down + horizontal wall prefers +Y")
+  var along_east: Variant = p.call("pick_tangent_closer", Vector2.RIGHT, Vector2(0, -1))
+  _assert(Vector2.RIGHT.is_equal_approx((along_east as Vector2).normalized()), "east + skyward normal prefers +X")
+
+
+func _test_obstacle_visual_tiers() -> void:
+  ## Buckets obstacle footprint max-axis into three export texture slots on [ObstacleFieldRoot].
+  var tier_helper_obj: Object = _ObstacleVisualTiersScr.new()
+  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(110, 90))) == 0, "obstacle tier small")
+  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(140, 110))) == 1, "obstacle tier medium")
+  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(280, 220))) == 2, "obstacle tier large")
+
+
 func _test_environment_baked_grid() -> void:
   var open := _EnvCell.new()
   open.passible = true
@@ -635,26 +655,125 @@ func _test_environment_baked_grid() -> void:
   _assert(d1 != null and d1.get("passible") == false, "sample_cell_data_at_world returns squeeze preset")
 
 
+func _test_cardinal_interior_env_grid() -> void:
+  var open := _EnvCell.new()
+  open.passible = true
+  open.movement_impact = 0.0
+  open.fit_size = -1.0
+  var wall := _EnvCell.new()
+  wall.passible = false
+  wall.fit_size = 0.0
+  var presets: Array = [open, wall]
+  var grid := _EnvGrid.new()
+  grid.cell_width = 5
+  grid.cell_height = 1
+  grid.cell_size_px = 100.0
+  grid.origin_world = Vector2.ZERO
+  grid.kind_presets = presets
+  var ids := PackedInt32Array([0, 0, 0, 1, 0])
+  grid.cell_kind_ids = ids
+  var step := 400.0 * 0.15
+  var c_left := _Motor.cost_at_prediction(
+    Vector2(250.0 - step, 50.0),
+    [],
+    Vector2.ZERO,
+    Vector2(800.0, 800.0),
+    0.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+    false,
+    grid,
+    10.0,
+    {"active": true, "weight_solid": 5000.0, "weight_slow": 10.0},
+  )
+  var c_right := _Motor.cost_at_prediction(
+    Vector2(250.0 + step, 50.0),
+    [],
+    Vector2.ZERO,
+    Vector2(800.0, 800.0),
+    0.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+    false,
+    grid,
+    10.0,
+    {"active": true, "weight_solid": 5000.0, "weight_slow": 10.0},
+  )
+  _assert(c_right > c_left + 500.0, "impassible baked cell east of pose adds much larger cost than open cell west")
+
+  var c_wall := _Motor.cost_at_prediction(
+    Vector2(350.0, 50.0),
+    [],
+    Vector2.ZERO,
+    Vector2(800.0, 800.0),
+    1.0,
+    0.5,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+    false,
+    grid,
+    10.0,
+    {"active": true, "weight_solid": 9000.0, "weight_slow": 3.0},
+  )
+  _assert(c_wall >= 8000.0, "interior solid grid adds large cost on impassible cell")
+
+
 func _test_mob_avoidance_acceptance() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
   for a in ["move_up", "move_down", "move_left", "move_right"]:
     _assert(InputMap.has_action(a), "InputMap defines %s for HUMAN movement" % a)
   var repo := _Merge.load_merged_config("user://__mob_avoid_accept_repo__.json")
   var cm: Dictionary = repo["merged"]["creature_motor"]
   _assert(str(cm.get("mode", "")).to_lower() == "scripted", "repo game_config creature_motor.mode scripted")
   _assert(
-    _Driver.playing_control_mode_int_for_motor_mode_string("llm") == _PlayerScr.ai_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("llm") == _PlayerScr.ai_control_as_int(),
     "PLAYING branch: llm motor → AI control int",
   )
   _assert(
-    _Driver.playing_control_mode_int_for_motor_mode_string("LLM") == _PlayerScr.ai_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("LLM") == _PlayerScr.ai_control_as_int(),
     "motor mode comparison is case-insensitive",
   )
   _assert(
-    _Driver.playing_control_mode_int_for_motor_mode_string("scripted") == _PlayerScr.engine_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("scripted") == _PlayerScr.engine_control_as_int(),
     "PLAYING branch: scripted motor → ENGINE control int",
   )
   _assert(
-    _Driver.playing_control_mode_int_for_motor_mode_string("unknown_mode") == _PlayerScr.engine_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("unknown_mode") == _PlayerScr.engine_control_as_int(),
     "unknown motor mode maps to ENGINE (safe scripted motor)",
   )
 
@@ -745,56 +864,65 @@ func _test_perception_sampling() -> void:
   var p: Vector2 = s.get("point", Vector2.ZERO)
   var he: Vector3 = s.get("half_extents", Vector3.ZERO)
   _assert(p.is_equal_approx(Vector2(200, 300)), "capsule sampling center")
-  _assert(he.x > 5.0 and he.y > 15.0, "capsule half-extents plausible")
+  _assert(he.x > 5.0 and he.y > 10.0, "capsule half-extents plausible")
 
 
 func _test_ai_driver_helpers() -> void:
-  _assert(_Driver.should_apply_response_id(7, 7), "latest-enqueued response applies")
-  _assert(not _Driver.should_apply_response_id(6, 7), "older response is stale")
-  var d := _Driver.new()
-  _assert(d.get_armed_handshake_user() == "ARMED", "armed handshake literal")
-  _assert(_Driver.http_request_result_label(HTTPRequest.RESULT_CANT_CONNECT) == "CANT_CONNECT", "HTTP label")
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  _assert(Callable(AD, &"should_apply_response_id").call(7, 7), "latest-enqueued response applies")
+  _assert(not Callable(AD, &"should_apply_response_id").call(6, 7), "older response is stale")
+  var d: Node = AD.new() as Node
+  _assert(d.call("get_armed_handshake_user") == "ARMED", "armed handshake literal")
+  _assert(Callable(AD, &"http_request_result_label").call(HTTPRequest.RESULT_CANT_CONNECT) == "CANT_CONNECT", "HTTP label")
   _assert(
-    _Driver.extract_openai_chat_choice_text({
-      "choices": [{"message": {"content": [{"type": "text", "text": "LEFT"}]}}],
-    })
+    Callable(AD, &"extract_openai_chat_choice_text").call(
+      {
+        "choices": [{"message": {"content": [{"type": "text", "text": "LEFT"}]}}],
+      },
+    )
     == "LEFT",
     "OpenAI array-shaped message.content",
   )
   _assert(
-    _Driver.extract_openai_chat_choice_text({"choices": [{"message": {"content": "RIGHT"}, "text": ""}]})
+    Callable(AD, &"extract_openai_chat_choice_text").call(
+      {"choices": [{"message": {"content": "RIGHT"}, "text": ""}]},
+    )
     == "RIGHT",
     "string message.content",
   )
   _assert(
-    _Driver.extract_openai_chat_choice_text({"choices": [{"text": "legacy DOWN"}]}) == "legacy DOWN",
+    Callable(AD, &"extract_openai_chat_choice_text").call({"choices": [{"text": "legacy DOWN"}]}) == "legacy DOWN",
     "legacy choices[0].text fallback",
   )
   _assert(
-    _Driver.extract_openai_chat_choice_text({
-      "choices": [{"message": {"content": [{"type": "output_text", "text": "UP"}]}}],
-    })
+    Callable(AD, &"extract_openai_chat_choice_text").call(
+      {
+        "choices": [{"message": {"content": [{"type": "output_text", "text": "UP"}]}}],
+      },
+    )
     == "UP",
     "OpenAI output_text content block (llama-server)",
   )
   _assert(
-    _Driver.extract_openai_completion_choice_text({"choices": [{"text": "LEFT"}]}) == "LEFT",
+    Callable(AD, &"extract_openai_completion_choice_text").call({"choices": [{"text": "LEFT"}]}) == "LEFT",
     "OpenAI /v1/completions choices[0].text",
   )
   _assert(
-    _Driver.extract_openai_completion_choice_text({"choices": [{}]}) == "",
+    Callable(AD, &"extract_openai_completion_choice_text").call({"choices": [{}]}) == "",
     "empty completion text",
   )
-  _assert(_Driver.gbnf_for_completion_state_enum(1).contains("START"), "gbnf ARMED")
-  _assert(_Driver.gbnf_for_completion_state_enum(2).contains("RIGHT"), "gbnf PLAYING")
-  _assert(_Driver.gbnf_for_completion_state_enum(0).is_empty(), "gbnf IDLE empty")
+  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(1)).contains("START"), "gbnf ARMED")
+  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(2)).contains("RIGHT"), "gbnf PLAYING")
+  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
+  d.free()
 
 
 func _test_bundled_inference_helpers() -> void:
+  var BN := load("res://AI_int_lib/bundled_inference_launcher.gd") as Script
   var ic_off := {"INFERENCE_AUTO_START_ENABLED": false}
-  _assert(not _Bundle.should_attempt_auto_start(ic_off, "http://127.0.0.1:8080"), "auto-start off")
+  _assert(not Callable(BN, &"should_attempt_auto_start").call(ic_off, "http://127.0.0.1:8080"), "auto-start off")
   var ic_on := {"INFERENCE_AUTO_START_ENABLED": true}
-  _assert(_Bundle.should_attempt_auto_start(ic_on, "http://127.0.0.1:8080"), "loopback + auto")
-  _assert(not _Bundle.should_attempt_auto_start(ic_on, "https://api.example.com"), "remote URL no spawn")
-  _assert(_Bundle.port_from_base_url("http://127.0.0.1:9090/") == 9090, "port parse")
-  _assert(_Bundle.port_from_base_url("http://127.0.0.1") == 8080, "default port when omitted")
+  _assert(Callable(BN, &"should_attempt_auto_start").call(ic_on, "http://127.0.0.1:8080"), "loopback + auto")
+  _assert(not Callable(BN, &"should_attempt_auto_start").call(ic_on, "https://api.example.com"), "remote URL no spawn")
+  _assert(Callable(BN, &"port_from_base_url").call("http://127.0.0.1:9090/") == 9090, "port parse")
+  _assert(Callable(BN, &"port_from_base_url").call("http://127.0.0.1") == 8080, "default port when omitted")

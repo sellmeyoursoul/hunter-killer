@@ -59,7 +59,7 @@
 ### Architecture / data flow
 
 - **CreatureStats** (or equivalent) Resource holds scalars; nodes (`Player`, `Mob`, future `NPC`) **own** a stats instance and read/write through small APIs (`spend_fit`, `tick_hunger`, etc.) as phases land.  
-- **Motivation traits** (-100..100 sliders or 0..100—<<Question: pick one scale at implementation>>) influence **weights** in a future utility layer, not movement tokens from an LLM.
+- **Motivation traits** (-100..100 sliders or 0..100—<<Question: pick one scale at implementation>>) influence **weights** in a future utility layer, not movement tokens from an LLM. For **heredity**, **evolution**, and **phased trait–motor coupling** (survival-only vs multi-motivation), see [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md).
 
 ### Field catalog (from world vision; typos in source corrected)
 
@@ -85,12 +85,14 @@
 | `compassion_self_interest` | Others’ needs vs self-max |
 | `community_individual` | Collective support vs self-reliance |
 
+**Cross-reference:** Field names and scales are authoritative here; [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) defines how they participate in the **dual genome** (`creature_motor` + outlook) and when each trait may affect motor or fitness.
+
 **Basic info**
 
 | Field | Notes |
 |-------|--------|
 | `age`, `max_age` | Game days |
-| `size` | Longest dimension (design units TBD: feet vs meters—<<Question: align with Godot px or abstract “tiles”?>>) |
+| `size` | Longest dimension in **internal simulation units** (Godot 2D is typically **pixels**; there is **no** built-in feet/meters). Define a project constant **pixels ↔ real length** (e.g. inches or cm) when gameplay needs physical feel. **Future:** user setting for **display-only** units (ft/in vs m/cm); core sim stays in pixels unless a later phase changes that. |
 | `weight` | Unencumbered mass |
 | `speed` | Base locomotion (abstract or px/s) |
 
@@ -110,6 +112,8 @@
 | `gestation_length` | Game days |
 | `gender` | Enum or char: `M` / `F` / `O` / other—prefer Godot enum in code |
 
+**Display length units (future UX):** Expose **`size`** (and related fields) to players in **ft/in** or **m/cm** via a settings toggle; convert at UI boundaries from internal pixels (or chosen abstract unit). Do **not** block POC on this — implement internal floats first, document the conversion constant when a creature phase wires `size` to motion or UI.
+
 ### Methods (intent)
 
 - **`generate_points()`** (internal): For each stat baseline, set `max_point_*` and usually `curr_point_*` via [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md). Original spec chained formulas; implementation doc should restate in GDScript-friendly steps when coding.  
@@ -123,11 +127,13 @@
 
 ### Collision / input / signals (if relevant)
 
-- Deferred until creature controller phase.
+- Locomotion against terrain: **`CharacterBody2D`** / **`CharacterBody3D`** with **`move_and_slide()`** per [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1 — **do not** reimplement slide on **`Area2D`**.
 
 ### Dependencies
 
-- [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md)
+- [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md)  
+- [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) (§5.1 — `CharacterBody*D` + `move_and_slide` for creature locomotion)  
+- [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) (motivation traits in evolution / motor stack)
 
 ---
 
@@ -152,7 +158,7 @@
 | Risk | Mitigation |
 |------|------------|
 | Godot scene bloat from huge exports | Use nested Resource or Dictionary for rare fields. |
-| Unit mismatch (feet vs pixels) | Pick one internal unit in first implementation phase; document conversion at boundaries. |
+| Unit mismatch (feet vs pixels) | Sim uses **pixels** (typical Godot 2D); document a **pixels ↔ real length** constant when needed. **Future:** user-facing unit preference (ft/in vs m/cm) at UI only — see **Display length units** under §4. |
 
 ---
 
@@ -170,6 +176,7 @@
 
 - <<Question: Single `gender` enum vs bitmask for future genetics?>>  
 - <<Question: Should `hunger` be stored or always derived?>>
+- **Control parity (deferred):** [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 applies interior env / exploration motor biases to **ENGINE**-controlled creatures only for that phase; **HUMAN** input does not get those nudges. Resolve whether **`ControlMode.AI`** (or any non-scripted motor) should match **ENGINE** weights when the **AI control** phase lands — document in the AI feature plan so scripted vs learned control stays consistent.
 
 ---
 
@@ -177,4 +184,8 @@
 
 | Date | Change |
 |------|--------|
+| 2026-05-12 | §9: deferred **ENGINE vs AI** interior motor parity (OBJECT §8.2.5). |
+| 2026-05-12 | §4 Collision: **`CharacterBody*D`** + **`move_and_slide`** per [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1; dependency link. |
+| 2026-05-12 | `size`: internal **pixels**; no Godot ft/m; future **display** units (ft/in vs m/cm); **Display length units** note; §7 risk. |
+| 2026-05-12 | Cross-link motivation traits ↔ [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) (§4, Dependencies). |
 | 2026-05-11 | Extracted creature + vitals from EARLY_SPEC_DOC. |

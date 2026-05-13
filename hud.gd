@@ -56,7 +56,7 @@ func _on_start_button_pressed():
 	start_game.emit()
 
 
-## Requests AI ownership of the next round (ARMED -> START -> PLAYING).
+## Requests scripted CPU/engine control for the next round (no inference; see [method AiDriver.begin_engine_player_round]).
 ## Params:
 ## - none
 ## Returns / side effects:

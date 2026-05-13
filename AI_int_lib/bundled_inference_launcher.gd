@@ -7,6 +7,7 @@ const _PROBE_HTTP_MIN_SEC := 15.0
 ## After `/health` returns 503 (“loading”), allow a longer probe window — load can stall HTTP replies past the normal probe budget.
 const _PROBE_HTTP_AFTER_503_SEC := 90.0
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 
 ## One-shot hint per [method ensure_inference_endpoint_ready] run: editor+Windows console spawn PID is often not the llama-server PID.
 var _did_log_editor_console_pid_hint: bool = false
@@ -186,7 +187,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
       ) % base_url
     elif not _is_loopback_http_url(base_url):
       detail = " Remote INFERENCE_BASE_URL — auto-start only runs for http://127.0.0.1 or http://localhost."
-    OLog.error(
+    _OLogSafe.info(
       "BundledInference: inference not reachable at %s.%s" % [probe_url, detail],
       true,
       "BundledInference"
@@ -197,8 +198,12 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
   var exe_rel := str(inference_client.get("BUNDLED_SERVER_EXE", "")).strip_edges()
   var model_rel := str(inference_client.get("BUNDLED_MODEL_GGUF", "")).strip_edges()
   if exe_rel.is_empty() or model_rel.is_empty():
-    OLog.error(
-      "BundledInference: set BUNDLED_SERVER_EXE and BUNDLED_MODEL_GGUF (relative to bundle root).",
+    _OLogSafe.info(
+      (
+        "BundledInference: auto-start skipped — set inference_client.BUNDLED_SERVER_EXE and "
+        + "BUNDLED_MODEL_GGUF (paths relative to bundle root; see inference/README.md), "
+        + "or set INFERENCE_AUTO_START_ENABLED false and run a server at INFERENCE_BASE_URL."
+      ),
       true,
       "BundledInference"
     )
@@ -207,10 +212,26 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
   var exe_abs := "%s/%s" % [bundle_root, exe_rel.replace("\\", "/")]
   var model_abs := "%s/%s" % [bundle_root, model_rel.replace("\\", "/")]
   if not FileAccess.file_exists(exe_abs):
-    OLog.error("BundledInference: server executable missing: %s" % exe_abs, true, "BundledInference")
+    _OLogSafe.info(
+      (
+        "BundledInference: server executable missing (%s). "
+        + "Place llama-server (see inference/README.md), or disable INFERENCE_AUTO_START_ENABLED and start a server manually."
+      )
+      % exe_abs,
+      true,
+      "BundledInference"
+    )
     return false
   if not FileAccess.file_exists(model_abs):
-    OLog.error("BundledInference: model file missing: %s" % model_abs, true, "BundledInference")
+    _OLogSafe.info(
+      (
+        "BundledInference: model file missing (%s). "
+        + "Add the GGUF under the bundle root or fix BUNDLED_MODEL_GGUF; see inference/README.md."
+      )
+      % model_abs,
+      true,
+      "BundledInference"
+    )
     return false
 
   var argv := PackedStringArray()
@@ -225,7 +246,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
 
   var open_console: bool = editor_windows_attach_console(inference_client)
   if OS.has_feature("editor") and OS.get_name() == "Windows" and not open_console:
-    OLog.debug(
+    _OLogSafe.debug(
       "BundledInference: spawning without attached console (BUNDLED_SERVER_ATTACH_CONSOLE false) — PID matches llama-server for exit detection.",
       true,
       "BundledInference"
@@ -236,9 +257,9 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
     if i > 0:
       argv_display += " "
     argv_display += argv[i]
-  OLog.debug("BundledInference: spawn argv: %s" % argv_display, true, "BundledInference")
+  _OLogSafe.debug("BundledInference: spawn argv: %s" % argv_display, true, "BundledInference")
 
-  OLog.info(
+  _OLogSafe.info(
     "BundledInference: starting server (pid TBD) — %s" % exe_abs.get_file(),
     true,
     "BundledInference"
@@ -263,7 +284,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
   })
   #endregion
   if pid <= 0:
-    OLog.error("BundledInference: OS.create_process failed for %s" % exe_abs, true, "BundledInference")
+    _OLogSafe.error("BundledInference: OS.create_process failed for %s" % exe_abs, true, "BundledInference")
     return false
 
   var deadline := Time.get_ticks_msec() + timeout_ms
@@ -321,7 +342,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
       and not _did_log_editor_console_pid_hint
     ):
       _did_log_editor_console_pid_hint = true
-      OLog.info(
+      _OLogSafe.info(
         (
           "BundledInference: editor console spawn on Windows — create_process PID may not be llama-server; "
           + "`process_running` in logs can be false while the server is still starting. Continuing probes."
@@ -330,7 +351,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
         "BundledInference"
       )
     if poll_pr["ok"]:
-      OLog.info("BundledInference: inference endpoint ready.", true, "BundledInference")
+      _OLogSafe.info("BundledInference: inference endpoint ready.", true, "BundledInference")
       return true
     # Spawned PID from OS.create_process can be a short-lived launcher when open_console=true; do not infer crash from PID there.
     if poll_pr["result"] != HTTPRequest.RESULT_SUCCESS:
@@ -351,7 +372,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
           },
         })
         #endregion
-        OLog.error(
+        _OLogSafe.error(
           (
             "BundledInference: llama-server exited before %s responded (poll %s, pid=%s, last_http_result=%s). "
             + "Run from editor to see stderr in the spawned console window, or verify model/DLL deps."
@@ -378,7 +399,7 @@ func ensure_inference_endpoint_ready(inference_client: Dictionary) -> bool:
     },
   })
   #endregion
-  OLog.error(
+  _OLogSafe.error(
     "BundledInference: timeout waiting for %s (started pid %s)." % [probe_url, pid],
     true,
     "BundledInference"

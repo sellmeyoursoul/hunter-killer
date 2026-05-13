@@ -56,13 +56,6 @@ position = Vector2(945, 525)
 rotation = 0.0
 scale = Vector2(1, 1)
 
-[node name="Player" parent="." unique_id=543889992 instance=ExtResource("3_lquwl")]
-z_index = 1
-
-[node name="HUD" parent="." unique_id=573548739 instance=ExtResource("4_1bvp3")]
-
-[node name="ObstacleField" parent="." instance=ExtResource("7_obstacles")]
-
 [node name="TextureRect" type="TextureRect" parent="." unique_id=997498119]
 layout_mode = 0
 anchors_preset = 0
@@ -75,10 +68,18 @@ offset_bottom = 1050.0
 grow_horizontal = 0
 grow_vertical = 0
 z_index = -1
+mouse_filter = 2
 show_behind_parent = true
 texture = ExtResource("5_lquwl")
 expand_mode = 1
 stretch_mode = 0
+
+[node name="Player" parent="." unique_id=543889992 instance=ExtResource("3_lquwl")]
+z_index = 1
+
+[node name="HUD" parent="." unique_id=573548739 instance=ExtResource("4_1bvp3")]
+
+[node name="ObstacleField" parent="." instance=ExtResource("7_obstacles")]
 
 [node name="Music" type="AudioStreamPlayer" parent="." unique_id=154937832]
 stream = SubResource("AudioStreamOggVorbis_272bh")

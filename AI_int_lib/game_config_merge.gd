@@ -29,9 +29,9 @@ static func default_creature_motor_params() -> Dictionary:
     "weight_dist_sq": 55.0,
     "weight_closing": 1.05,
     "penalty_oob": 1e7,
-    "distance_eps": 12.0,
-    "creature_half_extent_x": 27.0,
-    "creature_half_extent_y": 61.0,
+    "distance_eps": 6.0,
+    "creature_half_extent_x": 13.5,
+    "creature_half_extent_y": 30.5,
     "scripted_intent_hold_physics_ticks": 5,
     "weight_interior": 0.65,
     "shuffle_tie_break": true,
@@ -43,6 +43,9 @@ static func default_creature_motor_params() -> Dictionary:
     "awareness_memory_weight": 0.35,
     "awareness_memory_horizon_sec": 0.0,
     "weight_obstacle": 1.25,
+    "interior_env_near_mob_px": 70.0,
+    "weight_interior_env_solid": 8000.0,
+    "weight_interior_env_slow": 4.0,
   }
 
 

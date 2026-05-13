@@ -1,5 +1,6 @@
 ## Pure cardinal motor: score predicted positions and pick lowest-cost intent.
 ## Params passed via [param ctx] dictionary — see [Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md](../../Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md).
+## Interior grid costs ([EnvironmentGridBaked]) are optional and gated by [code]ctx.interior_env_motor_active[/code] (OBJECT §8.2 — ENGINE-only nudges).
 class_name CardinalAvoidance
 extends Object
 
@@ -80,6 +81,59 @@ static func evaluation_order_from_ctx(ctx: Dictionary) -> Array[Vector2]:
   return dirs
 
 
+## Shortest squared distance from [param creature_center] (optionally AABB [param half]) to any mob point in [param mobs].
+static func nearest_mob_dist_sq(creature_center: Vector2, half: Vector2, mobs: Array) -> float:
+  var best := INF
+  for item in mobs:
+    if typeof(item) != TYPE_DICTIONARY:
+      continue
+    var mob_pos: Vector2 = item.get("position", Vector2.ZERO)
+    var d: float
+    if half.x <= 0.0 or half.y <= 0.0:
+      d = creature_center.distance_squared_to(mob_pos)
+    else:
+      var closest := closest_point_on_aabb(creature_center, half, mob_pos)
+      d = closest.distance_squared_to(mob_pos)
+    if d < best:
+      best = d
+  return best
+
+
+## Extra cost from baked environment at [param predicted] center (OBJECT §3.5 / §3.6, §8.2.2).
+## Params:
+## - [param mob_threat_high]: Reserved for §8.2.1 unknown explore/avoid vs mob threat; v1 uses grid solid/slow only.
+static func interior_env_cost_at(
+  predicted: Vector2,
+  environment_grid: Variant,
+  creature_size: float,
+  _mob_threat_high: bool,
+  p: Dictionary,
+) -> float:
+  if not bool(p.get("active", false)):
+    return 0.0
+  if creature_size <= 0.0:
+    return 0.0
+  if environment_grid == null or not (environment_grid is EnvironmentGridBaked):
+    return 0.0
+  var grid := environment_grid as EnvironmentGridBaked
+  if not grid.is_valid_shape():
+    return 0.0
+  var cell_r := grid.sample_cell_data_at_world(predicted)
+  if cell_r == null:
+    return 0.0
+  if not (cell_r is EnvironmentCellData):
+    return 0.0
+  var env := cell_r as EnvironmentCellData
+  var w_solid: float = float(p.get("weight_solid", 8000.0))
+  var w_slow: float = float(p.get("weight_slow", 4.0))
+  if not env.can_enter(creature_size):
+    return w_solid
+  var mult := env.movement_speed_multiplier(creature_size)
+  if mult < 0.999:
+    return w_slow * (1.0 - mult)
+  return 0.0
+
+
 ## Picks unit intent in tie-order preference among cardinals + idle.
 ## Params:
 ## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code].
@@ -98,7 +152,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var w_dist_sq: float = float(ctx.get("weight_dist_sq", 0.0))
   var w_close: float = float(ctx.get("weight_closing", 1.05))
   var penalty_oob: float = float(ctx.get("penalty_oob", 1e7))
-  var eps: float = float(ctx.get("distance_eps", 12.0))
+  var eps: float = float(ctx.get("distance_eps", 6.0))
   var w_interior: float = float(ctx.get("weight_interior", 0.0))
   var w_edge: float = float(ctx.get("weight_edge", 0.0))
   var w_obs: float = float(ctx.get("weight_obstacle", 0.0))
@@ -116,6 +170,17 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var facing_v: Vector2 = Vector2.RIGHT
   if typeof(facing_raw) == TYPE_VECTOR2:
     facing_v = facing_raw as Vector2
+
+  var sz_env: float = float(ctx.get("creature_size", 0.0))
+  var near_thr: float = float(ctx.get("interior_env_near_mob_px", 70.0))
+  var d_sq := nearest_mob_dist_sq(creature_pos, footprint_half, mobs)
+  var mob_threat_high := near_thr > 0.0 and d_sq < near_thr * near_thr
+  var interior_p := {
+    "active": bool(ctx.get("interior_env_motor_active", false)),
+    "weight_solid": float(ctx.get("weight_interior_env_solid", 8000.0)),
+    "weight_slow": float(ctx.get("weight_interior_env_slow", 4.0)),
+  }
+  var env_grid: Variant = ctx.get("environment_grid", null)
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
@@ -142,7 +207,11 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       cone_cos,
       facing_v,
       static_obs,
-      w_obs
+      w_obs,
+      mob_threat_high,
+      env_grid,
+      sz_env,
+      interior_p,
     )
     if cost < best_cost:
       best_cost = cost
@@ -278,6 +347,10 @@ static func cost_at_prediction(
   creature_facing: Vector2 = Vector2.RIGHT,
   static_obstacles: Array = [],
   weight_obstacle: float = 0.0,
+  mob_threat_high: bool = false,
+  environment_grid: Variant = null,
+  interior_creature_size: float = 0.0,
+  interior_env_params: Dictionary = {},
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -335,6 +408,13 @@ static func cost_at_prediction(
 
   total += _interior_posture_cost(predicted, bounds_min, bounds_max, weight_interior, eps)
   total += _edge_clearance_cost(predicted, half, bounds_min, bounds_max, weight_edge, eps)
+  total += interior_env_cost_at(
+    predicted,
+    environment_grid,
+    interior_creature_size,
+    mob_threat_high,
+    interior_env_params,
+  )
   return total
 
 
@@ -359,6 +439,10 @@ static func cost_at_prediction_aware(
   creature_facing: Vector2,
   static_obstacles: Array = [],
   weight_obstacle: float = 0.0,
+  mob_threat_high: bool = false,
+  environment_grid: Variant = null,
+  interior_creature_size: float = 0.0,
+  interior_env_params: Dictionary = {},
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -380,4 +464,8 @@ static func cost_at_prediction_aware(
     creature_facing,
     static_obstacles,
     weight_obstacle,
+    mob_threat_high,
+    environment_grid,
+    interior_creature_size,
+    interior_env_params,
   )

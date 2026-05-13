@@ -1,36 +1,40 @@
 [gd_scene format=4 uid="uid://r5m3msxv6uke"]
 
+[ext_resource type="Texture2D" uid="uid://b6pjatfftx02k" path="res://art/env/pile-of-rocks.png" id="1_rocks_tex"]
+[ext_resource type="Script" path="res://environment/obstacle_field_root.gd" id="2_obroot"]
+
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ra"]
-size = Vector2(140, 110)
+size = Vector2(70, 55)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rb"]
-size = Vector2(120, 100)
+size = Vector2(60, 50)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rc"]
-size = Vector2(260, 160)
+size = Vector2(130, 80)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rd"]
-size = Vector2(180, 120)
+size = Vector2(90, 60)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_re"]
-size = Vector2(160, 100)
+size = Vector2(80, 50)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rf"]
-size = Vector2(130, 95)
+size = Vector2(65, 47.5)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rg"]
-size = Vector2(280, 220)
+size = Vector2(140, 110)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rh"]
-size = Vector2(200, 170)
+size = Vector2(100, 85)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ri"]
-size = Vector2(150, 110)
+size = Vector2(75, 55)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rj"]
-size = Vector2(110, 90)
+size = Vector2(55, 45)
 
 [node name="ObstacleField" type="Node2D" groups=["obstacles_root"]]
+script = ExtResource("2_obroot")
 
 [node name="RockA" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(120, 140)
@@ -38,11 +42,19 @@ position = Vector2(120, 140)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockA"]
 shape = SubResource("RectangleShape2D_ra")
 
+[node name="Sprite2D" type="Sprite2D" parent="RockA"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
 [node name="RockB" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(90, 940)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockB"]
 shape = SubResource("RectangleShape2D_rb")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockB"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
 
 [node name="RockC" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(400, 880)
@@ -50,11 +62,19 @@ position = Vector2(400, 880)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockC"]
 shape = SubResource("RectangleShape2D_rc")
 
+[node name="Sprite2D" type="Sprite2D" parent="RockC"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
 [node name="RockD" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(945, 560)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockD"]
 shape = SubResource("RectangleShape2D_rd")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockD"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
 
 [node name="RockE" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(1020, 160)
@@ -62,11 +82,19 @@ position = Vector2(1020, 160)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockE"]
 shape = SubResource("RectangleShape2D_re")
 
+[node name="Sprite2D" type="Sprite2D" parent="RockE"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
 [node name="RockF" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(1620, 130)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockF"]
 shape = SubResource("RectangleShape2D_rf")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockF"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
 
 [node name="RockG" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(1520, 480)
@@ -74,11 +102,19 @@ position = Vector2(1520, 480)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockG"]
 shape = SubResource("RectangleShape2D_rg")
 
+[node name="Sprite2D" type="Sprite2D" parent="RockG"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
 [node name="RockH" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(1710, 900)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockH"]
 shape = SubResource("RectangleShape2D_rh")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockH"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
 
 [node name="RockI" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(720, 320)
@@ -86,8 +122,16 @@ position = Vector2(720, 320)
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockI"]
 shape = SubResource("RectangleShape2D_ri")
 
+[node name="Sprite2D" type="Sprite2D" parent="RockI"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
 [node name="RockJ" type="StaticBody2D" parent="." groups=["obstacles"]]
 position = Vector2(320, 520)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="RockJ"]
 shape = SubResource("RectangleShape2D_rj")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockJ"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")

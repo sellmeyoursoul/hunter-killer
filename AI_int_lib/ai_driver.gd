@@ -21,6 +21,8 @@ const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
 const _MOTOR := preload("res://creature/motor/cardinal_avoidance.gd")
 const _PlayerScr := preload("res://player.gd")
 const _IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -103,7 +105,7 @@ static func _dbg46_emit(run_id: String, hypothesis_id: String, location: String,
 
 var _state: State = State.IDLE
 var _main: Node = null
-var _creature: Area2D = null
+var _creature: CharacterBody2D = null
 var _inference_client: Dictionary = {}
 var _system_prompt: String = ""
 
@@ -141,11 +143,38 @@ var _mob_hist: Array = []
 ## Instance ids of mobs that have been inside effective awareness at least once this round; gates extrapolated [code]gated[/code] samples and [code]ghost[/code] entries to observed mobs only.
 var _mob_ids_ever_observed: Dictionary = {}
 
-## True while [method arm_ai_session] is in progress (awaiting bundled inference). Prevents overlapping arms.
+## True while [method arm_ai_session] is in progress (awaiting bundled inference) or a synchronous CPU arm is finishing.
 var _arm_session_in_progress: bool = false
+
+## When true from [method begin_engine_player_round], [method _creature_motor_mode] behaves as scripted (local motor only) until round end.
+var _cpu_player_round_active: bool = false
 
 ## Monotonic id for each [method arm_ai_session] entry; helps detect overlapping arms in NDJSON (debug).
 static var _debug_arm_invoke_seq: int = 0
+
+
+## Returns merged [code]creature_motor[/code] from autoload [code]GameConfig[/code], or merge defaults when absent (headless tool loads).
+func _live_creature_motor_params() -> Dictionary:
+  var g := get_node_or_null("/root/GameConfig")
+  if g != null and g.has_method("get_creature_motor_params"):
+    return g.call("get_creature_motor_params") as Dictionary
+  return (_Merge.default_root()["creature_motor"] as Dictionary).duplicate(true)
+
+
+## Returns merged [code]perception[/code] dict (same fallback pattern as [_live_creature_motor_params]).
+func _live_perception_params() -> Dictionary:
+  var g := get_node_or_null("/root/GameConfig")
+  if g != null and g.has_method("get_perception_params"):
+    return g.call("get_perception_params") as Dictionary
+  return _Merge.default_perception_params().duplicate(true)
+
+
+## Returns merged [code]inference_client[/code] dict (same fallback pattern as [_live_creature_motor_params]).
+func _live_inference_client() -> Dictionary:
+  var g := get_node_or_null("/root/GameConfig")
+  if g != null and g.has_method("get_inference_client"):
+    return g.call("get_inference_client") as Dictionary
+  return (_Merge.default_root()["inference_client"] as Dictionary).duplicate(true)
 
 
 func _ready() -> void:
@@ -169,7 +198,7 @@ func _ready() -> void:
 ## - Call once from Main._ready().
 func attach_main(main_node: Node) -> void:
   _main = main_node
-  _creature = _main.get_node_or_null("Player") as Area2D
+  _creature = _main.get_node_or_null("Player") as CharacterBody2D
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
   _mob_hist.clear()
   _mob_ids_ever_observed.clear()
@@ -348,6 +377,7 @@ func arm_ai_session() -> bool:
     #endregion
     return false
   _arm_session_in_progress = true
+  _cpu_player_round_active = false
   _debug_arm_invoke_seq += 1
   var invoke_id := _debug_arm_invoke_seq
   _refresh_inference_client_config()
@@ -367,7 +397,7 @@ func arm_ai_session() -> bool:
   })
   #endregion
   if base_url.is_empty() or model_id.is_empty():
-    OLog.error(
+    _OLogSafe.error(
       "AiDriver: cannot arm — set inference_client.INFERENCE_BASE_URL and MODEL_ID "
       + "(user://game_config.json overrides res://game_config.json template).",
       true,
@@ -419,6 +449,51 @@ func arm_ai_session() -> bool:
   return true
 
 
+## Arms a CPU round: scripted motor + [member Player.ControlMode.ENGINE]; no inference or HTTP handshake.
+## Params:
+## - none
+## Returns:
+## - False when overlapping arm, already ARMED or PLAYING, or [member Main]/Player not ready.
+## Usage:
+## - Main HUD "AI Player" when local engine control replaces remote LLM.
+func begin_engine_player_round() -> bool:
+  if _arm_session_in_progress:
+    return false
+  if _main == null or _creature == null:
+    _OLogSafe.info(
+      "AiDriver: cannot start CPU player — attach Main before pressing AI Player.",
+      true,
+      "AiDriver",
+    )
+    return false
+  if _state == State.PLAYING or _state == State.ARMED:
+    return false
+  _arm_session_in_progress = true
+  _debug_arm_invoke_seq += 1
+  var invoke_id := _debug_arm_invoke_seq
+  _cpu_player_round_active = true
+  _set_state(State.ARMED)
+  if _creature.has_method("set_control_mode"):
+    _creature.call("set_control_mode", _PlayerScr.engine_control_as_int())
+  if _creature.has_method("set_creature_move_intent"):
+    _creature.call("set_creature_move_intent", Vector2.ZERO)
+  Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  _has_snapshot = false
+  _latest_snapshot = ""
+  _next_inference_ms = Time.get_ticks_msec()
+  #region agent log
+  _AgentNdjson.write({
+    "runId": "cpu-arm",
+    "hypothesisId": "HUD",
+    "location": "ai_driver.gd:begin_engine_player_round_done",
+    "message": "begin_engine_player_round_complete",
+    "data": {"invoke_id": invoke_id},
+  })
+  #endregion
+  _arm_session_in_progress = false
+  return true
+
+
 ## Aborts an armed handshake without calling [method Main.new_game]; restores human control and IDLE UI.
 ## Params:
 ## - none
@@ -429,6 +504,7 @@ func arm_ai_session() -> bool:
 func cancel_armed_session() -> void:
   if _state != State.ARMED:
     return
+  _cpu_player_round_active = false
   _http_request.cancel_request()
   _inflight_request_id = -1
   if _creature != null and _creature.has_method("set_control_mode"):
@@ -462,10 +538,12 @@ func notify_main_new_game() -> void:
           playing_control_mode_int_for_motor_mode_string(_creature_motor_mode())
         )
     State.WAITING:
+      _cpu_player_round_active = false
       _set_state(State.IDLE)
       if _creature != null and _creature.has_method("set_control_mode"):
         _creature.call("set_control_mode", _PlayerScr.human_control_as_int())
     _:
+      _cpu_player_round_active = false
       if _creature != null and _creature.has_method("set_control_mode"):
         _creature.call("set_control_mode", _PlayerScr.human_control_as_int())
 
@@ -478,6 +556,7 @@ func notify_main_new_game() -> void:
 ## Usage:
 ## - Call from Main.game_over().
 func notify_main_game_over() -> void:
+  _cpu_player_round_active = false
   if _creature != null and _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
   _set_state(State.WAITING)
@@ -511,13 +590,16 @@ func _process(_delta: float) -> void:
   _enqueue_inference_request()
 
 
-## Returns merged [code]creature_motor.mode[/code]: [code]scripted[/code] or [code]llm[/code] (case-insensitive).
+## Returns effective motor lane for [method _physics_process] / inference gating:
+## **`scripted`** while [member _cpu_player_round_active]; else **`llm`** or **`scripted`** from merged [code]creature_motor.mode[/code].
 ## Params:
 ## - none
 ## Returns:
-## - Lowercase mode string; unknown values treated as [code]scripted[/code] for safety (local motor).
+## - **`scripted`** or **`llm`** (defaults to scripted when absent / unknown mode string).
 func _creature_motor_mode() -> String:
-  var cm := GameConfig.get_creature_motor_params()
+  if _cpu_player_round_active:
+    return "scripted"
+  var cm := _live_creature_motor_params()
   var m := str(cm.get("mode", "scripted")).to_lower().strip_edges()
   if m == "llm":
     return "llm"
@@ -581,7 +663,7 @@ func _effective_awareness_reach_for_driver(
 func _record_mob_history_if_playing() -> void:
   if _main == null:
     return
-  var motor_p_hist := GameConfig.get_creature_motor_params()
+  var motor_p_hist := _live_creature_motor_params()
   var max_t := int(motor_p_hist.get("awareness_memory_ticks", 3))
   if max_t <= 0:
     _mob_hist.clear()
@@ -734,8 +816,8 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
   if ss == Vector2.ZERO:
     ss = _creature.get_viewport_rect().size
   var he_xy := Vector2(
-    maxf(0.0, float(motor_p.get("creature_half_extent_x", 27.0))),
-    maxf(0.0, float(motor_p.get("creature_half_extent_y", 61.0))),
+    maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
+    maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
   )
   if _creature != null:
     var cs := _creature.get_node_or_null("CollisionShape2D") as CollisionShape2D
@@ -754,6 +836,19 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
       facing_display = fv0.normalized()
   var mobs_arr: Array = _motor_mobs_array(motor_p, pos, he_xy)
   _debug_last_motor_mobs = mobs_arr.duplicate(true)
+
+  var csz := 0.0
+  if _creature != null:
+    var szv: Variant = _creature.get("creature_size")
+    if typeof(szv) == TYPE_FLOAT or typeof(szv) == TYPE_INT:
+      csz = float(szv)
+  var interior_active := false
+  if _creature != null:
+    interior_active = int(_creature.get("control_mode")) == _PlayerScr.engine_control_as_int()
+  var env_grid: Variant = null
+  if _main != null and _main.has_method("get_environment_grid"):
+    env_grid = _main.call("get_environment_grid")
+
   return {
     "creature_position": pos,
     "creature_speed": spd,
@@ -765,7 +860,7 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "weight_dist_sq": float(motor_p.get("weight_dist_sq", 55.0)),
     "weight_closing": float(motor_p.get("weight_closing", 1.05)),
     "penalty_oob": float(motor_p.get("penalty_oob", 1e7)),
-    "distance_eps": float(motor_p.get("distance_eps", 12.0)),
+    "distance_eps": float(motor_p.get("distance_eps", 6.0)),
     "creature_half_extents": he_xy,
     "weight_interior": float(motor_p.get("weight_interior", 0.65)),
     "weight_edge": float(motor_p.get("weight_edge", 0.48)),
@@ -777,6 +872,12 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "creature_facing": facing_display,
     "static_obstacles": _static_obstacles_for_motor(),
     "weight_obstacle": float(motor_p.get("weight_obstacle", 0.0)),
+    "creature_size": csz,
+    "environment_grid": env_grid,
+    "interior_env_motor_active": interior_active,
+    "interior_env_near_mob_px": float(motor_p.get("interior_env_near_mob_px", 70.0)),
+    "weight_interior_env_solid": float(motor_p.get("weight_interior_env_solid", 8000.0)),
+    "weight_interior_env_slow": float(motor_p.get("weight_interior_env_slow", 4.0)),
   }
 
 
@@ -784,14 +885,14 @@ func _physics_process(_delta: float) -> void:
   if _state != State.PLAYING or _main == null or _creature == null:
     return
   _physics_ticks += 1
-  var p: Dictionary = GameConfig.get_perception_params()
+  var p: Dictionary = _live_perception_params()
   var stride := maxi(1, int(p.get("SNAPSHOT_PHYSICS_STRIDE", 1)))
   if _physics_ticks % stride == 0:
     _latest_snapshot = _build_snapshot_blob()
     _has_snapshot = not _latest_snapshot.is_empty()
 
   if _creature_motor_mode() == "scripted" and int(_creature.get("control_mode")) == _PlayerScr.engine_control_as_int():
-    var motor_p := GameConfig.get_creature_motor_params()
+    var motor_p := _live_creature_motor_params()
     var ctx := _build_motor_context(motor_p)
     var raw_intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
     var incumbent_v: Variant = _creature.get("creature_move_intent")
@@ -810,7 +911,7 @@ func _physics_process(_delta: float) -> void:
 
 
 func _refresh_inference_client_config() -> void:
-  _inference_client = GameConfig.get_inference_client()
+  _inference_client = _live_inference_client()
 
 
 func _set_state(next_state: State) -> void:
@@ -964,7 +1065,7 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
   var content_empty := content.strip_edges().is_empty()
   if excerpt.length() > _TL_DEBUG_CONTENT_MAX_CHARS:
     excerpt = excerpt.substr(0, _TL_DEBUG_CONTENT_MAX_CHARS) + " [truncated]"
-  OLog.debug("TL completion raw=\"%s\" → token=%s" % [excerpt, token], true, "AiDriver")
+  _OLogSafe.debug("TL completion raw=\"%s\" → token=%s" % [excerpt, token], true, "AiDriver")
   #region agent log
   _dbg46_emit(
     "ai-inf",
@@ -990,7 +1091,7 @@ func _on_http_request_completed(result: int, response_code: int, _headers: Packe
     var now_ms := Time.get_ticks_msec()
     if now_ms - _noop_diag_last_ms >= 2000:
       _noop_diag_last_ms = now_ms
-      OLog.info(
+      _OLogSafe.info(
         (
           "AiDriver: TL noop (state_enum=%d, content_empty=%s). raw_excerpt=\"%s\". "
           + "If content_empty: raise inference_client.MAX_OUTPUT_TOKENS or fix server JSON. "
@@ -1008,7 +1109,7 @@ func _fail_inference_response(reason: String) -> void:
   emit_signal("ai_inference_finished", "noop")
   if _state != State.ARMED:
     return
-  OLog.error("AiDriver: %s — cancel AI setup." % reason, true, "AiDriver")
+  _OLogSafe.error("AiDriver: %s — cancel AI setup." % reason, true, "AiDriver")
   cancel_armed_session()
 
 

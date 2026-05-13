@@ -1,7 +1,7 @@
 ## Authoring preset for one environment **kind** (passibility, squeeze, shrub slowdown).
 ## Palette index PNGs for baking live under **res://art/env/** (project convention).
 ## Params are consumed by [method can_enter] and [method movement_speed_multiplier] per
-## [OBJECT_AVOIDANCE_PLAN.md](../Project_Docs/OBJECT_AVOIDANCE_PLAN.md) §3.
+## [OBJECT_AVOIDANCE_PLAN.md](../Project_Docs/Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §3.
 class_name EnvironmentCellData
 extends Resource
 
@@ -16,7 +16,7 @@ extends Resource
 ## **< 0** = unset (treat as no valid shrub gate — everyone pays [member movement_impact] when impact is active).
 @export var fit_size: float = -1.0
 
-## Optional stable id for future experiential memory ([OBJECT_AVOIDANCE_PLAN.md](../Project_Docs/OBJECT_AVOIDANCE_PLAN.md) §10).
+## Optional stable id for future experiential memory ([OBJECT_AVOIDANCE_PLAN.md](../Project_Docs/Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §10).
 @export var terrain_kind_id: StringName = StringName()
 
 
