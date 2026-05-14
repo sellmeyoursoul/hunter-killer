@@ -71,3 +71,4 @@ Detailed rules live only in these files; add more pointers here as new focus are
 
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)
+- **Assets (`res://assets/`, `pack_resources.json`, variants):** [asset_management.md](./focus/asset_management.md) — full design in [ASSET_MANAGEMENT_PLAN.md](../../Project_Docs/ASSET_MANAGEMENT_PLAN.md)
