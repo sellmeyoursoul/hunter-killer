@@ -14,6 +14,7 @@ const _EnvCell := preload("res://environment/environment_cell_data.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvBake := preload("res://environment/environment_grid_bake.gd")
 const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
+const _PackRes := preload("res://pack_resource_resolver.gd")
 
 var _failures: int = 0
 
@@ -40,6 +41,7 @@ func _run_all() -> void:
   _test_cardinal_interior_env_grid()
   _test_wall_slide_pick()
   _test_obstacle_visual_tiers()
+  _test_pack_resource_resolver()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -586,6 +588,24 @@ func _test_wall_slide_pick() -> void:
   _assert(Vector2.DOWN.is_equal_approx((d_down as Vector2).normalized()), "down + horizontal wall prefers +Y")
   var along_east: Variant = p.call("pick_tangent_closer", Vector2.RIGHT, Vector2(0, -1))
   _assert(Vector2.RIGHT.is_equal_approx((along_east as Vector2).normalized()), "east + skyward normal prefers +X")
+
+
+func _test_pack_resource_resolver() -> void:
+  ## Bindings + defaults per archived asset plan §2.1 ([PackResourceResolver]); intentional fallback counts as failure unless asserted below.
+  _assert(ResourceLoader.exists(_PackRes.PATH_TEX_DEV), "default dev texture import exists")
+  _assert(ResourceLoader.exists(_PackRes.PATH_TEX_RELEASE), "default release texture import exists")
+  _assert(ResourceLoader.exists(_PackRes.PATH_AUDIO_DEV), "default dev wav import exists")
+  _assert(ResourceLoader.exists(_PackRes.PATH_AUDIO_RELEASE), "default release wav import exists")
+  var smoke_root := "res://assets/creatures/resolver_smoke"
+  var ok_tex: Dictionary = _PackRes.resolve_texture_from_pack(smoke_root, "obstacle_tex")
+  _assert(ok_tex["used_default"] == false, "shared obstacle_tex should hit migrated PNG")
+  _assert(str(ok_tex["path"]).ends_with("pile-of-rocks.png"), "obstacle_tex path suffix")
+  var bad_tex: Dictionary = _PackRes.resolve_texture_from_pack(smoke_root, "__missing_tag_for_test__")
+  _assert(bad_tex["used_default"] == true, "missing tag must fall back to default texture")
+  _assert(ResourceLoader.exists(str(bad_tex["path"])), "fallback texture path loads")
+  var bad_aud: Dictionary = _PackRes.resolve_audio_from_pack(smoke_root, "__missing_audio_tag__")
+  _assert(bad_aud["used_default"] == true, "missing audio tag uses default stream path")
+  _assert(ResourceLoader.exists(str(bad_aud["path"])), "fallback audio path loads")
 
 
 func _test_obstacle_visual_tiers() -> void:

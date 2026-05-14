@@ -42,7 +42,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Notes |
 |------|----------|--------|
-| **`res://` repo layout migration** | Medium | Draft: [REPO_LAYOUT_PLAN.md](REPO_LAYOUT_PLAN.md) — systems vs **`assets/`**, optional **`systems/`** rename, **`scenes/app/`**, **`config/`**; aligns with [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md) §4 / §9; **do not apply** until draft questions resolved |
+| **`res://` repo layout migration** | Medium | Draft: [REPO_LAYOUT_PLAN.md](REPO_LAYOUT_PLAN.md) — systems vs **`assets/`**, optional **`systems/`** rename, **`scenes/app/`**, **`config/`**; aligns with [ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) §4 / §9; **do not apply** until draft questions resolved |
 | Centralized doc path index | Low | Stable links across renames: historical **`Project Docs/`** vs **`Project_Docs/`**, completed vs active plans — reduces broken cross-references in comments and AGENTS rules |
 | World-model feature index | Low | Entry: [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md); archive table: [EARLY_SPEC_DOC](EARLY_SPEC_DOC) |
 

@@ -11,6 +11,7 @@ config_version=5
 [application]
 
 config/name="Hunter Killer"
+; Mixed-resolution 2D imports OK during transitional art pipeline; subtree import presets deferred (see Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md §5.1).
 run/main_scene="uid://cgb226hqsuv23"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"

@@ -4,7 +4,7 @@ class_name ObstacleFieldRoot
 extends Node2D
 
 
-const _DEFAULT_OBSTACLE_TEX := preload("res://art/env/pile-of-rocks.png")
+const _DEFAULT_OBSTACLE_TEX := preload("res://assets/environment/obstacle_rocks/pile-of-rocks.png")
 const _TIER_HELPER_SCRIPT := preload("res://environment/obstacle_visual_tiers.gd")
 
 

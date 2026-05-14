@@ -1,6 +1,6 @@
 [gd_scene format=4 uid="uid://r5m3msxv6uke"]
 
-[ext_resource type="Texture2D" uid="uid://b6pjatfftx02k" path="res://art/env/pile-of-rocks.png" id="1_rocks_tex"]
+[ext_resource type="Texture2D" uid="uid://b6pjatfftx02k" path="res://assets/environment/obstacle_rocks/pile-of-rocks.png" id="1_rocks_tex"]
 [ext_resource type="Script" path="res://environment/obstacle_field_root.gd" id="2_obroot"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ra"]

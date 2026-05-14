@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://b6pjatfftx02k"
-path="res://.godot/imported/pile-of-rocks.png-2ee0569be7d8438137f3515d40b3aaa5.ctex"
+uid="uid://5wn5eqn28vis"
+path="res://.godot/imported/missing_dev.png-767b2240bfb7a8b79732ec0ab24d16b1.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://art/env/pile-of-rocks.png"
-dest_files=["res://.godot/imported/pile-of-rocks.png-2ee0569be7d8438137f3515d40b3aaa5.ctex"]
+source_file="res://assets/_shared/default/textures/missing_dev.png"
+dest_files=["res://.godot/imported/missing_dev.png-767b2240bfb7a8b79732ec0ab24d16b1.ctex"]
 
 [params]
 

@@ -1,0 +1,6 @@
+{
+  "notes": "Headless-test-only pack for PackResourceResolver; safe to delete once superseded.",
+  "shared_resources": {
+    "obstacle_tex": "res://assets/environment/obstacle_rocks/pile-of-rocks.png"
+  }
+}

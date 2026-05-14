@@ -1,8 +1,8 @@
 # Repo layout plan — **DRAFT (do not apply)**
 
-> **Status:** **Draft / stub only.** This document records **intent and open questions** for reorganizing **`res://`** folders beyond what [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md) already specifies. **Agents and implementers must not treat this file as authoritative** until maintainers remove this banner and resolve the **`<<Question>>`** / **`<<Comment>>`** items below.
+> **Status:** **Draft / stub only.** This document records **intent and open questions** for reorganizing **`res://`** folders beyond what [ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) already specifies. **Agents and implementers must not treat this file as authoritative** until maintainers remove this banner and resolve the **`<<Question>>`** / **`<<Comment>>`** items below.
 >
-> **Companion:** Authoritative **content** (`assets/`, `pack_resources.json`, `_shared/`) rules live in **ASSET_MANAGEMENT_PLAN.md**. This plan focuses on **code**, **config**, **app shell**, and **optional tree renames**.
+> **Companion:** Authoritative **content** (`assets/`, `pack_resources.json`, `_shared/`) rules live in **[ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md)** (archived §11 baseline implemented — **`pack_resource_resolver.gd`**). This plan focuses on **code**, **config**, **app shell**, and **optional tree renames**.
 
 ---
 
@@ -83,12 +83,12 @@ Today several scenes/scripts sit at project root (`main.tscn`, `player.tscn`, �
 ## 5. Agent instructions (while draft)
 
 - **Do not** rename or move folders **based solely on this document** (see repo **AGENTS.md** — migrations are explicit tasks).
-- Use **[ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md)** for **`assets/`** behavior.
+- Use **[ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md)** for **`assets/`** behavior.
 - When implementing anything listed here, **update this draft** into a non-draft spec first or obtain explicit maintainer approval.
 
 ---
 
 ## 6. References
 
-- [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md) — §4.2 systems vs content, §4.4 sketch, §9 follow-on.
+- [ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) — §4.2 systems vs content, §4.4 sketch, §9 follow-on.
 - [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) — backlog pointer for scheduling this work.
