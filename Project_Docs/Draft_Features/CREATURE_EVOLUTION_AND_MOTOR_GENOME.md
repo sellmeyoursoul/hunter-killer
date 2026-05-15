@@ -56,7 +56,7 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 | **Survival-only** (current design target) | Prefer **`change_stability`** first when adding any coupling (e.g. tighter `lookahead_sec` vs longer `scripted_intent_hold_physics_ticks`, or fitness penalty for flip-flopping). Other traits: **no** default mapping until a feature doc names one. | `explorer_builder`, `compassion_self_interest`, `community_individual` — store, mutate, crossover for **lineage continuity**; document **neutral** effect in sim until their motivation systems exist. |
 | **Multi-motivation** (future) | Add explicit rows to a feature plan: each trait maps to **utility weights**, **motor multipliers** on named `creature_motor` genes, and/or **fitness components** (e.g. builder score from home quality). | — |
 
-**Interior motor + `explorer_builder` (deferred, OBJECT §8.2.5):** Once **multi-motivation** reads outlook in the same pipeline as **interior env / slow vs unknown** scoring ([OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 when archived), **high `explorer_builder`** should **scale up** unknown / explore attraction and **scale down** slow-terrain aversion so exploration wins more often **without** breaking the **mob > object** invariant. Name the exact gene multipliers in the implementing feature plan; until then traits stay **reserved** per the survival-only row above.
+**Interior motor + `explorer_builder` (deferred, OBJECT §8.2.5):** Once **multi-motivation** reads outlook in the same pipeline as **interior env / slow vs unknown** scoring ([OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 when archived), **high `explorer_builder`** should **scale up** unknown / explore attraction and **scale down** slow-terrain aversion so exploration wins more often **without** breaking the **mob > object** invariant. Name the exact gene multipliers in the implementing feature plan; until then traits stay **reserved** per the survival-only row above.
 
 **Fitness composition (future):** When objectives beyond survival exist, treat **motivation genes as priors**: a creature with high `explorer_builder` might gain fitness from map coverage while one low on that axis is scored on defensive positioning—**only** after those signals are implemented. Until then, **single-objective** fitness (survival, score, near-miss penalties) ignores trait-specific bonuses on purpose.
 
@@ -92,7 +92,7 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 
 ## Next implementation steps (when requested)
 
-1. NDJSON or SQLite logger for near-miss + motor context (respect [.cursor/rules/focus/logging_instr.md](../.cursor/rules/focus/logging_instr.md) PII/volume policy).
+1. NDJSON or SQLite logger for near-miss + motor context (respect [.cursor/rules/focus/logging_instr.md](../../.cursor/rules/focus/logging_instr.md) PII/volume policy).
 2. Batch runner: `godot --headless` loads genome from CLI, runs K episodes, prints fitness.
 3. Optional: small Python driver for GA loop calling Godot subprocesses.
 4. When `CreatureStats` exists: extend CLI / JSON schema to load and persist **motivation traits** alongside `creature_motor`; log them with episode outcomes for later correlation.
@@ -101,5 +101,5 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 
 | Date | Change |
 |------|--------|
-| 2026-05-12 | Trait–motor: deferred **`explorer_builder`** scaling for interior slow vs unknown ([OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5); multi-motivation hook. |
+| 2026-05-12 | Trait–motor: deferred **`explorer_builder`** scaling for interior slow vs unknown ([OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5); multi-motivation hook. |
 | 2026-05-12 | Motivation traits ([CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) §4): dual genome, phased trait–motor coupling, heredity/fitness; bidirectional cross-links. |

@@ -1,18 +1,20 @@
 # Early spec archive
 
-Superseded for agent work by the split plans in this folder; start at [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
+> **Archive:** Superseded for agent work by the split plans below. **Historical / reference only** — see [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) and [AGENTS.md](../../.cursor/rules/AGENTS.md) on `Completed_Features/` scope.
+
+Start active work at [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](../Draft_Features/VISION_WORLD_BUILDER_PLAN.md).
 
 | Topic | Plan |
 |-------|------|
-| Vision / roadmap | [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md) |
-| Creature stats, motivations, hunger, reproduction | [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) |
-| Full plant ecology (beyond POC) | [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) |
-| Plants + hunger POC | [PLANTS_PLAN.md](PLANTS_PLAN.md) |
-| Terrain / environment props | [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) |
-| stat → point pool math | [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md) |
-| LLM scope (conversation, not motor) | [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md) |
-| Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) |
-| Blank template for new features | [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) |
+| Vision / roadmap | [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](../Draft_Features/VISION_WORLD_BUILDER_PLAN.md) |
+| Creature stats, motivations, hunger, reproduction | [Draft_Features/CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) |
+| Full plant ecology (beyond POC) | [Draft_Features/PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) |
+| Plants + hunger POC | [Draft_Features/PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md) |
+| Terrain / environment props | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) |
+| stat → point pool math | [Draft_Features/SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md) |
+| LLM scope (conversation, not motor) | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](../Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) |
+| Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](MOB_AVOIDANCE_PLAN.md) |
+| Blank template for new features | [FEATURE_PLAN_TEMPLATE.md](../FEATURE_PLAN_TEMPLATE.md) |
 
 ---
 
@@ -60,7 +62,7 @@ This defines all of the basic elements of a creature in the world.
 #### Motivation traits for NPCs. These will drive there reaction to stimulus in the world, including players, and other NPCs
                     ◦ explorerBuilder <int> : The the degree to which you want to go out and explore the work vs staying home making things pleasant
                     ◦ changeStability <int> : The degree to which you value experiencing new things vs the desire to keep things as they are
-                    ◦ compassionSelfInterest <int> : The level to which you will consider the needs of others vs maximizing what’s best for yourself at all costs
+                    ◦ compassionSelfInterest <int> : The level to which you will consider the needs of others vs maximizing what's best for yourself at all costs
                     ◦ communityIndividual <Int> : The amount you feel society should support everyone in it regardless of contribution vs the idea that members of a community should be expected to rely on themselves
 
 			###### Basic info about the NPC
@@ -105,7 +107,7 @@ This defines the basic properties and methods for any plant life in the world
                     ◦ seedSpread <num>: the area in feed from the center of this plant that a seed can take root away from this plant
                     ◦ seedRate <num> : number of game days that it takes for the plant to spread seeds
                     ◦ seedCalReq <num> : the minimum number of callories required on the day the seed is spread that are required for the seed to be released
-                    ◦ seedChokeRake <num> : the rate at which this plant’s seeds will replace any plants already in place
+                    ◦ seedChokeRake <num> : the rate at which this plant's seeds will replace any plants already in place
                     ◦ movementImpact <num> : the % reduction in speed for a creature passing through
                     ◦ fitSize <num> : if the size of the creature < this value, the creature can move through at normal speed.
                     ◦ crushWeight <num> : The weight at which a creature passing through will destroy this object
@@ -120,7 +122,7 @@ This defines the properties and methods for all environmental objects such as st
                     ◦ passible <bool> : If false, this is a solid object that creatures can not pass through
                     ◦ movementImpact <num> : the % reduction in speed for a creature passing through
                     ◦ fitSize <num> : if the size of the creature < this value, the creature can move through at normal speed.
-                    ◦ crushWeight <num> : The weight at which a creature passing through will destroy this object. 0 means it’s unbreakable
+                    ◦ crushWeight <num> : The weight at which a creature passing through will destroy this object. 0 means it's unbreakable
                 • Methods :
 
 

@@ -6,10 +6,16 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 
 ## Behavioral instructions
 
-- **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. Project Documents = `./Project_Docs/*.md` (excluding `./Project_Docs/Completed_Features/*`) plus files in `./.cursor/rules/*`.
-- **Completed_Features scope:** Do not treat `./Project_Docs/Completed_Features/**` as authoritative requirements when implementing, reviewing, or reconciling behavior unless the user explicitly asks to use them. Those files are archived; active specs live in non-archived `Project_Docs` and `.cursor/rules`.
-- **Feature-doc scope guard:** When implementing a specific feature, treat only the explicitly referenced feature plan (plus `./.cursor/rules/*`) as authoritative. Any other files in `./Project_Docs/*.md` that are not explicitly referenced by the active feature request should be treated as **feature drafts** and must not override the active feature requirements.
-- **Refactoring:** Do not rename or move files once they have been created. Renaming files will break the contextual rule application and is strictly prohibited.
+- **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. **Project Documents** = files in `./.cursor/rules/*` plus active markdown under `./Project_Docs/` as defined below (not `Completed_Features/` unless the user explicitly cites them).
+- **Project_Docs layout (inventory: [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md)):**
+  - **Start here:** `./Project_Docs/PROJECT_DOC_INDEX.md` — **canonical path registry** for every project doc; update **only this file** when moving or adding `*.md` under `Project_Docs/`.
+  - **Draft features (tier II):** `./Project_Docs/Draft_Features/**/*.md` — **work in progress only** (no stubs for shipped features); `<<Question>>` / `<<Comment>>` expected.
+  - **Definitive contracts (tier III):** `./Project_Docs/Definitive_Features/**/*.md` — minimize drift vs code / `project.godot` (e.g. layer tables).
+  - **Root navigation (same folder as index):** `./Project_Docs/PROJECT_DOC_INDEX.md`, `FEATURE_PLAN_TEMPLATE.md`, `ENHANCEMENT_BACKLOG_PLAN.md` — process and backlog; not feature implementation specs unless explicitly cited.
+  - **Archived:** `./Project_Docs/Completed_Features/**` — see **Completed_Features scope** below.
+- **Completed_Features scope:** Files under `./Project_Docs/Completed_Features/**` are **snapshots in time**; drift vs current code is **expected**. Do **not** treat them as authoritative requirements when implementing, reviewing, or reconciling behavior unless the user **explicitly cites** that file for the task. **Code comments** that link to `Completed_Features/` do **not** elevate those files to definitive authority — they are reference pointers only. Use archived docs for **initial design intention** when no authoritative active doc exists on the topic; otherwise prefer `Draft_Features/`, `Definitive_Features/`, or the plan the task cites. Active specs live in `Draft_Features/`, `Definitive_Features/`, root navigation files above, and `.cursor/rules`.
+- **Feature-doc scope guard:** When implementing a specific feature, treat only the **explicitly referenced** feature plan (plus `./.cursor/rules/*`) as authoritative. Any other file in `Draft_Features/` or `Definitive_Features/` that is not referenced by the active request is a **feature draft** and must not override the cited spec.
+- **Refactoring:** Do not rename or move Project Docs or rule files casually — it breaks Cursor rule attachment. **Coordinated migrations** (folder changes, link updates, `AGENTS.md` + [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) in one change) are allowed when a maintainer directs them; see that index **Maintenance** section.
 
 ## Formatting
 
@@ -69,7 +75,7 @@ Detailed rules live only in these files; add more pointers here as new focus are
 
 **Ignore inconsistencies in historical files:** Files under `./Project_Docs/Completed_Features` are archived; see **Completed_Features scope** under Behavioral instructions. Do not treat them as active requirements unless a maintainer explicitly asks. Cross-doc drift with those files is expected.
 
-- **Project_Docs inventory (paths + proposed tiers):** [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) — organization strategy in [PD_INDEXING_AND_ORGANIZATION.md](../../Project_Docs/PD_INDEXING_AND_ORGANIZATION.md)
+- **Project_Docs (start here):** [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) — layout, tiers, promotion, and maintenance (`Draft_Features/`, `Definitive_Features/`, `Completed_Features/`)
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)
 - **Assets (`res://assets/`, `pack_resources.json`, variants):** [asset_management.md](./focus/asset_management.md) — full design in archived [ASSET_MANAGEMENT_PLAN.md](../../Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md)

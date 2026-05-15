@@ -1,6 +1,8 @@
 # Hunter Killer — Feature plan template (agent-friendly)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
+>
+> **Where to save:** Copy into `Project_Docs/Draft_Features/<NAME>_PLAN.md` for new work. **Promotion:** see [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md) **Promotion** — `Definitive_Features/` for ongoing contracts (minimize drift); `Completed_Features/` when shipped or superseded (snapshot; drift expected). **Register the path only in that index** (canonical inventory). When promoting, update the index, fix cross-links, and **delete** the `Draft_Features/` copy — no redirect stubs. Do **not** add new feature plans at `Project_Docs/` root.
 
 ---
 

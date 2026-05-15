@@ -61,6 +61,14 @@ static func default_creature_motor_params() -> Dictionary:
     "explore_coverage_cell_px": 52.0,
     "explore_trail_max_cells": 96,
     "weight_explore_trail_repulsion": 2.35,
+    ## Food-source memory (planned — not wired; see ai_driver.gd [_food_belief] comment block).
+    ## Draft defaults: precise world coords for motor seek while distance <= precise radius; beyond that, egocentric 8-way only.
+    # "food_memory_precise_radius_px": 1000.0,
+    # "food_memory_forget_radius_px": 2400.0,
+    # "food_memory_ttl_sec": 45.0,
+    # "food_memory_max_entries": 32,
+    # "weight_seek_remembered_food": 8.0,
+    # "weight_coarse_sector_food_bias": 0.0,
   }
 
 

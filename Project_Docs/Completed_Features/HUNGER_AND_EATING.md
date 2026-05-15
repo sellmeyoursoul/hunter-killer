@@ -1,12 +1,12 @@
 # Hunter Killer — Hunger, calories, and bush food sources (agent-friendly)
 
-> **Archive:** This feature is **implemented** in-tree (`player.gd`, `main.gd`, `hud.gd`, `mob.gd`, `assets/plants/…`). Per [AGENTS.md](../../.cursor/rules/AGENTS.md), treat this file as **historical** unless a maintainer explicitly cites it for new work; active plants index remains [PLANTS_PLAN.md](../PLANTS_PLAN.md).
+> **Archive:** This feature is **implemented** in-tree (`player.gd`, `main.gd`, `hud.gd`, `mob.gd`, `assets/plants/…`). Per [AGENTS.md](../../.cursor/rules/AGENTS.md), treat this file as **historical** unless a maintainer explicitly cites it for new work; active plants index remains [PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md).
 
 > **Purpose:** Specify **hunger** / **calorie** gameplay for the Hunter Killer Godot project: bush-style food assets, two interaction archetypes (impact vs pass-through), creature HUD feedback, plant **calorie regrowth**, and **two-state shrub sprites** (PNG) per archetype.
 >
-> **Terminology:** Use **calorie** / **calories** in code and docs (not “callory”). Align creature-facing fields with [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md) (**`caloric_needs`**, **`current_calories`**).
+> **Terminology:** Use **calorie** / **calories** in code and docs (not “callory”). Align creature-facing fields with [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) (**`caloric_needs`**, **`current_calories`**).
 >
-> **Relationship to other docs:** Environment passibility and brush semantics intersect [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) and [OBJECT_AVOIDANCE_PLAN.md](OBJECT_AVOIDANCE_PLAN.md). Plant **field names** and long-term **`growth_rate`** semantics align with [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md) (no separate `yield_calories`—use **`current_calories`** / **`max_calories`**). High-level plants index: [PLANTS_PLAN.md](../PLANTS_PLAN.md). **Authoritative asset root for plant packs:** **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) and [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md).
+> **Relationship to other docs:** Environment passibility and brush semantics intersect [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) and [OBJECT_AVOIDANCE_PLAN.md](OBJECT_AVOIDANCE_PLAN.md). Plant **field names** and long-term **`growth_rate`** semantics align with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) (no separate `yield_calories`—use **`current_calories`** / **`max_calories`**). High-level plants index: [PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md). **Authoritative asset root for plant packs:** **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) and [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md).
 
 ---
 
@@ -18,7 +18,7 @@
 
 **Out of scope (explicit non-goals):**
 
-- Full ecosystem simulation (seeding, species competition) beyond calorie pool regrowth on placed bushes — defer to [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md).
+- Full ecosystem simulation (seeding, species competition) beyond calorie pool regrowth on placed bushes — defer to [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md).
 - Per-plant **differing** regrowth rates — **not** required this phase (all bushes use **1/s**); the **awareness** rules below are written so that difference can land later without redoing beliefs.
 - Cross-session persistence of hunger or plant depletion (see **Session reset** in §3).
 
@@ -49,7 +49,7 @@
 **Existing patterns to follow:**
 
 - [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md) and focus rules under [`.cursor/rules/focus/`](../../.cursor/rules/focus/).
-- Document physics **layers/masks** in [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) **§6** (authoritative table) and **§7** acceptance checklist. Keep **`project.godot`** `[layer_names]` in sync; see [PD_INDEXING_AND_ORGANIZATION.md](../PD_INDEXING_AND_ORGANIZATION.md) for doc tiers.
+- Document physics **layers/masks** in [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) **§6** (authoritative table) and **§7** acceptance checklist. Keep **`project.godot`** `[layer_names]` in sync; see [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) for doc tiers.
 
 ---
 
@@ -73,13 +73,13 @@
 
 ### Must have
 
-1. **Creature calorie pool** — Track **`current_calories`** with an upper bound **`caloric_needs`** (or equivalent) per [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md); derive optional **`hunger`** display if useful (e.g. ratio or inverted bar). **This phase:** **`caloric_needs` = 10** (see §3 constants table).
+1. **Creature calorie pool** — Track **`current_calories`** with an upper bound **`caloric_needs`** (or equivalent) per [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md); derive optional **`hunger`** display if useful (e.g. ratio or inverted bar). **This phase:** **`caloric_needs` = 10** (see §3 constants table).
 2. **Hunger drain** — Decrease **`current_calories`** at **exactly 1 calorie per second** in **real time** (see §3). Implementation may run in **`_process`** or accumulate `delta` in **`_physics_process`**, but the **authoritative rule** is **1/s** drain, not “only while moving” and not “each physics frame” as the unit of loss.
 3. **Starvation failure** — When **`current_calories` ≤ 0**, trigger **game over** using the **same player-facing outcome as mob contact** this phase (`Main.game_over()` / existing HUD flow). **Future:** differentiated deaths (violence vs starvation vs environment) — see [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
 4. **Food source A — Impassible impact bush** — Stationary **solid** prop (creature **cannot** walk through). **Calorie grant (this phase):** **single burst** on **first qualifying** collision / contact with the player (debounce so it does **not** repeat every physics frame while touching); only when bush is **full** (§3). **Burst transfer:** add up to **`max_calories`** (5) toward **`caloric_needs`**; **overflow is wasted** (clamp at **`caloric_needs`**, do not bank past cap). <<Comment: future phase may add sustained-touch rules>>
 5. **Food source B — Creature-pass / mob-block bush** — Creature **passes through** (no blocking collision for the player creature); **mobs do not** pass through (they experience it as a blocker or detour). **Calorie grant (this phase):** **single burst** when the player **enters** the calorie overlap (same semantics as Food A: **not** a per-frame drip while standing inside). **Re-consume:** once the plant regrows so **`current_calories == max_calories`** again, it is **ready** (swap to **`*_full.png`**) and the player may earn another burst on a **new** qualifying entry after having left / reset debounce as designed. **Later phase:** **steady drip** while overlapping so player **decision-making** under sustained contact becomes richer.
 6. **HUD** — Upper **right** corner: readable **hunger/calorie status** (numeric and/or bar). **Implementation:** **`hud.gd`** uses **`_process`** (or equivalent **idle** display tick), **not** gameplay physics, increments a counter and every **10** frames reads **`Player`** vitals and updates labels (§3). **No** world collision or interaction from the HUD—**read-only** display. May lag true vitals by up to that interval; tune **`10`** as needed.
-7. **Calorie regrowth on plants** — When a creature consumes a bush, the bush’s **`current_calories`** go to **0**. Regrow toward **`max_calories` (5)** at **+1 calorie per second** in **real time** — **authoritative** for this phase, same time base as creature drain. **`growth_rate`** naming can align with [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md); this phase fixes the numeric rate at **1/s**.
+7. **Calorie regrowth on plants** — When a creature consumes a bush, the bush’s **`current_calories`** go to **0**. Regrow toward **`max_calories` (5)** at **+1 calorie per second** in **real time** — **authoritative** for this phase, same time base as creature drain. **`growth_rate`** naming can align with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md); this phase fixes the numeric rate at **1/s**.
 8. **Visual states** — **Sprite / texture** (this phase: **no** colored border frame; **no** partial pickup): swap **`Sprite2D`** (or equivalent) texture when crossing the ready threshold (`current_calories == max_calories`). Filenames and placement: **§5.4**; art under **`res://assets/plants/…`**. **Z-order:** render the shrub **above** the creature so the player **visually tucks into** the bush when passing through (Food B). <<Comment: tune sibling order / z_index per scene>>
    - **Not ready** (`current_calories < max_calories`): **inedible** art — creature can **enter** Food B / cannot eat; Food A remains **solid** and inedible (§5.4 table).
    - **Ready** (`current_calories == max_calories`): **full (5) / consumable** art — **only** state where eating can occur; burst **5** then bush goes to **0** per §5.
@@ -96,7 +96,7 @@
 ### Should have
 
 - Bush scenes and textures under **`res://assets/plants/<archetype>/…`** with optional **`pack_resources.json`** per [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md).
-- Single configurable export or Resource for **`max_calories`**, **`growth_rate`** per instance (align names with [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md); **`current_calories`** is the live pool—**no** separate `yield_calories`).
+- Single configurable export or Resource for **`max_calories`**, **`growth_rate`** per instance (align names with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md); **`current_calories`** is the live pool—**no** separate `yield_calories`).
 
 ### Nice to have
 
@@ -111,11 +111,11 @@
 
 - **Bush placement:** Food shrubs are **their own authored scenes** under **`res://assets/plants/solid_shrub/`** (**Food A**) and **`res://assets/plants/open_shrub/`** (**Food B**). **Do not** fold them into **`obstacle_field`** tiers or **`obstacle_field_root`** as generic obstacle rows; place instances from **`main.gd`** (or a future level loader) alongside the obstacle system. Scripts may still mirror collision patterns from [OBJECT_AVOIDANCE_PLAN.md](OBJECT_AVOIDANCE_PLAN.md) where useful, but **assets and scenes** are **`assets/plants/`**-scoped.
 - **`Player`** (or a small **`CreatureVitals`** helper it owns) holds **`current_calories`** / **`caloric_needs`**. Optional **`vitals_changed`** signal remains useful for **non-HUD** subscribers; **HUD** uses **polling** (§3, §5.3).
-- Each **bush** instance owns **`current_calories`**, **`max_calories`**, and **`growth_rate`** (names per [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md)); burst grant reads **`current_calories`** when **`== max_calories`** only.
+- Each **bush** instance owns **`current_calories`**, **`max_calories`**, and **`growth_rate`** (names per [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md)); burst grant reads **`current_calories`** when **`== max_calories`** only.
 - **Regrowth:** On **`_process`** (or **`_physics_process`** with `delta` accumulation), increase plant **`current_calories`** by **1 × delta** per second toward **`max_calories` (5)**; clamp; **swap sprite** to **ready** vs **not-ready** texture when crossing **`max_calories`** (§5.4).
 - **Calorie grant (player only, this phase):** **Burst** — one grant per **enter** or **first qualifying** contact while bush is **full**; debounce / one-shot per visit so **Food A** and **Food B** do **not** spam every frame. **Overflow** past **`caloric_needs`** on the player is **wasted** (§4). **Future:** **drip** while overlapping (especially Food B) for richer player tradeoffs.
 - **Food A (solid):** **`solid_shrub`** **`StaticBody2D`** on **`world_static` (layer `1`)** with the **same layer/mask parity as `ObstacleField` rocks** so **player** and **mobs** both collide. Optional **`Area2D`** or **`CharacterBody2D`** contact handling on **`Player`** for burst calorie grant <<Comment: avoid double-counting on every physics frame unless explicitly designed>>.
-- **Food B (creature-pass / mob-block):** **Chosen implementation — layer / mask split (Option A):** **`open_shrub`** uses (1) a **`StaticBody2D`** **mob shell** on dedicated layer **`plant_mob_block` (bit `8`)** with **`collision_mask`** including **mobs** so **`RigidBody2D`** contacts register, and (2) a separate **`Area2D`** **calorie zone** with **`collision_mask = 2`** (player layer only) for burst grants. **Player** keeps **`collision_mask`** on **`world_static` (bit `1`)** only — **excludes bit `8`**, so the creature **walks through** the shell. **`Mob`** **ORs** bit **`8`** into **`collision_mask`** (target **`9`** alongside **`world_static`**). **Mobs treat that shell like other solid obstacles** for blocking / avoidance. **Do not** put mobs on **two** physics layers in v1. **Authoritative bit table:** [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) **§6**. **Future:** multi-sized creatures or richer pass rules may need more bits or math — extend **§6** in the same PR as code changes.
+- **Food B (creature-pass / mob-block):** **Chosen implementation — layer / mask split (Option A):** **`open_shrub`** uses (1) a **`StaticBody2D`** **mob shell** on dedicated layer **`plant_mob_block` (bit `8`)** with **`collision_mask`** including **mobs** so **`RigidBody2D`** contacts register, and (2) a separate **`Area2D`** **calorie zone** with **`collision_mask = 2`** (player layer only) for burst grants. **Player** keeps **`collision_mask`** on **`world_static` (bit `1`)** only — **excludes bit `8`**, so the creature **walks through** the shell. **`Mob`** **ORs** bit **`8`** into **`collision_mask`** (target **`9`** alongside **`world_static`**). **Mobs treat that shell like other solid obstacles** for blocking / avoidance. **Do not** put mobs on **two** physics layers in v1. **Authoritative bit table:** [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) **§6**. **Future:** multi-sized creatures or richer pass rules may need more bits or math — extend **§6** in the same PR as code changes.
   - **Not chosen (v1):** `add_collision_exception_with(player)` as the primary Food B story (revisit only if layer budget or maintenance cost forces it).
 - **Mob plant intel (post-stub):** When graduating from §4.11 **MVP C**, feed each mob (**`mob.gd`** or successor) **session-local** memory: **discovered** food plants; **refresh `current_calories` / readiness** only inside **awareness** (same **`awareness_radius`** as creature motor config). **Mobs never** invoke player-only eat logic or reduce bush pools.
 
@@ -124,7 +124,7 @@
 | Action | Path | Notes |
 |--------|------|-------|
 | create | `res://assets/plants/solid_shrub/…` | **Food A** — impassible impact bush; textures **`solid_shrub.png`**, **`solid_shrub_full.png`** (§5.4) |
-| create | `res://assets/plants/open_shrub/…` | **Food B** — creature passes, mobs blocked per [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) §6; **`open_shrub.png`**, **`open_shrub_full.png`** |
+| create | `res://assets/plants/open_shrub/…` | **Food B** — creature passes, mobs blocked per [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) §6; **`open_shrub.png`**, **`open_shrub_full.png`** |
 | create | `res://assets/plants/bush_food.gd` (shared; or per-archetype scripts beside these folders) | Shared calorie / regrowth / **sprite** swap |
 | modify | `res://player.gd` | Apply overlaps/collisions; drain hunger |
 | modify | `res://hud.gd` | Top-right vitals; **poll `Player` every 10 `_process` frames** (§3); **display-only** |
@@ -154,7 +154,7 @@
 ### 5.5 Dependencies
 
 - **Assets:** Four PNGs per §5.4 (`open_shrub.png`, `open_shrub_full.png`, `solid_shrub.png`, `solid_shrub_full.png`) under **`res://assets/plants/solid_shrub/`** and **`res://assets/plants/open_shrub/`**; placeholders acceptable until art lands.
-- **Plans:** [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md), [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md), [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md).
+- **Plans:** [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md), [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md), [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md).
 
 ---
 
@@ -182,7 +182,7 @@
 - [ ] Starvation at **`current_calories` ≤ 0** ends the round via the **same `game_over` path** as mob hit this phase (see backlog for future differentiation).
 - [ ] **Session start** sets **player** and **all** food bushes to **full** calories; **no** cross-session persistence of hunger or bush pools.
 - [ ] **Mobs — MVP C:** food bushes registered (e.g. **`food_plants`** group); **`mob.gd`** may query/list for **stub / logging**; **no** bush calorie mutation; **carnivore** vs player unchanged.
-- [ ] **Layer/mask** matches [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) **§6** (Food B split; mob **`collision_mask`** includes **`plant_mob_block`**; player does **not**).
+- [ ] **Layer/mask** matches [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) **§6** (Food B split; mob **`collision_mask`** includes **`plant_mob_block`**; player does **not**).
 
 ## 8. Risks & mitigations
 
@@ -215,15 +215,15 @@
 
 ## 10. Open questions (embedded)
 
-**Resolved this phase (do not reopen without a new phase note):** Creature drain **−1 calorie per second** and plant regrowth **+1 calorie per second** (real time, **not** movement-gated); **`caloric_needs` = 10** / **`max_calories` = 5** per bush; eat **only when `current_calories == max_calories`**; **burst overflow wasted**; regrow to full → **`*_full.png`** again; starvation **≤ 0** uses **same `game_over` path** as mob hit ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) for future death kinds); **saves out of scope**; level intent **~4–5** bushes (§4.9); **session reset** full pools (§2, §4.10); **mobs** **carnivore** / no bush calories (§4.11); **mob plant MVP C** = **`food_plants`** group **stub**; **post-stub** intel uses **`awareness_radius`** shared with creature motor; **HUD** polls **`Player` every 10** `_process` frames — **display-only** (§3, §5.3); **Food B** shrub **z-order above player** for tuck-in visual; **Food B collision = layer/mask split (Option A)** per [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) **§6** — no dual-layer mobs in v1; **archetype folders** **`solid_shrub/`** and **`open_shrub/`** under **`res://assets/plants/`**; **burst** grant (**drip** later); **PNG pairs** per §5.4; shared logic **`res://assets/plants/bush_food.gd`** (name fixed for this phase); **no** `yield_calories`—align [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md) fields; **not** folded into **`obstacle_field`**.
+**Resolved this phase (do not reopen without a new phase note):** Creature drain **−1 calorie per second** and plant regrowth **+1 calorie per second** (real time, **not** movement-gated); **`caloric_needs` = 10** / **`max_calories` = 5** per bush; eat **only when `current_calories == max_calories`**; **burst overflow wasted**; regrow to full → **`*_full.png`** again; starvation **≤ 0** uses **same `game_over` path** as mob hit ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) for future death kinds); **saves out of scope**; level intent **~4–5** bushes (§4.9); **session reset** full pools (§2, §4.10); **mobs** **carnivore** / no bush calories (§4.11); **mob plant MVP C** = **`food_plants`** group **stub**; **post-stub** intel uses **`awareness_radius`** shared with creature motor; **HUD** polls **`Player` every 10** `_process` frames — **display-only** (§3, §5.3); **Food B** shrub **z-order above player** for tuck-in visual; **Food B collision = layer/mask split (Option A)** per [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) **§6** — no dual-layer mobs in v1; **archetype folders** **`solid_shrub/`** and **`open_shrub/`** under **`res://assets/plants/`**; **burst** grant (**drip** later); **PNG pairs** per §5.4; shared logic **`res://assets/plants/bush_food.gd`** (name fixed for this phase); **no** `yield_calories`—align [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) fields; **not** folded into **`obstacle_field`**.
 
 ---
 
 ## 11. References
 
-- [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md) — hunger fields.
-- [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md) — `current_calories`, `max_calories`, `growth_rate`.
-- [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) — **§6** physics (**layer/mask split** for **`solid_shrub`** / **`open_shrub`**).
+- [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) — hunger fields.
+- [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) — `current_calories`, `max_calories`, `growth_rate`.
+- [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — **§6** physics (**layer/mask split** for **`solid_shrub`** / **`open_shrub`**).
 - [OBJECT_AVOIDANCE_PLAN.md](OBJECT_AVOIDANCE_PLAN.md) — locomotion, obstacles, mob detours.
 - [ASSET_MANAGEMENT_PLAN.md](ASSET_MANAGEMENT_PLAN.md) — `assets/plants/` packaging.
 - [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) — active **`res://assets/`** policy summary.
@@ -235,5 +235,5 @@
 
 | Date | Change |
 |------|--------|
-| 2026-05-14 | **Food B:** **layer/mask split (Option A)** — authoritative table in [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) **§6**; **archetype paths** **`solid_shrub/`**, **`open_shrub/`**; fixed **`bush_food.gd`**; §5.1 / §5.2 / §6–§7 / §10 / references updated. |
+| 2026-05-14 | **Food B:** **layer/mask split (Option A)** — authoritative table in [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) **§6**; **archetype paths** **`solid_shrub/`**, **`open_shrub/`**; fixed **`bush_food.gd`**; §5.1 / §5.2 / §6–§7 / §10 / references updated. |
 | 2026-05-14 | **Implemented** in Godot: `player`/`main`/`hud`/`mob`, **`assets/plants/`** scenes; doc moved to **Completed_Features**. |

@@ -2,7 +2,7 @@
 
 **Status:** Completed (2026-05-11). Archived under `Project_Docs/Completed_Features/`; active code references this document for motor contracts. Run `godot --path . --headless -s res://tests/run_all.gd` for regression coverage.
 
-> Cardinal motor for dodging mobs — foundation for future weighted utility (hunger, etc.). LLM is **not** the movement engine while `creature_motor.mode` is `scripted` ([AI_INT_CONVERSATION_SCOPE_PLAN.md](../AI_INT_CONVERSATION_SCOPE_PLAN.md)).
+> Cardinal motor for dodging mobs — foundation for future weighted utility (hunger, etc.). LLM is **not** the movement engine while `creature_motor.mode` is `scripted` ([AI_INT_CONVERSATION_SCOPE_PLAN.md](../Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md)).
 
 ---
 
@@ -42,7 +42,7 @@
 
 **Existing patterns to follow:**  
 - [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
-- [VISION_WORLD_BUILDER_PLAN.md](../VISION_WORLD_BUILDER_PLAN.md), [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md) for future weight hooks.
+- [VISION_WORLD_BUILDER_PLAN.md](../Draft_Features/VISION_WORLD_BUILDER_PLAN.md), [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) for future weight hooks.
 
 ---
 

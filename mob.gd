@@ -54,6 +54,8 @@ func _ready() -> void:
   var mob_animations: Array[StringName] = [&"fly", &"swim", &"walk"]
   $AnimatedSprite2D.animation = mob_animations.pick_random()
   $AnimatedSprite2D.play()
+  ## Food-source memory (predator / carnivore draft): prey = [code]player[/code] group (moving — track id + velocity like [code]ai_driver[/code] [_mob_hist]).
+  ## Stationary [code]food_plants[/code] are routing intel only (where herbivore may go), not mob calories. Precise coords while in sense; coarse 8-way is egocentric and updates each tick — see [code]ai_driver.gd[/code] [_food_belief] design block.
   var plants := get_tree().get_nodes_in_group(&"food_plants")
   if not plants.is_empty():
     OLog.debug("Mob food_plants stub sees %d bush(es)." % plants.size(), false, "Mob")

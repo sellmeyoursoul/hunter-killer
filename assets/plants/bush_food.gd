@@ -2,6 +2,7 @@ extends Node2D
 ## Shared calorie pool, regrowth, sprite swap, and player-only burst pickup for food shrubs (hunger POC).
 ## Params: [member texture_not_ready] / [member texture_ready] per archetype in each scene; child CalorieArea uses ENVIRONMENT_MODEL_PLAN §6 masks.
 ## Solid blockers: [member CalorieArea] pickup shape should extend past the static collision circle, or [method CharacterBody2D.move_and_slide] leaves the player flush outside and [signal Area2D.body_entered] never fires.
+## **Food-source memory (stationary):** ENGINE belief should key on this node's [code]get_instance_id()[/code], store [code]global_position[/code] while in awareness, and refresh [method is_pickup_ready_for_motor] only when the bush is seen again. Position is fixed in world space — unlike predator prey, no velocity field is required.
 
 signal calories_changed
 

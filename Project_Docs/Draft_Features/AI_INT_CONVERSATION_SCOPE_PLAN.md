@@ -22,13 +22,13 @@
 
 **Engine & version:** Godot 4.6.2
 
-**Main scenes / entry:** `AiDriver` autoload; see [DtC_AI_INT_PLAN.md](DtC_AI_INT_PLAN.md) and [Completed_Features/DtC_AI_INT_PLAN.md](Completed_Features/DtC_AI_INT_PLAN.md) for what shipped.
+**Main scenes / entry:** `AiDriver` autoload; see [Completed_Features/DtC_AI_INT_PLAN.md](../Completed_Features/DtC_AI_INT_PLAN.md) for what shipped.
 
 **Key scripts (paths):**  
 - `AI_int_lib/ai_driver.gd`, inference client config, `system_prompt.txt`.
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
+- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
 - Do **not** delete working inference code; new gameplay AI should live in **heuristic / utility / BT** modules per [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
 
 ---

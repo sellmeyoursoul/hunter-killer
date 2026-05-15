@@ -28,7 +28,7 @@
 - Future: `res://creature/stat_math.gd` or static methods on `CreatureStats` companion.
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
+- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
 - Add **unit tests** when implementing (table boundaries, stat 26+, stat 1).
 
 ---

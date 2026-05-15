@@ -30,7 +30,7 @@
 - Existing: `player.gd`, `mob.gd` may gain **optional** exports that mirror a subset of names below.
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
+- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
 - Prefer **Resource** or **composition** for stats so `Player` and `Mob` do not duplicate large blocks of logic prematurely.
 
 **Stat point math:** Centralize in [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md).
@@ -127,19 +127,19 @@
 
 ### Collision / input / signals (if relevant)
 
-- Locomotion against terrain: **`CharacterBody2D`** / **`CharacterBody3D`** with **`move_and_slide()`** per [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1 — **do not** reimplement slide on **`Area2D`**.
+- Locomotion against terrain: **`CharacterBody2D`** / **`CharacterBody3D`** with **`move_and_slide()`** per [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1 — **do not** reimplement slide on **`Area2D`**.
 
 ### Dependencies
 
 - [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md)  
-- [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) (§5.1 — `CharacterBody*D` + `move_and_slide` for creature locomotion)  
+- [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) (§5.1 — `CharacterBody*D` + `move_and_slide` for creature locomotion)  
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) (motivation traits in evolution / motor stack)
 
 ---
 
 ## 5. Implementation plan (ordered)
 
-1. Land hunger on **player** per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) (and index [PLANTS_PLAN.md](PLANTS_PLAN.md)) using **`current_calories`**, **`caloric_needs`**.
+1. Land hunger on **player** per [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md) (and index [PLANTS_PLAN.md](PLANTS_PLAN.md)) using **`current_calories`**, **`caloric_needs`**.
 2. Introduce `CreatureStats` Resource with **all fields @export default** for forward compatibility; wire only used fields.  
 3. Migrate mob/player to shared Resource when second species needs the same vitals.
 
@@ -176,7 +176,31 @@
 
 - <<Question: Single `gender` enum vs bitmask for future genetics?>>  
 - <<Question: Should `hunger` be stored or always derived?>>
-- **Control parity (deferred):** [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 applies interior env / exploration motor biases to **ENGINE**-controlled creatures only for that phase; **HUMAN** input does not get those nudges. Resolve whether **`ControlMode.AI`** (or any non-scripted motor) should match **ENGINE** weights when the **AI control** phase lands — document in the AI feature plan so scripted vs learned control stays consistent.
+- **Control parity (deferred):** [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 applies interior env / exploration motor biases to **ENGINE**-controlled creatures only for that phase; **HUMAN** input does not get those nudges. Resolve whether **`ControlMode.AI`** (or any non-scripted motor) should match **ENGINE** weights when the **AI control** phase lands — document in the AI feature plan so scripted vs learned control stays consistent.
+
+### Food-source memory (creature enhancement — draft)
+
+**Goal:** Remember discovered food after it leaves the awareness cone — without omniscient seek.
+
+| Tier | Condition (baseline) | Representation | Motor use |
+|------|----------------------|----------------|-----------|
+| **Precise** | Remembered bush/player-food and `distance(creature, last_world_pos) ≤ food_memory_precise_radius_px` (**1000** px default) | Exact `Vector2` + last-known ready/unready | Merge into `food_seek_targets` / unready lists ([`ai_driver.gd`](../../AI_int_lib/ai_driver.gd), [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd)) |
+| **Coarse** | Still remembered but farther than precise radius | **Egocentric** 8-way sector recomputed each tick from `last_world_pos - creature_pos`: N, NE, E, SE, S, SW, W, NW | Weak cardinal bias or LLM/perception text — **not** a stored world compass bearing |
+
+**Alternatives to weigh**
+
+1. **Mob-style ghost buffer** — ring buffer + `awareness_memory_*` decay at last position (proven pattern in `ai_driver` `_mob_hist`).  
+2. **Explore-trail-style grid** — cheap, but merges distinct bushes in one cell.  
+3. **Precise-only** — no coarse tier; forget hard outside radius (simplest).
+
+**Open design**
+
+- <<Question: Coarse direction **changes as the creature moves** because sectors are relative to current position. Is that acceptable for ENGINE routing, or do we need map-fixed landmarks for “return to NW corner of map”?>>  
+- <<Question: **Forget** — combine `food_memory_forget_radius_px`, `food_memory_ttl_sec` since last in-awareness observation, session reset, and LRU `food_memory_max_entries`?>>  
+- <<Question: **Predator / moving food** — track prey `instance_id` + `velocity`; refresh every tick in awareness; extrapolate out of cone like mob ghosts; readiness ≠ bush regrow. Coarse 8-way is a weak cue for movers — prefer velocity bearing or precise tier only.>>  
+- <<Comment: Stationary bushes — [`bush_food.gd`](../../assets/plants/bush_food.gd) `global_position` is stable; belief keys on instance id.>>
+
+**Planned config keys** (commented in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)): `food_memory_precise_radius_px`, `food_memory_forget_radius_px`, `food_memory_ttl_sec`, `food_memory_max_entries`, `weight_seek_remembered_food`.
 
 ---
 
@@ -185,7 +209,7 @@
 | Date | Change |
 |------|--------|
 | 2026-05-12 | §9: deferred **ENGINE vs AI** interior motor parity (OBJECT §8.2.5). |
-| 2026-05-12 | §4 Collision: **`CharacterBody*D`** + **`move_and_slide`** per [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1; dependency link. |
+| 2026-05-12 | §4 Collision: **`CharacterBody*D`** + **`move_and_slide`** per [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1; dependency link. |
 | 2026-05-12 | `size`: internal **pixels**; no Godot ft/m; future **display** units (ft/in vs m/cm); **Display length units** note; §7 risk. |
 | 2026-05-12 | Cross-link motivation traits ↔ [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) (§4, Dependencies). |
 | 2026-05-11 | Extracted creature + vitals from EARLY_SPEC_DOC. |

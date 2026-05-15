@@ -28,10 +28,10 @@
 **Key scripts (paths):** TBD per phase; see active feature plans below.
 
 **Existing patterns to follow:**  
-- Follow [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md) and [`.cursor/rules/focus/`](../.cursor/rules/focus/).  
+- Follow [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md) and [`.cursor/rules/focus/`](../../.cursor/rules/focus/).  
 - **Feature-doc scope:** When implementing a ticket, the **explicitly referenced** feature plan is authoritative; this vision doc does not override a narrower phase doc.
 
-**Split from legacy notes:** The freeform capture in [EARLY_SPEC_DOC](EARLY_SPEC_DOC) is superseded for **agent work** by the linked plans below; keep EARLY_SPEC_DOC as historical scratch or index.
+**Split from legacy notes:** The freeform capture in [Completed_Features/EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC) is superseded for **agent work** by the linked plans below.
 
 ---
 
@@ -57,7 +57,7 @@
 ### Architecture / data flow
 
 - **Vision layer (this file):** Roadmap and cross-links only.  
-- **Domain plans:** [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md), [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md), [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md), [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md).  
+- **Domain plans:** [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md), [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md), [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md).  
 - **Near-term gameplay:** [PLANTS_PLAN.md](PLANTS_PLAN.md) (player food / starvation POC).  
 - **LLM posture:** [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md).
 
@@ -80,14 +80,14 @@
 ## 5. Implementation plan (ordered)
 
 1. Keep child feature docs updated as POCs land (plants, larger playfield, etc.).  
-2. When adding a new domain (e.g. predators), add a new `*_PLAN.md` from the template and link it here and in EARLY_SPEC_DOC index.
+2. When adding a new domain (e.g. predators), add a new `*_PLAN.md` from the template and link it here and in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 
 ---
 
 ## 6. Acceptance criteria
 
 - [ ] This file lists all active world-model plans with relative links (see §4).  
-- [ ] EARLY_SPEC_DOC begins with a pointer to this file and the child plans.  
+- [x] [Completed_Features/EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC) index points at child plans (historical reference only).  
 - [ ] LLM “not the movement engine” policy is stated in §1 or §3 and mirrored in AI conversation scope plan.
 
 ---

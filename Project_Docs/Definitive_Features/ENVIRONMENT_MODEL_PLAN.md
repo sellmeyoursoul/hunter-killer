@@ -19,7 +19,7 @@
 | **Per-creature interior env belief — save-game persistence** | **FUTURE** | OBJECT §8.2.3 (memory on creature; persistence OOS) — §11 |
 | **Multi-layer palette / image → grid merge order** | **Document at bake time** | OBJECT §8.1 limits — §11 |
 | **Footprint: polygon–cell overlap vs center-only** | **FUTURE** (3D / mesh sampling) | OBJECT §9 — §11 |
-| **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §11; [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) |
+| **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §11; [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) |
 | **Silhouette vs unexplored** second motor bucket + LOS on snapshot | **FUTURE** (perception / FOV) | OBJECT §8.2.5 comments; OBJECT §10 — §11 |
 
 ---
@@ -50,7 +50,7 @@
 **Existing patterns to follow:**  
 - [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
 - [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)); **2D** physics **layer/mask** mapping for hunger + actors is **§6** (extend when new props need bits).
-- Align numeric semantics with [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) for `movement_impact`, `fit_size`, `crush_weight` where possible (shared helper).
+- Align numeric semantics with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) for `movement_impact`, `fit_size`, `crush_weight` where possible (shared helper).
 
 ---
 
@@ -103,7 +103,7 @@
 
 ### Dependencies
 
-- [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) for `size` / `weight` on creatures.
+- [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) for `size` / `weight` on creatures.
 
 ---
 
@@ -206,10 +206,10 @@
 
 - **Interior belief on creature; persistence:** Runtime store on the creature is specified for OBJECT phase; **save-game persistence** for that belief is **explicitly future**.
 - **Ghost / stale mob positions:** Conservative updates if observation **contradicts** estimates; stable feature id **`terrain_kind_id` + `instance_id`** + grid fallbacks (OBJECT §8.2.3).
-- **Optional headless `can_enter` probes:** Faster learning without physical “bump” — **parking lot**, not OBJECT v1 (see [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md)).
+- **Optional headless `can_enter` probes:** Faster learning without physical “bump” — **parking lot**, not OBJECT v1 (see [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 - **Low vs high mob-threat bands:** Single threshold or hysteresis pair in `GameConfig` / **`creature_motor`** — values **TBD** at tuning (OBJECT §8.2.5).
 - **Slow vs unknown merge (no stronger stimuli):** After bounded **L / R / through** detours and **`awareness_memory_ticks`** patience, pick **one** convention in code: **additive** costs vs **weighted lexicographic** — **not** `max` alone; weights **TBD** (OBJECT §8.2.5).
-- **`awareness_memory_ticks` vs `env_detour_patience_ticks`:** v1 **reuses** one knob for mob ghosts and env detour patience; **split** if coupled behavior causes problems ([ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md)).
+- **`awareness_memory_ticks` vs `env_detour_patience_ticks`:** v1 **reuses** one knob for mob ghosts and env detour patience; **split** if coupled behavior causes problems ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 
 ### Authoring & metadata
 

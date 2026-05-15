@@ -145,6 +145,17 @@ var _mob_hist: Array = []
 ## Instance ids of mobs that have been inside effective awareness at least once this round; gates extrapolated [code]gated[/code] samples and [code]ghost[/code] entries to observed mobs only.
 var _mob_ids_ever_observed: Dictionary = {}
 
+## FOOD-SOURCE MEMORY (not implemented — design anchor for herbivore ENGINE / future LLM beliefs).
+## Rough draft: per-round table keyed by [code]food_plants[/code] [code]get_instance_id()[/code] (stationary bushes) or prey [code]RigidBody2D[/code] id (predators).
+## - [b]Precise tier[/b]: while remembered and [code]distance(creature, entry.world_pos) <= food_memory_precise_radius_px[/code] (baseline **1000**), pass exact [code]Vector2[/code] into [code]food_seek_targets[/code] / unready lists (same as live awareness).
+## - [b]Coarse tier[/b]: beyond precise radius but not forgotten — do **not** store a fixed world compass label; each tick recompute an **egocentric** 8-way bucket from [code]entry.world_pos - creature_pos[/code]: N, NE, E, SE, S, SW, W, NW (45° sectors, +Y = N in world space). Use for weak motor bias, jeopardy routing, or perception text only.
+## Alternatives to weigh: (A) mirror [_mob_hist] ghosts + [code]awareness_memory_*[/code] decay at last position; (B) reuse [_explore_trail_record] grid cells per bush id (cheaper, blurs individual plants); (C) precise-only with no coarse tier (simplest, amnesia outside 1000px).
+## Open design — direction vs movement: the 8-way label **changes as the creature moves** because it is relative to current position, not a map-fixed bearing. That is intentional for "where is it from here?" navigation; map-fixed bearing needs stored world pos + separate landmark logic.
+## Open design — forget: candidates — [code]distance > food_memory_forget_radius_px[/code]; [code]Time.get_ticks_msec() - last_observed_ms > food_memory_ttl_sec[/code]; session reset; LRU cap [code]food_memory_max_entries[/code]. Readiness ([code]is_pickup_ready_for_motor[/code]) should freeze at last observation until the bush re-enters awareness (same rule as mob plant beliefs in HUNGER archive §4.11).
+## Open design — predator / moving food: update [code]world_pos[/code] + [code]velocity[/code] every tick in awareness; out of cone extrapolate like [_motor_mobs_array] ghosts; coarse 8-way is a poor primary cue for movers — prefer velocity bearing or precise tier only while chase is plausible.
+## Planned hooks: [code]_food_belief_reset()[/code], [code]_food_belief_sync_from_scene()[/code] after [_motor_food_plants_in_awareness_by_readiness], merge remembered precise targets in [_build_motor_context]; optional [code]res://creature/motor/food_source_memory.gd[/code].
+# var _food_belief: Dictionary = {}
+
 ## True while [method arm_ai_session] is in progress (awaiting bundled inference) or a synchronous CPU arm is finishing.
 var _arm_session_in_progress: bool = false
 
@@ -152,6 +163,7 @@ var _arm_session_in_progress: bool = false
 var _cpu_player_round_active: bool = false
 
 ## Coarse grid cell centers visited this round (coverage memory); last append is current cell (stripped before motor).
+## Related: food-source memory coarse tier could reuse this cell size ([code]explore_coverage_cell_px[/code]) but should stay **keyed by bush instance id**, not merely "visited cells", so individual shrubs are not merged.
 var _explore_trail_centers: Array = []
 var _explore_trail_last_cell: Vector2i = Vector2i(2147483647, 2147483647)
 
@@ -841,6 +853,7 @@ func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector
 
 
 ## In-awareness [code]food_plants[/code] split by each node's [code]is_pickup_ready_for_motor[/code] (same cone/radius as mob motor gating).
+## **Live sense only today.** Food-source memory (precise coords within [code]food_memory_precise_radius_px[/code], else egocentric 8-way) would merge **after** this call inside [_build_motor_context] — see [_food_belief] design block above.
 ## When [code]awareness_radius <= 0[/code], returns empty lists (no omniscient food seek/avoid); unlike live mob cost, food targets require explicit sensory range.
 ## Params:
 ## - motor_p: Merged [code]creature_motor[/code].
@@ -970,11 +983,14 @@ func _build_motor_context(motor_p: Dictionary, hunger_explore: Dictionary = {}) 
   if _main != null and _main.has_method("get_environment_grid"):
     env_grid = _main.call("get_environment_grid")
 
+  ## Live awareness lists; future: union with [_food_belief] precise-tier positions (ready/unready frozen at last observation).
   var food_split: Dictionary = _motor_food_plants_in_awareness_by_readiness(
     motor_p, pos, he_xy, facing_display
   )
   var food_targets: Array = food_split["ready"]
   var unready_food_targets: Array = food_split["unready"]
+  ## Future food memory: for each belief outside awareness but inside precise radius, append world pos to ready/unready;
+  ## for coarse-only beliefs, expose [code]food_memory_coarse_sectors[/code] (8-way strings) or a weak cardinal cost — do not append stale Vector2 beyond precise radius.
   var w_seek_base := float(motor_p.get("weight_seek_ready_food", 16.0))
   var w_avoid_unready_base := float(motor_p.get("weight_avoid_unready_food", 5.5))
   var imminent_r_cfg := float(motor_p.get("food_seek_imminent_mob_radius_px", 100.0))

@@ -1,48 +1,96 @@
 # Project documentation index
 
-> **Purpose:** Single place to **find** markdown under `Project_Docs/` and see a **proposed tier** (see [PD_INDEXING_AND_ORGANIZATION.md](PD_INDEXING_AND_ORGANIZATION.md)). Tiers: **I** = implementation/ephemeral, **II** = draft feature, **III** = definitive contract, **A** = archived (`Completed_Features/`), **meta** = templates and repo policy.  
+> **Canonical path registry — update only this file when any `Project_Docs/**/*.md` is added, moved, or removed.** Other docs, code comments, and [AGENTS.md](../.cursor/rules/AGENTS.md) describe *policy*; **paths live here.**
 >
-> **Status:** Initial inventory from repo scan; **tier column is provisional** until maintainers complete the review in `PD_INDEXING_AND_ORGANIZATION.md`.
+> **Tiers:** **II** = draft (work in progress), **III** = definitive contract (`Definitive_Features/` only — no tier III at root), **A** = archived (`Completed_Features/`), **root** = navigation / backlog / templates. **Tier I** (implementation notes) stays **outside** `Project_Docs/` and is not listed here unless policy changes.
+>
+> **Layout (option B):** `Draft_Features/` (active drafts only), `Definitive_Features/`, `Completed_Features/`. Historical migration notes: [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md).
 
 ---
 
-## Top-level `Project_Docs/*.md`
+## Folder layout
 
-| File | Proposed tier | Notes |
-|------|----------------|-------|
-| [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md) | II | AI / conversation scope draft. |
-| [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | II | Long-horizon design. |
-| [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) | II → III? | Creature fields / schema; promote to definitive as code converges. |
-| [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) | II / meta | Backlog / enhancement tracking. |
-| [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) | II → III? | Env + passibility; **§6** = **2D layer/mask** (hunger **`solid_shrub`** / **`open_shrub`**); **§7** acceptance checklist. |
-| [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) | meta | Template for new plans. |
-| [FORK_HUNTER_KILLER.md](FORK_HUNTER_KILLER.md) | meta | Fork / process notes. |
-| [MOB_AVOIDANCE_PLAN.md](MOB_AVOIDANCE_PLAN.md) | II | **Review:** also `Completed_Features/MOB_AVOIDANCE_PLAN.md` — clarify which is current. |
-| [PD_INDEXING_AND_ORGANIZATION.md](PD_INDEXING_AND_ORGANIZATION.md) | meta | Doc taxonomy / folder strategy task. |
-| [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) | II | Ecology draft. |
-| [PLANTS_PLAN.md](PLANTS_PLAN.md) | II | Plants / food index; **`res://assets/plants/solid_shrub/`**, **`open_shrub/`**; implementation + spec in [Completed_Features/HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md). |
-| [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md) | meta | This index. |
-| [REPO_LAYOUT_PLAN.md](REPO_LAYOUT_PLAN.md) | II | Repository layout planning. |
-| [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md) | II | Shared stat design. |
-| [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md) | II | World builder vision. |
+```
+Project_Docs/
+  PROJECT_DOC_INDEX.md          ← this file (inventory + policy)
+  FEATURE_PLAN_TEMPLATE.md
+  ENHANCEMENT_BACKLOG_PLAN.md
+  Draft_Features/               ← tier II
+  Definitive_Features/          ← tier III
+  Completed_Features/           ← tier A (archived)
+```
+
+Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 ---
 
-## `Project_Docs/Completed_Features/` (archived)
+## Promotion (draft → definitive or archived)
 
-**Per [AGENTS.md](../.cursor/rules/AGENTS.md):** not default authority for new implementation unless explicitly cited.
+| Target | When | Action |
+|--------|------|--------|
+| **`Definitive_Features/`** (tier III) | **Ongoing contract** — must stay aligned with code, `project.godot`, or shared schemas (e.g. physics layer table). Drift is a bug. | Move file; register below; remove any `Draft_Features/` copy; fix cross-links. |
+| **`Completed_Features/`** (tier A) | Feature **shipped**, plan **superseded**, or content **extracted** elsewhere. **Snapshot** — drift vs code is **expected**. | Move file; register below; **delete** `Draft_Features/` copy; **no** redirect stubs. |
 
-| File | Tier | Notes |
-|------|------|-------|
-| [Completed_Features/AI_INSTRUCTIONS_PLAN.md](Completed_Features/AI_INSTRUCTIONS_PLAN.md) | A | Archived. |
-| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | A | Asset pipeline; background for `.cursor/rules/focus/asset_management.md`. |
-| [Completed_Features/DtC_AI_INT_PLAN.md](Completed_Features/DtC_AI_INT_PLAN.md) | A | Archived. |
-| [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md) | A | **Review:** overlap with top-level `FORK_HUNTER_KILLER.md`. |
-| [Completed_Features/HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) | A | Hunger + bushes POC — **implemented** (`player`/`main`/`hud`/`mob`, `assets/plants/`). |
-| [Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md) | A | Field / perception archive. |
-| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | A | Policy supplanted by `.cursor/rules/focus/logging_instr.md`. |
-| [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) | A | **Compare** to top-level `MOB_AVOIDANCE_PLAN.md`. |
-| [Completed_Features/OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) | A | Object avoidance / grid; common historical reference. |
+**Do not** promote to tier III merely because code exists. **Code comments** linking to `Completed_Features/` do **not** make those files authoritative — see [AGENTS.md](../.cursor/rules/AGENTS.md) **Completed_Features scope**.
+
+**Tier III default:** `Definitive_Features/` only. Rare root exception → **exception** note in the Definitive table below with rationale.
+
+---
+
+## Root `Project_Docs/` (navigation & process)
+
+| File | Tier | Role |
+|------|------|------|
+| [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md) | root | **This file** — sole inventory + active doc policy. |
+| [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) | root | Template for new feature plans. |
+| [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) | root | Cross-feature parking lot; links draft plans where applicable. |
+
+---
+
+## `Project_Docs/Draft_Features/` (tier II — work in progress only)
+
+**Do not** add redirect stubs or duplicate entries for shipped features — list the real path under `Completed_Features/` or `Definitive_Features/` below and remove the draft file when the work ships or is superseded.
+
+| File | Notes |
+|------|-------|
+| [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
+| [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
+| [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; food-memory draft in §9. |
+| [Draft_Features/PLANT_ECOLOGY_PLAN.md](Draft_Features/PLANT_ECOLOGY_PLAN.md) | Long-term plant ecology. |
+| [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | Plants / food index (active design; shipped slice archived). |
+| [Draft_Features/REPO_LAYOUT_PLAN.md](Draft_Features/REPO_LAYOUT_PLAN.md) | `res://` layout draft (not authoritative). |
+| [Draft_Features/SHARED_STATTOPOINT_PLAN.md](Draft_Features/SHARED_STATTOPOINT_PLAN.md) | Stat → point pools. |
+| [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](Draft_Features/VISION_WORLD_BUILDER_PLAN.md) | World-builder umbrella. |
+
+---
+
+## `Project_Docs/Definitive_Features/` (tier III — current contract)
+
+**Default location for tier III.** Exceptions (a spec at `Project_Docs/` root) require an explicit **exception** note in this table.
+
+| File | Notes |
+|------|-------|
+| [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Env catalog; **§6** = **2D layer/mask** (`project.godot`); **§7** acceptance checklist. |
+
+---
+
+## `Project_Docs/Completed_Features/` (archived — tier A)
+
+**Per [AGENTS.md](../.cursor/rules/AGENTS.md):** snapshots in time; not default authority unless explicitly cited. Code comment links are reference only.
+
+| File | Notes |
+|------|-------|
+| [Completed_Features/AI_INSTRUCTIONS_PLAN.md](Completed_Features/AI_INSTRUCTIONS_PLAN.md) | Archived rules refactor. |
+| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see `.cursor/rules/focus/asset_management.md`. |
+| [Completed_Features/DtC_AI_INT_PLAN.md](Completed_Features/DtC_AI_INT_PLAN.md) | Dodge-the-Creeps AI integration archive. |
+| [Completed_Features/EARLY_SPEC_DOC](Completed_Features/EARLY_SPEC_DOC) | Pre-split World Builder scratch; extracted into child plans — **reference only**. |
+| [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md) | Fork / mirror workflow (historical policy). |
+| [Completed_Features/HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) | Hunger + bushes POC — **implemented**. |
+| [Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md) | Field / perception archive. |
+| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | Supplanted by `.cursor/rules/focus/logging_instr.md`. |
+| [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) | Shipped motor avoidance (code may link here — **reference only** unless task cites this file). |
+| [Completed_Features/OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) | Object / grid avoidance archive. |
+| [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md) | **Completed** Project_Docs reorg (option B) — historical; active policy is **this index** + `AGENTS.md`. |
 
 ---
 
@@ -50,11 +98,17 @@
 
 | Location | Role |
 |----------|------|
-| [.cursor/rules/AGENTS.md](../.cursor/rules/AGENTS.md) | Agent scope; `Completed_Features` rule; doc precedence. |
-| [.cursor/rules/focus/](../.cursor/rules/focus/) | Narrow **policy** extracts (logging, assets, agents, etc.). |
+| [.cursor/rules/AGENTS.md](../.cursor/rules/AGENTS.md) | Agent scope; doc precedence. |
+| [.cursor/rules/focus/](../.cursor/rules/focus/) | Narrow policy extracts (logging, assets, agents). |
 
 ---
 
 ## Maintenance
 
-When adding or removing a `*.md` under `Project_Docs/`, update **this file** in the same change (or immediately after). Use [PD_INDEXING_AND_ORGANIZATION.md](PD_INDEXING_AND_ORGANIZATION.md) when **re-tiering** or **moving** docs.
+1. **Path changes:** Edit **only this file** for inventory moves; then fix broken relative links (grep the old basename).
+2. **New draft:** Add a row under `Draft_Features/` when work starts; remove the row and delete the file when shipped (move to `Completed_Features/` or `Definitive_Features/` per **Promotion** above).
+3. **No draft stubs** for completed features — register `Completed_Features/` (or `Definitive_Features/`) here instead.
+4. **Enhancement backlog:** Link `Draft_Features/…` paths in [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) when tracking active work.
+5. **Coordinated migrations:** Folder or glob changes → update [AGENTS.md](../.cursor/rules/AGENTS.md) in the **same** change set.
+6. **Link hygiene:** Use **relative** links from each file’s directory (`../` when crossing folders).
+7. **Duplication:** One canonical path per topic — e.g. mob avoidance: `Completed_Features/MOB_AVOIDANCE_PLAN.md` only, not a duplicate in `Draft_Features/`.

@@ -122,10 +122,11 @@ static func minimum_footprint_point_clearance(center: Vector2, half: Vector2, po
 
 
 ## Linear pull toward nearest [param food_targets] world point; disabled when any imminent mob is within [param imminent_mob_radius] of [param predicted] footprint. Use [method effective_food_seek_weight] to disable the whole tick from the creature's current footprint.
+## **Food-source memory (planned):** [param food_targets] should include only **precise-tier** remembered positions (within [code]food_memory_precise_radius_px[/code] of the creature). Coarse 8-way memories (N, NE, …) are egocentric and change as the creature moves — implement as a separate weak cardinal bias or perception field, not as fake [code]Vector2[/code] targets here.
 ## Params:
 ## - predicted: Candidate creature center after lookahead.
 ## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
-## - food_targets: [code]Array[/code] of [code]Vector2[/code] world positions (ready bushes in awareness).
+## - food_targets: [code]Array[/code] of [code]Vector2[/code] world positions (ready bushes in awareness + precise-tier memory).
 ## - weight: Scales summed distance cost; [code]0[/code] disables.
 ## - imminent_mob_points: Mob centers for survival gating (typically all live mobs).
 ## - imminent_mob_radius: If [code]> 0[/code] and clearance to any point falls below this, returns [code]0[/code].

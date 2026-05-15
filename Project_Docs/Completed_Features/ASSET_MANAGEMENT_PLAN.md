@@ -4,7 +4,7 @@
 
 > **Purpose:** Decide how we author, store, and bind **2D** (current focus) and future **3D** content so defaults (import settings, collision shapes, material templates, variability) stay consistent as the repo grows.
 >
-> **Relationship to today’s tree:** The game already ships authored bitmaps under **`res://art/`** (e.g. environment palette convention in [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md)) and scenes/scripts elsewhere. This doc chooses how **`res://assets/`** complements or replaces ad-hoc paths without breaking existing features until we migrate deliberately.
+> **Relationship to today’s tree:** The game already ships authored bitmaps under **`res://art/`** (e.g. environment palette convention in [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) and scenes/scripts elsewhere. This doc chooses how **`res://assets/`** complements or replaces ad-hoc paths without breaking existing features until we migrate deliberately.
 
 ---
 
@@ -211,7 +211,7 @@ Do **not** fold generic engine logic into `assets/` just to satisfy Option A. Tr
 | **Tests** | `tests/` | **Dev-only** — never shipped as content. |
 | **Editor addons** | `addons/` | Godot convention — unchanged. |
 
-<<Comment: Optional consolidated **`res://systems/`** tree — see draft [REPO_LAYOUT_PLAN.md](../REPO_LAYOUT_PLAN.md); do not move folders until that plan is promoted.>>
+<<Comment: Optional consolidated **`res://systems/`** tree — see draft [REPO_LAYOUT_PLAN.md](../Draft_Features/REPO_LAYOUT_PLAN.md); do not move folders until that plan is promoted.>>
 
 ### 4.3 Config, product identity, misc blobs
 
@@ -308,7 +308,7 @@ Store authored **`*.blend`** / **`*.gltf`** sources under **`assets/<domain>/<na
 Every gameplay-ready asset should expose:
 
 - **One clear entry scene** (e.g. `rabbit.tscn`) at a stable path, OR a documented factory in code that loads by ID.
-- **Documented collision layer/mask** expectations (link to physics table in [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) when extended).
+- **Documented collision layer/mask** expectations (link to physics table in [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) when extended).
 - **Pivot / footprint**: where “feet” are for `CharacterBody2D` vs prop anchor for `StaticBody2D`.
 
 ---
@@ -326,7 +326,7 @@ Every gameplay-ready asset should expose:
 
 ## 7. Version control and binaries
 
-- Prefer **Git LFS** (or binary Art repo) for heavy PNG/mesh/audio; document limits in [FORK_HUNTER_KILLER.md](../FORK_HUNTER_KILLER.md) or a short **`docs/contributing-assets.md`** when added.
+- Prefer **Git LFS** (or binary Art repo) for heavy PNG/mesh/audio; document limits in [FORK_HUNTER_KILLER.md](FORK_HUNTER_KILLER.md) or a short **`docs/contributing-assets.md`** when added.
 - Commit **`.import`** files for stable CI/editor parity unless team policy says otherwise.
 - Avoid committing **generated** bake outputs if reproducible from palette sources — align with environment bake docs.
 
@@ -336,7 +336,7 @@ Every gameplay-ready asset should expose:
 
 1. **Single source of truth** — One canonical mesh/sprite per variant; derivatives are generated or referenced, not copied blindly.
 2. **LOD / performance budgets** — Even for 2D: max texture size per category (creature vs UI vs env decal).
-3. **Naming + folder mirrors gameplay taxonomy** — creatures/plants/environment match design docs ([CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md), [PLANTS_PLAN.md](../PLANTS_PLAN.md), env plans).
+3. **Naming + folder mirrors gameplay taxonomy** — creatures/plants/environment match design docs ([CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md), [PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md), env plans).
 4. **Ownership** — Each asset folder has an obvious “maintainer” note when cross-team.
 5. **Deprecations** — If replaced, `deprecated/` or Git delete with PR reference; no zombie paths in manifests.
 6. **Legal** — License file per third-party pack (`LICENSE_THIRD_PARTY.txt` in pack folder).
@@ -345,7 +345,7 @@ Every gameplay-ready asset should expose:
 
 ## 9. Follow-on: repo-wide structure task
 
-**Stub:** [REPO_LAYOUT_PLAN.md](../REPO_LAYOUT_PLAN.md) (**draft** — do not apply until promoted). It expands:
+**Stub:** [REPO_LAYOUT_PLAN.md](../Draft_Features/REPO_LAYOUT_PLAN.md) (**draft** — do not apply until promoted). It expands:
 
 - Where **systems** (`environment/`, `creature/`, `AI_int_lib/`) vs **content** (`assets/`) live (aligned with §4.2 / §4.4).
 - Rules for **when** new scripts land next to scenes vs in shared libraries.
@@ -377,7 +377,7 @@ Every gameplay-ready asset should expose:
 2. **Baseline (done):** **`res://assets/creatures/`**, **`plants/`**, **`environment/`**, **`locations/`**, **`_shared/`** exist; **`_shared/default/textures/`** and **`…/audio/`** hold committed placeholder binaries + **`.import`** sidecars per §2.1.
 3. **Resolver + tests (done):** **`res://pack_resource_resolver.gd`** (global class **`PackResourceResolver`**); headless coverage in **`res://tests/run_all.gd`** (`_test_pack_resource_resolver`). CI treats **`used_default`** on gameplay paths as a bug — tests only assert fallback on intentional negative cases (same policy as §2.1).
 4. **Import presets (deferred):** Add subtree import presets / wiki notes for mixed DPI (**§5.1**); optional **`pixel/`** vs **`smooth/`** under **`assets/`** when art volume warrants it.
-5. **§4 domain folders / app shell (deferred):** Add **`ui/`**, **`audio/`**, **`config/`**, optional **`systems/`** rename only as agreed ([REPO_LAYOUT_PLAN.md](../REPO_LAYOUT_PLAN.md)); migrate app shell to **`res://scenes/app/`** when doing that pass.
+5. **§4 domain folders / app shell (deferred):** Add **`ui/`**, **`audio/`**, **`config/`**, optional **`systems/`** rename only as agreed ([REPO_LAYOUT_PLAN.md](../Draft_Features/REPO_LAYOUT_PLAN.md)); migrate app shell to **`res://scenes/app/`** when doing that pass.
 6. **Pilot migration (done):** Obstacle texture **`pile-of-rocks.png`** moved **`art/env/` → `assets/environment/obstacle_rocks/`**; **`obstacle_field.tscn`** / **`obstacle_field_root.gd`** updated.
 7. **Doc drift (partial):** Palette bake docs still cite **`res://art/env/`** where grid authoring lives; update when those PNGs migrate — obstacle path no longer uses **`art/env`**.
 
@@ -389,13 +389,13 @@ Every gameplay-ready asset should expose:
 |-------|--------|
 | 3D source storage (in-repo vs LFS vs external) | <<Question: …>> (see §5.2) |
 | Per-pack **`pack_resources.json`** schema (required **`shared_resources`** root key; optional root **`notes`**; per-entry string **`res://…`** or `{ "path", "notes?" }`) | Implemented — see **`load_shared_resources_map`** / **`resolve_*_from_pack`** in **`pack_resource_resolver.gd`** |
-| Promote **[REPO_LAYOUT_PLAN.md](../REPO_LAYOUT_PLAN.md)** from draft → executable spec | <<Comment: …>> (see §9 — stub exists; resolve questions then migrate) |
+| Promote **[REPO_LAYOUT_PLAN.md](../Draft_Features/REPO_LAYOUT_PLAN.md)** from draft → executable spec | <<Comment: …>> (see §9 — stub exists; resolve questions then migrate) |
 
 ---
 
 ## 13. References
 
-- [ENVIRONMENT_MODEL_PLAN.md](../ENVIRONMENT_MODEL_PLAN.md) — existing `art/env` palette / bake assumptions.
-- [CREATURE_MODEL_PLAN.md](../CREATURE_MODEL_PLAN.md) — creature abstraction.
-- [PLANTS_PLAN.md](../PLANTS_PLAN.md), [PLANT_ECOLOGY_PLAN.md](../PLANT_ECOLOGY_PLAN.md) — plant content direction.
-- [REPO_LAYOUT_PLAN.md](../REPO_LAYOUT_PLAN.md) — **draft** repo-wide code/config layout (systems vs `assets/`); follow-on to §9.
+- [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — existing `art/env` palette / bake assumptions.
+- [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) — creature abstraction.
+- [PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md), [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) — plant content direction.
+- [REPO_LAYOUT_PLAN.md](../Draft_Features/REPO_LAYOUT_PLAN.md) — **draft** repo-wide code/config layout (systems vs `assets/`); follow-on to §9.
