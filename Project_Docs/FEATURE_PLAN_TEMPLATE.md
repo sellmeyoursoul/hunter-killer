@@ -1,4 +1,4 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Feature plan template (agent-friendly)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
 

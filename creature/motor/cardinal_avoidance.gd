@@ -99,6 +99,150 @@ static func nearest_mob_dist_sq(creature_center: Vector2, half: Vector2, mobs: A
   return best
 
 
+## Minimum world distance from creature footprint ([param center], [param half]) to any point in [param points] ([code]Vector2[/code] or dict with [code]position[/code]).
+static func minimum_footprint_point_clearance(center: Vector2, half: Vector2, points: Array) -> float:
+  var best := INF
+  for item in points:
+    var pt: Vector2 = Vector2.ZERO
+    if typeof(item) == TYPE_VECTOR2:
+      pt = item as Vector2
+    elif typeof(item) == TYPE_DICTIONARY:
+      pt = (item as Dictionary).get("position", Vector2.ZERO)
+    else:
+      continue
+    var d: float
+    if half.x <= 0.0 or half.y <= 0.0:
+      d = center.distance_to(pt)
+    else:
+      var closest := closest_point_on_aabb(center, half, pt)
+      d = closest.distance_to(pt)
+    if d < best:
+      best = d
+  return best
+
+
+## Linear pull toward nearest [param food_targets] world point; disabled when any imminent mob is within [param imminent_mob_radius] of [param predicted] footprint. Use [method effective_food_seek_weight] to disable the whole tick from the creature's current footprint.
+## Params:
+## - predicted: Candidate creature center after lookahead.
+## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
+## - food_targets: [code]Array[/code] of [code]Vector2[/code] world positions (ready bushes in awareness).
+## - weight: Scales summed distance cost; [code]0[/code] disables.
+## - imminent_mob_points: Mob centers for survival gating (typically all live mobs).
+## - imminent_mob_radius: If [code]> 0[/code] and clearance to any point falls below this, returns [code]0[/code].
+## Returns:
+## - Nonnegative cost (higher when farther from nearest food); [code]0[/code] when disabled or gated.
+static func food_seek_cost_at_prediction(
+  predicted: Vector2,
+  half: Vector2,
+  food_targets: Array,
+  weight: float,
+  imminent_mob_points: Array,
+  imminent_mob_radius: float,
+) -> float:
+  if weight <= 0.0 or food_targets.is_empty():
+    return 0.0
+  if imminent_mob_radius > 0.0 and imminent_mob_points.size() > 0:
+    if minimum_footprint_point_clearance(predicted, half, imminent_mob_points) < imminent_mob_radius:
+      return 0.0
+  var best_d := INF
+  for t in food_targets:
+    if typeof(t) != TYPE_VECTOR2:
+      continue
+    var pt := t as Vector2
+    var d: float
+    if half.x <= 0.0 or half.y <= 0.0:
+      d = predicted.distance_to(pt)
+    else:
+      var c := closest_point_on_aabb(predicted, half, pt)
+      d = c.distance_to(pt)
+    if d < best_d:
+      best_d = d
+  if not is_finite(best_d):
+    return 0.0
+  return weight * best_d
+
+
+## Returns [param weight] or [code]0[/code] when any imminent mob is within [param imminent_mob_radius] of the creature's **current** footprint (survival over foraging for the whole tick).
+static func effective_food_seek_weight(
+  weight: float,
+  creature_center: Vector2,
+  half: Vector2,
+  imminent_mob_points: Array,
+  imminent_mob_radius: float,
+) -> float:
+  if weight <= 0.0 or imminent_mob_radius <= 0.0 or imminent_mob_points.is_empty():
+    return weight
+  if minimum_footprint_point_clearance(creature_center, half, imminent_mob_points) < imminent_mob_radius:
+    return 0.0
+  return weight
+
+
+## Inverse-distance repulsion for depleted / locked bushes still in motor awareness so the agent does not hug an inedible solid.
+## Params:
+## - predicted: Candidate creature center after lookahead.
+## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
+## - unready_targets: [code]Vector2[/code] world positions (not pickup-ready this tick).
+## - weight: Scales [code]sum(1 / max(eps, dist))[/code]; [code]0[/code] disables.
+## - eps: Distance floor (typically shared with mob [code]distance_eps[/code]).
+## Returns:
+## - Nonnegative cost; rises when [param predicted] moves closer to any unready bush.
+static func unready_food_avoid_cost_at_prediction(
+  predicted: Vector2,
+  half: Vector2,
+  unready_targets: Array,
+  weight: float,
+  eps: float,
+) -> float:
+  if weight <= 0.0 or unready_targets.is_empty():
+    return 0.0
+  var total := 0.0
+  for t in unready_targets:
+    if typeof(t) != TYPE_VECTOR2:
+      continue
+    var pt := t as Vector2
+    var d: float
+    if half.x <= 0.0 or half.y <= 0.0:
+      d = predicted.distance_to(pt)
+    else:
+      var c := closest_point_on_aabb(predicted, half, pt)
+      d = c.distance_to(pt)
+    total += weight / maxf(eps, d)
+  return total
+
+
+## Inverse-distance repulsion for coarse cells already visited this round (ENGINE coverage); discourages retreading when no higher-priority objective applies.
+## Params:
+## - predicted: Candidate creature center after lookahead.
+## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
+## - trail_centers: Prior cell centers (caller should omit the active cell).
+## - weight: Scales [code]sum(1 / max(eps, dist))[/code]; [code]0[/code] disables.
+## - eps: Distance floor.
+## Returns:
+## - Nonnegative cost; rises when [param predicted] approaches previously visited cells.
+static func exploration_trail_repulsion_cost(
+  predicted: Vector2,
+  half: Vector2,
+  trail_centers: Array,
+  weight: float,
+  eps: float,
+) -> float:
+  if weight <= 0.0 or trail_centers.is_empty():
+    return 0.0
+  var total := 0.0
+  for t in trail_centers:
+    if typeof(t) != TYPE_VECTOR2:
+      continue
+    var pt := t as Vector2
+    var d: float
+    if half.x <= 0.0 or half.y <= 0.0:
+      d = predicted.distance_to(pt)
+    else:
+      var c := closest_point_on_aabb(predicted, half, pt)
+      d = c.distance_to(pt)
+    total += weight / maxf(eps, d)
+  return total
+
+
 ## Extra cost from baked environment at [param predicted] center (OBJECT §3.5 / §3.6, §8.2.2).
 ## Params:
 ## - [param mob_threat_high]: Reserved for §8.2.1 unknown explore/avoid vs mob threat; v1 uses grid solid/slow only.
@@ -136,7 +280,7 @@ static func interior_env_cost_at(
 
 ## Picks unit intent in tie-order preference among cardinals + idle.
 ## Params:
-## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code].
+## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty).
 ## Returns:
 ## - Normalized cardinal `Vector2` or `Vector2.ZERO`.
 ## Usage:
@@ -181,6 +325,19 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
     "weight_slow": float(ctx.get("weight_interior_env_slow", 4.0)),
   }
   var env_grid: Variant = ctx.get("environment_grid", null)
+  var food_targets: Array = ctx.get("food_seek_targets", []) as Array
+  var w_seek_food_raw: float = float(ctx.get("weight_seek_ready_food", 0.0))
+  var imminent_pts: Array = ctx.get("imminent_mob_points", []) as Array
+  var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius_px", 0.0))
+  var unready_food: Array = ctx.get("unready_food_avoid_targets", []) as Array
+  var w_avoid_unready: float = float(ctx.get("weight_avoid_unready_food", 0.0))
+  var w_idle_explore: float = float(ctx.get("weight_explore_idle_penalty", 0.0))
+  var w_turn_explore: float = float(ctx.get("weight_explore_turn_bias", 0.0))
+  var trail_centers: Array = ctx.get("explore_trail_centers", []) as Array
+  var w_trail_rep: float = float(ctx.get("weight_explore_trail_repulsion", 0.0))
+  var w_seek_food := effective_food_seek_weight(
+    w_seek_food_raw, creature_pos, footprint_half, imminent_pts, imminent_r
+  )
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
@@ -212,7 +369,25 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       env_grid,
       sz_env,
       interior_p,
+      food_targets,
+      w_seek_food,
+      imminent_pts,
+      imminent_r,
+      unready_food,
+      w_avoid_unready,
     )
+    if w_idle_explore > 0.0 and food_targets.is_empty() and not mob_threat_high:
+      if d.length_squared() < 1e-14:
+        cost += w_idle_explore
+    if w_turn_explore > 0.0 and food_targets.is_empty() and not mob_threat_high and d.length_squared() > 1e-14:
+      var lm := facing_v
+      if lm.length_squared() > 1e-12:
+        var u := lm.normalized()
+        cost -= w_turn_explore * maxf(0.0, d.dot(u))
+    if w_trail_rep > 0.0 and food_targets.is_empty() and not mob_threat_high:
+      cost += exploration_trail_repulsion_cost(
+        predicted, footprint_half, trail_centers, w_trail_rep, eps
+      )
     if cost < best_cost:
       best_cost = cost
       best_d = d
@@ -325,6 +500,11 @@ static func _add_mob_cost_terms(
 ## - awareness_radius: If `<= 0`, no distance gating (legacy). Else skip mobs farther than effective cone reach from [param creature_center_aware].
 ## - awareness_cone_cos_threshold: If `< -1`, cone extra disabled; else forward sector uses [method effective_awareness_reach].
 ## - static_obstacles: Array of dicts with `position` (center) and `half_extents` (half size of AABB); zero velocity repulsion via [param weight_obstacle].
+## - food_targets: Optional [code]Vector2[/code] world positions of pickup-ready food (ENGINE hunger); [param weight_seek_ready_food] scales linear distance cost.
+## - imminent_mob_points: Mob centers for disabling food pull when a mob is too close to [param predicted] (survival over foraging).
+## - imminent_mob_radius: Clearance threshold in px; [code]0[/code] disables gating.
+## - unready_food_targets: Optional [code]Vector2[/code] world positions of bushes in awareness that are **not** pickup-ready; [param weight_avoid_unready_food] adds inverse-distance cost so the agent leaves depleted shrubs.
+## - weight_avoid_unready_food: Scales [code]sum(1 / max(eps, dist))[/code] per unready bush; [code]0[/code] disables.
 ## Returns:
 ## - Scalar cost (higher = worse).
 static func cost_at_prediction(
@@ -351,6 +531,12 @@ static func cost_at_prediction(
   environment_grid: Variant = null,
   interior_creature_size: float = 0.0,
   interior_env_params: Dictionary = {},
+  food_targets: Array = [],
+  weight_seek_ready_food: float = 0.0,
+  imminent_mob_points: Array = [],
+  imminent_mob_radius: float = 0.0,
+  unready_food_targets: Array = [],
+  weight_avoid_unready_food: float = 0.0,
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -415,6 +601,17 @@ static func cost_at_prediction(
     mob_threat_high,
     interior_env_params,
   )
+  total += food_seek_cost_at_prediction(
+    predicted,
+    half,
+    food_targets,
+    weight_seek_ready_food,
+    imminent_mob_points,
+    imminent_mob_radius,
+  )
+  total += unready_food_avoid_cost_at_prediction(
+    predicted, half, unready_food_targets, weight_avoid_unready_food, eps
+  )
   return total
 
 
@@ -443,6 +640,12 @@ static func cost_at_prediction_aware(
   environment_grid: Variant = null,
   interior_creature_size: float = 0.0,
   interior_env_params: Dictionary = {},
+  food_targets: Array = [],
+  weight_seek_ready_food: float = 0.0,
+  imminent_mob_points: Array = [],
+  imminent_mob_radius: float = 0.0,
+  unready_food_targets: Array = [],
+  weight_avoid_unready_food: float = 0.0,
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -468,4 +671,10 @@ static func cost_at_prediction_aware(
     environment_grid,
     interior_creature_size,
     interior_env_params,
+    food_targets,
+    weight_seek_ready_food,
+    imminent_mob_points,
+    imminent_mob_radius,
+    unready_food_targets,
+    weight_avoid_unready_food,
   )

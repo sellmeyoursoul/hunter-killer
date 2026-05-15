@@ -21,6 +21,7 @@ const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
 const _MOTOR := preload("res://creature/motor/cardinal_avoidance.gd")
 const _PlayerScr := preload("res://player.gd")
 const _IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
+const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
@@ -136,6 +137,7 @@ var _bundled_launcher: Node
 
 ## Persisted challenger streak state for scripted motor oscillation damping (keys `challenger`, `frames`; see scripted_intent_hold.gd).
 var _scripted_intent_hold_state: Dictionary = {}
+var _jeopardy_forced_turn_state: Dictionary = {}
 
 ## Ring buffer of mob snapshots for motor memory: each entry maps [code]RigidBody2D.get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
 var _mob_hist: Array = []
@@ -148,6 +150,10 @@ var _arm_session_in_progress: bool = false
 
 ## When true from [method begin_engine_player_round], [method _creature_motor_mode] behaves as scripted (local motor only) until round end.
 var _cpu_player_round_active: bool = false
+
+## Coarse grid cell centers visited this round (coverage memory); last append is current cell (stripped before motor).
+var _explore_trail_centers: Array = []
+var _explore_trail_last_cell: Vector2i = Vector2i(2147483647, 2147483647)
 
 ## Monotonic id for each [method arm_ai_session] entry; helps detect overlapping arms in NDJSON (debug).
 static var _debug_arm_invoke_seq: int = 0
@@ -177,6 +183,33 @@ func _live_inference_client() -> Dictionary:
   return (_Merge.default_root()["inference_client"] as Dictionary).duplicate(true)
 
 
+## Clears ENGINE coverage trail (new round, attach, or session end).
+func _explore_trail_reset() -> void:
+  _explore_trail_centers.clear()
+  _explore_trail_last_cell = Vector2i(2147483647, 2147483647)
+
+
+## Records a trail sample when [param world] enters a new coarse grid cell ([code]explore_coverage_cell_px[/code] from [param motor_p]).
+## Params:
+## - world: Player world position.
+## - motor_p: Merged [code]creature_motor[/code].
+## Returns:
+## - none
+func _explore_trail_record(world: Vector2, motor_p: Dictionary) -> void:
+  var cell_px := maxf(16.0, float(motor_p.get("explore_coverage_cell_px", 52.0)))
+  var ix := int(floorf(world.x / cell_px))
+  var iy := int(floorf(world.y / cell_px))
+  var c := Vector2i(ix, iy)
+  if c == _explore_trail_last_cell:
+    return
+  _explore_trail_last_cell = c
+  var center := Vector2((float(ix) + 0.5) * cell_px, (float(iy) + 0.5) * cell_px)
+  _explore_trail_centers.append(center)
+  var cap := maxi(8, int(motor_p.get("explore_trail_max_cells", 96)))
+  while _explore_trail_centers.size() > cap:
+    _explore_trail_centers.pop_front()
+
+
 func _ready() -> void:
   _system_prompt = FileAccess.get_file_as_string(_SYSTEM_PROMPT_PATH).strip_edges()
   _http_request = HTTPRequest.new()
@@ -200,8 +233,10 @@ func attach_main(main_node: Node) -> void:
   _main = main_node
   _creature = _main.get_node_or_null("Player") as CharacterBody2D
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  Callable(_JeopardyTurnScr, &"reset_state").call(_jeopardy_forced_turn_state)
   _mob_hist.clear()
   _mob_ids_ever_observed.clear()
+  _explore_trail_reset()
   emit_signal("ai_session_state_changed", int(_state))
 
 
@@ -433,6 +468,7 @@ func arm_ai_session() -> bool:
   if _creature != null and _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  Callable(_JeopardyTurnScr, &"reset_state").call(_jeopardy_forced_turn_state)
   _has_snapshot = false
   _latest_snapshot = ""
   _next_inference_ms = Time.get_ticks_msec()
@@ -478,6 +514,7 @@ func begin_engine_player_round() -> bool:
   if _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  Callable(_JeopardyTurnScr, &"reset_state").call(_jeopardy_forced_turn_state)
   _has_snapshot = false
   _latest_snapshot = ""
   _next_inference_ms = Time.get_ticks_msec()
@@ -512,6 +549,7 @@ func cancel_armed_session() -> void:
   if _creature != null and _creature.has_method("set_creature_move_intent"):
     _creature.call("set_creature_move_intent", Vector2.ZERO)
   Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+  Callable(_JeopardyTurnScr, &"reset_state").call(_jeopardy_forced_turn_state)
   _set_state(State.IDLE)
 
 
@@ -529,6 +567,7 @@ func notify_main_new_game() -> void:
   _next_inference_ms = Time.get_ticks_msec()
   _mob_hist.clear()
   _mob_ids_ever_observed.clear()
+  _explore_trail_reset()
   match _state:
     State.ARMED:
       _set_state(State.PLAYING)
@@ -565,6 +604,7 @@ func notify_main_game_over() -> void:
   _latest_snapshot = ""
   _mob_hist.clear()
   _mob_ids_ever_observed.clear()
+  _explore_trail_reset()
 
 
 func _exit_tree() -> void:
@@ -800,13 +840,94 @@ func _motor_mobs_array(motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector
   return out
 
 
+## In-awareness [code]food_plants[/code] split by each node's [code]is_pickup_ready_for_motor[/code] (same cone/radius as mob motor gating).
+## When [code]awareness_radius <= 0[/code], returns empty lists (no omniscient food seek/avoid); unlike live mob cost, food targets require explicit sensory range.
+## Params:
+## - motor_p: Merged [code]creature_motor[/code].
+## - creature_pos: Creature center (world).
+## - he_xy: Footprint half-extents for gating.
+## - facing_v: Forward axis for cone reach.
+## Returns:
+## - Dict with [code]ready[/code] / [code]unready[/code] arrays of [code]Vector2[/code] bush roots.
+func _motor_food_plants_in_awareness_by_readiness(
+  motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2, facing_v: Vector2
+) -> Dictionary:
+  var ready_positions: Array = []
+  var unready_positions: Array = []
+  if _main == null:
+    return {"ready": ready_positions, "unready": unready_positions}
+  var awareness_r: float = float(motor_p.get("awareness_radius", 0.0))
+  if awareness_r <= 0.0:
+    return {"ready": ready_positions, "unready": unready_positions}
+  var cone_extra: float = float(motor_p.get("awareness_cone_extra", 0.0))
+  var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
+  var cone_cos: float = cos(deg_to_rad(half_deg))
+  for n in _main.get_tree().get_nodes_in_group(&"food_plants"):
+    if not n.has_method(&"is_pickup_ready_for_motor"):
+      continue
+    var fp: Vector2 = n.global_position
+    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, fp)
+    var eff := _effective_awareness_reach_for_driver(
+      creature_pos, fp, awareness_r, cone_extra, cone_cos, facing_v
+    )
+    if gd > eff:
+      continue
+    var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
+    if typeof(ready_v) == TYPE_BOOL and bool(ready_v):
+      ready_positions.append(fp)
+    else:
+      unready_positions.append(fp)
+  return {"ready": ready_positions, "unready": unready_positions}
+
+
+## Live mob centers for food-seek survival gating (ungated; all [code]mobs[/code] group [code]RigidBody2D[/code]).
+## Params:
+## - none
+## Returns:
+## - Array of [code]Vector2[/code].
+func _motor_imminent_mob_positions() -> Array:
+  var out: Array = []
+  if _main == null:
+    return out
+  for n in _main.get_tree().get_nodes_in_group(&"mobs"):
+    if n is RigidBody2D:
+      out.append((n as RigidBody2D).global_position)
+  return out
+
+
+## Derives multipliers so low hunger relaxes center/edge posture costs and shortens scripted intent hold (more map coverage).
+## Params:
+## - motor_p: Merged [code]creature_motor[/code]; optional [code]hunger_explore_*[/code] keys tune low-calorie exploration (see [code]game_config_merge.default_creature_motor_params[/code]).
+## Returns:
+## - Dict with [code]interior_mul[/code], [code]edge_mul[/code], [code]hold_mul[/code] in [code](0, 1][/code]; all [code]1.0[/code] when calories full or creature lacks hunger fields.
+func _hunger_exploration_modifiers(motor_p: Dictionary) -> Dictionary:
+  var calorie_ratio := 1.0
+  if _creature != null:
+    var c0: Variant = _creature.get("current_calories")
+    var n0: Variant = _creature.get("caloric_needs")
+    if (typeof(c0) == TYPE_FLOAT or typeof(c0) == TYPE_INT) and (typeof(n0) == TYPE_FLOAT or typeof(n0) == TYPE_INT):
+      calorie_ratio = clampf(float(c0) / maxf(1.0, float(n0)), 0.0, 1.0)
+  var urgency := 1.0 - calorie_ratio
+  var power := float(motor_p.get("hunger_explore_urgency_power", 1.25))
+  urgency = clampf(pow(urgency, power), 0.0, 1.0)
+  var min_i := float(motor_p.get("hunger_explore_interior_scale_min", 0.16))
+  var min_e := float(motor_p.get("hunger_explore_edge_scale_min", 0.16))
+  var min_h := float(motor_p.get("hunger_explore_hold_scale_min", 0.2))
+  return {
+    "interior_mul": lerpf(1.0, min_i, urgency),
+    "edge_mul": lerpf(1.0, min_e, urgency),
+    "hold_mul": lerpf(1.0, min_h, urgency),
+  }
+
+
 ## Builds the dictionary consumed by [code]cardinal_avoidance.pick_best_move_intent[/code].
 ## Half-extents: JSON [code]creature_half_extent_*[/code] are clamped with [code]maxf(0, …)[/code]; capsule-derived values use the same clamp. Use **positive** JSON values for real footprint scoring ([code]Vector2.ZERO[/code] in context falls back to center-point motor math).
 ## Params:
 ## - motor_p: Merged [code]creature_motor[/code] params from [code]GameConfig[/code].
+## - hunger_explore: Output of [method _hunger_exploration_modifiers] (optional; empty uses no scaling).
 ## Returns:
 ## - Context dict with creature position (playable entity body), bounds, mob samples, and tunables.
-func _build_motor_context(motor_p: Dictionary) -> Dictionary:
+func _build_motor_context(motor_p: Dictionary, hunger_explore: Dictionary = {}) -> Dictionary:
   var pos := _creature.global_position
   var spd := 400.0
   var spv: Variant = _creature.get("speed")
@@ -849,6 +970,63 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
   if _main != null and _main.has_method("get_environment_grid"):
     env_grid = _main.call("get_environment_grid")
 
+  var food_split: Dictionary = _motor_food_plants_in_awareness_by_readiness(
+    motor_p, pos, he_xy, facing_display
+  )
+  var food_targets: Array = food_split["ready"]
+  var unready_food_targets: Array = food_split["unready"]
+  var w_seek_base := float(motor_p.get("weight_seek_ready_food", 16.0))
+  var w_avoid_unready_base := float(motor_p.get("weight_avoid_unready_food", 5.5))
+  var imminent_r_cfg := float(motor_p.get("food_seek_imminent_mob_radius_px", 100.0))
+  var cr := 1.0
+  if _creature != null:
+    var ccal: Variant = _creature.get("current_calories")
+    var cneed: Variant = _creature.get("caloric_needs")
+    if (typeof(ccal) == TYPE_FLOAT or typeof(ccal) == TYPE_INT) and (
+      typeof(cneed) == TYPE_FLOAT or typeof(cneed) == TYPE_INT
+    ):
+      cr = clampf(float(ccal) / maxf(1.0, float(cneed)), 0.0, 1.0)
+  var w_seek := 0.0
+  if not food_targets.is_empty() and w_seek_base > 0.0 and cr < 0.998:
+    var urg := clampf(1.0 - cr, 0.0, 1.0)
+    w_seek = w_seek_base * lerpf(0.28, 1.0, pow(urg, 0.85))
+  var w_avoid_unready := 0.0
+  if not unready_food_targets.is_empty() and w_avoid_unready_base > 0.0 and cr < 0.998:
+    var urg2 := clampf(1.0 - cr, 0.0, 1.0)
+    w_avoid_unready = w_avoid_unready_base * lerpf(0.22, 1.0, pow(urg2, 0.85))
+    if not food_targets.is_empty():
+      w_avoid_unready *= float(motor_p.get("food_avoid_unready_scale_when_ready_target", 0.35))
+  var w_idle_exp_base := float(motor_p.get("weight_explore_idle_penalty", 10.5))
+  var w_turn_exp_base := float(motor_p.get("weight_explore_turn_bias", 0.14))
+  var w_idle_exp := 0.0
+  var w_turn_exp := 0.0
+  var w_trail_rep := 0.0
+  var trail_for_motor: Array = []
+  if food_targets.is_empty():
+    var urg3 := clampf(1.0 - cr, 0.0, 1.0)
+    var urg_curve3 := lerpf(0.18, 1.0, pow(urg3, 0.9))
+    if w_idle_exp_base > 0.0:
+      w_idle_exp = w_idle_exp_base * urg_curve3
+    if w_turn_exp_base > 0.0:
+      w_turn_exp = w_turn_exp_base * urg_curve3
+    var w_trail_base := float(motor_p.get("weight_explore_trail_repulsion", 2.35))
+    if w_trail_base > 0.0:
+      w_trail_rep = w_trail_base * urg_curve3
+    trail_for_motor = _explore_trail_centers.duplicate()
+    if trail_for_motor.size() > 1:
+      trail_for_motor.pop_back()
+  var imminent_pts: Array = []
+  var imminent_r_applied := 0.0
+  if imminent_r_cfg > 0.0 and (w_seek > 0.0 or not food_targets.is_empty()):
+    imminent_pts = _motor_imminent_mob_positions()
+    imminent_r_applied = imminent_r_cfg
+    if w_seek > 0.0 and not imminent_pts.is_empty():
+      var clear_now := float(
+        Callable(_MOTOR, &"minimum_footprint_point_clearance").call(pos, he_xy, imminent_pts)
+      )
+      if clear_now < imminent_r_cfg:
+        w_seek = 0.0
+
   return {
     "creature_position": pos,
     "creature_speed": spd,
@@ -862,8 +1040,8 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "penalty_oob": float(motor_p.get("penalty_oob", 1e7)),
     "distance_eps": float(motor_p.get("distance_eps", 6.0)),
     "creature_half_extents": he_xy,
-    "weight_interior": float(motor_p.get("weight_interior", 0.65)),
-    "weight_edge": float(motor_p.get("weight_edge", 0.48)),
+    "weight_interior": float(motor_p.get("weight_interior", 0.65)) * float(hunger_explore.get("interior_mul", 1.0)),
+    "weight_edge": float(motor_p.get("weight_edge", 0.48)) * float(hunger_explore.get("edge_mul", 1.0)),
     "shuffle_tie_break": _motor_bool_default_true(motor_p, "shuffle_tie_break"),
     "tie_shuffle_seed": _physics_ticks,
     "awareness_radius": float(motor_p.get("awareness_radius", 0.0)),
@@ -878,6 +1056,16 @@ func _build_motor_context(motor_p: Dictionary) -> Dictionary:
     "interior_env_near_mob_px": float(motor_p.get("interior_env_near_mob_px", 70.0)),
     "weight_interior_env_solid": float(motor_p.get("weight_interior_env_solid", 8000.0)),
     "weight_interior_env_slow": float(motor_p.get("weight_interior_env_slow", 4.0)),
+    "food_seek_targets": food_targets,
+    "weight_seek_ready_food": w_seek,
+    "imminent_mob_points": imminent_pts,
+    "food_seek_imminent_mob_radius_px": imminent_r_applied,
+    "unready_food_avoid_targets": unready_food_targets,
+    "weight_avoid_unready_food": w_avoid_unready,
+    "weight_explore_idle_penalty": w_idle_exp,
+    "weight_explore_turn_bias": w_turn_exp,
+    "explore_trail_centers": trail_for_motor,
+    "weight_explore_trail_repulsion": w_trail_rep,
   }
 
 
@@ -893,17 +1081,51 @@ func _physics_process(_delta: float) -> void:
 
   if _creature_motor_mode() == "scripted" and int(_creature.get("control_mode")) == _PlayerScr.engine_control_as_int():
     var motor_p := _live_creature_motor_params()
-    var ctx := _build_motor_context(motor_p)
-    var raw_intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
+    _explore_trail_record(_creature.global_position, motor_p)
+    var h_ex := _hunger_exploration_modifiers(motor_p)
+    var ctx := _build_motor_context(motor_p, h_ex)
     var incumbent_v: Variant = _creature.get("creature_move_intent")
     var incumbent: Vector2 = incumbent_v if typeof(incumbent_v) == TYPE_VECTOR2 else Vector2.ZERO
+    var raw_intent: Vector2 = _MOTOR.pick_best_move_intent(ctx)
+    var jeopardy_forced := false
+    var jeopardy_ticks := maxi(0, int(motor_p.get("jeopardy_forced_turn_ticks", 5)))
+    if jeopardy_ticks > 0:
+      var half_deg_j: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
+      var jeopardy_eval: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(
+        {
+          "incumbent": incumbent,
+          "creature_position": ctx["creature_position"],
+          "creature_half_extents": ctx.get("creature_half_extents", Vector2.ZERO),
+          "creature_facing": ctx.get("creature_facing", Vector2.RIGHT),
+          "mobs": ctx.get("mobs", []),
+          "imminent_radius_px": float(motor_p.get("food_seek_imminent_mob_radius_px", 100.0)),
+          "cone_cos_threshold": cos(deg_to_rad(half_deg_j)),
+          "required_ticks": jeopardy_ticks,
+        },
+        _jeopardy_forced_turn_state,
+      )
+      if bool(jeopardy_eval.get("should_force", false)):
+        raw_intent = Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
+          ctx,
+          incumbent,
+          jeopardy_eval["threat_mob_pos"],
+        ) as Vector2
+        jeopardy_forced = true
+        Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+    var hold_base := float(maxi(1, int(motor_p.get("scripted_intent_hold_physics_ticks", 8))))
+    var food_seek_list: Array = ctx.get("food_seek_targets", []) as Array
+    var extra_hold := 0.0
+    if food_seek_list.is_empty():
+      extra_hold = float(maxi(0, int(motor_p.get("explore_intent_hold_extra_ticks", 5))))
     var hold_ticks := maxi(
       1,
-      int(motor_p.get("scripted_intent_hold_physics_ticks", 5))
+      int(round((hold_base + extra_hold) * float(h_ex.get("hold_mul", 1.0))))
     )
-    var intent := Callable(_IntentHoldScr, &"filtered_intent").call(
-      raw_intent, incumbent, hold_ticks, _scripted_intent_hold_state
-    ) as Vector2
+    var intent: Vector2 = raw_intent
+    if not jeopardy_forced:
+      intent = Callable(_IntentHoldScr, &"filtered_intent").call(
+        raw_intent, incumbent, hold_ticks, _scripted_intent_hold_state
+      ) as Vector2
     if _creature.has_method("set_creature_move_intent"):
       _creature.call("set_creature_move_intent", intent)
 
@@ -919,6 +1141,8 @@ func _set_state(next_state: State) -> void:
     return
   if _state == State.PLAYING and next_state != State.PLAYING:
     Callable(_IntentHoldScr, &"reset_state").call(_scripted_intent_hold_state)
+    Callable(_JeopardyTurnScr, &"reset_state").call(_jeopardy_forced_turn_state)
+    _explore_trail_reset()
   _state = next_state
   emit_signal("ai_session_state_changed", int(_state))
 

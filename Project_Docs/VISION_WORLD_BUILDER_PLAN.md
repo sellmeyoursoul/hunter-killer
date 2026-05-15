@@ -1,4 +1,4 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — World Builder vision (umbrella doc, agent-friendly)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
 
@@ -19,7 +19,7 @@
 
 ## 2. Context for agents
 
-**Repo / project root:** `C:\Users\mikea\Documents\Git Proj\dodge-the-creeps` (adjust `{projectHome}` per clone).
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`; adjust per clone).
 
 **Engine & version:** Godot 4.6.2
 

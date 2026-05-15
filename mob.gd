@@ -54,6 +54,9 @@ func _ready() -> void:
   var mob_animations: Array[StringName] = [&"fly", &"swim", &"walk"]
   $AnimatedSprite2D.animation = mob_animations.pick_random()
   $AnimatedSprite2D.play()
+  var plants := get_tree().get_nodes_in_group(&"food_plants")
+  if not plants.is_empty():
+    OLog.debug("Mob food_plants stub sees %d bush(es)." % plants.size(), false, "Mob")
 
 
 func _on_visible_on_screen_notifier_2d_screen_exited():

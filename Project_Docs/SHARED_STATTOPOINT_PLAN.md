@@ -1,4 +1,4 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Shared stat-to-point (agent-friendly)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
 
@@ -18,7 +18,7 @@
 
 ## 2. Context for agents
 
-**Repo / project root:** `{projectHome}/dodge-the-creeps`
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`).
 
 **Engine & version:** Godot 4.6.2
 

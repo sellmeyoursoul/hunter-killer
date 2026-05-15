@@ -2,6 +2,8 @@ extends Node
 
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 const _Brand := preload("res://product_brand.gd")
+const _SolidShrubScene := preload("res://assets/plants/solid_shrub/solid_shrub.tscn")
+const _OpenShrubScene := preload("res://assets/plants/open_shrub/open_shrub.tscn")
 
 @export var mob_scene: PackedScene
 ## Optional baked terrain; when unset, [method _create_default_open_grid] fills the viewport with passible open cells.
@@ -30,6 +32,7 @@ func new_game() -> void:
 	get_tree().call_group(&"mobs", &"queue_free")
 	score = 0
 	$Player.start($StartPosition.position)
+	_reset_food_plants()
 	$StartTimer.start()
 	$HUD.update_score(score)
 	$HUD.show_message("Get Ready")
@@ -51,6 +54,43 @@ func _ready() -> void:
 	$HUD.end_ai_game.connect(_on_hud_end_ai_game)
 	_ai_driver().ai_session_state_changed.connect(_on_ai_session_state_changed)
 	$HUD.set_ai_session_state(_ai_driver().get_state())
+	_ensure_food_plants()
+
+
+## Spawns three solid shrub scenes and two open shrub scenes under [code]FoodPlants[/code]; [method new_game] resets bush pools.
+func _ensure_food_plants() -> void:
+	if get_node_or_null("FoodPlants") != null:
+		return
+	var root := Node2D.new()
+	root.name = "FoodPlants"
+	add_child(root)
+	var solid_positions: Array[Vector2] = [
+		Vector2(300.0, 320.0),
+		Vector2(1380.0, 220.0),
+		Vector2(700.0, 780.0),
+	]
+	var open_positions: Array[Vector2] = [
+		Vector2(450.0, 680.0),
+		Vector2(1250.0, 850.0),
+	]
+	for p in solid_positions:
+		var s: Node2D = _SolidShrubScene.instantiate() as Node2D
+		s.position = p
+		root.add_child(s)
+	for p in open_positions:
+		var o: Node2D = _OpenShrubScene.instantiate() as Node2D
+		o.position = p
+		root.add_child(o)
+
+
+## Restores every [code]food_plants[/code] bush session pools to full (hunger POC).
+func _reset_food_plants() -> void:
+	var fr := get_node_or_null("FoodPlants")
+	if fr == null:
+		return
+	for c in fr.get_children():
+		if c.has_method(&"reset_session"):
+			c.call(&"reset_session")
 
 
 ## Returns the active [EnvironmentGridBaked] for movement queries (OBJECT §8.1).

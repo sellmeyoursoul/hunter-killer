@@ -1,98 +1,94 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Plants / food (design doc, agent-friendly)
 
-> Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
+> **Authoritative implementation slice for hunger + bushes (shipped; archived spec):** [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md). This file tracks **plants/food** intent at a high level and stays aligned with [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) field names. **Asset layout:** all new plant-authored content lives under **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md).
 
 ---
 
 ## 1. Phase summary
 
-**Phase name:**  Introduce plants
-**One-line objective:**  This phase will introduce a new element to the game. This is plants/food. 
+**Phase name:** Introduce plants / food
 
-**Out of scope (explicit non-goals):**  providing independence for mobs. At the moment, they don't experience hunger or non-linear movement
+**One-line objective:** Stationary **food plants** (shrubs) that restore creature calories, with **hunger** driving risk and routing; see **HUNGER_AND_EATING** for numeric rules, two archetypes, mob intel stub, and HUD.
 
-**Related long-term design:** Full plant fields (regrowth, seeds, brush slowdown) live in [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md). Creature vitals naming for hunger alignment: [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md). Vision umbrella: [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
+**Out of scope (explicit non-goals):** Mobs do **not** gain calories from plants (carnivore vs player per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)). Full ecology (seeding, competition) stays in [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md).
+
+**Related long-term design:** [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md). Creature vitals: [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md). Vision umbrella: [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md).
 
 ---
 
 ## 2. Context for agents
 
-**Repo / project root:**  `C:\Users\mikea\Documents\Git Proj\dodge-the-creeps` (authoritative for this repository clone; adjust `{projectHome}` if you open a copy elsewhere).
-**Engine & version:**  Godot 4.6.2
-**Main scenes / entry:**  Only one scene for this iteration
-**Key scripts (paths):**  
-    A. `{projectHome}/main.gd`
-    B. `{projectHome}/player.gd`
-    C. `{projectHome}/mob.gd`
-    D. `{projectHome}/hud.gd`
-    E. `{projectHome}/plant.gd`
--  
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`).
 
-**Existing patterns to follow:** (naming, signals, groups, layers, file layout)  
-    **formatting** 
-    A. We are following [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md) (and referenced **focus** files under [`.cursor/rules/focus/`](../.cursor/rules/focus/)). From there apply Godot script best practices for GDScript. **C++:** No native C++ gameplay modules are in scope for this phase; if C++ is added later for TL inference glue, apply standard C++ practices then.
-    B. We are going to comment every function we touch per **AGENTS.md** documenting rules.
-    c. Where possible we will use the same root names for the objects in different files. If there is a need to differentiate them add an `_` and a short descriptor (for example mobVariable_cpp and mobVariable_gd) 
--  
+**Engine & version:** Godot **4.6.x** (match `project.godot`).
+
+**Main scenes / entry:** `res://main.tscn` + `res://main.gd` (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §2).
+
+**Key scripts (paths):**  
+- `res://main.gd`, `res://player.gd`, `res://mob.gd`, `res://hud.gd`  
+- Plant logic / scenes: **`res://assets/plants/`** — archetype folders **`solid_shrub/`** (Food A), **`open_shrub/`** (Food B); shared script **`res://assets/plants/bush_food.gd`** (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.2).
+
+**Existing patterns to follow:** [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md), [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md).
 
 ---
 
 ## 3. Requirements
 
 ### Must have
-  A. Introduce a stationary object (plant), the goal of which is for the player to collide with
-  B. Introduce the concept of hunger/calories, whith a new game_over() condition, starvation.
-  C. Add a hunger indicator for players to observe. This reflects the current status of the new paramiter "calories". This number goes down every frame where the player moves (by one tick) and increases by an amout that is defined on each plant object. It is generated dynamically, but stays static for the object once instantiated.
--  
+
+- **Hunger / calories** — Creature **`current_calories`** bounded by **`caloric_needs`**; **time-based** passive loss (baseline rate **tunable** in play; see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §3 for current numbers). **Not** “drain only while moving” as the long-term baseline.
+- **Action cost (future)** — Additional calorie burn for **actions** (e.g. **running**, **fighting**) once those systems exist; rates TBD. This doc defers details to creature / combat plans when implemented.
+- **Food plants** — Player can gain calories from authored plant instances under **`res://assets/plants/`**; starvation can end the round per HUNGER spec.
+- **HUD** — Readable calorie / hunger feedback (polling / layout per HUNGER).
 
 ### Should have
--  
+
+- `pack_resources.json` under plant packs when audio/sprites are shared (per asset_management focus rule).
 
 ### Nice to have
--  
+
+- Eat SFX from pack manifests.
 
 ---
 
 ## 4. Technical design
 
 ### Architecture / data flow
-(Diagram in words: who calls whom, new nodes, autoloads, resources.)
 
--  
+- **Plants:** Standalone scenes under **`res://assets/plants/solid_shrub/`** and **`res://assets/plants/open_shrub/`** (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.2). Shared GDScript: **`res://assets/plants/bush_food.gd`** (keep all new plant paths under **`assets/plants/`**).
+- **Who calls whom:** `Player` holds vitals; plants signal or are queried on overlap/collision; `Main` spawns plant instances and session-resets pools.
 
 ### Scene & file changes
-| Action | Path | Notes |
-|--------|------|--------| 
-| create | plant.gd | This defines the plant object
-| modify | main.gd | instiantiate and display a plant object at a random location defined at the time the plant object is instatiated.
-| create / modify / delete | `res://...` | |
 
-### Collision / input / signals (if relevant)
-- Layers/masks:  
-- New signals:  
-- Groups:  
+| Action | Path | Notes |
+|--------|------|--------|
+| create | `res://assets/plants/…` | Bush scenes + textures per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.4 |
+| create / modify | `res://assets/plants/bush_food.gd` | Shared calorie / regrowth / sprite swap |
+| modify | `res://main.gd` | Instantiate plants; reset vitals |
+| modify | `res://player.gd` | Vitals + drain + eat hooks |
+
+### Collision / input / signals
+
+- **Layer/mask (Food B):** Implement per [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) **§6** (split); document any deviation in the same PR as `project.godot`.
 
 ### Dependencies
-- Assets:  
-- Plugins:  
-- External APIs:  
+
+- [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md), [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md), [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md).
 
 ---
 
 ## 5. Implementation plan (ordered)
 
-1.  
-2.  
-3.  
+1. Shipped per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §6 (see `main.gd`, `player.gd`, `hud.gd`, `mob.gd`, `assets/plants/`).  
+2. Reconcile any drift between this file and HUNGER after each milestone.
 
 ---
 
 ## 6. Acceptance criteria
 
-(Checklist — agent treats unchecked items as incomplete.)
-
-- [ ]  
-- [ ]  
+- [ ] Plant art and scenes live under **`res://assets/plants/`** only (no new `res://plants/` root for authored plant content).  
+- [ ] Calorie drain matches **time-based** baseline in HUNGER; movement-only drain is **not** the authoritative rule.  
+- [ ] Cross-ref HUNGER for numeric constants and acceptance checklist.
 
 ---
 
@@ -100,22 +96,19 @@
 
 | Risk | Mitigation |
 |------|------------|
-| | |
+| Doc drift vs HUNGER | Single “implementation authority” sentence at top of §1 |
 
 ---
 
 ## 8. Testing / verification
 
-**Manual steps:**  
--  
-
-**Automated (if any):**  
+**Manual:** Per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §9.
 
 ---
 
 ## 9. Open questions
 
--  
+- (none — defer to HUNGER `<<Question>>` markers)
 
 ---
 
@@ -124,4 +117,5 @@
 | Date | Change |
 |------|--------|
 | 2026-05-11 | Linked PLANT_ECOLOGY, CREATURE_MODEL, VISION plans for forward-compatible fields. |
-| | |
+| 2026-05-14 | Retargeted to **Hunter Killer**; **time-based** hunger + future **action** costs; **`res://assets/plants/`** root; archetypes **`solid_shrub/`** / **`open_shrub/`**; **`bush_food.gd`**; Food B → ENV **§6** layer/mask split; HUNGER as implementation authority. |
+| 2026-05-14 | **Implemented** hunger POC in code; spec moved to **`Completed_Features/HUNGER_AND_EATING.md`**. |

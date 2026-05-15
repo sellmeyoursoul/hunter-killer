@@ -1,4 +1,4 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Creature model (agent-friendly)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
 
@@ -19,7 +19,7 @@
 
 ## 2. Context for agents
 
-**Repo / project root:** `{projectHome}/dodge-the-creeps`
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`).
 
 **Engine & version:** Godot 4.6.2
 
@@ -139,7 +139,7 @@
 
 ## 5. Implementation plan (ordered)
 
-1. Land [PLANTS_PLAN.md](PLANTS_PLAN.md) hunger on **player** using minimal overlap (`current_calories`, `caloric_needs` names if practical).  
+1. Land hunger on **player** per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) (and index [PLANTS_PLAN.md](PLANTS_PLAN.md)) using **`current_calories`**, **`caloric_needs`**.
 2. Introduce `CreatureStats` Resource with **all fields @export default** for forward compatibility; wire only used fields.  
 3. Migrate mob/player to shared Resource when second species needs the same vitals.
 

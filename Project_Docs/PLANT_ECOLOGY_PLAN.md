@@ -1,6 +1,6 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Plant ecology (world model, agent-friendly)
 
-> Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
+> **Authoritative asset layout for plant packs:** **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md). **Shipped hunger + shrub POC** (field usage / rates): archived [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md); this doc defines **long-term** semantics and names—implementations should **reuse the same property names** where they overlap.
 
 ---
 
@@ -8,29 +8,30 @@
 
 **Phase name:** Plant ecology (world model — beyond edible POC)
 
-**One-line objective:** Capture the **full** abstract plant model (calories, regrowth, seeding, movement impedance, crush rules) from the world vision so [PLANTS_PLAN.md](PLANTS_PLAN.md) can stay a **minimal** “stationary food + starvation” slice without losing long-term fields.
+**One-line objective:** Capture the **full** abstract plant model (calories, regrowth, seeding, movement impedance, crush rules) from the world vision so [PLANTS_PLAN.md](PLANTS_PLAN.md) can stay a **high-level** plants/food index without losing long-term fields.
 
 **Out of scope (explicit non-goals):**  
-- Implementing every property in the first plant PR (follow PLANTS_PLAN for POC scope).  
+- Implementing every property in the first plant PR (follow [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) for the current shipped slice).  
 - Full ecosystem simulation (competing species, soil moisture) until a dedicated ecology phase.
 
 ---
 
 ## 2. Context for agents
 
-**Repo / project root:** `{projectHome}/dodge-the-creeps`
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`).
 
-**Engine & version:** Godot 4.6.2
+**Engine & version:** Godot **4.6.x** (match `project.godot`).
 
-**Main scenes / entry:** `plant.gd` / `Plant` scene when implemented per PLANTS_PLAN.
+**Main scenes / entry:** Bush / plant scenes under **`res://assets/plants/`** per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md); instantiated from `main.gd` (or level loader).
 
 **Key scripts (paths):**  
-- Near term: [PLANTS_PLAN.md](PLANTS_PLAN.md) paths (`plant.gd`, `main.gd`, `hud.gd`, `player.gd`).  
+- Near term: [PLANTS_PLAN.md](PLANTS_PLAN.md), [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) (`main.gd`, `player.gd`, `hud.gd`, `mob.gd`, `assets/plants/…`).  
 - Long term: optional `PlantSpecies` Resource holding the fields below.
 
 **Existing patterns to follow:**  
 - [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
-- Forward-compat: **declare unused exports or Resource defaults** on `Plant` when cheap, so saves/replicas carry future data.
+- [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md)  
+- Forward-compat: **declare unused exports or Resource defaults** on plant scenes when cheap, so future saves/replicas carry data.
 
 ---
 
@@ -62,10 +63,10 @@
 
 | Property | Type | Meaning |
 |----------|------|---------|
-| `edible` | bool | Creature can consume |
-| `current_calories` | float | Available calories for consumers |
-| `max_calories` | float | Cap for regrowth |
-| `growth_rate` | float | Calories restored per **game day** toward `max_calories` |
+| `edible` | bool | Creature **may** consume when rules allow; **Hunger POC** ties edibility to **`current_calories == max_calories`** ([HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)). |
+| `current_calories` | float | Available calories stored in the plant **right now**; consumers use this value. **Edible “ready” gate (Hunger phase):** no transfer until `current_calories == max_calories` (then burst depletes to 0 for that interaction—see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)). |
+| `max_calories` | float | Cap for regrowth and **ready** threshold |
+| `growth_rate` | float | **Long term:** calories restored **per unit time** toward `max_calories`, scaled by **plant type**, **biome / environment** (e.g. faster in rainforest than desert), and other world factors—**not** a single global constant in the vision. **POC / testing:** a fixed numeric rate (e.g. **+1 per second** in [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)) is acceptable to unblock other features until species + env hooks exist. *(Legacy table text “per game day” referred to an older tick abstraction; replace with sim-time units when world days are defined.)* |
 | `size` | float | Footprint (e.g. square feet or tile area—align with ENVIRONMENT plan) |
 | `seed_spread` | float | Max distance from center a new seed can root |
 | `seed_rate` | float | Game days between seeding attempts |
@@ -79,24 +80,27 @@
 
 - **`spread_seed(spread: float, curr_cals: float, req_cals: float)`** (internal): If `curr_cals < req_cals`, return. Else pick random offset with distance `< spread`, attempt spawn at computed location (validity rules TBD).
 
-### POC subset (cross-ref PLANTS_PLAN)
+### POC subset (cross-ref [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md))
 
-| Used in PLANTS_PLAN first? | Fields |
-|-----------------------------|--------|
-| Yes | `edible`, `current_calories` (per-instance static after spawn), collision with player |
-| Likely soon | `max_calories` (for bar / balance) |
-| Later | `growth_rate`, all seed*, `movement_impact`, `fit_size`, `crush_weight` |
+| In current hunger slice? | Fields |
+|---------------------------|--------|
+| Yes | `current_calories`, `max_calories`, regrowth via **`growth_rate`** (fixed +1/s for POC), burst grant when full, collision / overlap per Food A / B |
+| Optional / soon | `edible` (implicit when full), HUD via creature vitals |
+| Later | Per-species **`growth_rate`** modulation by environment; all `seed_*`, `movement_impact`, `fit_size`, `crush_weight` |
+
+**Note:** There is **no** separate **`yield_calories`** in this catalog—**`current_calories`** is the live pool; **`max_calories`** is the cap and ready test. Do not introduce a second “yield” field unless a future mechanic needs it and this table is extended explicitly.
 
 ### Scene & file changes
 
 | Action | Path | Notes |
 |--------|------|-------|
-| see | [PLANTS_PLAN.md](PLANTS_PLAN.md) | POC file table |
+| see | [PLANTS_PLAN.md](PLANTS_PLAN.md), [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) | POC under **`res://assets/plants/solid_shrub/`** and **`open_shrub/`**; physics [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) **§6** |
 
 ### Collision / input / signals (if relevant)
 
 - `body_entered` → transfer calories to `Player` / future `Creature`.  
-- Future: layer for “walkable underbrush” vs blocking.
+- **Food B asymmetry:** [ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) **§6** (layer/mask split), not ad-hoc per-scene exceptions unless a future phase revisits.  
+- Future: layer for “walkable underbrush” vs blocking beyond hunger POC.
 
 ### Dependencies
 
@@ -106,16 +110,16 @@
 
 ## 5. Implementation plan (ordered)
 
-1. Ship PLANTS_PLAN POC with minimal fields.  
+1. **Done:** hunger + plant POC per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) with **PLANT_ECOLOGY** field names (`current_calories`, `max_calories`, `growth_rate`).  
 2. Add `PlantData` Resource with **full** defaults; scene uses subset.  
-3. Implement regrowth tick.  
+3. Generalize regrowth tick (per-species / per-environment **`growth_rate`**).  
 4. Implement `spread_seed` + competition (`seed_choke_rate`).
 
 ---
 
 ## 6. Acceptance criteria
 
-- [ ] PLANTS_PLAN and this doc agree on which plant fields are **live** in code for each release.  
+- [ ] [PLANTS_PLAN.md](PLANTS_PLAN.md), [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md), and this doc agree on which plant fields are **live** in code for each release.  
 - [ ] `spread_seed` pseudocode above reflected in real GDScript when phase starts.
 
 ---
@@ -151,3 +155,5 @@
 | Date | Change |
 |------|--------|
 | 2026-05-11 | Split full plant ecology from EARLY_SPEC_DOC; linked PLANTS_PLAN POC. |
+| 2026-05-14 | Hunter Killer paths; **`growth_rate`** long-term vs POC; **`assets/plants/solid_shrub/`** + **`open_shrub/`**; Food B collision → ENV **§6**; aligned eat rule with HUNGER; removed implied `yield_calories`. |
+| 2026-05-14 | Hunger POC **shipped** in repo; cross-refs point at archived **HUNGER_AND_EATING**. |

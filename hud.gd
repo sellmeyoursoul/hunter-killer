@@ -1,9 +1,16 @@
 extends CanvasLayer
 
+## Frames between HUD reads of [code]Player[/code] vitals (hunger POC; display-only).
+@export var vitals_poll_frames: int = 10
+
 # Notifies 'Main' node that the button has been pressed
 signal start_game
 signal ai_player_game
 signal end_ai_game
+
+
+var _vitals_poll: int = 0
+var _player: Node = null
 
 
 func _ai_driver() -> Node:
@@ -118,4 +125,23 @@ func _ready() -> void:
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(_delta: float) -> void:
-	pass
+	_vitals_poll += 1
+	if _vitals_poll < vitals_poll_frames:
+		return
+	_vitals_poll = 0
+	if _player == null:
+		var m := get_tree().current_scene
+		if m != null:
+			_player = m.get_node_or_null("Player")
+	if _player == null:
+		return
+	var mx: Variant = _player.get("caloric_needs")
+	var cur: Variant = _player.get("current_calories")
+	if typeof(mx) != TYPE_INT and typeof(mx) != TYPE_FLOAT:
+		return
+	if typeof(cur) != TYPE_FLOAT and typeof(cur) != TYPE_INT:
+		return
+	var mx_i := int(mx)
+	var cur_f := clampf(float(cur), 0.0, float(mx_i))
+	var cur_i := int(round(cur_f))
+	$CaloriesLabel.text = "%d / %d" % [cur_i, mx_i]

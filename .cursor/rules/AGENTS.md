@@ -69,6 +69,7 @@ Detailed rules live only in these files; add more pointers here as new focus are
 
 **Ignore inconsistencies in historical files:** Files under `./Project_Docs/Completed_Features` are archived; see **Completed_Features scope** under Behavioral instructions. Do not treat them as active requirements unless a maintainer explicitly asks. Cross-doc drift with those files is expected.
 
+- **Project_Docs inventory (paths + proposed tiers):** [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) — organization strategy in [PD_INDEXING_AND_ORGANIZATION.md](../../Project_Docs/PD_INDEXING_AND_ORGANIZATION.md)
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)
 - **Assets (`res://assets/`, `pack_resources.json`, variants):** [asset_management.md](./focus/asset_management.md) — full design in archived [ASSET_MANAGEMENT_PLAN.md](../../Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md)

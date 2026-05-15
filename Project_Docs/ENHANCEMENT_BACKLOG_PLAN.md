@@ -17,7 +17,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
-## AI integration (Dodge the Creeps)
+## AI integration (Hunter Killer)
 
 | Item | Priority | Notes |
 |------|----------|-------|
@@ -35,6 +35,15 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | **Skill-based human HUD / tutor nudge** (safer probing, corridor use) | Low | OBJECT §8.2.5: interior env motor nudges are **ENGINE**-only for that phase; optional **human** assist stays a **separate** UX feature. |
 | **Optional headless `can_enter` probes** (learn passibility without bump) | Low | OBJECT §8.2.5 comment — faster belief updates in tests or sim; not required for cardinal v1. |
 | **Optional `env_threat_radius`** gate for mob-threat scoring | Low | OBJECT §8.2 v1 uses existing snapshot only; add only if tuning asks for an extra spatial gate ([ENVIRONMENT_MODEL_PLAN.md](ENVIRONMENT_MODEL_PLAN.md) §10). |
+
+---
+
+## Death / game-over differentiation
+
+| Item | Priority | Notes |
+|------|----------|-------|
+| **Distinct player defeat causes** | Medium | **Today:** mob contact and (per [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)) **starvation** may both call **`Main.game_over()`** with the same player-facing outcome. **Future:** separate messaging, sounds, analytics, and **`AiDriver`** hooks for **violence** (mob hit), **starvation**, **environment** (e.g. freezing, falling, drowning), etc. |
+| **Per-cause tutorial / meta** | Low | Optional HUD copy or post-death screen keyed by defeat enum |
 
 ---
 

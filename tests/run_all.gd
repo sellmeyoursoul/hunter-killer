@@ -8,6 +8,7 @@ const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
+const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _PlayerScr := preload("res://player.gd")
 const _EnvCell := preload("res://environment/environment_cell_data.gd")
@@ -33,6 +34,10 @@ func _run_all() -> void:
   _test_perception_sampling()
   _test_perception_risk_hints()
   _test_cardinal_avoidance()
+  _test_food_seek_motor()
+  _test_explore_idle_when_no_pickup()
+  _test_explore_trail_repulsion_motor()
+  _test_jeopardy_forced_turn()
   _test_scripted_intent_hold()
   _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
@@ -42,6 +47,7 @@ func _run_all() -> void:
   _test_wall_slide_pick()
   _test_obstacle_visual_tiers()
   _test_pack_resource_resolver()
+  _test_hunger_calorie_clamp()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -88,7 +94,7 @@ func _test_merge_defaults_and_override() -> void:
   var m2: Dictionary = res["merged"]
   _assert(m2["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 1, "missing file perception default")
   _assert(str(base["creature_motor"].get("mode", "")) == "scripted", "default creature_motor.mode scripted")
-  _assert(int(base["creature_motor"].get("scripted_intent_hold_physics_ticks", -1)) == 5, "default scripted intent hold")
+  _assert(int(base["creature_motor"].get("scripted_intent_hold_physics_ticks", -1)) == 8, "default scripted intent hold")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_closing", 0.0)), 1.05), "default weight_closing")
@@ -100,6 +106,58 @@ func _test_merge_defaults_and_override() -> void:
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_cone_extra", 0.0)), 3000.0), "default awareness_cone_extra")
   _assert(int(base["creature_motor"].get("awareness_memory_ticks", -1)) == 3, "default awareness_memory_ticks")
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_memory_weight", 0.0)), 0.35), "default awareness_memory_weight")
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("hunger_explore_interior_scale_min", 0.0)), 0.16),
+    "default hunger_explore_interior_scale_min",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("hunger_explore_urgency_power", 0.0)), 1.25),
+    "default hunger_explore_urgency_power",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", 0.0)), 16.0),
+    "default weight_seek_ready_food",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("food_seek_imminent_mob_radius_px", 0.0)), 100.0),
+    "default food_seek_imminent_mob_radius_px",
+  )
+  _assert(
+    int(base["creature_motor"].get("jeopardy_forced_turn_ticks", -1)) == 5,
+    "default jeopardy_forced_turn_ticks",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_avoid_unready_food", 0.0)), 5.5),
+    "default weight_avoid_unready_food",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("food_avoid_unready_scale_when_ready_target", 0.0)), 0.35),
+    "default food_avoid_unready_scale_when_ready_target",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_explore_idle_penalty", 0.0)), 10.5),
+    "default weight_explore_idle_penalty",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_explore_turn_bias", 0.0)), 0.14),
+    "default weight_explore_turn_bias",
+  )
+  _assert(
+    int(base["creature_motor"].get("explore_intent_hold_extra_ticks", -1)) == 5,
+    "default explore_intent_hold_extra_ticks",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("explore_coverage_cell_px", 0.0)), 52.0),
+    "default explore_coverage_cell_px",
+  )
+  _assert(
+    int(base["creature_motor"].get("explore_trail_max_cells", -1)) == 96,
+    "default explore_trail_max_cells",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_explore_trail_repulsion", 0.0)), 2.35),
+    "default weight_explore_trail_repulsion",
+  )
 
 
 func _test_load_merged_config_repo_fallback() -> void:
@@ -581,6 +639,171 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
 
 
+func _test_food_seek_motor() -> void:
+  var food := [Vector2(400.0, 200.0)]
+  var c_left := float(
+    Callable(_Motor, &"food_seek_cost_at_prediction").call(
+      Vector2(200.0, 200.0), Vector2.ZERO, food, 1.0, [], 0.0
+    )
+  )
+  var c_right := float(
+    Callable(_Motor, &"food_seek_cost_at_prediction").call(
+      Vector2(300.0, 200.0), Vector2.ZERO, food, 1.0, [], 0.0
+    )
+  )
+  _assert(c_right < c_left, "food seek cost decreases when prediction moves toward target")
+  var mob_near := [Vector2(205.0, 200.0)]
+  var gated := float(
+    Callable(_Motor, &"food_seek_cost_at_prediction").call(
+      Vector2(250.0, 200.0), Vector2.ZERO, food, 50.0, mob_near, 60.0
+    )
+  )
+  var free := float(
+    Callable(_Motor, &"food_seek_cost_at_prediction").call(
+      Vector2(250.0, 200.0), Vector2.ZERO, food, 50.0, [], 0.0
+    )
+  )
+  _assert(gated < 1e-6 and free > 1000.0, "imminent mob radius suppresses food pull at predicted pose")
+  var w_suppressed := float(
+    Callable(_Motor, &"effective_food_seek_weight").call(
+      50.0, Vector2(240.0, 200.0), Vector2.ZERO, mob_near, 100.0
+    )
+  )
+  var w_active := float(
+    Callable(_Motor, &"effective_food_seek_weight").call(
+      50.0, Vector2(100.0, 200.0), Vector2.ZERO, mob_near, 100.0
+    )
+  )
+  _assert(w_suppressed < 1e-6 and w_active > 40.0, "imminent mob radius zeros food weight at current pose")
+  var c_far_un := float(
+    Callable(_Motor, &"unready_food_avoid_cost_at_prediction").call(
+      Vector2(0.0, 0.0), Vector2.ZERO, [Vector2(200.0, 0.0)], 10.0, 8.0
+    )
+  )
+  var c_near_un := float(
+    Callable(_Motor, &"unready_food_avoid_cost_at_prediction").call(
+      Vector2(150.0, 0.0), Vector2.ZERO, [Vector2(200.0, 0.0)], 10.0, 8.0
+    )
+  )
+  _assert(c_near_un > c_far_un, "unready bush inverse-distance cost rises when prediction hugs the bush")
+  var seek_ctx := {
+    "creature_position": Vector2(200.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [],
+    "weight_dist": 0.0,
+    "weight_closing": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.0,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.0,
+    "food_seek_targets": food,
+    "weight_seek_ready_food": 2.0,
+    "imminent_mob_points": [],
+    "food_seek_imminent_mob_radius_px": 0.0,
+  }
+  var toward := _Motor.pick_best_move_intent(seek_ctx)
+  _assert(toward.is_equal_approx(Vector2.RIGHT), "food seek steers toward in-range ready bush when mob costs off")
+  var mob_pos := Vector2(300.0, 200.0)
+  var flee_ctx := {
+    "creature_position": Vector2(240.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [{"position": mob_pos, "velocity": Vector2.ZERO}],
+    "weight_dist": 0.45,
+    "weight_closing": 0.0,
+    "weight_dist_sq": 55.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.0,
+    "weight_edge": 0.0,
+    "food_seek_targets": food,
+    "weight_seek_ready_food": 80.0,
+    "imminent_mob_points": [mob_pos],
+    "food_seek_imminent_mob_radius_px": 100.0,
+  }
+  var flee := _Motor.pick_best_move_intent(flee_ctx)
+  _assert(flee.is_equal_approx(Vector2.LEFT), "mob within imminent radius beats food seek")
+
+
+func _test_explore_idle_when_no_pickup() -> void:
+  var roam := {
+    "creature_position": Vector2(240.0, 360.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [],
+    "weight_dist": 0.0,
+    "weight_closing": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.65,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.48,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "imminent_mob_points": [],
+    "food_seek_imminent_mob_radius_px": 0.0,
+    "unready_food_avoid_targets": [],
+    "weight_avoid_unready_food": 0.0,
+    "weight_explore_idle_penalty": 15.0,
+    "weight_explore_turn_bias": 0.0,
+  }
+  var intent := _Motor.pick_best_move_intent(roam)
+  _assert(not intent.is_equal_approx(Vector2.ZERO), "explore idle penalty avoids standstill without pickup targets")
+
+
+func _test_explore_trail_repulsion_motor() -> void:
+  var c_far := float(
+    Callable(_Motor, &"exploration_trail_repulsion_cost").call(
+      Vector2(300.0, 360.0), Vector2.ZERO, [Vector2(190.0, 360.0)], 10.0, 8.0
+    )
+  )
+  var c_near := float(
+    Callable(_Motor, &"exploration_trail_repulsion_cost").call(
+      Vector2(180.0, 360.0), Vector2.ZERO, [Vector2(190.0, 360.0)], 10.0, 8.0
+    )
+  )
+  _assert(c_near > c_far, "trail repulsion rises when prediction approaches a prior cell center")
+  var trail_ctx := {
+    "creature_position": Vector2(240.0, 360.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": [],
+    "weight_dist": 0.0,
+    "weight_closing": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.65,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.48,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "imminent_mob_points": [],
+    "food_seek_imminent_mob_radius_px": 0.0,
+    "unready_food_avoid_targets": [],
+    "weight_avoid_unready_food": 0.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "explore_trail_centers": [Vector2(190.0, 360.0)],
+    "weight_explore_trail_repulsion": 40.0,
+  }
+  var away := _Motor.pick_best_move_intent(trail_ctx)
+  _assert(away.is_equal_approx(Vector2.RIGHT), "trail repulsion steers away from visited cell when symmetric otherwise")
+
+
 func _test_wall_slide_pick() -> void:
   ## Picks tangent with larger dot toward incoming (= smaller planar turn vs the ±90 flank).
   var p: Object = _SlidePickScr.new()
@@ -606,6 +829,17 @@ func _test_pack_resource_resolver() -> void:
   var bad_aud: Dictionary = _PackRes.resolve_audio_from_pack(smoke_root, "__missing_audio_tag__")
   _assert(bad_aud["used_default"] == true, "missing audio tag uses default stream path")
   _assert(ResourceLoader.exists(str(bad_aud["path"])), "fallback audio path loads")
+
+
+func _test_hunger_calorie_clamp() -> void:
+  ## Burst overflow is wasted: pool clamps at caloric_needs (HUNGER_AND_EATING §4).
+  var cur := 9.0
+  var cap := 10.0
+  var grant := 5.0
+  var next := minf(cap, cur + grant)
+  _assert(is_equal_approx(next, 10.0), "hunger burst clamps at caloric_needs")
+  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub.tscn"), "solid_shrub scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub.tscn"), "open_shrub scene exists")
 
 
 func _test_obstacle_visual_tiers() -> void:
@@ -798,6 +1032,89 @@ func _test_mob_avoidance_acceptance() -> void:
   )
 
 
+func _test_jeopardy_forced_turn() -> void:
+  var mob_pos := Vector2(300.0, 200.0)
+  var mobs := [{"position": mob_pos, "velocity": Vector2.ZERO}]
+  var cone_cos := cos(deg_to_rad(45.0))
+  var threat := Callable(_JeopardyTurnScr, &"primary_threat_in_forward_cone").call(
+    Vector2(240.0, 200.0), Vector2.ZERO, Vector2.RIGHT, mobs, 100.0, cone_cos
+  ) as Dictionary
+  _assert(bool(threat.get("found", false)), "forward-cone mob inside imminent radius is a threat")
+  var state: Dictionary = {}
+  var tick_base := {
+    "incumbent": Vector2.RIGHT,
+    "creature_position": Vector2(240.0, 200.0),
+    "creature_half_extents": Vector2.ZERO,
+    "creature_facing": Vector2.RIGHT,
+    "mobs": mobs,
+    "imminent_radius_px": 100.0,
+    "cone_cos_threshold": cone_cos,
+    "required_ticks": 2,
+  }
+  var eval1: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick_base, state)
+  _assert(not bool(eval1.get("should_force", true)), "first straight tick does not force turn")
+  var tick2 := tick_base.duplicate(true)
+  tick2["creature_position"] = Vector2(250.0, 200.0)
+  var eval2: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick2, state)
+  _assert(not bool(eval2.get("should_force", true)), "second closing tick not yet at threshold")
+  var tick3 := tick_base.duplicate(true)
+  tick3["creature_position"] = Vector2(260.0, 200.0)
+  var eval3: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick3, state)
+  _assert(bool(eval3.get("should_force", false)), "second consecutive closing straight tick forces turn")
+  var flee_ctx := {
+    "creature_position": Vector2(260.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": mobs,
+    "weight_dist": 0.45,
+    "weight_closing": 0.0,
+    "weight_dist_sq": 55.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "creature_half_extents": Vector2.ZERO,
+    "weight_interior": 0.0,
+    "weight_edge": 0.0,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "imminent_mob_points": [mob_pos],
+    "food_seek_imminent_mob_radius_px": 100.0,
+    "unready_food_avoid_targets": [],
+    "weight_avoid_unready_food": 0.0,
+  }
+  var flee := Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
+    flee_ctx, Vector2.RIGHT, mob_pos
+  ) as Vector2
+  _assert(flee.is_equal_approx(Vector2.LEFT), "forced turn flees mob when mob repulsion dominates")
+  var turn_ctx := {
+    "creature_position": Vector2(260.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(480.0, 720.0),
+    "mobs": mobs,
+    "weight_dist": 0.0,
+    "weight_closing": 0.0,
+    "weight_dist_sq": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "creature_half_extents": Vector2.ZERO,
+    "weight_interior": 0.0,
+    "weight_edge": 0.0,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "imminent_mob_points": [mob_pos],
+    "food_seek_imminent_mob_radius_px": 100.0,
+    "unready_food_avoid_targets": [],
+    "weight_avoid_unready_food": 0.0,
+  }
+  var forced := Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
+    turn_ctx, Vector2.RIGHT, mob_pos
+  ) as Vector2
+  _assert(forced.is_equal_approx(Vector2.UP) or forced.is_equal_approx(Vector2.DOWN), "forced turn is perpendicular when mob is ahead on same line")
+
+
 func _test_scripted_intent_hold() -> void:
   var fh := Callable(IntentHoldScr, &"filtered_intent")
   var st: Dictionary = {}
@@ -935,6 +1252,54 @@ func _test_ai_driver_helpers() -> void:
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(2)).contains("RIGHT"), "gbnf PLAYING")
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
   d.free()
+  _test_food_plant_awareness_gating(AD)
+
+
+func _test_food_plant_awareness_gating(ad_script: Script) -> void:
+  var BushScr := load("res://assets/plants/bush_food.gd") as Script
+  var main := Node.new()
+  root.add_child(main)
+  var bush := Node2D.new()
+  bush.set_script(BushScr)
+  main.add_child(bush)
+  bush.call("_ready")
+  bush.global_position = Vector2(80.0, 0.0)
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var creature_pos := Vector2.ZERO
+  var he := Vector2(13.5, 30.5)
+  var facing := Vector2.RIGHT
+  var motor_off := {
+    "awareness_radius": 0.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 45.0,
+  }
+  var split_off: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness", motor_off, creature_pos, he, facing
+  )
+  var ready_off: Array = split_off.get("ready", []) as Array
+  var unready_off: Array = split_off.get("unready", []) as Array
+  _assert(ready_off.is_empty() and unready_off.is_empty(), "awareness_radius 0 yields no motor food targets")
+  var motor_on := {
+    "awareness_radius": 200.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 180.0,
+  }
+  var split_near: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness", motor_on, creature_pos, he, facing
+  )
+  var ready_near: Array = split_near.get("ready", []) as Array
+  _assert(ready_near.size() == 1, "bush inside awareness radius is visible to motor")
+  bush.global_position = Vector2(5000.0, 0.0)
+  var split_far: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness", motor_on, creature_pos, he, facing
+  )
+  var ready_far: Array = split_far.get("ready", []) as Array
+  var unready_far: Array = split_far.get("unready", []) as Array
+  _assert(ready_far.is_empty() and unready_far.is_empty(), "bush outside awareness radius is excluded")
+  driver.queue_free()
+  main.queue_free()
 
 
 func _test_bundled_inference_helpers() -> void:

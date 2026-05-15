@@ -1,4 +1,4 @@
-# Dodge the Creeps — Design doc (agent-friendly)
+# Hunter Killer — Environment model (terrain / props abstraction)
 
 > Fill each section before implementation. Keep bullets concrete enough that an agent can open the right files and know when it is done.
 
@@ -9,18 +9,18 @@
 | **`passible`**, **`movement_impact`**, **`fit_size`**, mob detours, creature **`size`** (2D) | **Specified for implementation** | [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) |
 | **Placement / boundaries / authoring** for env geometry | **Chosen:** palette PNGs in **`res://art/env/`** → bake → `EnvironmentGridBaked` (OBJECT §8.1) | [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.1 |
 | **Player motor weights** (interior env + memory vs mobs; edges unchanged) | **Specified** — implement per OBJECT §8.2 | [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2 |
-| **Experiential slowdown** + **`terrain_kind_id`** (learn per terrain kind; **includes squeeze exploration**) | **FUTURE** — not object-avoidance phase | §10 (carry-forward); archived OBJECT §10; §4 `terrain_kind_id` |
+| **Experiential slowdown** + **`terrain_kind_id`** (learn per terrain kind; **includes squeeze exploration**) | **FUTURE** — not object-avoidance phase | §11 (carry-forward); archived OBJECT §10; §4 `terrain_kind_id` |
 | **`crush_weight`** destructible props | **NOT IMPLEMENTED** — future phase | §4 Property catalog; §5 step 3 |
-| **`apply_movement_impact` / modifier merge** (shared helper) | Partially scoped — env side in object-avoidance plan; **plant + terrain merge** still **OUTSTANDING** | §5 step 1; §7 Risks |
-| Physics **layer/mask mapping** table | **OUTSTANDING** | §6 Acceptance |
-| **`crush_weight == 0`** semantics in code comments | **OUTSTANDING** (blocked until crush phase) | §6 Acceptance |
-| **3D** height / volumetric crush | **OUTSTANDING / deferred** — keep **2D** until a future doc | §9 Open questions |
+| **`apply_movement_impact` / modifier merge** (shared helper) | Partially scoped — env side in object-avoidance plan; **plant + terrain merge** still **OUTSTANDING** | §5 step 1; §8 Risks |
+| Physics **layer/mask mapping** (hunger shrubs + actors) | **Specified** — layer/mask **split** (Option A); see **§6** | §6; [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.1 |
+| **`crush_weight == 0`** semantics in code comments | **OUTSTANDING** (blocked until crush phase) | §7 Acceptance |
+| **3D** height / volumetric crush | **OUTSTANDING / deferred** — keep **2D** until a future doc | §10 Open questions |
 | Nice-to-have: **`Area2D` water** with non-linear drag | **OUTSTANDING** | §3 Nice to have |
-| **Per-creature interior env belief — save-game persistence** | **FUTURE** | OBJECT §8.2.3 (memory on creature; persistence OOS) — §10 |
-| **Multi-layer palette / image → grid merge order** | **Document at bake time** | OBJECT §8.1 limits — §10 |
-| **Footprint: polygon–cell overlap vs center-only** | **FUTURE** (3D / mesh sampling) | OBJECT §9 — §10 |
-| **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §10; [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) |
-| **Silhouette vs unexplored** second motor bucket + LOS on snapshot | **FUTURE** (perception / FOV) | OBJECT §8.2.5 comments; OBJECT §10 — §10 |
+| **Per-creature interior env belief — save-game persistence** | **FUTURE** | OBJECT §8.2.3 (memory on creature; persistence OOS) — §11 |
+| **Multi-layer palette / image → grid merge order** | **Document at bake time** | OBJECT §8.1 limits — §11 |
+| **Footprint: polygon–cell overlap vs center-only** | **FUTURE** (3D / mesh sampling) | OBJECT §9 — §11 |
+| **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §11; [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) |
+| **Silhouette vs unexplored** second motor bucket + LOS on snapshot | **FUTURE** (perception / FOV) | OBJECT §8.2.5 comments; OBJECT §10 — §11 |
 
 ---
 
@@ -38,9 +38,9 @@
 
 ## 2. Context for agents
 
-**Repo / project root:** `{projectHome}/dodge-the-creeps`
+**Repo / project root:** `{projectHome}/hunter-killer` (directory containing `project.godot`)
 
-**Engine & version:** Godot 4.6.2
+**Engine & version:** Godot **4.6.x** (match `project.godot`)
 
 **Main scenes / entry:** TBD—likely tilemap layers or `StaticBody2D` tiles under `Main`.
 
@@ -49,6 +49,7 @@
 
 **Existing patterns to follow:**  
 - [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
+- [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)); **2D** physics **layer/mask** mapping for hunger + actors is **§6** (extend when new props need bits).
 - Align numeric semantics with [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) for `movement_impact`, `fit_size`, `crush_weight` where possible (shared helper).
 
 ---
@@ -98,7 +99,7 @@
 
 ### Collision / input / signals (if relevant)
 
-- Physics layers: environment vs creature vs projectile—table when implementing.
+- Physics layers: **hunger + shrubs** use the **§6** table (layer/mask split). Extend this section when new props or actors need additional bits.
 
 ### Dependencies
 
@@ -114,14 +115,45 @@
 
 ---
 
-## 6. Acceptance criteria
+## 6. Godot 2D physics — layer / mask (hunger shrubs)
 
-- [ ] First implementation phase lists Godot layer/mask mapping.  
-- [ ] `crush_weight == 0` semantics documented in code comments.
+**Chosen approach:** **Layer / mask split (Option A)** for **Food B** (`open_shrub`) — **no** `PhysicsBody2D.add_collision_exception_with(player)` as the primary mechanism for v1. **Food A** (`solid_shrub`) uses the **same solidity class as `ObstacleField` rocks** (mobs and player both collide).
+
+**Authoritative numbers** below match **`player.gd`**, **`mob.tscn`**, and **`obstacle_field.tscn`** as of **2026-05-14**. If bits change in code, update **this table** and **`project.godot` `[layer_names]`** in the same PR.
+
+### 6.1 Layer bits (2D physics)
+
+| Bit | Value `2^(bit-1)` | Suggested `[layer_names]` name | Occupants |
+|-----|-------------------|----------------------------------|-----------|
+| 1 | `1` | `world_static` | `ObstacleField` **StaticBody2D** rocks; **Food A** **`solid_shrub`** blocker (match rock parity); **Food B** **`open_shrub`** calorie **`Area2D`** **collision_layer** (overlap detection only — see §6.2) |
+| 2 | `2` | `player` | **`Player`** **CharacterBody2D** |
+| 3 | `4` | `mob` | **`Mob`** **RigidBody2D** |
+| 4 | `8` | `plant_mob_block` | **Food B only:** **`open_shrub`** **StaticBody2D** shell that blocks **mobs** but **not** the player |
+
+### 6.2 Masks (targets for hunger implementation)
+
+| Body | `collision_layer` | `collision_mask` | Role |
+|------|-------------------|------------------|------|
+| **Player** | `2` | `1` | Walks **world_static** + Food B calorie areas; **`1` excludes bit `8`** → **no** physics collision with **`plant_mob_block`**. |
+| **Mob** | `4` | `1 \| 8` (= **`9`**) | Collides with **rocks** and **`plant_mob_block`** — **same treatment as other solid obstacles** for movement / avoidance. |
+| **Food A `solid_shrub` static** | `1` | same as rocks (typically **`1`**) | Impassible for **player** and **mobs**. |
+| **Food B `open_shrub` mob shell** | `8` | **`4`** | Godot requires **mutual** mask↔layer agreement: shell **must** include **mob** in **`collision_mask`** so **`RigidBody2D`** contacts register. |
+| **Food B `open_shrub` calorie `Area2D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **player-only** `body_entered` / overlap for burst calories. Mobs (**layer `4`**) do **not** match mask **`2`** → **no** plant pickup or state changes from mob overlap. |
+
+**Implementer note:** Calorie **`Area2D`** nodes are **not** a substitute for mob blocking; keep the **StaticBody2D** shell on **`plant_mob_block`** for **`open_shrub`**.
 
 ---
 
-## 7. Risks & mitigations
+## 7. Acceptance criteria
+
+- [ ] **`project.godot`** lists **`2d_physics/layer_*`** names for bits used in §6.1 (at minimum **1, 2, 4, 8** once hunger ships).  
+- [ ] **`Mob`** `collision_mask` **ORs** in **`plant_mob_block`** (`8`) when Food B is present (target **`9`** if base mask was **`1`**).  
+- [ ] **Food B** scene root (or shared plant README under **`res://assets/plants/open_shrub/`**) carries a **short comment** pointing to this **§6** table.  
+- [ ] `crush_weight == 0` semantics documented in code comments (unchanged — future crush phase).
+
+---
+
+## 8. Risks & mitigations
 
 | Risk | Mitigation |
 |------|------------|
@@ -130,7 +162,7 @@
 
 ---
 
-## 8. Testing / verification
+## 9. Testing / verification
 
 **Manual steps:**  
 - Walk creature through water / brush vs open ground.
@@ -140,13 +172,13 @@
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
 - **Deferred:** <<Question: 2D top-down only, or future 3D height for crush?>> — **3D out of scope** for [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md); revisit when a dedicated phase addresses height/crush.
 
 ---
 
-## 10. Future / deferred carryovers (OBJECT plan)
+## 11. Future / deferred carryovers (OBJECT plan)
 
 **Purpose:** [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) now lives under **Completed_Features**; this section keeps **deferred** policy and comment-thread intent in an **active** doc. Cross-check the archived OBJECT file for full prose; here is the **checklist** implementers should not lose.
 
@@ -190,10 +222,11 @@
 
 ---
 
-## 11. Changelog (this phase)
+## 12. Changelog (this phase)
 
 | Date | Change |
 |------|--------|
+| 2026-05-14 | **§6:** Godot **2D layer/mask split (Option A)** for **`solid_shrub`** / **`open_shrub`**; mob mask **`9`**; renumbered §6→§12. Tracking: physics table **Specified**. |
 | 2026-05-12 | §10: Mode A / float policy; silhouette vs unexplored. |
 | 2026-05-12 | §10: consolidated **future / deferred** checklist from OBJECT (perception, experiential memory, sampling, config, authoring); §11 changelog renumber; tracking table rows. |
 | 2026-05-12 | Tracking: §8.2 motor spec expanded (belief, memory, LOS future). |
