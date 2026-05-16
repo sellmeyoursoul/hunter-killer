@@ -8,7 +8,7 @@
 
 **Phase name:** Creature model (abstract data + vitals)
 
-**One-line objective:** Define the **authoritative list** of creature-facing stats, motivation sliders, hunger, and reproduction fields so POC classes and future `Creature`-style nodes can **reserve** members without implementing every system at once.
+**One-line objective:** Define the **authoritative list** of creature-facing stats, motivation sliders, hunger, and reproduction fields — plus the **goal hierarchy** (survival, reproduction, trait-driven priorities) — so POC classes and future `Creature`-style nodes can **reserve** members without implementing every system at once.
 
 **Out of scope (explicit non-goals):**  
 - Full utility-AI or behavior-tree product in this phase.  
@@ -42,6 +42,7 @@
 ### Must have (design completeness)
 
 - Single table (below) listing **POC-used** vs **reserved-for-later** fields.  
+- Document **goal hierarchy** (§4 — survival, reproduction, motivation traits) for future utility / motor weighting.  
 - Document `generatePoints()` / `initializeOutlook()` intent even if methods are stubs.
 
 ### Should have
@@ -86,6 +87,26 @@
 | `community_individual` | Collective support vs self-reliance |
 
 **Cross-reference:** Field names and scales are authoritative here; [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) defines how they participate in the **dual genome** (`creature_motor` + outlook) and when each trait may affect motor or fitness.
+
+### Goals and motivational priorities (design)
+
+Creatures are modeled as having **goals** that future utility, scripted motor, or LLM-assisted layers will **reconcile** with local threats and resources (not all goals are implemented in POC).
+
+| Rank | Goal | Notes |
+|------|------|--------|
+| **Primary** | **Live through natural lifespan** | Survive until **`max_age`** (or as **close** as circumstances allow — injury, predation, starvation may cut life short). This is the default **top** objective unless trait-weighted tradeoffs say otherwise in a given beat. |
+| **Secondary** | **Reproduce** | Find mates, bear or fertilize offspring, protect young as later phases define. Ordering vs momentary survival is **not** fixed globally—see traits below. |
+| **Subsequent** | **Motivation-driven** | **`explorer_builder`**, **`change_stability`**, **`compassion_self_interest`**, **`community_individual`** (and future traits) set **how** the creature **prioritizes** survival vs reproduction and which tactical sub-goals matter (explore vs fortify, novelty vs routine, etc.). |
+
+**Survival vs reproduction:** The **relative urgency** of staying alive vs. mating or helping the next generation is **not** identical for every creature. High **community**-leaning **`community_individual`** can favor **group survival** over the **individual**, opening design space for **self-sacrifice** (distraction, holding a line, starving so juveniles eat). **Individual**-leaning **`community_individual`** tends to **secure personal survival first**, then seek a **mate after danger passes**.
+
+**Compassion vs self-interest (`compassion_self_interest`):** High **compassion** can favor **sharing food** (kin, allies, group pool); high **self-interest** favors **hoarding** for a personal buffer when memory/foraging phases support it—see [CREATURE_MEMORY.md](CREATURE_MEMORY.md) for remembered resources.
+
+**Motor / Tier-2 expansion (same axes, tactical framing):** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) §A.4 (**Survival-plan vision**).
+
+<<Comment: Concrete utility weights, sacrifice actions, and food-transfer mechanics are deferred to feature phases; this section pins **design intent** only.>>
+
+---
 
 **Basic info**
 
@@ -178,29 +199,7 @@
 - <<Question: Should `hunger` be stored or always derived?>>
 - **Control parity (deferred):** [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5 applies interior env / exploration motor biases to **ENGINE**-controlled creatures only for that phase; **HUMAN** input does not get those nudges. Resolve whether **`ControlMode.AI`** (or any non-scripted motor) should match **ENGINE** weights when the **AI control** phase lands — document in the AI feature plan so scripted vs learned control stays consistent.
 
-### Food-source memory (creature enhancement — draft)
-
-**Goal:** Remember discovered food after it leaves the awareness cone — without omniscient seek.
-
-| Tier | Condition (baseline) | Representation | Motor use |
-|------|----------------------|----------------|-----------|
-| **Precise** | Remembered bush/player-food and `distance(creature, last_world_pos) ≤ food_memory_precise_radius_px` (**1000** px default) | Exact `Vector2` + last-known ready/unready | Merge into `food_seek_targets` / unready lists ([`ai_driver.gd`](../../AI_int_lib/ai_driver.gd), [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd)) |
-| **Coarse** | Still remembered but farther than precise radius | **Egocentric** 8-way sector recomputed each tick from `last_world_pos - creature_pos`: N, NE, E, SE, S, SW, W, NW | Weak cardinal bias or LLM/perception text — **not** a stored world compass bearing |
-
-**Alternatives to weigh**
-
-1. **Mob-style ghost buffer** — ring buffer + `awareness_memory_*` decay at last position (proven pattern in `ai_driver` `_mob_hist`).  
-2. **Explore-trail-style grid** — cheap, but merges distinct bushes in one cell.  
-3. **Precise-only** — no coarse tier; forget hard outside radius (simplest).
-
-**Open design**
-
-- <<Question: Coarse direction **changes as the creature moves** because sectors are relative to current position. Is that acceptable for ENGINE routing, or do we need map-fixed landmarks for “return to NW corner of map”?>>  
-- <<Question: **Forget** — combine `food_memory_forget_radius_px`, `food_memory_ttl_sec` since last in-awareness observation, session reset, and LRU `food_memory_max_entries`?>>  
-- <<Question: **Predator / moving food** — track prey `instance_id` + `velocity`; refresh every tick in awareness; extrapolate out of cone like mob ghosts; readiness ≠ bush regrow. Coarse 8-way is a weak cue for movers — prefer velocity bearing or precise tier only.>>  
-- <<Comment: Stationary bushes — [`bush_food.gd`](../../assets/plants/bush_food.gd) `global_position` is stable; belief keys on instance id.>>
-
-**Planned config keys** (commented in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)): `food_memory_precise_radius_px`, `food_memory_forget_radius_px`, `food_memory_ttl_sec`, `food_memory_max_entries`, `weight_seek_remembered_food`.
+**Creature memory** (food beliefs, hiding, LoS): [CREATURE_MEMORY.md](CREATURE_MEMORY.md).
 
 ---
 
@@ -208,6 +207,9 @@
 
 | Date | Change |
 |------|--------|
+| 2026-05-18 | After **Compassion vs self-interest** §4Goals: cross-link [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) §A.4 (motor / survival-plan dichotomy narrative). |
+| 2026-05-15 | §4 **Goals and motivational priorities** — survival (primary), reproduction (secondary), trait-driven ordering; community/individual and compassion/self-interest examples. |
+| 2026-05-15 | §9 **food-source memory** table + questions → [CREATURE_MEMORY.md](CREATURE_MEMORY.md). |
 | 2026-05-12 | §9: deferred **ENGINE vs AI** interior motor parity (OBJECT §8.2.5). |
 | 2026-05-12 | §4 Collision: **`CharacterBody*D`** + **`move_and_slide`** per [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §5.1; dependency link. |
 | 2026-05-12 | `size`: internal **pixels**; no Godot ft/m; future **display** units (ft/in vs m/cm); **Display length units** note; §7 risk. |

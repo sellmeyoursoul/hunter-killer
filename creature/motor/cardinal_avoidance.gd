@@ -4,6 +4,8 @@
 class_name CardinalAvoidance
 extends Object
 
+const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
+
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false.
 static var _tie_order: Array[Vector2] = [
   Vector2(0.0, -1.0),
@@ -281,7 +283,7 @@ static func interior_env_cost_at(
 
 ## Picks unit intent in tie-order preference among cardinals + idle.
 ## Params:
-## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty).
+## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]motor_intent_cost_chaos[/code] (uniform jitter ± this amount per candidate cost; breaks symmetric plateaus; 0 disables), [code]motor_chaos_seed[/code] ([code]tie_shuffle_seed[/code] XOR body id typical), [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty), [code]expanding_explore_hint[/code] + [code]weight_expanding_explore_hint[/code] (no ready-food: bias toward expanding cardinal sweep — see [code]expanding_cardinal_explore.gd[/code] [code]Explore[/code]).
 ## Returns:
 ## - Normalized cardinal `Vector2` or `Vector2.ZERO`.
 ## Usage:
@@ -336,9 +338,38 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var w_turn_explore: float = float(ctx.get("weight_explore_turn_bias", 0.0))
   var trail_centers: Array = ctx.get("explore_trail_centers", []) as Array
   var w_trail_rep: float = float(ctx.get("weight_explore_trail_repulsion", 0.0))
+  var w_expand_hint: float = float(ctx.get("weight_expanding_explore_hint", 0.0))
+  var expand_hint_raw: Variant = ctx.get("expanding_explore_hint", Vector2.ZERO)
+  var explore_mult: float = float(ctx.get("exploration_blend_multiplier", 1.0))
+  var allow_explore := explore_mult > 1e-6 and not mob_threat_high
   var w_seek_food := effective_food_seek_weight(
     w_seek_food_raw, creature_pos, footprint_half, imminent_pts, imminent_r
   )
+  var pursuit_targets: Array = ctx.get("pursuit_targets", []) as Array
+  var w_p_dist: float = float(ctx.get("weight_pursuit_dist", 0.0))
+  var w_p_close: float = float(ctx.get("weight_pursuit_closing", 0.0))
+  var w_p_sq: float = float(ctx.get("weight_pursuit_dist_sq", 0.0))
+  var strat_pts_raw: Variant = ctx.get("aware_obstacle_samples", PackedVector2Array())
+  var strat_pts := PackedVector2Array()
+  if strat_pts_raw is PackedVector2Array:
+    strat_pts = strat_pts_raw as PackedVector2Array
+  elif typeof(strat_pts_raw) == TYPE_ARRAY:
+    for x in strat_pts_raw as Array:
+      if typeof(x) == TYPE_VECTOR2:
+        strat_pts.append(x as Vector2)
+  var strat_threat: Vector2 = ctx.get("strategic_threat_pos", Vector2.ZERO)
+  var strat_prey_pin: Vector2 = ctx.get("strategic_prey_pin_pos", Vector2.ZERO)
+  var w_shield: float = float(ctx.get("weight_obstacle_shield_prey", 0.0))
+  var w_pin: float = float(ctx.get("weight_obstacle_pin_predator", 0.0))
+
+  var chaos_amp := float(ctx.get("motor_intent_cost_chaos", 0.0))
+  var chaos_rng: RandomNumberGenerator = null
+  if chaos_amp > 1e-10:
+    chaos_rng = RandomNumberGenerator.new()
+    var s_seed := int(ctx.get("motor_chaos_seed", 0))
+    if s_seed == 0:
+      s_seed = int(hash(creature_pos))
+    chaos_rng.seed = maxi(1, absi(s_seed))
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
@@ -376,19 +407,39 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       imminent_r,
       unready_food,
       w_avoid_unready,
+      pursuit_targets,
+      w_p_dist,
+      w_p_close,
+      w_p_sq,
+      strat_pts,
+      strat_threat,
+      strat_prey_pin,
+      w_shield,
+      w_pin,
     )
-    if w_idle_explore > 0.0 and food_targets.is_empty() and not mob_threat_high:
+    if w_idle_explore > 0.0 and allow_explore:
       if d.length_squared() < 1e-14:
         cost += w_idle_explore
-    if w_turn_explore > 0.0 and food_targets.is_empty() and not mob_threat_high and d.length_squared() > 1e-14:
+    if w_turn_explore > 0.0 and allow_explore and d.length_squared() > 1e-14:
       var lm := facing_v
       if lm.length_squared() > 1e-12:
         var u := lm.normalized()
         cost -= w_turn_explore * maxf(0.0, d.dot(u))
-    if w_trail_rep > 0.0 and food_targets.is_empty() and not mob_threat_high:
+    var expand_gate_stuck := bool(ctx.get("motor_stuck_allow_expand_hint", false))
+    var expand_allow := allow_explore or expand_gate_stuck
+    if w_expand_hint > 0.0 and expand_allow and d.length_squared() > 1e-14:
+      if typeof(expand_hint_raw) == TYPE_VECTOR2:
+        var zh := expand_hint_raw as Vector2
+        if zh.length_squared() > 1e-12:
+          if (not mob_threat_high) or expand_gate_stuck:
+            var uh := zh.normalized()
+            cost -= w_expand_hint * maxf(0.0, d.dot(uh))
+    if w_trail_rep > 0.0 and allow_explore:
       cost += exploration_trail_repulsion_cost(
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
+    if chaos_rng != null:
+      cost += chaos_rng.randf_range(-chaos_amp, chaos_amp)
     if cost < best_cost:
       best_cost = cost
       best_d = d
@@ -538,6 +589,15 @@ static func cost_at_prediction(
   imminent_mob_radius: float = 0.0,
   unready_food_targets: Array = [],
   weight_avoid_unready_food: float = 0.0,
+  pursuit_targets: Array = [],
+  weight_pursuit_dist: float = 0.0,
+  weight_pursuit_closing: float = 0.0,
+  weight_pursuit_dist_sq: float = 0.0,
+  aware_obstacle_samples: PackedVector2Array = PackedVector2Array(),
+  strategic_threat_pos: Vector2 = Vector2.ZERO,
+  strategic_prey_pin_pos: Vector2 = Vector2.ZERO,
+  weight_obstacle_shield_prey: float = 0.0,
+  weight_obstacle_pin_predator: float = 0.0,
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -578,6 +638,36 @@ static func cost_at_prediction(
       predicted, half, mob_pos, mob_vel, w_dist, w_close, weight_dist_sq, eps, c_scale
     )
 
+  for item in pursuit_targets:
+    if typeof(item) != TYPE_DICTIONARY:
+      continue
+    var ppos: Vector2 = item.get("position", Vector2.ZERO)
+    var pvel: Vector2 = item.get("velocity", Vector2.ZERO)
+    var p_scale: float = float(item.get("cost_scale", 1.0))
+    if awareness_radius > 0.0:
+      var gd2 := awareness_gate_distance(creature_center_aware, gate_half, ppos)
+      var eff_p := effective_awareness_reach(
+        creature_center_aware,
+        ppos,
+        awareness_radius,
+        awareness_cone_extra,
+        awareness_cone_cos_threshold,
+        creature_facing,
+      )
+      if gd2 > eff_p:
+        continue
+    total -= _add_mob_cost_terms(
+      predicted,
+      half,
+      ppos,
+      pvel,
+      weight_pursuit_dist,
+      weight_pursuit_closing,
+      weight_pursuit_dist_sq,
+      eps,
+      p_scale,
+    )
+
   if weight_obstacle > 0.0:
     for ob in static_obstacles:
       if typeof(ob) != TYPE_DICTIONARY:
@@ -613,6 +703,15 @@ static func cost_at_prediction(
   total += unready_food_avoid_cost_at_prediction(
     predicted, half, unready_food_targets, weight_avoid_unready_food, eps
   )
+  total += _ObsStrat.strategic_obstacle_cost(
+    predicted,
+    strategic_threat_pos,
+    strategic_prey_pin_pos,
+    aware_obstacle_samples,
+    weight_obstacle_shield_prey,
+    weight_obstacle_pin_predator,
+    eps,
+  )
   return total
 
 
@@ -647,6 +746,15 @@ static func cost_at_prediction_aware(
   imminent_mob_radius: float = 0.0,
   unready_food_targets: Array = [],
   weight_avoid_unready_food: float = 0.0,
+  pursuit_targets: Array = [],
+  weight_pursuit_dist: float = 0.0,
+  weight_pursuit_closing: float = 0.0,
+  weight_pursuit_dist_sq: float = 0.0,
+  aware_obstacle_samples: PackedVector2Array = PackedVector2Array(),
+  strategic_threat_pos: Vector2 = Vector2.ZERO,
+  strategic_prey_pin_pos: Vector2 = Vector2.ZERO,
+  weight_obstacle_shield_prey: float = 0.0,
+  weight_obstacle_pin_predator: float = 0.0,
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -678,4 +786,13 @@ static func cost_at_prediction_aware(
     imminent_mob_radius,
     unready_food_targets,
     weight_avoid_unready_food,
+    pursuit_targets,
+    weight_pursuit_dist,
+    weight_pursuit_closing,
+    weight_pursuit_dist_sq,
+    aware_obstacle_samples,
+    strategic_threat_pos,
+    strategic_prey_pin_pos,
+    weight_obstacle_shield_prey,
+    weight_obstacle_pin_predator,
   )

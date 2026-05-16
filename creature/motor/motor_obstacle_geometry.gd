@@ -1,0 +1,161 @@
+## Builds static obstacle AABBs (repulsion channel) and outline sample points (strategic shield/pin channel).
+## Rock field uses group [code]obstacles[/code]; **shrub footprints** ([code]food_plants[/code] subtree [StaticBody2D]) merge in separately so predators avoid bushes without putting shrubs on the global obstacle group ([code]bush_food.gd[/code] grazing vs repulsion tuning in [method AiDriver._filter_obstacle_geom_for_foraging_prey]).
+extends Object
+
+
+## Transforms all corners of [param local_rect] into world space via [param xf].
+static func _rect_corners_world(xf: Transform2D, local_rect: Rect2) -> PackedVector2Array:
+  var mn := local_rect.position
+  var mx := local_rect.position + local_rect.size
+  var out := PackedVector2Array()
+  out.append(xf * Vector2(mn.x, mn.y))
+  out.append(xf * Vector2(mx.x, mn.y))
+  out.append(xf * Vector2(mx.x, mx.y))
+  out.append(xf * Vector2(mn.x, mx.y))
+  return out
+
+
+## Axis-aligned half extents and center enclosing [param corners] (nonempty).
+static func _aabb_from_corners(corners: PackedVector2Array) -> Dictionary:
+  var mn := corners[0]
+  var mx := corners[0]
+  for i in range(1, corners.size()):
+    var q := corners[i]
+    mn.x = minf(mn.x, q.x)
+    mn.y = minf(mn.y, q.y)
+    mx.x = maxf(mx.x, q.x)
+    mx.y = maxf(mx.y, q.y)
+  var center := (mn + mx) * 0.5
+  var half := (mx - mn) * 0.5
+  return {"position": center, "half_extents": half}
+
+
+## Extra capsule rim samples beyond [method CapsuleShape2D.get_rect] corners for flank scoring.
+static func _capsule_rim_world(cs: CollisionShape2D, cap: CapsuleShape2D) -> PackedVector2Array:
+  var xf := cs.global_transform
+  var out := PackedVector2Array()
+  var rr := cap.get_rect()
+  var corners := _rect_corners_world(xf, rr)
+  out.append_array(corners)
+  var seg_top := xf * Vector2(rr.position.x + rr.size.x * 0.5, rr.position.y)
+  var seg_bot := xf * Vector2(rr.position.x + rr.size.x * 0.5, rr.position.y + rr.size.y)
+  var r := maxf(cap.radius, 1.0)
+  for k in range(8):
+    var ang := PI * float(k) / 4.0
+    var off := xf.basis_xform(Vector2(cos(ang), sin(ang)) * r * 0.65)
+    out.append(seg_top + off)
+    out.append(seg_bot + off)
+  return out
+
+
+## Appends geometry from one collision shape ([param cs]) into [param out_aabbs] / [param sample_points].
+static func _append_collision_shape_geom(
+  cs: CollisionShape2D, out_aabbs: Array, sample_points: PackedVector2Array
+) -> void:
+  var sh: Shape2D = cs.shape
+  if sh == null:
+    return
+  if sh is RectangleShape2D:
+    var rect_sh := sh as RectangleShape2D
+    var corners := _rect_corners_world(cs.global_transform, rect_sh.get_rect())
+    if corners.size() >= 4:
+      out_aabbs.append(_aabb_from_corners(corners))
+      for i in range(corners.size()):
+        sample_points.append(corners[i])
+  elif sh is CircleShape2D:
+    var circ := sh as CircleShape2D
+    var xf_circ := cs.global_transform
+    var rad := maxf(circ.radius, 1.0)
+    var rim_circ := PackedVector2Array()
+    for k in range(16):
+      var ang := TAU * float(k) / 16.0
+      rim_circ.append(xf_circ * (Vector2(cos(ang), sin(ang)) * rad))
+    if rim_circ.size() >= 8:
+      out_aabbs.append(_aabb_from_corners(rim_circ))
+      for i in range(rim_circ.size()):
+        sample_points.append(rim_circ[i])
+  elif sh is CapsuleShape2D:
+    var cap := sh as CapsuleShape2D
+    var rim := _capsule_rim_world(cs, cap)
+    if rim.size() >= 4:
+      out_aabbs.append(_aabb_from_corners(rim))
+      for i in range(rim.size()):
+        sample_points.append(rim[i])
+  elif sh is ConvexPolygonShape2D:
+    var poly := sh as ConvexPolygonShape2D
+    var xf := cs.global_transform
+    var gcorners := PackedVector2Array()
+    for pv in poly.points:
+      gcorners.append(xf * pv)
+    if gcorners.size() >= 3:
+      out_aabbs.append(_aabb_from_corners(gcorners))
+      for i in range(gcorners.size()):
+        sample_points.append(gcorners[i])
+
+
+## Accumulates collision shapes attached to one [StaticBody2D].
+static func append_static_body_shapes(
+  sb: StaticBody2D, out_aabbs: Array, sample_points: PackedVector2Array
+) -> void:
+  for child in sb.get_children():
+    if child is CollisionShape2D:
+      _append_collision_shape_geom(child as CollisionShape2D, out_aabbs, sample_points)
+
+
+## Nodes in group [code]obstacles[/code] ([StaticBody2D] roots as in obstacle_field scenes).
+static func collect_obstacle_group_statics(main: Node) -> Dictionary:
+  var aabbs: Array = []
+  var sample_points := PackedVector2Array()
+  if main == null:
+    return {"aabbs": aabbs, "sample_points": sample_points}
+  for n in main.get_tree().get_nodes_in_group(&"obstacles"):
+    if not n is StaticBody2D:
+      continue
+    append_static_body_shapes(n as StaticBody2D, aabbs, sample_points)
+  return {"aabbs": aabbs, "sample_points": sample_points}
+
+
+## Static blocking collision under each [code]food_plants[/code] shrub (solid + open blocker).
+static func collect_plant_blocker_statics(main: Node) -> Dictionary:
+  var aabbs: Array = []
+  var sample_points := PackedVector2Array()
+  if main == null:
+    return {"aabbs": aabbs, "sample_points": sample_points}
+  for bush in main.get_tree().get_nodes_in_group(&"food_plants"):
+    for ch in bush.get_children():
+      if ch is StaticBody2D:
+        append_static_body_shapes(ch as StaticBody2D, aabbs, sample_points)
+  return {"aabbs": aabbs, "sample_points": sample_points}
+
+
+static func merge_geometry_packs(a: Dictionary, b: Dictionary) -> Dictionary:
+  var aabbs_out: Array = (a["aabbs"] as Array).duplicate(true)
+  aabbs_out.append_array(b.get("aabbs", []) as Array)
+  var sp_a: PackedVector2Array = a.get("sample_points", PackedVector2Array()) as PackedVector2Array
+  var merged := sp_a.duplicate()
+  var sp_b: PackedVector2Array = b.get("sample_points", PackedVector2Array()) as PackedVector2Array
+  for i in range(sp_b.size()):
+    merged.append(sp_b[i])
+  return {"aabbs": aabbs_out, "sample_points": merged}
+
+
+## Rocks + shrub footprints for motor repulsion/strategic cues.
+static func collect_from_scene_tree(main: Node) -> Dictionary:
+  var rocks := collect_obstacle_group_statics(main)
+  var plants := collect_plant_blocker_statics(main)
+  return merge_geometry_packs(rocks, plants)
+
+
+## Drops obstacle samples farther than [param radius_px] from [param creature_center] ([code]<= 0[/code] keeps all).
+static func filter_samples_by_radius(
+  creature_center: Vector2, radius_px: float, samples: PackedVector2Array
+) -> PackedVector2Array:
+  if radius_px <= 0.0:
+    return samples
+  var r2 := radius_px * radius_px
+  var out := PackedVector2Array()
+  for i in range(samples.size()):
+    var p := samples[i]
+    if creature_center.distance_squared_to(p) <= r2:
+      out.append(p)
+  return out

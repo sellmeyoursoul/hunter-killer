@@ -1,0 +1,21 @@
+[gd_resource type="Resource" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://creature/definition/creature_definition.gd" id="1_def"]
+[ext_resource type="Script" path="res://creature/definition/locomotion_profile.gd" id="2_loco"]
+
+[sub_resource type="Resource" id="sub_loco"]
+script = ExtResource("2_loco")
+max_speed = 6.0
+acceleration = 24.0
+friction = 14.0
+
+[resource]
+script = ExtResource("1_def")
+species_id = &"rabbit_archetype"
+display_name = "Rabbit (archetype sample)"
+feeding_mode = 0
+caloric_needs = 10
+creature_size = 0.85
+collision_capsule_radius = 0.3
+collision_capsule_height = 1.0
+locomotion_profile = SubResource("sub_loco")

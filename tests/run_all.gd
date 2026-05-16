@@ -16,6 +16,17 @@ const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvBake := preload("res://environment/environment_grid_bake.gd")
 const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
+const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
+const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
+const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
+const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
+const _CreaturePerception3D := preload("res://creature/capabilities/creature_perception_3d.gd")
+const _CreatureRoot3D := preload("res://creature/creature_root_3d.gd")
+const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
+const _EXPANDING_CARDINAL_EXPLORE_SCR := preload("res://creature/motor/expanding_cardinal_explore.gd")
+const _CarnivorePursuit := preload("res://creature/motor/carnivore_pursuit.gd")
+const _MobScr := preload("res://mob.gd")
+const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 
 var _failures: int = 0
 
@@ -34,6 +45,8 @@ func _run_all() -> void:
   _test_perception_sampling()
   _test_perception_risk_hints()
   _test_cardinal_avoidance()
+  _test_obstacle_strategy_shield_pin()
+  _test_expanding_cardinal_explore()
   _test_food_seek_motor()
   _test_explore_idle_when_no_pickup()
   _test_explore_trail_repulsion_motor()
@@ -48,6 +61,17 @@ func _run_all() -> void:
   _test_obstacle_visual_tiers()
   _test_pack_resource_resolver()
   _test_hunger_calorie_clamp()
+  _test_calorie_drain_movement_formula()
+  _test_predator_prey_meal_clamp()
+  _test_creature_vitals_math_burn_and_clamp()
+  _test_creature_predation_math()
+  _test_diet_registry_defaults()
+  _test_creature_perception_3d_scale()
+  _test_creature_3d_template_scenes_load()
+  _test_playfield_clamp()
+  _test_carnivore_pursuit_intent()
+  _test_creature_diet_on_2d_bodies()
+  _test_ai_driver_creature_registry()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -103,6 +127,11 @@ func _test_merge_defaults_and_override() -> void:
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
   _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_radius", 0.0)), 1500.0), "default awareness_radius")
+  _assert(int(base["creature_motor"].get("expanding_explore_base_physics_ticks", -1)) == 36, "default expanding_explore_base_physics_ticks")
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_expanding_explore_hint", 0.0)), 0.12),
+    "default weight_expanding_explore_hint",
+  )
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_cone_extra", 0.0)), 3000.0), "default awareness_cone_extra")
   _assert(int(base["creature_motor"].get("awareness_memory_ticks", -1)) == 3, "default awareness_memory_ticks")
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_memory_weight", 0.0)), 0.35), "default awareness_memory_weight")
@@ -113,6 +142,19 @@ func _test_merge_defaults_and_override() -> void:
   _assert(
     is_equal_approx(float(base["creature_motor"].get("hunger_explore_urgency_power", 0.0)), 1.25),
     "default hunger_explore_urgency_power",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("calorie_baseline_drain_per_sec", 0.0)), 1.0),
+    "default calorie_baseline_drain_per_sec",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("calorie_cost_per_px_moved", 0.0)), 0.002),
+    "default calorie_cost_per_px_moved",
+  )
+  _assert(int(base["creature_motor"].get("predator_prey_meal_calories", -1)) == 5, "default predator_prey_meal_calories")
+  _assert(
+    int(base["creature_motor"].get("carnivore_explore_rotate_physics_ticks", -1)) == 36,
+    "default carnivore_explore_rotate_physics_ticks",
   )
   _assert(
     is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", 0.0)), 16.0),
@@ -157,6 +199,19 @@ func _test_merge_defaults_and_override() -> void:
   _assert(
     is_equal_approx(float(base["creature_motor"].get("weight_explore_trail_repulsion", 0.0)), 2.35),
     "default weight_explore_trail_repulsion",
+  )
+  _assert(bool(base["creature_motor"].get("motor_exploration_always_enabled", false)), "default motor_exploration_always_enabled")
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_pursuit_dist", 0.0)), 0.42),
+    "default weight_pursuit_dist",
+  )
+  _assert(
+    int(base["creature_motor"].get("intent_hold_ticks_predator", -1)) == 6,
+    "default intent_hold_ticks_predator",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_obstacle_shield_prey", 0.0)), 28.0),
+    "default weight_obstacle_shield_prey",
   )
 
 
@@ -350,6 +405,14 @@ func _test_cardinal_avoidance() -> void:
     if not (o_a[i] as Vector2).is_equal_approx(o_b[i] as Vector2):
       perm_diff = true
   _assert(perm_diff, "different tie_shuffle_seed permutes cardinals")
+
+  var chaos_ctx := base_ctx.duplicate(true)
+  chaos_ctx["motor_intent_cost_chaos"] = 80.0
+  chaos_ctx["motor_chaos_seed"] = 12345
+  chaos_ctx["shuffle_tie_break"] = false
+  var ch_pick: Vector2 = _Motor.pick_best_move_intent(chaos_ctx)
+  var ch_len := ch_pick.length()
+  _assert(ch_len < 1e-4 or absf(ch_len - 1.0) < 1e-4, "motor cost chaos yields idle or cardinal only")
 
   var left_open := {
     "creature_position": Vector2(20.0, 360.0),
@@ -638,6 +701,112 @@ func _test_cardinal_avoidance() -> void:
   )
   _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
 
+  ## Pursuit samples subtract mob-style cost (inverse distance toward prey).
+  var pred_c := Vector2(400.0, 300.0)
+  var pt: Array = [{"position": Vector2(430.0, 300.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}]
+  var c_np: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred_c,
+    [],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    pred_c,
+    5000.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+    false,
+    null,
+    0.0,
+    {},
+    [],
+    0.0,
+    [],
+    0.0,
+    [],
+    0.0,
+  )
+  var c_wp: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred_c,
+    [],
+    Vector2.ZERO,
+    Vector2(2000.0, 2000.0),
+    1.0,
+    0.0,
+    1e7,
+    12.0,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+    0.0,
+    pred_c,
+    5000.0,
+    0.0,
+    -2.0,
+    Vector2.RIGHT,
+    [],
+    0.0,
+    false,
+    null,
+    0.0,
+    {},
+    [],
+    0.0,
+    [],
+    0.0,
+    [],
+    0.0,
+    pt,
+    6.0,
+    1.0,
+    40.0,
+    PackedVector2Array(),
+    Vector2.ZERO,
+    Vector2.ZERO,
+    0.0,
+    0.0,
+  )
+  _assert(c_wp < c_np - 1e-6, "pursuit targets reduce cost near prey")
+
+
+func _test_obstacle_strategy_shield_pin() -> void:
+  var pts := PackedVector2Array([Vector2(410.0, 300.0)])
+  var shield := _ObstacleStrat.strategic_obstacle_cost(
+    Vector2(400.0, 300.0), Vector2(600.0, 300.0), Vector2.ZERO, pts, 40.0, 0.0, 6.0
+  )
+  _assert(shield < 0.0, "prey shield term rewards obstacle between self and threat")
+  var pin := _ObstacleStrat.strategic_obstacle_cost(
+    Vector2(200.0, 300.0), Vector2.ZERO, Vector2(350.0, 300.0), pts, 0.0, 35.0, 6.0
+  )
+  _assert(pin < 0.0, "predator pin term rewards obstacles along prey vector")
+
+
+func _test_expanding_cardinal_explore() -> void:
+  var X := _EXPANDING_CARDINAL_EXPLORE_SCR.Explore
+  var L0: Dictionary = X.locate(36, 0)
+  _assert(int(L0["segment_index"]) == 0 and int(L0["cycle_index"]) == 0, "expanding explore t=0 first leg")
+  var L35: Dictionary = X.locate(36, 35)
+  _assert(int(L35["segment_index"]) == 0, "expanding explore still leg 1 before rotate")
+  var L36: Dictionary = X.locate(36, 36)
+  _assert(int(L36["segment_index"]) == 1, "expanding explore rotate after n ticks")
+  var L143: Dictionary = X.locate(36, 143)
+  _assert(int(L143["segment_index"]) == 3 and int(L143["cycle_index"]) == 0, "expanding explore fourth leg cycle 0")
+  var L144: Dictionary = X.locate(36, 144)
+  _assert(int(L144["cycle_index"]) == 1 and int(L144["segment_index"]) == 0, "expanding explore cycle 1 start")
+  _assert(int(L144["segment_ticks"]) == 72, "expanding explore doubled dwell after fourth rotation")
+  var c0: Vector2 = X.pick_cardinal(36, 0, 0)
+  var c1: Vector2 = X.pick_cardinal(36, 0, 1)
+  _assert(c0.is_equal_approx(Vector2.RIGHT) and c1.is_equal_approx(Vector2.DOWN), "phase_seed rotates cardinal ordering")
+
 
 func _test_food_seek_motor() -> void:
   var food := [Vector2(400.0, 200.0)]
@@ -840,6 +1009,135 @@ func _test_hunger_calorie_clamp() -> void:
   _assert(is_equal_approx(next, 10.0), "hunger burst clamps at caloric_needs")
   _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub.tscn"), "solid_shrub scene exists")
   _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub.tscn"), "open_shrub scene exists")
+
+
+func _test_calorie_drain_movement_formula() -> void:
+  ## Same formula as [code]Player._apply_calorie_drain_and_starvation[/code] / [code]Mob._apply_calorie_burn[/code].
+  var baseline := 1.0
+  var per_px := 0.002
+  var delta := 1.0
+  var speed_px_s := 100.0
+  var burn := baseline * delta + per_px * speed_px_s * delta
+  _assert(is_equal_approx(burn, 1.2), "1s at 100px/s matches baseline + per-px movement")
+
+
+func _test_predator_prey_meal_clamp() -> void:
+  var base := _Merge.default_root()
+  var meal := int(base["creature_motor"].get("predator_prey_meal_calories", 5))
+  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  _assert(mob_scene != null, "mob.tscn loads")
+  var mob: RigidBody2D = mob_scene.instantiate() as RigidBody2D
+  _assert(mob != null, "mob instantiates")
+  mob.set("caloric_needs", 10)
+  mob.set("current_calories", 8.0)
+  mob.call("add_calories_from_prey", meal)
+  _assert(is_equal_approx(float(mob.get("current_calories")), 10.0), "predator meal clamps at caloric_needs")
+  mob.queue_free()
+
+
+func _test_creature_vitals_math_burn_and_clamp() -> void:
+  var burn: float = _CreatureVitalsMath.burn_amount(1.0, 0.002, 100.0, 1.0, 1.0, 1.0)
+  _assert(is_equal_approx(burn, 1.2), "CreatureVitalsMath burn matches legacy 2D formula")
+  var after: float = _CreatureVitalsMath.add_food_clamped(9.0, 5, 10)
+  _assert(is_equal_approx(after, 10.0), "add_food_clamped respects cap")
+  var burned_def: float = _CreatureVitalsMath.burn_amount(1.0, 0.002, 0.0, 1.0, 0.5, 2.0)
+  _assert(is_equal_approx(burned_def, 0.5), "species multipliers scale burn")
+
+
+func _test_creature_predation_math() -> void:
+  var next: float = _CreaturePredationMath.apply_meal_to_predator(8.0, 10, 5)
+  _assert(is_equal_approx(next, 10.0), "CreaturePredationMath clamps meal at cap")
+
+
+func _test_diet_registry_defaults() -> void:
+  var h = _DietRegistry.default_food_intake_policy(_CreatureDefinition.FeedingMode.HERBIVORE)
+  _assert(h.plant_groups.has(&"food_plants"), "herbivore policy includes food_plants")
+  _assert(h.prey_groups.is_empty(), "herbivore policy has no prey by default")
+  var c = _DietRegistry.default_food_intake_policy(_CreatureDefinition.FeedingMode.CARNIVORE)
+  _assert(c.prey_groups.size() >= 1, "carnivore policy has prey groups")
+  var o = _DietRegistry.default_food_intake_policy(_CreatureDefinition.FeedingMode.OMNIVORE)
+  _assert(not o.plant_groups.is_empty() and not o.prey_groups.is_empty(), "omnivore merges plant and prey")
+
+
+func _test_creature_perception_3d_scale() -> void:
+  var def = _CreatureDefinition.new()
+  def.perception_radius_scale = 1.5
+  def.awareness_cone_half_angle_scale = 0.8
+  var r: float = _CreaturePerception3D.effective_awareness_radius(1000.0, def)
+  _assert(is_equal_approx(r, 1500.0), "perception radius scales")
+  var ang: float = _CreaturePerception3D.effective_cone_half_angle_deg(45.0, def)
+  _assert(is_equal_approx(ang, 36.0), "cone half-angle scales")
+  var r0: float = _CreaturePerception3D.effective_awareness_radius(200.0, null)
+  _assert(is_equal_approx(r0, 200.0), "null definition leaves radius unchanged")
+
+
+func _test_playfield_clamp() -> void:
+  var half := Vector2(10.0, 20.0)
+  var screen := Vector2(200.0, 100.0)
+  var clamped := _PlayfieldClamp.clamp_position(Vector2(-5.0, 50.0), half, screen)
+  _assert(clamped.x >= half.x and clamped.y >= half.y, "playfield clamp min edges")
+  _assert(clamped.x <= screen.x - half.x, "playfield clamp max x")
+
+
+func _test_carnivore_pursuit_intent() -> void:
+  var ctx := {
+    "creature_position": Vector2.ZERO,
+    "prey_targets": [Vector2(100.0, 0.0)],
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(500.0, 500.0),
+    "creature_half_extents": Vector2(10.0, 10.0),
+  }
+  var intent: Vector2 = _CarnivorePursuit.pick_pursuit_intent(ctx)
+  _assert(intent.is_equal_approx(Vector2.RIGHT), "pursuit intent toward prey on +X")
+
+
+func _test_creature_diet_on_2d_bodies() -> void:
+  var p_scene: PackedScene = load("res://player.tscn") as PackedScene
+  var m_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  _assert(p_scene != null and m_scene != null, "player and mob scenes load")
+  var p: Node = p_scene.instantiate()
+  var m: Node = m_scene.instantiate()
+  root.add_child(p)
+  root.add_child(m)
+  _assert(int(p.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.HERBIVORE, "player default herbivore")
+  _assert(int(m.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE, "mob default carnivore")
+  _assert(p.is_in_group(&"herbivores") and p.is_in_group(&"prey"), "player prey groups")
+  p.queue_free()
+  m.queue_free()
+
+
+func _test_ai_driver_creature_registry() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  var d: Node = AD.new()
+  root.add_child(d)
+  var n := Node2D.new()
+  d.call("register_creature", n)
+  d.call("register_creature", n)
+  d.call("set_duel_round_active", true)
+  _assert(bool(d.get("_duel_round_active")), "duel round flag")
+  _assert(bool(d.call("is_duel_round_active")), "is_duel_round_active mirrors flag")
+  d.call("clear_creature_registry")
+  _assert((d.get("_registered_creatures") as Array).is_empty(), "registry cleared")
+  d.call("set_duel_round_active", false)
+  n.queue_free()
+  d.free()
+
+
+func _test_creature_3d_template_scenes_load() -> void:
+  _assert(ResourceLoader.exists("res://creature/templates/creature_herbivore_kinematic_3d.tscn"), "herbivore 3d template exists")
+  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_rigid_3d.tscn"), "carnivore 3d template exists")
+  var herb := load("res://creature/templates/creature_herbivore_kinematic_3d.tscn") as PackedScene
+  var carn := load("res://creature/templates/creature_carnivore_rigid_3d.tscn") as PackedScene
+  var root_h := herb.instantiate() as Node
+  var root_c := carn.instantiate() as Node
+  _assert(root_h.get_script() == _CreatureRoot3D, "herbivore root uses CreatureRoot3D script")
+  _assert(root_c.get_script() == _CreatureRoot3D, "carnivore root uses CreatureRoot3D script")
+  root_h.queue_free()
+  root_c.queue_free()
+  var rabbit: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
+  _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
+  _assert(rabbit.get("species_id") == &"rabbit_archetype", "rabbit archetype id")
+  _assert(rabbit.get("locomotion_profile") != null, "rabbit has locomotion profile")
 
 
 func _test_obstacle_visual_tiers() -> void:
@@ -1253,6 +1551,41 @@ func _test_ai_driver_helpers() -> void:
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
   d.free()
   _test_food_plant_awareness_gating(AD)
+  _test_carnivore_prey_awareness_gating(AD)
+
+
+func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
+  ## Carnivore ENGINE prey list uses the same radius/cone gate as herbivore-vs-predator mob sampling.
+  var main := Node2D.new()
+  var hunter_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  var prey_scene_ps: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(hunter_scene != null and prey_scene_ps != null, "mob and player scenes load for prey gate")
+  var hunter: Node = hunter_scene.instantiate()
+  var prey: Node = prey_scene_ps.instantiate()
+  root.add_child(main)
+  main.add_child(hunter)
+  main.add_child(prey)
+  hunter.global_position = Vector2(320.0, 240.0)
+  prey.global_position = hunter.global_position + Vector2(80.0, 0.0)
+  hunter.set("last_move_direction", Vector2.RIGHT)
+  prey.show()
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var motor_gate := {
+    "awareness_radius": 120.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 45.0,
+  }
+  var pos_h: Vector2 = hunter.global_position
+  var he := Vector2(10.0, 10.0)
+  var near_arr: Array = driver.call("_collect_prey_positions", hunter, motor_gate, pos_h, he)
+  _assert(near_arr.size() == 1, "prey inside carnivore awareness radius is tracked")
+  prey.global_position = hunter.global_position + Vector2(-260.0, 0.0)
+  var far_arr: Array = driver.call("_collect_prey_positions", hunter, motor_gate, pos_h, he)
+  _assert(far_arr.is_empty(), "prey outside carnivore awareness radius is omitted")
+  driver.queue_free()
+  main.queue_free()
 
 
 func _test_food_plant_awareness_gating(ad_script: Script) -> void:

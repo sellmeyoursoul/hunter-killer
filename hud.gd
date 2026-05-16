@@ -1,20 +1,20 @@
 extends CanvasLayer
 
-## Frames between HUD reads of [code]Player[/code] vitals (hunger POC; display-only).
 @export var vitals_poll_frames: int = 10
 
-# Notifies 'Main' node that the button has been pressed
 signal start_game
 signal ai_player_game
 signal end_ai_game
 
-
 var _vitals_poll: int = 0
-var _player: Node = null
+var _herbivore: Node = null
+var _carnivore: Node = null
+var _carnivore_score_override: int = -1
 
 
 func _ai_driver() -> Node:
 	return get_node("/root/AiDriver")
+
 
 func show_message(text):
 	$Message.text = text
@@ -22,40 +22,38 @@ func show_message(text):
 	$MessageTimer.start()
 
 
-## Hides the transient HUD message and stops its timer (e.g. after async AI bootstrap).
 func dismiss_message() -> void:
 	$MessageTimer.stop()
 	$Message.hide()
 
-## Shows game-over messaging then restores non-playing controls.
-## Params:
-## - none
-## Returns / side effects:
-## - Awaits message timer and toggles HUD buttons.
-## Usage:
-## - Called by Main.game_over().
+
 func show_game_over():
 	show_message("Game Over")
-	# Wait until the MessageTImer has counted down.
 	await $MessageTimer.timeout
-	
 	$Message.text = "Dodge the Creeps!"
 	$Message.show()
-	# Make a one-shot timer and wait for it to finish.
 	$StartButton.show()
 	$AIPlayerButton.show()
 	$EndAIButton.hide()
-	
+
+
 func update_score(score):
 	$ScoreLabel.text = str(score)
-	
-## Handles human Start button presses while respecting AiDriver suppression rules.
-## Params:
-## - none
-## Returns / side effects:
-## - Emits start_game only when human Start is allowed.
-## Usage:
-## - Connected from StartButton.pressed in hud.tscn.
+
+
+## Clears end-of-round carnivore score display override.
+func reset_vitals_display() -> void:
+	_carnivore_score_override = -1
+	_herbivore = null
+	_carnivore = null
+
+
+## Shows herbivore calories at catch on the carnivore HUD line (CREATURE_GOALS end score).
+func set_carnivore_score_display(prey_calories: int) -> void:
+	_carnivore_score_override = prey_calories
+	_refresh_vitals_labels()
+
+
 func _on_start_button_pressed():
 	if _ai_driver().is_human_start_suppressed():
 		return
@@ -63,85 +61,84 @@ func _on_start_button_pressed():
 	start_game.emit()
 
 
-## Requests scripted CPU/engine control for the next round (no inference; see [method AiDriver.begin_engine_player_round]).
-## Params:
-## - none
-## Returns / side effects:
-## - Emits ai_player_game when AiDriver accepts arming.
-## Usage:
-## - Called from the "AI Player" button press signal.
 func _on_ai_player_button_pressed() -> void:
 	ai_player_game.emit()
 
 
-## Ends an active AI round early via Main.game_over().
-## Params:
-## - none
-## Returns / side effects:
-## - Emits end_ai_game for Main to process.
-## Usage:
-## - Called from the "End AI" button press signal.
 func _on_end_ai_button_pressed() -> void:
 	end_ai_game.emit()
-	
+
+
 func _on_message_timer_timeout():
 	$Message.hide()
 
 
-## Updates HUD controls according to AiDriver session state.
-## Params:
-## - state: AiDriver.State enum value encoded as int.
-## Returns / side effects:
-## - Shows/hides Start, AI Player, and End AI buttons.
-## Usage:
-## - Main forwards AiDriver.ai_session_state_changed(state).
 func set_ai_session_state(state: int) -> void:
 	match state:
-		0: # IDLE
+		0:
 			$StartButton.show()
 			$AIPlayerButton.show()
 			$EndAIButton.hide()
 			$EndAIButton.text = "End AI"
-		1: # ARMED
+		1:
 			$StartButton.show()
 			$AIPlayerButton.hide()
 			$EndAIButton.show()
 			$EndAIButton.text = "Cancel"
-		2: # PLAYING
+		2:
 			$StartButton.hide()
 			$AIPlayerButton.hide()
 			$EndAIButton.show()
 			$EndAIButton.text = "End AI"
-		3: # WAITING
+		3:
 			$StartButton.show()
 			$AIPlayerButton.show()
 			$EndAIButton.hide()
 			$EndAIButton.text = "End AI"
 
-# Called when the node enters the scene tree for the first time.
-func _ready() -> void:
-	pass # Replace with function body.
+
+func _resolve_duel_creatures() -> void:
+	var m := get_tree().current_scene
+	if m == null:
+		return
+	if _herbivore == null or not is_instance_valid(_herbivore):
+		_herbivore = m.get_node_or_null("Player")
+	var mobs := get_tree().get_nodes_in_group(&"mobs")
+	if mobs.size() >= 1:
+		_carnivore = mobs[0]
 
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
+func _format_vitals_line(role: String, cur_i: int, mx_i: int) -> String:
+	return "%s %d / %d" % [role, cur_i, mx_i]
+
+
+func _refresh_vitals_labels() -> void:
+	_resolve_duel_creatures()
+	if _herbivore != null:
+		var mx_h: Variant = _herbivore.get("caloric_needs")
+		var cur_h: Variant = _herbivore.get("current_calories")
+		if (typeof(mx_h) == TYPE_INT or typeof(mx_h) == TYPE_FLOAT) and (
+			typeof(cur_h) == TYPE_FLOAT or typeof(cur_h) == TYPE_INT
+		):
+			var mx_i := int(mx_h)
+			var cur_f := clampf(float(cur_h), 0.0, float(mx_i))
+			$HerbivoreCaloriesLabel.text = _format_vitals_line("Herbivore", int(round(cur_f)), mx_i)
+	if _carnivore != null:
+		var mx_c: Variant = _carnivore.get("caloric_needs")
+		var mx_ci := int(mx_c) if typeof(mx_c) == TYPE_INT or typeof(mx_c) == TYPE_FLOAT else 10
+		var cur_ci := _carnivore_score_override
+		if cur_ci < 0:
+			var cur_c: Variant = _carnivore.get("current_calories")
+			if typeof(cur_c) == TYPE_FLOAT or typeof(cur_c) == TYPE_INT:
+				cur_ci = int(round(clampf(float(cur_c), 0.0, float(mx_ci))))
+			else:
+				cur_ci = 0
+		$CarnivoreCaloriesLabel.text = _format_vitals_line("Carnivore", cur_ci, mx_ci)
+
+
 func _process(_delta: float) -> void:
 	_vitals_poll += 1
 	if _vitals_poll < vitals_poll_frames:
 		return
 	_vitals_poll = 0
-	if _player == null:
-		var m := get_tree().current_scene
-		if m != null:
-			_player = m.get_node_or_null("Player")
-	if _player == null:
-		return
-	var mx: Variant = _player.get("caloric_needs")
-	var cur: Variant = _player.get("current_calories")
-	if typeof(mx) != TYPE_INT and typeof(mx) != TYPE_FLOAT:
-		return
-	if typeof(cur) != TYPE_FLOAT and typeof(cur) != TYPE_INT:
-		return
-	var mx_i := int(mx)
-	var cur_f := clampf(float(cur), 0.0, float(mx_i))
-	var cur_i := int(round(cur_f))
-	$CaloriesLabel.text = "%d / %d" % [cur_i, mx_i]
+	_refresh_vitals_labels()

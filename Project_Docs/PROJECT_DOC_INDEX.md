@@ -55,7 +55,10 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
 | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
-| [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; food-memory draft in §9. |
+| [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; memory → [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
+| [Draft_Features/CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md) | **3D creature stack:** [CreatureDefinition](res://creature/definition/creature_definition.gd), capabilities, templates, AI intent bridge. |
+| [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Creature memory** (working → definitive): goal-aligned beliefs (food, danger, mates, shelter); diet archetypes; **§3** prerequisites — promote when contract-ready. |
+| [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) | **Unified motor refactor:** `creature_motor` in `assets/creatures/*/pack_resources.json`, single intent path, motivation tree (**Don’t die** → avoid hostiles / find food / mate stub / preserve calories), trait mapping; ported from CREATURE_MEMORY for beliefs alignment. |
 | [Draft_Features/PLANT_ECOLOGY_PLAN.md](Draft_Features/PLANT_ECOLOGY_PLAN.md) | Long-term plant ecology. |
 | [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | Plants / food index (active design; shipped slice archived). |
 | [Draft_Features/REPO_LAYOUT_PLAN.md](Draft_Features/REPO_LAYOUT_PLAN.md) | `res://` layout draft (not authoritative). |
@@ -70,6 +73,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 | File | Notes |
 |------|-------|
+| [Definitive_Features/CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md) | **2D creature movement inventory:** cardinal motor pipeline, config keys, AiDriver tools, carnivore vs herbivore forks (refactor anchor). |
 | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Env catalog; **§6** = **2D layer/mask** (`project.godot`); **§7** acceptance checklist. |
 
 ---
@@ -82,6 +86,8 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 |------|-------|
 | [Completed_Features/AI_INSTRUCTIONS_PLAN.md](Completed_Features/AI_INSTRUCTIONS_PLAN.md) | Archived rules refactor. |
 | [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see `.cursor/rules/focus/asset_management.md`. |
+| [Completed_Features/CREATURE_GOALS.md](Completed_Features/CREATURE_GOALS.md) | **Archived:** v1 Herbivore vs Carnivore duel (opposite spawns, dual HUD, N-creature AiDriver, manual playtest log). Snapshot — drift expected. |
+| [Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md](Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md) | Manual win/cause rows for CREATURE_GOALS balance tuning (companion to archived spec). |
 | [Completed_Features/DtC_AI_INT_PLAN.md](Completed_Features/DtC_AI_INT_PLAN.md) | Dodge-the-Creeps AI integration archive. |
 | [Completed_Features/EARLY_SPEC_DOC](Completed_Features/EARLY_SPEC_DOC) | Pre-split World Builder scratch; extracted into child plans — **reference only**. |
 | [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md) | Fork / mirror workflow (historical policy). |

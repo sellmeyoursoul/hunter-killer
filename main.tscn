@@ -88,8 +88,7 @@ parameters/looping = true
 [node name="DeathSound" type="AudioStreamPlayer" parent="." unique_id=517798214]
 stream = ExtResource("6_7mycd")
 
-[connection signal="timeout" from="MobTimer" to="." method="_on_mob_timer_timeout"]
 [connection signal="timeout" from="ScoreTimer" to="." method="_on_score_timer_timeout"]
 [connection signal="timeout" from="StartTimer" to="." method="_on_start_timer_timeout"]
-[connection signal="hit" from="Player" to="." method="game_over"]
+[connection signal="hit" from="Player" to="." method="_on_player_hit"]
 [connection signal="start_game" from="HUD" to="." method="new_game"]

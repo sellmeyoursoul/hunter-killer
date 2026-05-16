@@ -37,7 +37,7 @@
 ### Must have
 
 - **Hunger / calories** — Creature **`current_calories`** bounded by **`caloric_needs`**; **time-based** passive loss (baseline rate **tunable** in play; see [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md) §3 for current numbers). **Not** “drain only while moving” as the long-term baseline.
-- **Action cost (future)** — Additional calorie burn for **actions** (e.g. **running**, **fighting**) once those systems exist; rates TBD. This doc defers details to creature / combat plans when implemented.
+- **Action cost (future)** — Additional calorie burn for **actions** (e.g. **locomotion** / distance, **running**, **fighting**) per [CREATURE_MEMORY.md](CREATURE_MEMORY.md) **§3** (movement-based costs **before** food-memory expansion); full rates TBD in implementing phase.
 - **Food plants** — Player can gain calories from authored plant instances under **`res://assets/plants/`**; starvation can end the round per HUNGER spec.
 - **HUD** — Readable calorie / hunger feedback (polling / layout per HUNGER).
 

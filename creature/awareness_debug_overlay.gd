@@ -1,5 +1,6 @@
 extends Node2D
-## Runtime debug draw for scripted motor awareness (base radius, forward cone extra band, gated live + ghost mob samples).
+## Runtime debug draw for scripted motor awareness (base radius, forward cone extra band).
+## Under Player: gated live + ghost mob samples ([method AiDriver.get_debug_motor_mobs_snapshot]). Under Mob: prey positions inside carnivore reach ([method AiDriver.get_debug_carnivore_prey_snapshot]).
 ## Enable via Project Settings [code]hunter_killer_debug/draw_awareness[/code], or press **F9** in debug builds ([code]OS.is_debug_build()[/code]).
 
 const _PLAYING_STATE: int = 2  # Matches [enum AiDriver.State.PLAYING] on the autoload script.
@@ -39,11 +40,25 @@ func _overlay_enabled() -> bool:
   return via_settings or (OS.is_debug_build() and _dev_toggle)
 
 
+## Params:
+## - ad: AiDriver autoload node (may be null).
+## Returns:
+## - [code]true[/code] during LLM [enum AiDriver.State.PLAYING] or active scripted duel ([method AiDriver.is_duel_round_active]).
+func _awareness_debug_allowed(ad: Node) -> bool:
+  if ad == null:
+    return false
+  if ad.get_state() == _PLAYING_STATE:
+    return true
+  if ad.has_method(&"is_duel_round_active") and bool(ad.call(&"is_duel_round_active")):
+    return true
+  return false
+
+
 func _draw() -> void:
   if not _overlay_enabled():
     return
   var ad := get_node_or_null("/root/AiDriver")
-  if ad == null or ad.get_state() != _PLAYING_STATE:
+  if not _awareness_debug_allowed(ad):
     return
   var motor: Dictionary = GameConfig.get_creature_motor_params()
   var r0 := float(motor.get("awareness_radius", 0.0))
@@ -83,6 +98,15 @@ func _draw() -> void:
       2.0,
     )
 
+  var carn_overlay := par != null and par.is_in_group(&"mobs")
+  if carn_overlay:
+    for wp in ad.get_debug_carnivore_prey_snapshot(par as PhysicsBody2D):
+      if typeof(wp) != TYPE_VECTOR2:
+        continue
+      var world_p := wp as Vector2
+      draw_circle(to_local(world_p), 7.0, Color(0.35, 1.0, 0.45, 0.92))
+    return
+
   for item in ad.get_debug_motor_mobs_snapshot():
     if typeof(item) != TYPE_DICTIONARY:
       continue
@@ -90,10 +114,10 @@ func _draw() -> void:
     var src: String = str(d.get("_motor_debug_source", ""))
     if src != "gated" and src != "ghost":
       continue
-    var wp: Variant = d.get("position", null)
-    if typeof(wp) != TYPE_VECTOR2:
+    var wp2: Variant = d.get("position", null)
+    if typeof(wp2) != TYPE_VECTOR2:
       continue
-    var world_p := wp as Vector2
-    var lp := to_local(world_p)
+    var world_p2 := wp2 as Vector2
+    var lp := to_local(world_p2)
     var col := Color(1.0, 0.52, 0.08, 0.92) if src == "gated" else Color(0.88, 0.22, 1.0, 0.92)
     draw_circle(lp, 7.0, col)

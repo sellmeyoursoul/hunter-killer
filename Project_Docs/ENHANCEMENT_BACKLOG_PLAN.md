@@ -54,7 +54,17 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
-| **Food-source memory** (precise coords + egocentric 8-way) | Medium | [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) §9 | Design in CREATURE_MODEL; implementation hooks in `ai_driver.gd`. |
+| **Predator / prey calorie intake** (predators gain calories from prey, not bushes-only) | High | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §3 | **Prerequisite** before treating predator memory/foraging as correct; ties to diet archetype table (§2). |
+| **Movement-based calorie costs** (locomotion burns `current_calories` beyond time drain) | High | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §3, [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | **Prerequisite** per CREATURE_MEMORY — tune via `creature_motor` / vitals; pairs with foraging tradeoffs. |
+| **Food-source memory** (precise coords + egocentric 8-way) | Medium | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | After §3 prerequisites unless phase note defers; `ai_driver.gd` / `game_config_merge.gd`. |
+
+---
+
+## Perception & awareness (draft design)
+
+| Item | Priority | Draft plan | Notes |
+|------|----------|------------|-------|
+| **Line of sight / occlusion** — solids reduce or block effective **awareness** (cone/radius) | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | Future: ray or grid checks vs props/tiles; pairs with **memory** (last known) and **squeeze** / `fit_size` hiding (ENVIRONMENT property catalog). |
 
 ---
 

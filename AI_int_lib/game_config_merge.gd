@@ -35,6 +35,8 @@ static func default_creature_motor_params() -> Dictionary:
     "scripted_intent_hold_physics_ticks": 8,
     "weight_interior": 0.65,
     "shuffle_tie_break": true,
+    ## Uniform cost jitter per cardinal+idle in [member CardinalAvoidance.pick_best_move_intent]; pairs with instance-mixed tie shuffle seed.
+    "motor_intent_cost_chaos": 3.05,
     "weight_edge": 0.48,
     "awareness_radius": 1500.0,
     "awareness_cone_extra": 3000.0,
@@ -43,6 +45,10 @@ static func default_creature_motor_params() -> Dictionary:
     "awareness_memory_weight": 0.35,
     "awareness_memory_horizon_sec": 0.0,
     "weight_obstacle": 1.25,
+    ## Prey ENGINE: strip merged shrub static AABBs this close to current [code]food_seek_targets[/code] so grazing can beat repulsion.
+    "vegetation_blocking_forage_clearance_px": 92.0,
+    ## Multiply base [code]weight_obstacle[/code] for carnivores (shrub footprints + pursuit balance).
+    "weight_obstacle_predator_boost": 1.55,
     "interior_env_near_mob_px": 70.0,
     "weight_interior_env_solid": 8000.0,
     "weight_interior_env_slow": 4.0,
@@ -50,6 +56,11 @@ static func default_creature_motor_params() -> Dictionary:
     "hunger_explore_edge_scale_min": 0.16,
     "hunger_explore_hold_scale_min": 0.2,
     "hunger_explore_urgency_power": 1.25,
+    ## Vitals / calories (CREATURE_MEMORY §3): baseline time drain matches [HUNGER_AND_EATING.md](../Project_Docs/Completed_Features/HUNGER_AND_EATING.md) §3; movement adds cost per pixel traveled this tick.
+    "calorie_baseline_drain_per_sec": 1.0,
+    "calorie_cost_per_px_moved": 0.002,
+    ## Predator (mob) gain on successful prey contact; clamped at that mob's [code]caloric_needs[/code] in [code]mob.gd[/code].
+    "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
     "food_seek_imminent_mob_radius_px": 100.0,
     "jeopardy_forced_turn_ticks": 5,
@@ -61,6 +72,42 @@ static func default_creature_motor_params() -> Dictionary:
     "explore_coverage_cell_px": 52.0,
     "explore_trail_max_cells": 96,
     "weight_explore_trail_repulsion": 2.35,
+    ## Expanding cardinal explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 4-leg cycle.
+    "expanding_explore_base_physics_ticks": 36,
+    ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
+    "weight_expanding_explore_hint": 0.12,
+    ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
+    "weight_seek_prey": 22.0,
+    ## Consecutive physics ticks with nonzero intent but displacement below [code]motor_stuck_move_epsilon_px[/code] before escape shaping runs.
+    "motor_stuck_escape_ticks": 8,
+    "motor_stuck_move_epsilon_px": 1.25,
+    ## Multiply [code]weight_seek_ready_food[/code] while stuck (breaks wall-slide deadlock toward prey).
+    "motor_stuck_prey_pull_scale": 1.5,
+    ## Boost expanding cardinal hint when stuck with no food/prey targets.
+    "weight_stuck_escape_explore": 2.2,
+    ## Softer expanding hint while prey is visible but movement has stalled ([code]motor_stuck_allow_expand_hint[/code]).
+    "weight_stuck_escape_explore_when_chasing": 0.95,
+    "motor_stuck_turn_bias_scale": 0.25,
+    "motor_stuck_idle_penalty_scale": 2.5,
+    "motor_stuck_prey_expand_floor": 0.95,
+    "motor_stuck_prey_idle_scale": 1.35,
+    "motor_stuck_prey_turn_scale": 1.2,
+    ## Unified ENGINE exploration: keep coverage terms while chasing ([code]exploration_blend_min_when_engaged[/code] at full pursuit urgency).
+    "motor_exploration_always_enabled": true,
+    "exploration_blend_min_when_engaged": 0.28,
+    ## Inverse-distance pull toward prey samples ([code]pursuit_targets[/code]); complements [code]food_seek_targets[/code].
+    "weight_pursuit_dist": 0.42,
+    "weight_pursuit_closing": 0.95,
+    "weight_pursuit_dist_sq": 38.0,
+    ## Rival predator jeopardy ([code]mobs[/code] samples); scaled by [code]jeopardy_weight_rival_predator[/code].
+    "jeopardy_forced_turn_ticks_predator": 5,
+    "jeopardy_weight_rival_predator": 1.0,
+    "intent_hold_ticks_predator": 6,
+    ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
+    "weight_obstacle_shield_prey": 28.0,
+    "weight_obstacle_pin_predator": 22.0,
+    ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
+    "carnivore_explore_rotate_physics_ticks": 36,
     ## Food-source memory (planned — not wired; see ai_driver.gd [_food_belief] comment block).
     ## Draft defaults: precise world coords for motor seek while distance <= precise radius; beyond that, egocentric 8-way only.
     # "food_memory_precise_radius_px": 1000.0,
