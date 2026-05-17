@@ -243,7 +243,7 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 | **Jeopardy** | `_jeopardy_forced_turn_state_by_body` | Forward-cone threat streak → forced turn ([`jeopardy_forced_turn.gd`](../../creature/motor/jeopardy_forced_turn.gd)) |
 | **Hunger explore modifiers** | computed per tick | Scales `weight_interior`, `weight_edge`, hold duration |
 | **Registered creatures** | `_registered_creatures` | Duel bodies for motor loop |
-| **Food belief** | `_food_belief` (comment block only) | **Not implemented** |
+| **Goal-target belief** | `_goal_belief` (design-comment block / stub in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd); keys **`goal_memory_*`**) | **Not implemented** |
 
 ### 7.1 Context build (`_build_motor_context`)
 

@@ -108,14 +108,16 @@ static func default_creature_motor_params() -> Dictionary:
     "weight_obstacle_pin_predator": 22.0,
     ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
     "carnivore_explore_rotate_physics_ticks": 36,
-    ## Food-source memory (planned — not wired; see ai_driver.gd [_food_belief] comment block).
-    ## Draft defaults: precise world coords for motor seek while distance <= precise radius; beyond that, egocentric 8-way only.
-    # "food_memory_precise_radius_px": 1000.0,
-    # "food_memory_forget_radius_px": 2400.0,
-    # "food_memory_ttl_sec": 45.0,
-    # "food_memory_max_entries": 32,
-    # "weight_seek_remembered_food": 8.0,
-    # "weight_coarse_sector_food_bias": 0.0,
+    ## Goal-target memory (planned — not wired; see [code]ai_driver.gd[/code] [_goal_belief] comment block).
+    ## Draft defaults: precise-tier merge from CREATURE_MEMORY §5–§11; stationary = exact coords; movers = disk [code]goal_memory_moving_last_known_radius_px[/code].
+    # "goal_memory_precise_radius_px": 1000.0,
+    # "goal_memory_moving_last_known_radius_px": 50.0,
+    # "goal_memory_forget_radius_px": 2400.0,
+    # "goal_memory_ttl_sec": 45.0,
+    # "goal_memory_coarse_ttl_sec": 15.0,
+    # "goal_memory_max_entries": 32,
+    # "weight_seek_remembered_goal": 8.0,
+    # "weight_coarse_sector_goal_bias": 0.0,
   }
 
 
