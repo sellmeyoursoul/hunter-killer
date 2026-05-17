@@ -115,8 +115,9 @@ Once memory tracks **regions or outcomes that reliably satisfied a Tier-2 goal**
 
 - **Nearby habitual locale** (within **`believed_goal_hotspot_near_radius_px`** — distance TBD, configurable per creature / pack): bias movement toward that anchor (“this patch has paid off before” for whichever **active seek leaf** dominates).
 - **No nearby habitual source** (nothing within **`believed_goal_seek_escalate_radius_px`** — TBD / configurable): **elevate urgency for the dominant Tier-2 seek concern** (**Find food** in early builds; analogous rise for mates when enabled) inside the Preserve/Seek calorie-band logic described above.
+- **Trait-scaled habitual replay:** after goal memory projects **`believed_goal_*`** from **`context_hash`** / locale priors (**[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)**), **motivation traits (§A.4)** modulate **how strongly to reapply** that habitual overlay (**[CREATURE_MEMORY.md §2.2](CREATURE_MEMORY.md)** — same façade, **no forked ingress**). Example: **`explorer_builder`** biases replay toward **lasting local-environment** successes (**Builder** pole) vs **roaming / discovery** successes (**Explorer** pole) once **strategy-class** semantics for **`context_hash`** exist (**[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)**). Traits stay **read-only at spawn** until a future learning/heredity pass implements **experience-driven trait drift** (still **explicitly excluded** — **§A.4**, OUT OF V2 scope table).
 
-Implementation slots: motor context **`believed_goal_source_bias`** (direction scalar, sector list, or structured field per façade), fed from [CREATURE_MEMORY.md §2 / §10](CREATURE_MEMORY.md). **Stub during ENGINE refactor until memory lands.**
+Implementation slots: motor context **`believed_goal_source_bias`** (direction scalar, sector list, or structured field per façade), fed from [CREATURE_MEMORY.md §§2–2.2 / §10](CREATURE_MEMORY.md). Trait blend hooks run in the **same** Tier-2 / mapper stack as habitual bias; obey **§A.4 trait application order** where multiple axes touch the same weights. **Stub during ENGINE refactor until memory lands.**
 
 <<Comment: First implementation may omit `believed_goal_*`; document keys in **`creature_motor`** packs when wired. Nutritional hotspots may be the first consumer — still keyed generically so mates/shelter/evasion stacks without renames later.>>
 
@@ -364,7 +365,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 ## H. Dependencies
 
 - [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) — V1 fork inventory **to deprecate**.
-- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
+- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; success-pattern façade (**§2.1**); trait-mediated habitual replay (**§2.2**); routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
 - [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) — field catalog; traits.
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) — must stay consistent (**heredity out of scope** here; genome doc may evolve separately).
 - [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
@@ -375,6 +376,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-05-16 | **§A.3.1:** **Trait-scaled habitual replay** — **`believed_goal_*`** from **`context_hash` / LocalePriorMap**, then **§A.4 traits** modulate **reapplication** ([CREATURE_MEMORY §2.2](CREATURE_MEMORY.md)); **`explorer_builder` vs environment-alter vs explore** illustrative; drift **still out-of-scope**. Implementation slots → **MEMORY §§2–2.2**. |
 | 2026-05-16 | **Naming alignment (`goal_*`):** generalized belief keys (**`goal_memory_*`**, **`weight_seek_remembered_goal`**, **`believed_goal_*`**, **`_goal_belief`** hooks); **§B**, **§C**, **§F**, **§G** synced with [CREATURE_MEMORY.md](CREATURE_MEMORY.md); **§B.2** retitled (**`feeding_mode` ingress** vs diet-archetype memory). |
 | 2026-05-17 | Initial **CREATURE_MOVEMENT_V2**: goals (pack motor, unified intent ontology, motivation tree + mate stub, trait map), ported CREATURE_MEMORY food/env/LOS sections, acceptance criteria — **trait learning & heredity explicitly excluded.** |
 | 2026-05-18 | **A.1** merge spine + dual **ship** / **dev** defaults in `game_config_merge`; canonical **`creature_motor` inline JSON**; per-instance pack resolution clarified; **LLM motor** marked out-of-scope — future uses **traits at minimum** + optional JSON read-through; §G checklist updated. |
