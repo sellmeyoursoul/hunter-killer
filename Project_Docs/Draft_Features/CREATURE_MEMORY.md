@@ -12,7 +12,7 @@
 
 **Phase name:** Creature memory (**goal-generalized** beliefs + success patterns)
 
-**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **evasion & nesting**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with [CREATURE_MOVEMENT_V2.md §A.3–A.4](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2**), and **§14 open decisions** until learning-layer knobs are settled.
+**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with [CREATURE_MOVEMENT_V2.md §A.3–A.4](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2**), and **§14 open decisions** until learning-layer knobs are settled.
 
 **Explicit non-authority:** **Which** entities count as **`SeekCandidate` / consumable_now / food_candidate** vs **friend/foe** is governed by **`CreatureDefinition`** + ingestion policy ([CREATURE_MOVEMENT_V2.md §A.2 — `feeding_mode` / DietRegistry posture](CREATURE_MOVEMENT_V2.md)). **Memory** stores **belief records** keyed by stable instance ids **where applicable** and **does not** restate predator/omnivore/herbivore branching.
 
@@ -76,7 +76,7 @@ flowchart LR
 - **`ExperienceRing`:** ship **later** unless scope allows a **minimal** ring (small cap per `GoalKind`, **ε = 0** = aggregate-only behavior for designers who want zero episodic branching).
 - **Do not** use the label **belief tags** for success patterns — avoids colliding with **belief records** (instance-target memory, §§5–6).
 
-**`context_hash` (concept):** coarse situation fingerprint (**grid cell id** is the phase-1 *candidate*; biome / squeeze pocket / nest cluster keys are **later extensions** layered on **`GoalKind`**, still one Tier-2 story). Exact definition is an **outstanding decision** (**§14**). Optional **strategy-class metadata** paired with **`context_hash`** feeds **trait-mediated replay** (**§2.2**) once defined.
+**`context_hash` (concept):** coarse situation fingerprint. Composite key **`(GoalKind, …)`** with **per-`GoalKind` overlays** (**spatial / fingerprint layering — resolved in §14**): e.g. uniform **grid cell** for foraging, squeeze/nest **fingerprints** for **`GoalKind.shelter`**, etc. — **not** one global spatial hash pasted onto every goal. Keep definitions at **consistent higher-order layering** (**goal ordinal / tier**) so composite **third-order** goals can reuse **the same scheme** (§14 row and example therein). Phase-1 *candidate*: **grid cell** for nutrition overlays; sibling keys layered by goal author. Other §14 knobs (**strategy-class tagging**, normalization, gates, …) remain in the **`<<Question>>`** list below. Optional **strategy-class metadata** paired with **`context_hash`** feeds **trait-mediated replay** (**§2.2**) once defined.
 
 ### 2.2 Trait-mediated replay (**context_hash × motivation traits`)
 
@@ -109,7 +109,7 @@ Memory categories **rollup to Tier-2** leaves (**CREATURE_MOVEMENT_V2 §A.3**) a
 | **Nutrition (“find food”)** | **Find food** | **Implement first** alongside the movement-memory phase (**§§4–5**); payloads may include **anticipated calories**. |
 | **Mates / reproduction** | **Find mate** | **Reuse same memory schema + config keys** (see **`goal_*`** list in §10); mating-specific payloads when systems land (e.g. estrous, lineage id). |
 | **Danger / hostiles** | **Avoid hostiles** | Outline + unify with **ThreatSample**/jeopardy; coarse/precise can mirror goal rules where “last hostile position” cues exist. Dedicated schema refinement **later** if needed — **still no diet archetypes**. |
-| **Evasion & nesting** (supersedes legacy “ambient hiding §” wording) | Survival, reproduction (safe birth sites) | **Design in §7** — **squeeze / perceived fit**, hostile size comparison, remembered **bolt-holes**, future nest sites. Separate from standalone “ambient hide minigame.” |
+| **Finding shelter** (supersedes legacy “ambient hiding §” wording) | Survival, reproduction (safe birth sites) | **Design in §7** — **squeeze / perceived fit**, hostile size comparison, remembered **bolt-holes**, future nest sites. Separate from standalone “ambient hide minigame.” |
 
 **Cross-category mechanic:** **`context_hash`** replay weighting scaled by **`CreatureDefinition` motivation traits** (**§2.2**) applies **GoalKind-agnostically** (nutrition → mates → evasion) unless a future mapping table restricts a tag to one category.
 
@@ -172,19 +172,19 @@ Type-specific blobs **orthogonal** to tier geometry:
 |-----------|-------------------------|
 | **Nutrition / food** | `anticipated_calories` (estimate from memory or last sensory read), ripeness-ish flags mirrored from **`consumable_now`**. |
 | **Mate** | Compatibility / courtship cues when designed (size bracket, hormonal flag, lineage avoid list). |
-| **Evasion & nesting / shelter-like** | `estimated_squeeze_body_size`, `estimated_hostile_size`, `confidence` (**§7**) — qualitative “fit” not raw editor truth unless skill maxed (**future progression**). |
+| **Finding shelter** (`GoalKind.shelter`) | `estimated_squeeze_body_size`, `estimated_hostile_size`, `confidence` (**§7**) — qualitative “fit” not raw editor truth unless skill maxed (**future progression**). |
 
 Payloads attach to belief entries; **routing** ignores unknown fields gracefully.
 
 ---
 
-## 7. Evasion & nesting (refactor from “ambient hiding” prose)
+## 7. Finding shelter (refactor from “ambient hiding” prose)
 
 **Authoritative squeeze / passage semantics:** [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — **`passible`**, **`fit_size`**, **Mode A** squeeze.
 
 ### 7.1 Goal framing
 
-Treat **bolt-holes**, **squeeze pockets**, future **birthing nests** as **`GoalKind.evade_or_nest` (name TBD)** records — same **tier / TTL / coarse** rules (**§5**). **Shelter/rest comfort** modulation (*reward safe recovery*) aligns with CREATURE_MOVEMENT motivation tree commentary once rest vitals tie in.
+Treat **bolt-holes**, **squeeze pockets**, future **birthing nests** as **`GoalKind.shelter`** records — same **tier / TTL / coarse** rules (**§5**). **Shelter/rest comfort** modulation (*reward safe recovery*) aligns with CREATURE_MOVEMENT motivation tree commentary once rest vitals tie in.
 
 ### 7.2 Size comparison (skills — not authoritative editor reads)
 
@@ -193,7 +193,9 @@ Creature decisions **never** consume **oracle** **`fit_size` / hostile collider 
 - **`estimated_squeeze_capability`** (**creature-relative** squeeze/clearance skill — parameterized elsewhere; improves with progression).  
 - **`estimated_hostile_body_size`** (threat profiling skill / last sighting).
 
-**Decision sketch:** propose retreat toward candidate cell only if **`estimated squeeze passage ≥ hostile estimate − margin`** (margin & transforms **implementation detail** anchored to ENVIRONMENT MODEL fields without exposing truths for free).
+**Decision sketch — creature seeking shelter:** propose retreat toward a candidate passage only if **`estimated squeeze passage ≥ hostile estimate − margin`** (margin & transforms **implementation detail** anchored to ENVIRONMENT MODEL fields without exposing truths for free).
+
+**Symmetric skill (hostile-facing, inverse framing):** a hostile agent uses the **same class of estimate** (`estimated_squeeze_capability` lane — **“can I squeeze / fit?”**) **inverted** toward **prediction**: **would typical prey / this target treat this pocket as viable shelter?** and **does my estimate say I fit as well?** Reasoning stays **belief- and skill-bounded** (no free **`fit_size`**). Examples: bias **committing** pursuit, **waiting at an egress**, or **blocking** when both prey-shelter plausibility and self-fit signatures read high; bias **backing off**, **routing around**, or **deprioritizing** chase when refuge reads **reachable for prey** **but too tight for self** — avoiding wasted pursuit into squeezes the hostile cannot exploit.
 
 ### 7.3 Last-known fleeing targets (**moving prey / hiding creature** symmetry)
 
@@ -260,10 +262,10 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 
 ---
 
-## 11. Cross-ported questions (prior CREATURE_MODEL §9 food themes)
+## 11. Cross-ported resolutions (CREATURE_MODEL §9 & related)
 
-- <<Question: Should **`hunger`** stay stored vs purely derived (`current_calories` / needs)? (**[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)** §9)>>  
-- <<Question: **Food bushes deep inside squeeze cavities** — distance-only until LoS, or heuristic occlusion stub?>> *(Superseded loosely by CREATURE_MOVEMENT_V2 §D interim — reaffirm during memory implementation PR.)*
+- **Hunger — derived (resolved vs [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) §9):** Treat **`hunger` / satiation** as **derived**, not authoritative stored vitals alongside **`current_calories`**. Persist **canonical** **`current_calories`** and **capacity / needs** thresholds the model owns; **each tick** (or wherever vitals gate motor) derive a **ratio or %**, then feed **rules** and **weight / factor adjusts** — e.g. rest vs forage bands, **hungry-enough-to-hunt**, satiation unlocking **mate / explore / other Tier-2** mixes. Avoid a redundant persisted **`hunger`** scalar unless a save format or foreign API mandates a mirrored field.
+- **Food deep inside squeeze cavities (resolved):** **Finding** those resources (e.g. **food bushes** beyond naive range/visibility) **should require exploration**, not instant goal telegraphy. Exploration outcomes **seed locale priors** (**§2.1**) and **belief entries** (**§§5–6**) as usual. Successful **persistent** use fits an **ecological niche** pattern — e.g. **living/foraging chiefly in predator-excluding squeeze** — expressible as **`GoalKind` + overlay `context_hash`** (**§14**) and habitual **`believed_goal_*`** replay (**§2.2**) without a bespoke branch. Distance-only vs LoS stubs stay secondary to **[CREATURE_MOVEMENT_V2.md §D interim](CREATURE_MOVEMENT_V2.md)** posture during implementation (**reaffirm in memory PR**).
 
 ---
 
@@ -285,7 +287,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 - [ ] **`goal_*`** / **`believed_goal_*`** keys documented in **`game_config_merge.gd`** and pack authoring when wired (**§10 — no deprecated `food_memory_*` in active codepaths**).  
 - [ ] **`SeekCandidate` unify** regression check post-memory — predator/prey ingestion **already** routed through single list (**§A.2**).  
 - [ ] Predator locomotion prerequisites before claiming predator memory parity (**§4 bullet 2**).  
-- [ ] Future LoS / stealth alignment notes trace to ENVIRONMENT backlog + **`GoalKind.evade_or_nest`**.  
+- [ ] Future LoS / stealth alignment notes trace to ENVIRONMENT backlog + **`GoalKind.shelter`**.  
 - [ ] **Learning layer (§2.1 / §14):** **`LocalePriorMap`** → **`believed_goal_*`** façade is gated and tunable — or **defer** with explicit MVP (**counters-only**, §4 note) recorded in changelog / implementing PR once §14 rows settle or are waived.
 
 ---
@@ -296,7 +298,7 @@ Resolve **before** treating learning-layer code as contract-frozen. Keep the **`
 
 <<Question: **context_hash strategy class** — minimal enum or tag set (alter local env, pure explore, squeeze-commit, …); mapping from each tag to **motivation trait axes** (**§A.4**) for replay multiplier on **`believed_goal_*`** (**§2.2**)?>>
 
-<<Question: **context_hash** — global uniform grid versus per-`GoalKind` overlay fields (squeeze, nest fingerprints); cell size / origin; alignment to playfield clamps and awareness (§2.1)?>>
+**Resolved (**`context_hash` — overlays & layering**):** **`LocalePriorMap` / episodic backends** SHOULD use **`(GoalKind, overlay…)`**, i.e. **per `GoalKind`** spatial regimes and fingerprint payloads (grid cell vs squeeze/nest keys, …) rather than **one global uniform grid** pasted onto every motivation. Normalize **definitions at a consistent higher-order level** (**goal ordinal / tier** — taxonomy **TBD**): when a **third-order composite goal** appears (example: behaviors that **“crush” less plentiful sources** — spend effort removing or collapsing **economically worse** patches — **to make room / attention for more plentiful ones**, i.e. **reshape local resource layout**), **`context_hash` compositor rules** SHOULD **reuse that same layering discipline** so **prior aggregates and episodic replay** (**§§2.1–2.2**) do not fork into bespoke hash stacks **per whim**. Per-overlay detail (cell size, origin, clamp-to-playfield, alignment to awareness envelopes) locks with implementation as each **`GoalKind` / overlay ships.
 
 <<Question: **Outcome → reward shaping** — booleans versus delta calories versus multi-goal composites; normalization so one goal cannot dominate LocalePriorMap aggregates?>>
 
@@ -314,7 +316,7 @@ Resolve **before** treating learning-layer code as contract-frozen. Keep the **`
 
 | Topic | Why it matters | Starter options |
 |-------|----------------|-----------------|
-| **context_hash** | Defines **“same situation”** for aggregates; resolution vs RAM vs designer legibility | Grid cell id vs biome id vs squeeze / nest fingerprint; GoalKind **always** part of composite key; prefer **one coarse spatial scheme** in phase 1 unless ENVIRONMENT defs force split |
+| **context_hash** | Defines **“same situation”** for aggregates; resolution vs RAM vs designer legibility | **Per `GoalKind` overlays** (grid cell, squeeze/nest fingerprint, …); **`GoalKind` + goal-order / tier** keep composite third-order goals on **the same compositing discipline**; cell size / origin / clamp / awareness alignment **per overlay** (see §2.1, resolved paragraph above) |
 | **Outcome → reward** | Priors need a bump rule when events land | Binary success only, Δ calories, escape / survival bitmask, capped blend across goals |
 | **Write gates** | Prevents per-tick noise from filling LocalePriorMap | Dominant Tier-2 leaf, salience threshold, cooldown per context_hash, max writes/sec |
 | **Prior decay / forget** | Avoid frozen confidence far from TTL spirit for beliefs | EWMA decay α, simulated half-life, LRU max buckets per creature |
@@ -332,10 +334,11 @@ Resolve **before** treating learning-layer code as contract-frozen. Keep the **`
 
 | Date | Change |
 |------|--------|
+| 2026-05-17 | **§11** deep-in-squeeze food: **exploration-gated** discovery; predator-excluding-squeeze niche via priors **`context_hash`** + **`believed_goal_*`**. **§14** **`context_hash` overlays:** **per `GoalKind`** + higher-order reuse for composite goals (**§14 Resolved** prose). **§2.1** `context_hash` concept synced. **§11** retitled **Resolutions**. |
 | 2026-05-16 | **§2.2 Trait-mediated replay:** **`context_hash` / strategy-class** × **`CreatureDefinition` §A.4 traits** scales **reapplication** of locale priors into **`believed_goal_*`** (Builder vs Explorer example); **future** learned trait drift **orthogonal** to tick replay. **§3** cross-category pointer; **§14** question + table row (**trait × context_hash replay**). **§8.1** read order. **CREATURE_MOVEMENT_V2** §A.3.1 bullets synced. |
 | 2026-05-16 | **Success patterns §2.1:** **LocalePriorMap** vs **ExperienceRing** (dual optional backends → **`MotorContext` `believed_goal_*`** façade, CREATURE_MOVEMENT_V2 §A.3.1). Resolved **belief tags** wording; forbid overloading **belief**. **§14** Outstanding design-decision table + **`<<Question>>`** markers; **§15** changelog renumber from former §14. **§§4, 8, 13** cross-links refreshed. |
 | 2026-05-16 | **Code/doc rename:** authoritative identifiers **`goal_memory_*`**, **`weight_seek_remembered_goal`**, **`weight_coarse_sector_goal_bias`**, **`believed_goal_*`**, stubs **`_goal_belief`** / **`goal_source_memory.gd`** (`ai_driver.gd`, `game_config_merge.gd`, `cardinal_avoidance.gd`). **§10:** no **`food_memory_*`** aliases policy. **`CREATURE_MOVEMENT_V2.md`** synced (dual-author note, §§A–G). **`CREATURE_MOVEMENT.md` (Definitive)** table row updated. |
 | 2026-05-16 | **Align with CREATURE_MOVEMENT_V2:** motor doc as **primary agent context**; remove **diet archetype / predator-herb.memory emphasis** duplicate — defer classification to **`feeding_mode`/`SeekCandidate`**. Memory = **facts + motivations + successful patterns**; modulation of Tier-2 + future learning hook. |
 | 2026-05-16 | **Goal-generalized tiers:** stationary exact vs mover disk ≤ `goal_memory_precise_radius_px` / `goal_memory_moving_last_known_radius_px`; **coarse TTL** (**`goal_memory_coarse_ttl_sec`** ~15); **coarse eviction on re-awareness** → precise; **`goal_*` config keys**. Optional **GoalPayload** (calories, mate cues, squeeze estimates). |
-| 2026-05-16 | **Evasion & nesting** refactor (skills-based size estimation vs hostiles); LoS deferral explicit; phased implementation order synced **§B.3**. |
+| 2026-05-16 | **Finding shelter** (then “evasion & nesting”) refactor — skills-based size estimation vs hostiles; LoS deferral explicit; phased implementation order synced **§B.3**. |
 | 2026-05-15 | *(historical)* Goal-aligned framing with diet archetypes / food-first prerequisites — superseded May 2026 alignment pass. |
