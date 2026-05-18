@@ -54,11 +54,12 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
-| [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
-| [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; memory → [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
 | [Draft_Features/CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md) | **3D creature stack:** [CreatureDefinition](res://creature/definition/creature_definition.gd), capabilities, templates, AI intent bridge. |
-| [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Creature memory** (working → definitive): goal-aligned beliefs (food, danger, mates, shelter); diet archetypes; **§3** prerequisites — promote when contract-ready. |
-| [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) | **Unified motor refactor:** `creature_motor` in `assets/creatures/*/pack_resources.json`, single intent path, motivation tree (**Don’t die** → avoid hostiles / find food / mate stub / preserve calories), trait mapping; ported from CREATURE_MEMORY for beliefs alignment. |
+| [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
+| [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Canonical:** motivation tree Tier-1/2, **`CreatureDefinition`** traits (−100…+100), goal-kind rollup, habitual **`believed_goal_*`** modulation + strategy-class **`<<Question>>`** Actions **1–3**. Consumed by [CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) + [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
+| [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Creature memory** (working → definitive): goal-aligned beliefs (food, danger, mates, shelter); success-pattern backends + **§14** tuning; read **[CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md)** first for Tier-2 / traits / replay semantics. |
+| [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; memory → [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md); Tier-2 trait narrative → [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3. |
+| [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) | **Unified motor refactor:** `creature_motor` in `assets/creatures/*/pack_resources.json`, single **`SeekCandidate`** path, **`MotorContext`** integration; motivation tree + traits authoritative in **[CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md)**. |
 | [Draft_Features/PLANT_ECOLOGY_PLAN.md](Draft_Features/PLANT_ECOLOGY_PLAN.md) | Long-term plant ecology. |
 | [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | Plants / food index (active design; shipped slice archived). |
 | [Draft_Features/REPO_LAYOUT_PLAN.md](Draft_Features/REPO_LAYOUT_PLAN.md) | `res://` layout draft (not authoritative). |

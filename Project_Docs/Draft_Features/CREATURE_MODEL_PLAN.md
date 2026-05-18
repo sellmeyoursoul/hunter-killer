@@ -102,7 +102,7 @@ Creatures are modeled as having **goals** that future utility, scripted motor, o
 
 **Compassion vs self-interest (`compassion_self_interest`):** High **compassion** can favor **sharing food** (kin, allies, group pool); high **self-interest** favors **hoarding** for a personal buffer when memory/foraging phases support it—see [CREATURE_MEMORY.md](CREATURE_MEMORY.md) for remembered resources.
 
-**Motor / Tier-2 expansion (same axes, tactical framing):** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) §A.4 (**Survival-plan vision**).
+**Motor / Tier-2 expansion (same axes, tactical framing):** [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) §3 (**Survival-plan vision**); wiring — [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md).
 
 <<Comment: Concrete utility weights, sacrifice actions, and food-transfer mechanics are deferred to feature phases; this section pins **design intent** only.>>
 
@@ -207,6 +207,7 @@ Creatures are modeled as having **goals** that future utility, scripted motor, o
 
 | Date | Change |
 |------|--------|
+| 2026-05-17 | **§4Goals:** motor / Tier-2 dichotomy pointer → **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** (replaces **CREATURE_MOVEMENT_V2** §A.4). |
 | 2026-05-18 | After **Compassion vs self-interest** §4Goals: cross-link [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) §A.4 (motor / survival-plan dichotomy narrative). |
 | 2026-05-15 | §4 **Goals and motivational priorities** — survival (primary), reproduction (secondary), trait-driven ordering; community/individual and compassion/self-interest examples. |
 | 2026-05-15 | §9 **food-source memory** table + questions → [CREATURE_MEMORY.md](CREATURE_MEMORY.md). |

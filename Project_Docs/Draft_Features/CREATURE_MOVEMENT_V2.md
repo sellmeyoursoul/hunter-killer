@@ -1,6 +1,6 @@
 # Hunter Killer — Creature movement V2 / unified motor (draft)
 
-> **Purpose:** Working spec for a **movement + motivation refactor**. This file **inherits** goal-aligned framing and **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** cardinal intent pipeline for all species, and a **motivation tree** that future memory and traits plug into.
+> **Purpose:** Working spec for a **movement + motivation refactor**. **Canonical goal drivers** (motivation tree Tier-1/2, `CreatureDefinition` traits, habitual **`believed_goal_*`** modulation): **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**. This file **inherits** **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** cardinal intent pipeline for all species, and **wiring** the motivation tree into `MotorContext` / cardinal scorer.
 >
 > **Tier:** Draft — supersede branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) when implemented; inventory doc stays authoritative for *current* code until then.
 >
@@ -8,7 +8,7 @@
 >
 > **References:** [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) (`pack_resources.json`), [`creature_definition.gd`](../../creature/definition/creature_definition.gd), [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md), [game_config_merge.gd](../../AI_int_lib/game_config_merge.gd).
 >
-> **Co-development:** **Belief keys, hooks, tier tables** are **dual-authored** with [CREATURE_MEMORY.md](CREATURE_MEMORY.md). Keep **identifiers** canonical there + in code (**`goal_memory_*`**, **`_goal_belief`**); this file focuses on **routing** remembered targets into **`SeekCandidate[]`**, **`creature_motor`**, and the **motivation tree**. **Archived** `[Completed_Features/](../Completed_Features/)** may still show older `food_memory_*` — ignore for implementation.
+> **Co-development:** **Tier / trait semantics** — **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; **belief keys, hooks, tier belief tables** — **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** + code (**`goal_memory_*`**, **`_goal_belief`**). This file focuses on **routing** remembered targets into **`SeekCandidate[]`**, **`creature_motor`**, and scorer plumbing. **Archived** `[Completed_Features/](../Completed_Features/)** may still show older `food_memory_*` — ignore for implementation.
 
 ---
 
@@ -81,24 +81,9 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 
 <<Comment: `DietRegistry` / `FoodIntakePolicy` should classify **interaction** (“can bite bush”); motor should classify **salience** (“target appears in seekers or hostiles”). Split keeps eating code from routing code.>>
 
-### A.3 Next tier: motivation tree (framework)
+### A.3 Motivation tree (framework)
 
-Higher-level planner **constraints** expressed as tiers. **Costs / weights** in the cardinal scorer are ultimately **sums of motivation-weighted utilities** aligned to this tree — after refactor, avoids ad-hoc `weight_seek_prey` vs `weight_seek_ready_food` sprawl unless they map here.
-
-```
-Tier 1 — Don’t die
-├── Tier 2 — Avoid hostiles        (danger, jeopardy, mob repulsion, obstacle shield)
-├── Tier 2 — Find food            (seek targets, memory merge, starvation urgency)
-├── Tier 2 — Find mate           (OUT OF SCOPE impl — reserve hooks / slots only)
-└── Tier 2 — Preserve calories   (movement cost awareness, throttle sprint, posture / idle when sated → future)
-```
-
-| Tier 2 leaf | Implemented today (approx.) | Extension / stub |
-|-------------|----------------------------|------------------|
-| **Avoid hostiles** | Mob costs, imminent gating food seek, jeopardy forced turn, `weight_obstacle_shield_prey` | Unified **threat samples**; acute threat **dominates** Tier-2 until **pack combat / nest defense** allows trait-driven **engage** (§A.4 preamble) |
-| **Find food** | Live `food_plants` + prey positions → seek; hunger scales explore | **Goal-target memory** (§C; full tier rules in [CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)); **Preserve cross-over** (§A.3.1); habitual **`believed_goal_*`** bias (§A.3.1); **`feeding_mode`** filters **`SeekCandidate`** ingress (§B.2) |
-| **Find mate** | — | **`MotivationWeights.mate_urgency` / slot in context** defaulted to zero; species or story enables later ([CREATURE_MEMORY.md §3 — Mates row](CREATURE_MEMORY.md)) |
-| **Preserve calories** | Burn per distance (`game_config_merge`), hunger explore modifiers | Cross-threshold blend with **Find food** (**§A.3.1**); thrift / posture / idle when **sated** |
+**Canonical tree diagram, Tier-2 leaf semantics, category rollup:** **[CREATURE_GOAL_DRIVERS.md §2 — Motivation tree](CREATURE_GOAL_DRIVERS.md)**. **This section** retains **motor-specific** Preserve-vs-Find thresholds (**§A.3.1**) and **`believed_goal_*`** integration stubs (**§A.3.1** bullets).
 
 #### A.3.1 Preserve calories vs Find food (resolved)
 
@@ -106,7 +91,7 @@ Tier 1 — Don’t die
 |------|----------------|
 | **Not exploration-only down-weight** | **Preserve calories** may **suppress or strongly reduce** Tier-2 **Find food** weights when **`calorie_ratio`** is above a **per-creature preserve floor** — more than tweaking generic exploration noise alone. |
 | **Per creature** | Floors / ceilings ship as **defaults in `default_creature_motor_params()`** (spine ∪ selected **`creature_motor_profile_*`**) and **overrides** in **`pack_resources.json` → `creature_motor`** / future **`CreatureDefinition`** exports so each archetype tunes the band. |
-| **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** interpolate (smoothstep recommended) so behavior does not flip-tick between tiers — smoothness parameterized by **`preserve_seek_blend_smoothness`** (authoring semantics TBD, e.g. blend aggressiveness **`0`**–**`1`**). **`Avoid hostiles`** / jeopardy **override this hunger band** whenever **acute personal threat** applies (**today**); **future pack engage** may reorder that stack (§A.4 preamble, *Threat vs offensive*). |
+| **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** interpolate (smoothstep recommended) so behavior does not flip-tick between tiers — smoothness parameterized by **`preserve_seek_blend_smoothness`** (authoring semantics TBD, e.g. blend aggressiveness **`0`**–**`1`**). **`Avoid hostiles`** / jeopardy **override this hunger band** whenever **acute personal threat** applies (**today**); **future pack engage** may reorder that stack (**[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** preamble, *Threat vs offensive*). |
 | **Motor keys** (author in **`creature_motor`** when wiring) | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**. |
 
 ##### Believed goal source / habitual locales (future — overlays goal memory)
@@ -115,114 +100,23 @@ Once memory tracks **regions or outcomes that reliably satisfied a Tier-2 goal**
 
 - **Nearby habitual locale** (within **`believed_goal_hotspot_near_radius_px`** — distance TBD, configurable per creature / pack): bias movement toward that anchor (“this patch has paid off before” for whichever **active seek leaf** dominates).
 - **No nearby habitual source** (nothing within **`believed_goal_seek_escalate_radius_px`** — TBD / configurable): **elevate urgency for the dominant Tier-2 seek concern** (**Find food** in early builds; analogous rise for mates when enabled) inside the Preserve/Seek calorie-band logic described above.
-- **Trait-scaled habitual replay:** after goal memory projects **`believed_goal_*`** from **`context_hash`** / locale priors (**[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)**), **motivation traits (§A.4)** modulate **how strongly to reapply** that habitual overlay (**[CREATURE_MEMORY.md §2.2](CREATURE_MEMORY.md)** — same façade, **no forked ingress**). Example: **`explorer_builder`** biases replay toward **lasting local-environment** successes (**Builder** pole) vs **roaming / discovery** successes (**Explorer** pole) once **strategy-class** semantics for **`context_hash`** exist (**[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)**). Traits stay **read-only at spawn** until a future learning/heredity pass implements **experience-driven trait drift** (still **explicitly excluded** — **§A.4**, OUT OF V2 scope table).
+- **Trait-scaled habitual replay:** **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)** (trait × strategy-class × **`believed_goal_*`**). Backends and **`context_hash`** overlays: **[CREATURE_MEMORY.md §§2.1–2.2](CREATURE_MEMORY.md)**; strategy-class **`<<Question>>` Actions 1–3** live in **GOAL_DRIVERS §5**. Same façade, **no forked ingress**.
 
-Implementation slots: motor context **`believed_goal_source_bias`** (direction scalar, sector list, or structured field per façade), fed from [CREATURE_MEMORY.md §§2–2.2 / §10](CREATURE_MEMORY.md). Trait blend hooks run in the **same** Tier-2 / mapper stack as habitual bias; obey **§A.4 trait application order** where multiple axes touch the same weights. **Stub during ENGINE refactor until memory lands.**
+Implementation slots: motor context **`believed_goal_source_bias`** (direction scalar, sector list, or structured field per façade), fed from [CREATURE_MEMORY.md §§2–2.2 / §10](CREATURE_MEMORY.md). Trait blend hooks run in the **same** Tier-2 / mapper stack as habitual bias; obey **[CREATURE_GOAL_DRIVERS.md §3 — Trait application order](CREATURE_GOAL_DRIVERS.md)** where multiple axes touch the same weights. **Stub during ENGINE refactor until memory lands.**
 
 <<Comment: First implementation may omit `believed_goal_*`; document keys in **`creature_motor`** packs when wired. Nutritional hotspots may be the first consumer — still keyed generically so mates/shelter/evasion stacks without renames later.>>
 
-### A.4 Map motivation traits (`CreatureDefinition`) to the motivation tree
+### A.4 Motivation traits (`CreatureDefinition`)
 
-**Source fields:** [`creature_definition.gd`](../../creature/definition/creature_definition.gd) — each is one scalar `@export_range(-100, 100)` whose ends are **paired opposites**:
+**Canonical:** polarity table, UI convention, trait application order, survival-plan narrative, Tier subtree scaling, OUT OF V2 scope — **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**.
 
-| Export | Negative end (conceptual −100 pole) | Positive end (conceptual +100 pole) |
-|--------|--------------------------------------|-------------------------------------|
-| `explorer_builder` | **Explorer** | **Builder** |
-| `change_stability` | **Change** | **Stability** |
-| `compassion_self_interest` | **Compassion** (share) | **Self-interest / hoard** (dominate resources) |
-| `community_individual` | **Community** | **Individual** |
-
-**Cross-links**
-
-- **`CreatureDefinition` trait fields** (-100/+100 sliders) — catalog table **Motivation traits (NPC / creature behavior drivers)** in [CREATURE_MODEL_PLAN.md §4 — Technical design — Field catalog](CREATURE_MODEL_PLAN.md#field-catalog-from-world-vision-typos-in-source-corrected).
-- **Goal rank** (survival → reproduction → trait-driven tactics) plus **sharing vs hoarding** language for **`compassion_self_interest`** — [CREATURE_MODEL_PLAN.md — Goals and motivational priorities (design)](CREATURE_MODEL_PLAN.md#goals-and-motivational-priorities-design).
-- **Believed / remembered resources** pooling with compassion dynamics — [CREATURE_MEMORY.md](CREATURE_MEMORY.md).
-
-**UI & player-facing convention (resolved)**
-
-- **Authoring / internal:** For every trait export, **slider left (−100)** = **first pole** in the pair (Explorer, Change, Compassion, Community); **slider right (+100)** = **second pole** (Builder, Stability, Self-interest, Individual). Consistent across all four fields.
-
-- **Player-facing (future):** Dichotomies are **not exposed as raw sliders** — players infer personality from **observed actions**; design maps those actions back to the same −100/+100 semantics so species stay data-driven.
-
-Traits are **knobs**, not branching scripts: runtime maps them to Tier-2 **weights** (`Find food`, `Find mate`, `Preserve calories`, spatial strategy, someday **world interaction** crush/nest/build).
-
-**Trait application order (resolved):** When **multiple motivation traits** influence the same mapper pass (formula application, modulation passes, Tier-2 weight stacking — wherever traits are consulted in one tick), evaluate trait contributions **in descending strength**:
-
-- **Strength** of a trait axis = **`abs(trait_value)`** (**distance from 0 midpoint** toward **−100** or **+100**). Apply **strongest first**, then **next strongest**, through **weakest last** (**abs** closest **0**).
-- **Ties** (equal **`abs`**): **`explorer_builder`** → **`change_stability`** → **`compassion_self_interest`** → **`community_individual`**.
-
-Same axis is evaluated **once per pass** at its slot in that sorted order (**no duplicate application** solely for reordering).
-
-**Threat vs offensive / social combat (current vs future)**
-
-- **Today (ENGINE / pre–rich combat):** **`Avoid hostiles`** is **dominant** whenever **acute personal threat** applies (imminent predator, jeopardy): flee / evade **hard-wins** over food seek and other Tier-2 urges so **escape is not overridden** by foraging or exploration in those states.
-
-- **Future (pack / nest defense / coordinated hunt):** Trait blends such as **high Builder** (defend resource or nest), **Stability** (hold line, don’t scatter), **Compassion** / **Community** (risk for kin or shared asset) can authorize **coordinated engage** — e.g. wolves **pack-hunting** a large target, rabbits **collectively defending** a nest from a fox — so **avoidance is no longer unconditional** once **group combat verbs** and **objective pinning** (“defend nest id X”) exist; design must **tier** personal survival vs communal objective (**supersedes naive Avoid hard-win**).
-
----
-
-#### Survival-plan vision (author intent — informs future systems)
-
-Below is **design vocabulary** tying each dichotomy to **Don’t die / reproduce**. Systems marked **future** depend on ecology, crush, nests, richer combat—not ENGINE cardinal refactor alone.
-
-**Explorer ⇄ Builder**
-
-- **Explorer (−)** — **covers ground** to **discover and register** sources: food hotspots, mates, nesting/shelter options. Supports **belief maps** anchored by **`believed_goal_*`** knobs (§A.3.1) plus per-goal payload records in CREATURE_MEMORY, and wider **trail / explore** modulation in motor.
-- **Builder (+)** — **thickens yield at known locations**: e.g. **crush competing non-food** so favoured food spreads; maintain **nest / safe substrate** so mates reproduce (**future** ecology + build verbs). Builder bias **de‑emphasizes blind roam** versus fortifying patches already known.
-
-Motor **today-ish:** Explorer → weaker trail repulsion, stronger expanding sweep / coverage; Builder → tighter orbit around **`SeekCandidate`** + belief anchors (**future**: action layer for crush/nest—not Tier-2 cost only).
-
-**Change ⇄ Stability**
-
-- **Change (−)** — **alters environment or strategy** aggressively. High **Explorer** ⇒ maximise **new terrain + new hypotheses** (“always stir the pot”). High **Builder** ⇒ **actively reshape locality** (competitors removed, corridors opened, nests adjusted).
-- **Stability (+)** — **preserve what works**. High **Explorer** ⇒ establish a **preferred range**: cycle known patches; only radiate outward when locals fail or external **pressure**. High **Builder** ⇒ **incremental tuning** at one focal resource—minor adjustments, reluctant to bulldoze; may **suppress** uprooting an established crop even if something “faster-growing” arrives (competition favors **steady state** unless forced).
-
-Cross with **Explorer** explorer+change vs explorer+stability distinguishes **nomadic scan** vs **patrol within home range**.
-
-**Compassion ⇄ Self-interest**
-
-- **Compassion (−)** — tolerate **sharing** food / mate access; weaker conspecific aggression (**future melee / chase-off** mechanics).
-- **Self-interest (+)** — **hoard**, contest, chase rivals from resources or mating opportunities (when combat depth exists).
-
-Tier-2 effect **before combat:** weak modulation of **crowding toward the same `SeekCandidate`**, **pseudo-priority bumps** toward contested patches (stub). Fully realized only with **faction / conspecific threat** tuning. Canonical **sharing vs hoarding** prose for **`compassion_self_interest`** is pinned in **[CREATURE_MODEL_PLAN.md — Goals and motivational priorities](CREATURE_MODEL_PLAN.md#goals-and-motivational-priorities-design)** (see **Cross-links** above).
-
-**Community ⇄ Individual**
-
-- **Community (−)** — **wants kin nearby** — shared growth if **paired with compassion**; paired with **self-interest** ⇒ **prefer other bodies as decoys/distraction for predators**, not necessarily benign sharing.
-
-- **Individual (+)** — **solo bias**. Paired **compassion**: tolerate transient **overlap** (another eats / mates then leaves); lingering conspecific **can flip to hostility** if space feels violated (**future script**). Paired **self-interest**: proactively **fight or steal**. With **high Change**, if too weak to evict rivals by force ⇒ **destructive sabotage** of contested resources (**future**—“scorched earth” escalation path).
-
-Tier-2 + motor: herd **centering potential fields** (**future**) vs lone **tangential roam** vectors; overlaps **Avoid hostiles** when conspecific rivalry becomes a ThreatSample.
-
----
-
-**Summary table — traits → Tier-2 emphasis (engineering shorthand)**
-
-| Trait axis | Rough Tier-2 / systems touch | Motor / scaffold today | Deferred |
-|------------|------------------------------|------------------------|----------|
-| **Explorer–Builder** | **Find food** coverage vs patch fortification | Explore weights, hotspot bias (**§A.3.1**) | Crush / nest ecology |
-| **Change–Stability** | Roam novelty vs patrol / incremental optimise | Escape vs hold (`scripted_intent_hold`), expanding hint | Landscaping / selective crush |
-| **Compassion–Self-interest** | Conspecific contest vs share | Minimal | Detailed combat chase-off |
-| **Community–Individual** | Aggregate vs solo roam; decoy herd | Minimal | Mate proximity, riot logic |
-
-**Trait scale into Tier subtrees (resolved)**
-
-- **`CreatureDefinition` authoring scale** stays **−100 … +100** on each slider, with **0 = midpoint** between the two poles (**neutral** blending — ship profile targets this region per §A.1).
-- Tier-2 weight deltas read **directly from this scalar** (e.g. `weight_x += trait_scale * explorer_builder / 100.0` patterns) unless a subsystem documents a different lawful transform; **no separate mandatory normalization** to auxiliary \([−1,+1]\) storage — \(/100\) is an implementation detail inside the mapper.
-- **First trait wired into motor:** add the concrete formula (per trait → which Tier-2 terms) beside `game_config_merge` or the motor façade so tuning stays auditable.
-
-**OUT OF V2 scope (explicit):**
-
-| Topic | Boundary |
-|-------|----------|
-| **Heredity** | No genetic transfer of traits or motor params in this refactor. |
-| **Experience-driven trait drift** | Motivation traits are **fixed at spawn / definition** until a future system explicitly adds learning. |
+**Code:** read `@export_range(-100, 100)` scalars from [`creature_definition.gd`](../../creature/definition/creature_definition.gd); apply per **GOAL_DRIVERS §3** when blending Tier-2 weights and **`believed_goal_*`** replay (**§A.3.1**).
 
 ---
 
 ## B. Port from CREATURE_MEMORY (goal-aligned beliefs — still applicable)
 
-*(Sections below summarize [CREATURE_MEMORY.md](CREATURE_MEMORY.md); V2 refactor **does not replace** belief design — it **routes** beliefs through the unified motivation tree and pack-scoped motor data.)*
+*(Sections below summarize [CREATURE_MEMORY.md](CREATURE_MEMORY.md); V2 refactor **does not replace** belief design — it **routes** beliefs through the **[CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)** motivation tree and pack-scoped motor data.)*
 
 ### B.1 What memory is for (goal-aligned categories)
 
@@ -350,7 +244,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 - [ ] **`believed_goal_source_bias`** (motor-context façade): habitual patch bias + escalate hooks; radii **`believed_goal_hotspot_near_radius_px`**, **`believed_goal_seek_escalate_radius_px`** ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md); **§A.3.1** here).
 
-- [ ] **Traits** plumbed **or** documented with `<<Comment>>` for first knob — **pole meaning** anchored in §A.4 (**Survival-plan vision** + shorthand table); **−100…+100** scale, **0 = midpoint** (**Trait scale into Tier subtrees**); mapper applies **trait application order** (**strongest `abs` first**; tie **`explorer_builder` → `change_stability` → `compassion_self_interest` → `community_individual`**).
+- [ ] **Traits** plumbed **or** documented with `<<Comment>>` for first knob — **pole meaning** anchored in **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** (**Survival-plan vision** + shorthand table); **−100…+100** scale, **0 = midpoint**; mapper applies **trait application order** (**strongest `abs` first**; tie **`explorer_builder` → `change_stability` → `compassion_self_interest` → `community_individual`**).
 
 ### G.4 Memory prerequisites (subset of CREATURE_MEMORY §13 — after movement slice)
 
@@ -365,7 +259,8 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 ## H. Dependencies
 
 - [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) — V1 fork inventory **to deprecate**.
-- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; success-pattern façade (**§2.1**); trait-mediated habitual replay (**§2.2**); routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
+- [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) — **canonical** motivation tree Tier-1/2, **`CreatureDefinition`** trait axes + application order, habitual **`believed_goal_*`** modulation (**strategy-class** Actions 1–3).
+- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; success-pattern façade (**§2.1**); trait-mediated habitual replay consumption (**§2.2**); routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
 - [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) — field catalog; traits.
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) — must stay consistent (**heredity out of scope** here; genome doc may evolve separately).
 - [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
@@ -376,6 +271,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-05-17 | **Three-way split:** motivation tree framework + **§A.4** trait content moved to **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; **§A.3** stub + **§A.3.1** motor keys/integration retained; **§A.4** = pointer to **GOAL_DRIVERS §3**; **§G**, **§H**, habitual replay bullets updated. |
 | 2026-05-16 | **§A.3.1:** **Trait-scaled habitual replay** — **`believed_goal_*`** from **`context_hash` / LocalePriorMap**, then **§A.4 traits** modulate **reapplication** ([CREATURE_MEMORY §2.2](CREATURE_MEMORY.md)); **`explorer_builder` vs environment-alter vs explore** illustrative; drift **still out-of-scope**. Implementation slots → **MEMORY §§2–2.2**. |
 | 2026-05-16 | **Naming alignment (`goal_*`):** generalized belief keys (**`goal_memory_*`**, **`weight_seek_remembered_goal`**, **`believed_goal_*`**, **`_goal_belief`** hooks); **§B**, **§C**, **§F**, **§G** synced with [CREATURE_MEMORY.md](CREATURE_MEMORY.md); **§B.2** retitled (**`feeding_mode` ingress** vs diet-archetype memory). |
 | 2026-05-17 | Initial **CREATURE_MOVEMENT_V2**: goals (pack motor, unified intent ontology, motivation tree + mate stub, trait map), ported CREATURE_MEMORY food/env/LOS sections, acceptance criteria — **trait learning & heredity explicitly excluded.** |

@@ -76,6 +76,7 @@ Detailed rules live only in these files; add more pointers here as new focus are
 **Ignore inconsistencies in historical files:** Files under `./Project_Docs/Completed_Features` are archived; see **Completed_Features scope** under Behavioral instructions. Do not treat them as active requirements unless a maintainer explicitly asks. Cross-doc drift with those files is expected.
 
 - **Project_Docs (start here):** [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) — layout, tiers, promotion, and maintenance (`Draft_Features/`, `Definitive_Features/`, `Completed_Features/`)
+- **Creature goal drivers (Tier-2 / traits / habitual replay semantics):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — canonical hub; implementation in [CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) + persistence in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)
 - **Assets (`res://assets/`, `pack_resources.json`, variants):** [asset_management.md](./focus/asset_management.md) — full design in archived [ASSET_MANAGEMENT_PLAN.md](../../Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md)

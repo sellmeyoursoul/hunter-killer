@@ -2,7 +2,7 @@
 
 > **Purpose:** **Authoritative working spec** for **creature memory** — what an agent **stores** and **updates** so it can pursue [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) **goals** (survival, reproduction, trait-shaped priorities). Memory is **not** a telemetry dump of every seen object.
 
-> **Motor / motivation alignment (read first):** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) defines the **unified scripted motor**, **`SeekCandidate`** ingress (`feeding_mode` filters **membership/metadata**, **not** parallel code paths), the **motivation tree** (Tier-2 leaves), **`creature_motor` pack merges**, and **phasing** (ENGINE movement Foundations **before** full memory wiring). Treat that file as **primary context for agents** implementing behavior; **this** doc specifies **what** to remember **and** how beliefs merge into **`SeekCandidate[]` (+ threat/danger channels)** once the façade exists.
+> **Motor / motivation alignment (read first):** **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (strategy-class **`<<Question>>`** Actions **1–3**). **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — unified scripted motor, **`SeekCandidate`** ingress, **`creature_motor`** pack merge, **Preserve vs Find** thresholds (**§A.3.1**), phasing (ENGINE movement Foundations **before** full memory wiring). **This doc:** **what** to remember and how beliefs / locale priors feed **`MotorContext`** (**§§2, 10**).
 
 **Location:** `Draft_Features/` while design stabilizes; **promote** to `Definitive_Features/` when contract vs code (see [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md)). **Live code notes:** [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) (**`_goal_belief`** design block), [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd).
 
@@ -12,7 +12,7 @@
 
 **Phase name:** Creature memory (**goal-generalized** beliefs + success patterns)
 
-**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with [CREATURE_MOVEMENT_V2.md §A.3–A.4](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2**), and **§14 open decisions** until learning-layer knobs are settled.
+**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** + [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2** → **GOAL_DRIVERS §5**), and **§14 open decisions** until learning-layer knobs are settled.
 
 **Explicit non-authority:** **Which** entities count as **`SeekCandidate` / consumable_now / food_candidate** vs **friend/foe** is governed by **`CreatureDefinition`** + ingestion policy ([CREATURE_MOVEMENT_V2.md §A.2 — `feeding_mode` / DietRegistry posture](CREATURE_MOVEMENT_V2.md)). **Memory** stores **belief records** keyed by stable instance ids **where applicable** and **does not** restate predator/omnivore/herbivore branching.
 
@@ -27,18 +27,15 @@
 
 ## 2. What memory is (conceptual contract)
 
-Creature memory holds **three** cooperating layers, all keyed to **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) Goals and motivational priorities** and routed through the **motivation tree** in CREATURE_MOVEMENT_V2 §A.3:
+Creature memory holds **three** cooperating layers, all keyed to **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) Goals and motivational priorities** and routed through the **motivation tree** (**[CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)**):
 
 | Layer | Role |
 |-------|------|
 | **Salient world facts** | Structured beliefs (positions, tiers, payloads, freshness) about **things that matter to active goals**. |
-| **Goals and motivational priorities** | Runtime snapshot of Tier-2 **what matters now** — acute hunger/threat/find-mate/evasion urgencies that **prioritize which belief subsets** fuse into **`SeekCandidate` / threat samples**. Same tree as scripted motor (**Find food**, **Avoid hostiles**, **Find mate** stub, etc.). |
+| **Goals and motivational priorities** | Runtime snapshot of Tier-2 **what matters now** — acute hunger/threat/find-mate/evasion urgencies that **prioritize which belief subsets** fuse into **`SeekCandidate` / threat samples**. Same Tier-2 leaves as **[CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)**. |
 | **Successful outcome patterns** | Compact records of **action → outcome links** (“leading a predator toward a weaker prey source paid off”; “this squeeze pocket repeatedly broke LoS”; “this nook held for nesting”) so **later decisions can reuse**. |
 
-**Linkage to motivation traits ([CREATURE_MOVEMENT_V2.md §A.4 — `CreatureDefinition` trait exports](CREATURE_MOVEMENT_V2.md)):**
-
-- **Today (ENGINE Foundations + staged memory):** definition-time traits (**−100…+100**) are **fixed per spawn**. Memory should still write **signals** that Tier-2 mappers consume: habitual patch bias (**`believed_goal_*`**, **`believed_goal_source_bias`** — CREATURE_MOVEMENT_V2 §A.3.1), modulation of replay by motivation traits (**§2.2**), **`weight_seek_remembered_goal`** (and goal-kind analogues), cardinal coarse bias, defensive retreat toward remembered **nest / squeeze** anchors, etc. Interpret as **belief-driven modulation of Tier-2 weights / relevance**, not silent trait mutation unless a dedicated **learning** system exists.  
-- **Future:** [CREATURE_MOVEMENT_V2.md §A.4 “OUT OF V2 scope”](CREATURE_MOVEMENT_V2.md) excludes **experience-driven trait drift**. When an explicit learning pass exists, successful patterns (**third row above**) become the **authority** that may **bias or slowly adjust** interpreted trait-aligned behavior (still subject to CREATURE_MOVEMENT_V2 trait-scale semantics). **[This doc]** requirements: **patterns must be plumbed such that identical logic can elevate food, mate, shelter, evasion proofs** — no forked memory silos.
+**Linkage to motivation traits:** **`CreatureDefinition`** trait axes (−100…+100), application order, and **survival-plan** narrative — **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**. Memory writes **signals** Tier-2 mappers consume (**`believed_goal_*`**, **`believed_goal_source_bias`** — CREATURE_MOVEMENT_V2 §A.3.1); **how traits scale habitual replay** — **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** + **§2.2** below. **Future trait drift** — still **[CREATURE_GOAL_DRIVERS.md §3.4](CREATURE_GOAL_DRIVERS.md)** boundary until a learning pass exists; successful patterns must stay **GoalKind-agnostic** (**no forked memory silos**).
 
 ### 2.1 Success patterns — locale priors vs experience traces (resolved naming)
 
@@ -76,33 +73,24 @@ flowchart LR
 - **`ExperienceRing`:** ship **later** unless scope allows a **minimal** ring (small cap per `GoalKind`, **ε = 0** = aggregate-only behavior for designers who want zero episodic branching).
 - **Do not** use the label **belief tags** for success patterns — avoids colliding with **belief records** (instance-target memory, §§5–6).
 
-**`context_hash` (concept):** coarse situation fingerprint. Composite key **`(GoalKind, …)`** with **per-`GoalKind` overlays** (**spatial / fingerprint layering — resolved in §14**): e.g. uniform **grid cell** for foraging, squeeze/nest **fingerprints** for **`GoalKind.shelter`**, etc. — **not** one global spatial hash pasted onto every goal. Keep definitions at **consistent higher-order layering** (**goal ordinal / tier**) so composite **third-order** goals can reuse **the same scheme** (§14 row and example therein). Phase-1 *candidate*: **grid cell** for nutrition overlays; sibling keys layered by goal author. Other §14 knobs (**strategy-class tagging**, normalization, gates, …) remain in the **`<<Question>>`** list below. Optional **strategy-class metadata** paired with **`context_hash`** feeds **trait-mediated replay** (**§2.2**) once defined.
+**`context_hash` (concept):** coarse situation fingerprint. Composite key **`(GoalKind, …)`** with **per-`GoalKind` overlays** (**spatial / fingerprint layering — resolved in §14**): e.g. uniform **grid cell** for foraging, squeeze/nest **fingerprints** for **`GoalKind.shelter`**, etc. — **not** one global spatial hash pasted onto every goal. Keep definitions at **consistent higher-order layering** (**goal ordinal / tier**) so composite **third-order** goals can reuse **the same scheme** (§14 row and example therein). Phase-1 *candidate*: **grid cell** for nutrition overlays; sibling keys layered by goal author. **Strategy-class tags**, **`<<Question>>` Actions 1–3**, and trait replay modulation — **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)**. Other §14 knobs (normalization, gates, …) stay open where marked. Optional tags paired with **`context_hash`** feed **`believed_goal_*`** once **Actions 1–3** **`Resolved:`** there.
 
 ### 2.2 Trait-mediated replay (**context_hash × motivation traits`)
 
-**Reads first:** **`LocalePriorMap`** / **`ExperienceRing`** (**§2.1**) project into **`believed_goal_source_bias`** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**). Beyond raw prior strength, **reapplication weight** SHOULD scale by **`CreatureDefinition` motivation traits** ([CREATURE_MOVEMENT_V2.md §A.4 — `explorer_builder`, etc.](CREATURE_MOVEMENT_V2.md)) so identical remembered outcomes steer **Builders** differently from **Explorers**, etc., without branching the seek list.
+**Canonical narrative:** illustrative **`explorer_builder`** tension table, strategy-class **`Resolved`** prose + **`<<Question>>` Actions 1–3** — **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)**.
 
-**Principle:**
+**This file (data path):** **`LocalePriorMap`** / **`ExperienceRing`** (**§2.1**) → **`believed_goal_source_bias`** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**). Trait scalar semantics (**−100…+100**, spawn-fixed today): **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**.
 
-- **`context_hash` encodes situation class** — spatial cell, passage fit, or (later) **effect class** such as **“changed local environment”** vs **“discovered new route.”**  
-- **Traits modulate how much to favor reusing that class** when merging into Tier-2 (same façade as §2.1 — **no** second memory stack).
+**Principle:** **`context_hash`** situation class × traits scales **reapplication** without branching **`SeekCandidate` ingress**.
 
-**Illustrative tension (authoring example, not a fixed rule until §14 maps hash semantics to trait axes):**
+**Backend tuning (`<<Question>>` rows):** **§14** — reward shaping, write gates, decay, projection geometry, **ExperienceRing**, **`action_tag`**.
 
-| **If `context_hash` / trace tags imply…** | **Builder pole** (positive `explorer_builder`) | **Explorer pole** (negative `explorer_builder`) |
-|------------------------------------------|-----------------------------------------------|--------------------------------------------------|
-| Strategy involved **lasting local change** (terraformed pocket, nest prep, blocked lane) | **Higher** weight to **reapply** that remembered pattern | **Lower** weight — prefers fresh scan over repeating “settled” plays |
-| Strategy was **pure reconnaissance / roaming payoff** | **Lower** relative emphasis vs stable patch bias | **Higher** weight to repeat similar wander / probe plays |
-
-**Today (ENGINE + staged memory):** traits are **fixed at spawn** ([CREATURE_MOVEMENT_V2.md §A.4 “OUT OF V2 scope”](CREATURE_MOVEMENT_V2.md)). Apply trait mediation as **read-only multipliers or blends** on **`believed_goal_*`** / hotspot contribution — **not** silent trait mutation.
-
-**Future:** an explicit **learning / heredity** pass may let **success-pattern aggregates** (or lineage copy) **nudge** motivation trait scalars. That path is **orthogonal** to this tick’s replay formula: **traits affect how prior evidence is consumed**; **learned trait drift** is a separate write channel when designed. Keep **one** Tier-2 façade so **food / mate / shelter / evasion** proofs share the same **replay × trait** story (**§2 table, third row**).
-
+**Future:** learned trait drift orthogonal (**GOAL_DRIVERS §3.4**); **one** Tier-2 façade for food / mate / shelter / evasion proofs (**§2 table**).
 ---
 
 ## 3. Goal-aligned categories
 
-Memory categories **rollup to Tier-2** leaves (**CREATURE_MOVEMENT_V2 §A.3**) and generalized goals:
+Memory categories **rollup** to Tier-2 leaves (**[CREATURE_GOAL_DRIVERS.md §4](CREATURE_GOAL_DRIVERS.md)**). **That section** defines category ↔ Tier-2 semantics; **this table** adds implementation phasing:
 
 | Category | Tier-2 / goals | This phase vs later |
 |----------|----------------|---------------------|
@@ -111,7 +99,7 @@ Memory categories **rollup to Tier-2** leaves (**CREATURE_MOVEMENT_V2 §A.3**) a
 | **Danger / hostiles** | **Avoid hostiles** | Outline + unify with **ThreatSample**/jeopardy; coarse/precise can mirror goal rules where “last hostile position” cues exist. Dedicated schema refinement **later** if needed — **still no diet archetypes**. |
 | **Finding shelter** (supersedes legacy “ambient hiding §” wording) | Survival, reproduction (safe birth sites) | **Design in §7** — **squeeze / perceived fit**, hostile size comparison, remembered **bolt-holes**, future nest sites. Separate from standalone “ambient hide minigame.” |
 
-**Cross-category mechanic:** **`context_hash`** replay weighting scaled by **`CreatureDefinition` motivation traits** (**§2.2**) applies **GoalKind-agnostically** (nutrition → mates → evasion) unless a future mapping table restricts a tag to one category.
+**Cross-category mechanic:** **`context_hash`** replay weighting scaled by **`CreatureDefinition` motivation traits** (**§2.2**, **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)**) applies **GoalKind-agnostically** (nutrition → mates → evasion) unless a future mapping table restricts a tag to one category.
 
 ---
 
@@ -213,13 +201,14 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 ---
 
-## 8. Context for agents (**CREATURE_MOVEMENT_V2 forwards** implementation)
+## 8. Context for agents (**GOAL_DRIVERS → MOVEMENT_V2 → this file**)
 
 ### 8.1 Read order
 
-1. **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — motivations, **`SeekCandidate`**, motor merge, phased acceptance (**§G**).  
-2. **This file** — belief lifecycle + payload tiers (**§§5–6**); success-pattern backends (**§2.1**); **trait × `context_hash` replay** (**§2.2**); open decisions (**§14** before locking learning implementation).  
-3. **[ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)** — geometry truths.
+1. **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (**§5**, strategy-class **`<<Question>>`**).
+2. **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — **`SeekCandidate`**, **`creature_motor`** merge, Preserve vs Find (**§A.3.1**), phased acceptance (**§G**).
+3. **This file** — belief lifecycle + payload tiers (**§§5–6**); success-pattern backends (**§2.1**); projection + **§14** storage/tuning **`<<Question>>`** rows.
+4. **[ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)** — geometry truths.
 
 ### 8.2 Key scripts / hooks (today’s breadcrumbs)
 
@@ -294,9 +283,9 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 
 ## 14. Outstanding design decisions (success patterns & motor façade)
 
-Resolve **before** treating learning-layer code as contract-frozen. Keep the **`<<Question: …>>` markers** plus table until replaced with terse **Resolved:** prose in-line or beside each row ([.cursor/rules/AGENTS.md](../../.cursor/rules/AGENTS.md)). Cross-links: **§§2.1–2.2**, [CREATURE_MOVEMENT_V2.md §A.3.1–A.4](CREATURE_MOVEMENT_V2.md).
+Resolve **before** treating learning-layer code as contract-frozen. Keep the **`<<Question: …>>` markers** plus table until replaced with terse **Resolved:** prose in-line or beside each row ([.cursor/rules/AGENTS.md](../../.cursor/rules/AGENTS.md)). Cross-links: **§§2.1–2.2**, [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** (strategy-class **`Resolved`** + **`<<Question>>` Actions **1–3**).
 
-<<Question: **context_hash strategy class** — minimal enum or tag set (alter local env, pure explore, squeeze-commit, …); mapping from each tag to **motivation trait axes** (**§A.4**) for replay multiplier on **`believed_goal_*`** (**§2.2**)?>>
+**Strategy-class tags & trait × habitual replay:** Authoritative **`Resolved`** prose (**tag set**, **dominant + attenuated secondary** combine rule) and **`<<Question>>` Actions **1–3** — **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)**. **§14 below** = **LocalePriorMap / episodic backends**, projection geometry, gates — not duplicated there.
 
 **Resolved (**`context_hash` — overlays & layering**):** **`LocalePriorMap` / episodic backends** SHOULD use **`(GoalKind, overlay…)`**, i.e. **per `GoalKind`** spatial regimes and fingerprint payloads (grid cell vs squeeze/nest keys, …) rather than **one global uniform grid** pasted onto every motivation. Normalize **definitions at a consistent higher-order level** (**goal ordinal / tier** — taxonomy **TBD**): when a **third-order composite goal** appears (example: behaviors that **“crush” less plentiful sources** — spend effort removing or collapsing **economically worse** patches — **to make room / attention for more plentiful ones**, i.e. **reshape local resource layout**), **`context_hash` compositor rules** SHOULD **reuse that same layering discipline** so **prior aggregates and episodic replay** (**§§2.1–2.2**) do not fork into bespoke hash stacks **per whim**. Per-overlay detail (cell size, origin, clamp-to-playfield, alignment to awareness envelopes) locks with implementation as each **`GoalKind` / overlay ships.
 
@@ -324,7 +313,7 @@ Resolve **before** treating learning-layer code as contract-frozen. Keep the **`
 | **Escalation vs threat** | **“No hotspot”** urgency must respect survival ordering | Hunger-band interaction plus hard override when jeopardy acute |
 | **ExperienceRing phase 1** | Novelty / retry versus engineering cost | **ε = 0** (aggregate-only tuning) or minimal ring behind same façade (**§2.1**) |
 | **action_tag** | Preserve improbable strategies without a brittle DSL | Very small enum (retreat, commit_cardinal, stalk, placeholders) versus mirror last motor intent ordinal (**minimal set first**) |
-| **trait × context_hash replay** | Same remembered prior, different **personality** on reapply (**§2.2**) | Author table: **strategy-class tag** → **§A.4 trait axes** (e.g. `explorer_builder`) → blend / multiply into habitual bias; future **learned trait drift** stays a **separate write** from tick replay |
+| **trait × context_hash replay** | Same remembered prior, different **personality** on reapply (**§2.2**) | **Semantics + `<<Question>>` Actions 1–3:** **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** (**tag set** + combine **`Resolved`**); **§14** rows above = backends / façade only; future **learned trait drift** — **GOAL_DRIVERS §3.4** |
 
 **Cross-cutting discipline:** GoalKind parity across §§5–6, MotorContext, and **`goal_*` / `believed_goal_*`** (**§10**) — mates / nests / evasion reuse the **same** façade (**§2 third-layer invariant:** no forked memory silos).
 
@@ -334,7 +323,10 @@ Resolve **before** treating learning-layer code as contract-frozen. Keep the **`
 
 | Date | Change |
 |------|--------|
-| 2026-05-17 | **§11** deep-in-squeeze food: **exploration-gated** discovery; predator-excluding-squeeze niche via priors **`context_hash`** + **`believed_goal_*`**. **§14** **`context_hash` overlays:** **per `GoalKind`** + higher-order reuse for composite goals (**§14 Resolved** prose). **§2.1** `context_hash` concept synced. **§11** retitled **Resolutions**. |
+| 2026-05-17 | **Three-way split:** new hub **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree §2, traits §3, habitual replay §5 (**strategy-class `<<Question>>`** Actions **1–3**). **§2** / **§3** / **§14** retarget there; **§14** = backends only. **CREATURE_MODEL_PLAN** §4Goals link updated. |
+| 2026-05-17 | **§14:** strategy-class → §A.4 replay split into **Actions 1–3** (canonical vocabulary; **per-tag §A.4** mapping; **dominant-tag** selection) with three scoped **`<<Question>>`** markers; **§2.1**, **§2.2**, §14 decision table synced. |
+| 2026-05-17 | **§11** deep-in-squeeze food: **exploration-gated** discovery; predator-excluding-squeeze niche via priors **`context_hash`** + **`believed_goal_*`**. **§14** **`context_hash` overlays:** **per `GoalKind`** + higher-order reuse for composite goals (**§14 Resolved** prose). **§2.1** `context_hash` concept synced. **§11** retitled **Resolutions**. **§14** **strategy class:** **tag set** (not minimal enum) for replay variability + design intent (**§15** next row: aggregation **Resolved**). |
+| 2026-05-17 | **§14 Resolved:** strategy-class **multi-tag aggregation** — **dominant tag** full contribution, non-dominant tags **strongly attenuated**; **double-counting bounded**; optional **caps** on tag count and/or max secondary impact if tuning requires. **`<<Question>>`** now: canonical vocabulary, **per-tag → §A.4** table, **dominant-tag tie-break**. **§2.1** / **§2.2** / §14 table synced. |
 | 2026-05-16 | **§2.2 Trait-mediated replay:** **`context_hash` / strategy-class** × **`CreatureDefinition` §A.4 traits** scales **reapplication** of locale priors into **`believed_goal_*`** (Builder vs Explorer example); **future** learned trait drift **orthogonal** to tick replay. **§3** cross-category pointer; **§14** question + table row (**trait × context_hash replay**). **§8.1** read order. **CREATURE_MOVEMENT_V2** §A.3.1 bullets synced. |
 | 2026-05-16 | **Success patterns §2.1:** **LocalePriorMap** vs **ExperienceRing** (dual optional backends → **`MotorContext` `believed_goal_*`** façade, CREATURE_MOVEMENT_V2 §A.3.1). Resolved **belief tags** wording; forbid overloading **belief**. **§14** Outstanding design-decision table + **`<<Question>>`** markers; **§15** changelog renumber from former §14. **§§4, 8, 13** cross-links refreshed. |
 | 2026-05-16 | **Code/doc rename:** authoritative identifiers **`goal_memory_*`**, **`weight_seek_remembered_goal`**, **`weight_coarse_sector_goal_bias`**, **`believed_goal_*`**, stubs **`_goal_belief`** / **`goal_source_memory.gd`** (`ai_driver.gd`, `game_config_merge.gd`, `cardinal_avoidance.gd`). **§10:** no **`food_memory_*`** aliases policy. **`CREATURE_MOVEMENT_V2.md`** synced (dual-author note, §§A–G). **`CREATURE_MOVEMENT.md` (Definitive)** table row updated. |
