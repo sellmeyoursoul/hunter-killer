@@ -190,11 +190,11 @@ After locale priors project into **`believed_goal_*`** / habitual bias, **`Creat
 | **Pole facet tags** | **8** — one negative / one positive pole per **§3** continuum | Motivational **“color”** of the episode — habitual replay affinity + **future trait drift** | **Yes** |
 | **Modality tags** | **6** initial — grow when scenarios arise | Tactical **means** / situation — “is this tactic applicable **here and now**?” | **No** (situational match only) |
 
-**Resolved (episode write — hybrid pole emission):** On every **salient** write (per **[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)** write gates):
+**Resolved (episode write — hybrid pole emission):** On every **salient** write (per **[CREATURE_MEMORY.md §14 — Write gates](CREATURE_MEMORY.md)** **Resolved**: dominant Tier-2 at outcome → **`GoalKind`**, one write per goal outcome):
 
 1. **`modality_tags[]`** — **required** when the emitter knows tactical class.
 2. **`pole_facet_tags[]`** — **explicit** when the emitter knows motivational color; **else infer at write** from modalities + motor/social/outcome context before persist (**fallback** so traits never disconnect).
-3. **`outcome_envelope`** — success tier, damage/jeopardy flag, goal delta (authoritative in **CREATURE_MEMORY** backends; referenced here for drift/aversion).
+3. **`outcome_envelope`** — success tier, damage/jeopardy flag, **`insufficient_yield`** (low-calorie target, **`Find food`** still active), goal delta stub (**[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)** outcome + **write gates**).
 
 Do **not** re-infer poles from later rules at **drift apply** time — the stored lesson stays stable (“that almost killed me”).
 
@@ -202,17 +202,17 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 
 - **Slot A — trait × pole affinity:** `trait_affinity(creature_traits, record.pole_facet_tags)` — e.g. negative **`explorer_builder`** boosts records tagged **`explorer`**. Implements **§5** illustrative tension without traits reading modality ids directly.
 - **Slot B — situational match:** `situational_match(current_context, record.modality_tags)` — e.g. squeeze geometry boosts **`squeeze_commit`**; acute threat boosts **`flee_retreat`** or **`hide_stealth`** as appropriate.
-- **Combine** with **`context_hash`** prior strength, recency, salience — weights **TBD** in **Action 2**.
+- **Combine** with **`context_hash`** prior strength, recency, salience — **Action 2 Resolved** below (`replay_delta` / `replay_weight`; recency / salience tie-breaks **Action 3**).
 
 **Resolved (outcome learning — two channels):**
 
 | Outcome | Pole channel (traits) | Modality channel (tactic memory) |
 |---------|----------------------|----------------------------------|
 | **Success** | Nudge **toward** stored **`pole_facet_tags`** on the record (**future**; **§3.4** today) | Strengthen prior for that **`context_hash`** + modality set |
-| **Failure** | Nudge **away from** dominant poles on the record | Weaken / decay modality prior for similar situations |
+| **Failure** | Nudge **away from** stored **`pole_facet_tags`** (strongest-weighted first) | Weaken / decay modality prior for similar situations |
 | **Near-death / high jeopardy** | Strong **away-from** on poles; may interact with **Avoid hostiles** hard-win (**§3**) | Strong suppression of that modality (“don’t repeat that tactic”) even if trait move is small |
 
-**Resolved (strategy-class tags — aggregation / double-counting):** **Bound double-counting within each family.** When several tags in the **same family** influence the same **§3** axis or the same **`believed_goal_*`** replay path, apply **dominant tag at full strength**; **all other tags in that family** contribute at a **significantly lower weight**. **Across families:** combine **Slot A** (poles) and **Slot B** (modalities) with bounded weights — do **not** pick one global winner among all tags. **Escape hatch (if tuning demands):** cap tag count and/or max secondary impact **per family**.
+**Resolved (strategy-class tags — aggregation / double-counting):** **Bound double-counting within each family** via **strength-ranked top contributors** (**Action 3**): rank tags by family-specific strength, take **at most three** — weights **1.0, 0.2, 0.2** — ignore the rest. **Across families:** **multiply** Slot A and Slot B results (**Action 3**); do **not** pick one global winner among all tags.
 
 **Strategy-class tags → trait replay — actions (complete in order):** Do **Action 1**, then **Action 2**, then **Action 3**. Each action **closes** when replaced by terse **`Resolved:`** prose (or explicitly **waived**) in-line here — same contract discipline as **[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)** for storage-backed rows.
 
@@ -245,18 +245,207 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 | `squeeze_commit` | **Commit** through **tight geometry** — squeeze, bolt-hole, passage commitment. | |
 | `return_home` | Returning to a **known area** yields goal payoff. | Tactical inverse of wide **explorer** roam; **requires LoS** to known locale when implemented. Spatial recurrence stays in **`context_hash`** — tag marks **return-for-payoff strategy**, not the cell id alone. |
 | `hide_stealth` | Situation addressed by **hiding or sneaking** — defensive (evade) and offensive (ambush). | Split **`hide`** vs **`ambush_stalk`** later if dominance gets muddy. |
-| `flee_retreat` | Situation addressed by **acute egress / running away** — distinct from **`hide_stealth`** hold-still or sneak. | Subsumes **[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)** episodic **`retreat`** / **`action_tag`** shorthand for strategy-class namespace. |
+| `flee_retreat` | Situation addressed by **acute egress / running away** — distinct from **`hide_stealth`** hold-still or sneak. | |
 | `fight` | Goal accomplished through **combat**. | **Requires combat** implementation; stub until then. |
 
-**Related (memory backend):** **[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)** **`action_tag`** examples (`commit_cardinal`, `stalk`, …) — map into **modality** ids here when emitters adopt strategy-class tags, or remain episodic-only until merged.
+**Memory backends:** **`LocalePriorMap`** and future **`ExperienceRing`** traces use this **same** episode write shape (**`modality_tags[]`**, **`pole_facet_tags[]`**, **`outcome_envelope`**) — **[CREATURE_MEMORY.md §§2.1, 14](CREATURE_MEMORY.md)** (**`action_tag` excised**).
 
-**Action 2 — Per-tag mapping to §3 axes:** **Slot A** affinity shapes for **pole facet** tags (direct axis lookup above); **Slot B** situational signals for **modality** tags; optional **write-time inference** table (modality → default pole hints). Must compose with **per-family dominant + attenuated secondary** (**Resolved** above) and **§3 trait application order** when spawn traits and tag-derived modulation touch the same mapper pass.
+**Action 2 — Per-tag mapping to §3 axes:** **Resolved** — numeric contracts below. Must compose with **per-family top-3 strength ranking** (**Action 3**) and **§3 trait application order** when spawn traits and tag-derived modulation touch the same mapper pass.
 
-<<Question: **Action 2 — Per-tag mapping** — numeric affinity curves (pole ↔ trait scalar), situational_match inputs per modality, inference table rows, and combine weights for Slot A + Slot B?>>
+**Resolved (Action 2 — per-tag mapping):** **Slot A** is **bipolar** (personality-colored replay); **Slot B** is **unipolar 0…100** (tactic familiarity + fit). **Slot B does not add a second signed term** — it **caps** how strongly **Slot A** can move habitual replay away from the baseline **`context_hash`** prior. Breakpoints and `k` are **first-pass** tunables in **`creature_motor`** / pack keys; the **0-neutral / B-gated / urgency-for-extremes** contract is normative.
 
-**Action 3 — Dominant-tag selection:** **Partially resolved** — dominance runs **per family** (poles separately from modalities), then slots combine. Tie-break among poles: **trait affinity** first, then recency / salience. Tie-break among modalities: **situational_match** first, then recency / salience / Tier-2 leaf ownership.
+#### Slot A — `trait_affinity(creature_traits, pole_facet_tags)` (−100…+100)
 
-<<Question: **Action 3 — Dominant-tag selection** — finalize secondary-tag attenuation factors, cross-family combine weights, and merge rules across **`LocalePriorMap` / episodic** buckets (**CREATURE_MEMORY §2.1**)?>>
+**Pole sign** on each **§3** axis: negative pole tags (`explorer`, `change`, `compassion`, `community`) → **−1**; positive pole tags (`builder`, `stability`, `self_interest`, `individual`) → **+1** (axis lookup in pole table above).
+
+**Per-tag raw alignment** (then **Action 3** top-3 weights on the record):
+
+```text
+raw_axis(tag)   = (trait_scalar / 100.0) * pole_sign(tag)
+pole_strength(tag) = abs(raw_axis(tag))
+```
+
+- **`trait_scalar = 0`** → **0** from that axis (**no personality pull**).
+- **Linear** in `trait_scalar`; **misalignment** is automatic (e.g. `explorer` tag + positive **`explorer_builder`** → negative `raw_axis`).
+- **Same continuum:** if two pole facets on one axis appear, keep only the **higher `pole_strength`** before ranking.
+
+**Top-3 blend (pole family, this record):** Sort remaining tags by **`pole_strength`** descending; ties use **§3** axis order (**`explorer_builder` → `change_stability` → `compassion_self_interest` → `community_individual`**). Apply rank weights **`[1.0, 0.2, 0.2]`** (max **three** tags; additional tags ignored).
+
+```text
+pole_blend = sum over rank r in 1..3:  rank_weight[r] * raw_axis(tag_r)
+slot_a_unsigned = clamp(abs(pole_blend) * 100.0, 0, 100)
+slot_a_sign     = sign(pole_blend)    // 0 if exactly neutral
+slot_a_raw      = slot_a_sign * slot_a_unsigned
+```
+
+**Multi-axis:** Top-3 poles may span up to three continuums; **`pole_blend`** is a **signed sum** of weighted alignments (strongest traits pull hardest without a single global “winner” tag in all cases).
+
+**Cap references Slot B + `external_urgency`:** **`slot_b_base`** limits **\|effective Slot A\|** on replay; approaching **±100** needs **high `slot_b_base`** **and** acute external pressure (imminent predator, jeopardy, extreme hunger band — **§3** **Avoid hostiles** inputs).
+
+| Condition | Max **\|effective Slot A\|** on replay |
+|-----------|----------------------------------------|
+| **`slot_b_base` ~0–25** (weak / novel tactic) | **~25** — personality tint only |
+| **`slot_b_base` ~25–75** | **Linear ramp ~25 → ~75** with `slot_b_base` |
+| **`slot_b_base` > ~75** | **Asymptote ~75** from B alone — **hard** to exceed without sustained success (bell on B) |
+| **`slot_b_base` ≥ ~90** **and** **`external_urgency` high** | **Toward ±100** |
+
+```text
+cap_from_b    = bell_cap(slot_b_base)         // maps Slot B 0…100 → cap ~0…~75 (see Slot B)
+cap_final     = min(100, cap_from_b + urgency_boost(external_urgency, slot_b_base))
+effective_a   = sign(slot_a_raw) * min(abs(slot_a_raw), cap_final)
+```
+
+#### Slot B — `situational_match(current_context, record.modality_tags)` (0…100)
+
+**Not bipolar** — **0** = never tried / no applicable match in this **`context_hash`** class; **100** = frequent, **consistent** success for this modality set in that bucket (**[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)** locale / episodic aggregates).
+
+**Two factors:**
+
+1. **`current_fit` ∈ [0, 1]`** — live **MotorContext**: is this tactic **applicable here and now**?
+2. **`stored_strength` ∈ [0, 1]`** — blended success history for **`(GoalKind, context_hash, modality_tags)`**; backend also exposes **`attempt_count`**, **`success_count`**, **`success_delta`** for **confidence** below (**[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)**).
+
+**Per-tag modality strength** (then **Action 3** top-3 weights):
+
+```text
+modality_strength(tag) = current_fit(tag) * stored_strength(tag)
+```
+
+Sort tags by **`modality_strength`** descending (ties: higher **`current_fit`**, then §3-style modality id order as impl tie-break). Rank weights **`[1.0, 0.2, 0.2]`**, max **three** tags.
+
+```text
+fit_blend   = sum rank_weight[r] * current_fit(tag_r)
+store_blend = sum rank_weight[r] * stored_strength(tag_r)
+x_blend     = w_fit * fit_blend + w_store * store_blend    // defaults: w_fit=0.4, w_store=0.6
+slot_b_base = round(100 * bell(x_blend))
+slot_b      = slot_b_base    // alias: familiarity band; ranking uses replay_rank_score below
+bell(x)     = 1 - exp(-k * x)    // k tuned so x≈0.25→bell≈0.25, x≈0.75→bell≈0.75; top approaches 1.0 slowly
+bell_cap(b) = bell(b / 100.0) * 75    // Slot A cap_from_b(slot_b_base): ~75 max from B alone (phase-1 shape)
+```
+
+**Bell intent:** **~25** is **easy** (modest fit **or** a few tries); **>~75** is **uncommon** (strong **`current_fit`** **and** consistent locale success); **100** is **rare**. Two records with the same **`slot_b_base`** can still **rank differently** after **confidence** and **`change_stability`** bias (below).
+
+**Per-modality `current_fit` inputs** (each tag scored separately; **top-3** weighted blend above replaces legacy **`max(current_fit)`**):
+
+| Modality | `current_fit` inputs |
+|----------|----------------------|
+| `squeeze_commit` | Passage / squeeze fingerprint match; commit-in-progress or narrow opening ahead |
+| `flee_retreat` | Acute threat / jeopardy; positive predator closure |
+| `hide_stealth` | Threat present; egress not dominant; cover / LoS-break opportunity |
+| `lasting_local_change` | Known durable local state at cell; builder-relevant patch flag |
+| `return_home` | LoS or proximity to known locale anchor (strategy tag — not cell id alone) |
+| `fight` | Combat engagement active (**stub 0** until combat ships) |
+
+#### Slot B — confidence (attempts, success delta, Change/Stability)
+
+**Purpose:** Same nominal **`slot_b_base`** (e.g. **~25**) can mean different **evidence quality**. **Confidence** reorders competing records and optionally **scales** personality pull; it does **not** replace the 0…100 bell or Slot A caps (**`cap_from_b(slot_b_base)`** unchanged).
+
+**Locale prior row** per **`(GoalKind, context_hash, modality_tag)`**; **`confidence`** stats (**`attempt_count`**, **`success_count`**, **`success_delta`**) read from the **highest `modality_strength`** tag’s row on this record (phase-1):
+
+| Field | Meaning |
+|-------|---------|
+| **`attempt_count`** | Salient tries in this bucket (write-gated per **CREATURE_MEMORY §14**) |
+| **`success_count`** | Outcomes counted success per **`outcome_envelope`** |
+| **`success_delta`** | Recent outcome trend — EWMA or rolling window (**§14** outcome-shaping locks formula) |
+
+```text
+success_rate = success_count / max(attempt_count, 1)    // or EWMA success rate in impl
+```
+
+**Confidence** (phase-1 shape, tunable):
+
+```text
+evidence      = 1 - exp(-attempt_count / n_sat)          // n_sat ≈ 8–12; saturates with tries
+consistency   = success_rate
+thin_cap      = min(1.0, attempt_count / n_min)         // n_min ≈ 2–3; perfect streak is “promising but thin”
+delta_factor  = clamp(1 + 0.1 * sign(success_delta), 0.85, 1.15)
+confidence    = clamp(evidence * (0.5 + 0.5 * consistency) * thin_cap * delta_factor, 0, 1)
+```
+
+- **Many attempts, mixed results** → **lower** `confidence` than **few attempts, never failed** at the same **`slot_b_base`**.
+- **`success_delta` > 0** (improving) → slight **up**; **< 0** → slight **down** (bounded by **`delta_factor`**).
+
+**`change_stability` rank bias** (traits enter **Slot B ranking only** — not Slot A):
+
+| Pole | When **`slot_b_base`** is similar, prefer… |
+|------|---------------------------------------------|
+| **Change (−)** | **Novel / thin evidence** — low **`attempt_count`**, **no failures**, over high **`attempt_count`** with mixed **`success_rate`**. |
+| **Stability (+)** | **Proven volume** — high **`attempt_count`** (even mixed) over untested / few-try streaks. |
+
+```text
+t               = (change_stability + 100) / 200.0       // 0 = Change … 1 = Stability
+mixed_penalty   = 4 * success_rate * (1 - success_rate)  // peaks at 50% mixed
+failures        = attempt_count - success_count
+streak_bonus    = (failures == 0 && attempt_count > 0) ? (1 - evidence) : 0
+novelty_score   = (1 - evidence) * (1 - mixed_penalty) + streak_bonus
+proven_score    = evidence * (0.5 + 0.5 * success_rate)
+trait_rank_bias = lerp(novelty_score, proven_score, t)
+replay_rank_score = slot_b_base * confidence * trait_rank_bias
+```
+
+Use **`replay_rank_score`** when **choosing among remembered lanes / records** at replay time.
+
+**Worked example** — same **`slot_b_base ≈ 25`**, same **`current_fit`**:
+
+| Record | Attempts | Success rate | **Change** creature rank | **Stability** creature rank |
+|--------|----------|--------------|--------------------------|-----------------------------|
+| A | 20 | 50% mixed | Lower **`replay_rank_score`** | Higher **`replay_rank_score`** |
+| B | 2 | 100% (never failed) | Higher **`replay_rank_score`** | Lower **`replay_rank_score`** |
+
+#### Combine — Slot A + Slot B + `context_hash` prior
+
+```text
+prior_base    = locale_prior_strength(context_hash, GoalKind)
+replay_delta  = effective_a * (slot_b_base / 100.0) * confidence    // confidence secondary to ranking
+replay_weight = prior_base * (1 + replay_delta / 100.0)             // or additive bias per MOVEMENT_V2 §A.3.1 façade
+```
+
+- **`slot_b_base = 0`** → personality modulation **off** even if traits are extreme.
+- **Moderate `slot_b_base`** → typical **±25…±75** effective personality swing (via cap table); **`confidence`** and **`trait_rank_bias`** reorder ties within that band.
+- **Near ±100** → **high `slot_b_base`** **and** **`external_urgency`**.
+- **Cross-family combine (resolved):** **multiply only** — `replay_delta = effective_a * (slot_b_base / 100.0) * confidence`; no separate **`w_pole` / `w_modality`**.
+- **Ranking** among **records**: **`replay_rank_score`** first, then recency / salience.
+
+#### Write-time inference (modality → default `pole_facet_tags[]`)
+
+Hints only when emitter does **not** set poles explicitly; runs **once at write** (no re-infer at drift apply).
+
+| Modality | Default pole hint(s) | Condition |
+|----------|---------------------|-----------|
+| `lasting_local_change` | `builder` | fortify / reuse local state |
+| `return_home` | `stability` | payoff from known locale |
+| `squeeze_commit` | `individual` or `community` | success + solo vs group squeeze |
+| `flee_retreat` | `individual` | solo egress default |
+| `hide_stealth` | `stability` or `change` | holding vs repositioning sub-phase |
+| `fight` | `self_interest` or `compassion` | default vs ally assist when combat exists |
+
+**Action 3 — Per-family strength ranking + backend merge:** **Resolved** — top-3 tag aggregation, cross-family multiply, and **`LocalePriorMap` / `ExperienceRing`** façade fusion below.
+
+**Resolved (Action 3 — per-family top-3):** Same paradigm as **§3 trait application order** — **strongest contributors matter most**; weaker tags still nudge at **20%**. Apply **separately** within **pole facet** family (Slot A) and **modality** family (Slot B); formulas in Slot A / Slot B above.
+
+| Rule | Detail |
+|------|--------|
+| **Rank weights** | **1.0**, **0.2**, **0.2** on ranks 1–3 |
+| **Cap** | **At most three** tags per family; additional tags **ignored** |
+| **Pole strength** | `pole_strength(tag) = abs(raw_axis(tag))`; one tag per continuum (higher wins) |
+| **Modality strength** | `modality_strength(tag) = current_fit(tag) * stored_strength(tag)` |
+| **Cross-family** | **Multiply only:** `replay_delta = effective_a * (slot_b_base / 100.0) * confidence` |
+
+**Example (one record):** `pole_facet_tags = [builder, individual]`, `modality_tags = [squeeze_commit, hide_stealth]`. Builder creature: `builder` rank-1 pole; `individual` rank-2 at 0.2. Squeeze fits now (`modality_strength` 0.7) vs hide partial (`0.3`): squeeze rank-1, hide rank-2 at 0.2 → blended **`slot_b_base`** and signed **`pole_blend`** feed **`effective_a`** / caps as in Action 2.
+
+**Compare records (unchanged from Action 2 extension):** **`replay_rank_score`** → **`slot_b_base`** → recency / salience / Tier-2 leaf ownership.
+
+**Resolved (Action 3 — backend merge):** **[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)** — **`LocalePriorMap`** (aggregate) and optional **`ExperienceRing`** (episodic) both feed **one** motor façade. Apply Action 2/3 formulas **once** per tick after fusion.
+
+| Situation | Rule |
+|-----------|------|
+| **Phase 1 default** (ring off or **ε = 0**) | **`LocalePriorMap` only** — no merge step |
+| **Both active, agree** | **Single** replay input (same tags/stats; no extra blend) |
+| **Both active, disagree** | **`change_stability`** sign breaks tie: **Change (−) → `ExperienceRing`**, **Stability (+) → `LocalePriorMap`** |
+| **`change_stability == 0`** | **Parity tie-break** (deterministic, not RNG): **`tie_key = hash(creature_instance_id, context_hash, GoalKind)`** — **odd → map**, **even → ring** |
+
+**Disagree (phase-1 predicate, tunable):** both backends have salient entries for **`(GoalKind, context_hash)`**, **and** they imply **opposite replay pull** on the same dominant modality — e.g. aggregate **`success_rate ≥ 0.5`** (or **`stored_strength`** above midpoint) while the best-matching ring episode has **near-death / failure** in **`outcome_envelope`**, **or** signed **`replay_delta`** differs after each side is evaluated with the same Action 2/3 path. If false → **agree** path.
+
+**Example:** Squeeze bucket — map says **50%** success over many tries; ring’s latest matching episode is **near-death** after **`squeeze_commit`**. **Stability (+)** rabbit → **map** stats for Slot B **`confidence`**; **Change (−)** rabbit → **ring** episode; **`change_stability == 0`** rabbit with **`tie_key` odd** → **map**.
 
 ---
 
@@ -276,6 +465,11 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 
 | Date | Change |
 |------|--------|
+| 2026-05-18 | **§5.1 / MEMORY:** **`action_tag` excised** — episodic traces reuse §5.1 tag sets; no parallel episodic enum. |
+| 2026-05-18 | **§5.1 Action 3 backend merge Resolved:** agree → single façade; disagree → **`change_stability`** (Change→ring, Stability→map); **`change_stability == 0`** → **`tie_key` odd/even** (odd→map, even→ring). |
+| 2026-05-18 | **§5.1 Action 3 Resolved:** per-family **top-3** strength ranking (**1.0 / 0.2 / 0.2**); **`pole_strength`** / **`modality_strength`**; cross-family **multiply only**. |
+| 2026-05-18 | **§5.1 Action 2 extension:** Slot B **`confidence`** (`attempt_count`, `success_count`, `success_delta`); **`replay_rank_score`** + **`change_stability`** novelty vs proven bias; combine uses optional `* confidence`; Action 3 modality tie-break → **`replay_rank_score`**. |
+| 2026-05-18 | **§5.1 Action 2 Resolved:** Slot A bipolar linear trait×pole, **B-gated** cap + **`external_urgency`** for ±100; Slot B unipolar **0…100** (`current_fit` + `stored_strength`, bell saturation); combine + write-time inference table. |
 | 2026-05-18 | **§5.1:** **Two-family** strategy-class tags (**8 pole facets** + **6 modalities** incl. **`flee_retreat`**); hybrid write (modalities required, poles explicit or inferred); **two-slot** replay + dual-channel outcome learning; per-family dominance; Action 1 largely **Resolved**. |
 | 2026-05-18 | **§5.1:** Seed **strategy-class tag vocabulary** table + orthogonality/scope/validation prose; narrow Action 1 `<<Question>>` to finalize ids + validation story. |
 | 2026-05-17 | **New draft:** split from **CREATURE_MOVEMENT_V2** §A.3 framework + §A.4 + overlapping **CREATURE_MEMORY** trait/replay prose; **§5** hosts strategy-class **Resolved** + **Actions 1–3** (`<<Question>>`). |
