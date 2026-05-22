@@ -27,6 +27,7 @@ static func awareness_gate_distance(creature_center: Vector2, creature_half: Vec
 
 
 ## Effective reach: [param base_radius] plus [param cone_extra] when [param mob_pos] lies in forward sector about [param facing].
+## When [param forward_cone_only] is true, targets outside the forward cone have zero reach (no rear disk).
 static func effective_awareness_reach(
   creature_center: Vector2,
   mob_pos: Vector2,
@@ -34,21 +35,28 @@ static func effective_awareness_reach(
   cone_extra: float,
   cone_cos_threshold: float,
   facing: Vector2,
+  forward_cone_only: bool = false,
 ) -> float:
+  var delta := mob_pos - creature_center
+  var dist := delta.length()
+  var u := Vector2.RIGHT
+  if dist > 1e-4:
+    u = delta / dist
+  var f := facing
+  if f.length() < 1e-4:
+    f = Vector2.RIGHT
+  else:
+    f = f.normalized()
+  var in_forward_cone := true
+  if cone_cos_threshold >= -1.0001:
+    in_forward_cone = u.dot(f) >= cone_cos_threshold
+  if forward_cone_only:
+    if not in_forward_cone:
+      return 0.0
+    return base_radius + cone_extra
   var reach := base_radius
-  if cone_extra > 0.0 and cone_cos_threshold >= -1.0001:
-    var delta := mob_pos - creature_center
-    var dist := delta.length()
-    var u := Vector2.RIGHT
-    if dist > 1e-4:
-      u = delta / dist
-    var f := facing
-    if f.length() < 1e-4:
-      f = Vector2.RIGHT
-    else:
-      f = f.normalized()
-    if u.dot(f) >= cone_cos_threshold:
-      reach = base_radius + cone_extra
+  if cone_extra > 0.0 and in_forward_cone:
+    reach = base_radius + cone_extra
   return reach
 
 
@@ -314,6 +322,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var awareness_r: float = float(ctx.get("awareness_radius", 0.0))
   var cone_extra: float = float(ctx.get("awareness_cone_extra", 0.0))
   var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
+  var forward_cone_only := bool(ctx.get("awareness_forward_cone_only", false))
   var facing_raw: Variant = ctx.get("creature_facing", Vector2.RIGHT)
   var facing_v: Vector2 = Vector2.RIGHT
   if typeof(facing_raw) == TYPE_VECTOR2:
@@ -427,6 +436,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       w_pin,
       prey_seek_targets,
       w_seek_prey_raw,
+      forward_cone_only,
     )
     if w_idle_explore > 0.0 and allow_explore:
       if d.length_squared() < 1e-14:
@@ -665,6 +675,7 @@ static func cost_at_prediction(
   weight_obstacle_pin_predator: float = 0.0,
   prey_seek_targets: Array = [],
   weight_seek_prey: float = 0.0,
+  awareness_forward_cone_only: bool = false,
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -698,6 +709,7 @@ static func cost_at_prediction(
         awareness_cone_extra,
         awareness_cone_cos_threshold,
         creature_facing,
+        awareness_forward_cone_only,
       )
       if gd > eff_r:
         continue
@@ -720,6 +732,7 @@ static func cost_at_prediction(
         awareness_cone_extra,
         awareness_cone_cos_threshold,
         creature_facing,
+        awareness_forward_cone_only,
       )
       if gd2 > eff_p:
         continue
@@ -833,6 +846,7 @@ static func cost_at_prediction_aware(
   weight_obstacle_pin_predator: float = 0.0,
   prey_seek_targets: Array = [],
   weight_seek_prey: float = 0.0,
+  awareness_forward_cone_only: bool = false,
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -875,4 +889,5 @@ static func cost_at_prediction_aware(
     weight_obstacle_pin_predator,
     prey_seek_targets,
     weight_seek_prey,
+    awareness_forward_cone_only,
   )

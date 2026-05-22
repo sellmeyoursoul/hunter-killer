@@ -160,11 +160,6 @@ func _spawn_duel_carnivore(pos: Vector2) -> void:
     mob.call(&"prepare_duel_spawn")
   if mob.has_method(&"set_control_mode"):
     mob.call(&"set_control_mode", _MobScr.engine_control_as_int())
-  var fd: Variant = mob.get("last_move_direction")
-  if typeof(fd) == TYPE_VECTOR2:
-    var fv := fd as Vector2
-    if fv.length_squared() > 1e-12:
-      mob.set("last_move_direction", Vector2.LEFT)
 
 
 func _ensure_food_plants() -> void:

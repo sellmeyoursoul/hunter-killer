@@ -67,6 +67,8 @@ func _run_all() -> void:
   _test_scripted_intent_hold()
   _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
+  _test_duel_spawn_facing_variance()
+  _test_forward_cone_only_awareness()
   _test_bundled_inference_helpers()
   _test_environment_baked_grid()
   _test_cardinal_interior_env_grid()
@@ -293,8 +295,12 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack duel motor chaos",
   )
   _assert(
-    bool(rabbit_m.get("herbivore_threat_awareness_omni", false)),
-    "rabbit pack omnidirectional threat awareness",
+    not bool(rabbit_m.get("herbivore_threat_awareness_omni", true)),
+    "rabbit pack uses forward cone threat awareness",
+  )
+  _assert(
+    bool(rabbit_m.get("awareness_forward_cone_only", false)),
+    "rabbit pack enables forward-cone-only live awareness",
   )
   var fox_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
@@ -335,6 +341,10 @@ func _test_creature_pack_motor_overlays() -> void:
   _assert(
     not bool(fox_m.get("predator_prey_awareness_omni", true)),
     "fox pack uses forward cone prey awareness",
+  )
+  _assert(
+    bool(fox_m.get("awareness_forward_cone_only", false)),
+    "fox pack enables forward-cone-only live awareness",
   )
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
@@ -1957,6 +1967,189 @@ func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
   prey.global_position = hunter.global_position + Vector2(-260.0, 0.0)
   var far_arr: Array = driver.call("_collect_prey_positions", hunter, motor_gate, pos_h, he)
   _assert(far_arr.is_empty(), "prey outside carnivore awareness radius is omitted")
+  prey.global_position = hunter.global_position + Vector2(-80.0, 0.0)
+  var cone_strict := {
+    "awareness_radius": 500.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 45.0,
+    "awareness_forward_cone_only": true,
+  }
+  var behind_arr: Array = driver.call("_collect_prey_positions", hunter, cone_strict, pos_h, he)
+  _assert(behind_arr.is_empty(), "prey behind hunter omitted with forward_cone_only")
+  prey.global_position = hunter.global_position + Vector2(80.0, 0.0)
+  var ahead_arr: Array = driver.call("_collect_prey_positions", hunter, cone_strict, pos_h, he)
+  _assert(ahead_arr.size() == 1, "prey ahead still tracked with forward_cone_only")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_forward_cone_only_awareness() -> void:
+  var reach_disk := _Motor.effective_awareness_reach(
+    Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, false
+  )
+  _assert(is_equal_approx(reach_disk, 500.0), "legacy disk reach applies behind creature")
+  var reach_cone := _Motor.effective_awareness_reach(
+    Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, true
+  )
+  _assert(is_equal_approx(reach_cone, 0.0), "forward_cone_only zeroes reach behind creature")
+  var ad_script: Script = _AiDriverScr
+  if not ad_script.can_instantiate():
+    push_warning("skip ai_driver cone gating tests — AiDriver script did not compile")
+    return
+  _test_forward_cone_only_food_gating(ad_script)
+  _test_forward_cone_only_threat_gating(ad_script)
+  _test_sated_herbivore_explore_with_off_cone_food(ad_script)
+
+
+func _test_forward_cone_only_food_gating(ad_script: Script) -> void:
+  var BushScr := load("res://assets/plants/bush_food.gd") as Script
+  var main := Node.new()
+  root.add_child(main)
+  var bush := Node2D.new()
+  bush.set_script(BushScr)
+  main.add_child(bush)
+  bush.call("_ready")
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var creature_pos := Vector2.ZERO
+  var he := Vector2(13.5, 30.5)
+  var facing := Vector2.RIGHT
+  var motor_cone := {
+    "awareness_radius": 500.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 45.0,
+    "awareness_forward_cone_only": true,
+  }
+  bush.global_position = Vector2(-80.0, 0.0)
+  var split_behind: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness", motor_cone, creature_pos, he, facing
+  )
+  var ready_behind: Array = split_behind.get("ready", []) as Array
+  _assert(ready_behind.is_empty(), "bush behind creature hidden with forward_cone_only")
+  bush.global_position = Vector2(80.0, 0.0)
+  var split_ahead: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness", motor_cone, creature_pos, he, facing
+  )
+  var ready_ahead: Array = split_ahead.get("ready", []) as Array
+  _assert(ready_ahead.size() == 1, "bush in forward cone visible with forward_cone_only")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_forward_cone_only_threat_gating(ad_script: Script) -> void:
+  var main := Node2D.new()
+  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(mob_scene != null and player_scene != null, "mob and player scenes load for threat gate")
+  var prey: Node = player_scene.instantiate()
+  var predator: Node = mob_scene.instantiate()
+  root.add_child(main)
+  main.add_child(prey)
+  main.add_child(predator)
+  prey.global_position = Vector2(400.0, 300.0)
+  predator.global_position = prey.global_position + Vector2(-120.0, 0.0)
+  prey.set("last_move_direction", Vector2.RIGHT)
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var motor_p := {
+    "awareness_radius": 500.0,
+    "awareness_cone_extra": 0.0,
+    "awareness_cone_half_angle_deg": 45.0,
+    "awareness_forward_cone_only": true,
+    "herbivore_threat_awareness_omni": false,
+  }
+  var he := Vector2(13.5, 30.5)
+  var facing := Vector2.RIGHT
+  var behind_threat: Dictionary = driver.call(
+    "_herbivore_predator_threat_sample",
+    prey,
+    motor_p,
+    prey.global_position,
+    he,
+    facing,
+  )
+  _assert(not bool(behind_threat.get("in_awareness", true)), "fox behind rabbit not in threat awareness")
+  predator.global_position = prey.global_position + Vector2(120.0, 0.0)
+  var ahead_threat: Dictionary = driver.call(
+    "_herbivore_predator_threat_sample",
+    prey,
+    motor_p,
+    prey.global_position,
+    he,
+    facing,
+  )
+  _assert(bool(ahead_threat.get("in_awareness", false)), "fox ahead of rabbit in threat awareness")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_sated_herbivore_explore_with_off_cone_food(ad_script: Script) -> void:
+  var BushScr := load("res://assets/plants/bush_food.gd") as Script
+  var main := Node2D.new()
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(player_scene != null, "player scene loads for sated explore test")
+  var prey: Node = player_scene.instantiate()
+  root.add_child(main)
+  main.add_child(prey)
+  var bush := Node2D.new()
+  bush.set_script(BushScr)
+  main.add_child(bush)
+  bush.call("_ready")
+  bush.global_position = prey.global_position + Vector2(-120.0, 0.0)
+  prey.set("last_move_direction", Vector2.RIGHT)
+  prey.set("current_calories", float(prey.get("caloric_needs")))
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", prey)
+  driver.call("set_primary_creature", prey)
+  driver.set("_duel_motor_round_salt", 90210)
+  var base := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/rabbit",
+  )
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, prey)
+  _assert(
+    float(ctx.get("weight_seek_ready_food", -1.0)) <= 0.0,
+    "sated rabbit does not seek food at full calories",
+  )
+  _assert(
+    float(ctx.get("weight_expanding_explore_hint", 0.0)) > 0.0,
+    "sated rabbit with off-cone bush gets expanding explore hint",
+  )
+  _assert(
+    float(ctx.get("exploration_blend_multiplier", 0.0)) > 0.0,
+    "sated rabbit with off-cone bush keeps exploration blend",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_duel_spawn_facing_variance() -> void:
+  if not _AiDriverScr.can_instantiate():
+    push_warning("skip duel spawn facing test — AiDriver script did not compile")
+    return
+  var main := Node2D.new()
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(player_scene != null, "player scene loads for duel facing variance")
+  var prey: Node = player_scene.instantiate()
+  root.add_child(main)
+  main.add_child(prey)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", prey)
+  driver.set("_duel_motor_round_salt", 0x1234)
+  driver.call("_randomize_duel_spawn_facing")
+  var facing_a: Vector2 = prey.get("last_move_direction")
+  driver.set("_duel_motor_round_salt", 0x5678)
+  driver.call("_randomize_duel_spawn_facing")
+  var facing_b: Vector2 = prey.get("last_move_direction")
+  _assert(facing_a.length_squared() > 1e-12, "random duel facing is non-zero")
+  _assert(facing_a != facing_b, "duel spawn facing varies with round salt")
   driver.queue_free()
   main.queue_free()
 

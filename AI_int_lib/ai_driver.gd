@@ -556,6 +556,7 @@ func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
     if fv.length() > 1e-4:
       facing = fv.normalized()
   var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
   var out: Array = []
   for n in _main.get_tree().get_nodes_in_group(&"prey"):
     if not (n is Node2D):
@@ -570,7 +571,50 @@ func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
         out.append(prey_pos)
     else:
       var eff := _effective_awareness_reach_for_driver(
-        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing
+        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
+      )
+      if gd <= eff:
+        out.append(prey_pos)
+  return out
+
+
+## Test/helper: prey positions under explicit motor params and facing (mirrors [_prey_positions_for_predator_motor] gating).
+func _collect_prey_positions(
+  predator: PhysicsBody2D,
+  motor_p: Dictionary,
+  creature_pos: Vector2,
+  he_xy: Vector2,
+) -> Array:
+  if predator == null or _main == null:
+    return []
+  var awareness_r := float(motor_p.get("awareness_radius", 0.0))
+  if awareness_r <= 0.0:
+    return []
+  var cone_extra := _predator_prey_cone_extra(motor_p)
+  var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
+  var cone_cos := cos(deg_to_rad(half_deg))
+  var facing := Vector2.RIGHT
+  var fd: Variant = predator.get("last_move_direction")
+  if typeof(fd) == TYPE_VECTOR2:
+    var fv := fd as Vector2
+    if fv.length() > 1e-4:
+      facing = fv.normalized()
+  var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
+  var out: Array = []
+  for n in _main.get_tree().get_nodes_in_group(&"prey"):
+    if not (n is Node2D):
+      continue
+    if (n as Node) == predator:
+      continue
+    var prey_pos := (n as Node2D).global_position
+    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, prey_pos)
+    if omni:
+      if gd <= awareness_r:
+        out.append(prey_pos)
+    else:
+      var eff := _effective_awareness_reach_for_driver(
+        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
       )
       if gd <= eff:
         out.append(prey_pos)
@@ -1337,6 +1381,7 @@ func _begin_playing_for_creature_goals_duel() -> void:
   var rng := RandomNumberGenerator.new()
   rng.randomize()
   _duel_motor_round_salt = rng.randi()
+  _randomize_duel_spawn_facing()
   _set_state(State.PLAYING)
   if _cpu_player_round_active:
     if _creature != null and _creature.has_method("set_control_mode"):
@@ -1346,6 +1391,22 @@ func _begin_playing_for_creature_goals_duel() -> void:
       )
   else:
     _apply_human_control_on_registered_prey()
+
+
+## Assigns a per-round random cardinal facing to each registered duel creature.
+func _randomize_duel_spawn_facing() -> void:
+  var cardinals: Array[Vector2] = [
+    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
+  ]
+  for n in _registered_creatures:
+    if not (n is PhysicsBody2D):
+      continue
+    var body := n as PhysicsBody2D
+    var slot := (body.get_instance_id() ^ _duel_motor_round_salt) & 3
+    var facing: Vector2 = cardinals[slot]
+    body.set("last_move_direction", facing)
+    if body.get("_last_heading") != null:
+      body.set("_last_heading", facing)
 
 
 ## Notifies the driver that Main.new_game() completed.
@@ -1477,21 +1538,28 @@ func _effective_awareness_reach_for_driver(
   cone_extra: float,
   cone_cos_threshold: float,
   facing: Vector2,
+  forward_cone_only: bool = false,
 ) -> float:
+  var delta := mob_pos - creature_center
+  var dist := delta.length()
+  var u := Vector2.RIGHT
+  if dist > 1e-4:
+    u = delta / dist
+  var f := facing
+  if f.length() < 1e-4:
+    f = Vector2.RIGHT
+  else:
+    f = f.normalized()
+  var in_forward_cone := true
+  if cone_cos_threshold >= -1.0001:
+    in_forward_cone = u.dot(f) >= cone_cos_threshold
+  if forward_cone_only:
+    if not in_forward_cone:
+      return 0.0
+    return base_radius + cone_extra
   var reach := base_radius
-  if cone_extra > 0.0 and cone_cos_threshold >= -1.0001:
-    var delta := mob_pos - creature_center
-    var dist := delta.length()
-    var u := Vector2.RIGHT
-    if dist > 1e-4:
-      u = delta / dist
-    var f := facing
-    if f.length() < 1e-4:
-      f = Vector2.RIGHT
-    else:
-      f = f.normalized()
-    if u.dot(f) >= cone_cos_threshold:
-      reach = base_radius + cone_extra
+  if cone_extra > 0.0 and in_forward_cone:
+    reach = base_radius + cone_extra
   return reach
 
 
@@ -1518,6 +1586,7 @@ func _herbivore_predator_threat_sample(
   var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
   var cone_cos := cos(deg_to_rad(half_deg))
   var omni := bool(motor_p.get("herbivore_threat_awareness_omni", false))
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
   var best_dist := INF
   var best_pos := Vector2.ZERO
   for n in _main.get_tree().get_nodes_in_group(&"mobs"):
@@ -1533,7 +1602,7 @@ func _herbivore_predator_threat_sample(
       in_zone = gd <= awareness_r
     else:
       var eff := _effective_awareness_reach_for_driver(
-        creature_pos, mp, awareness_r, cone_extra, cone_cos, facing
+        creature_pos, mp, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
       )
       in_zone = gd <= eff
     if not in_zone:
@@ -1715,6 +1784,7 @@ func _pursuit_targets_for_predator(
   var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
   var cone_cos := cos(deg_to_rad(half_deg))
   var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
   for n in _main.get_tree().get_nodes_in_group(&"prey"):
     if not (n is Node2D):
       continue
@@ -1727,7 +1797,7 @@ func _pursuit_targets_for_predator(
         continue
     else:
       var eff := _effective_awareness_reach_for_driver(
-        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing
+        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
       )
       if gd > eff:
         continue
@@ -1766,6 +1836,7 @@ func _motor_mobs_array(
       var fv := fd as Vector2
       if fv.length() > 1e-4:
         facing_v = fv.normalized()
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
   var prey_omni_threat := (
     motor_subject != null
     and motor_subject.is_in_group(&"prey")
@@ -1796,7 +1867,7 @@ func _motor_mobs_array(
           gated = gd > awareness_r
         else:
           var eff := _effective_awareness_reach_for_driver(
-            creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v
+            creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
           )
           gated = gd > eff
       if not gated:
@@ -1837,7 +1908,7 @@ func _motor_mobs_array(
         if awareness_r > 0.0:
           var gd2 := _awareness_gate_distance_for_driver(creature_pos, he_xy, pred)
           var eff2 := _effective_awareness_reach_for_driver(
-            creature_pos, pred, awareness_r, cone_extra, cone_cos, facing_v
+            creature_pos, pred, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
           )
           if gd2 > eff2:
             continue
@@ -1876,13 +1947,14 @@ func _motor_food_plants_in_awareness_by_readiness(
   var cone_extra: float = float(motor_p.get("awareness_cone_extra", 0.0))
   var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
   var cone_cos: float = cos(deg_to_rad(half_deg))
+  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
   for n in _main.get_tree().get_nodes_in_group(&"food_plants"):
     if not n.has_method(&"is_pickup_ready_for_motor"):
       continue
     var fp: Vector2 = n.global_position
     var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, fp)
     var eff := _effective_awareness_reach_for_driver(
-      creature_pos, fp, awareness_r, cone_extra, cone_cos, facing_v
+      creature_pos, fp, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
     )
     if gd > eff:
       continue
@@ -2066,7 +2138,7 @@ func _build_motor_context(
     body.is_in_group(&"prey") and plant_ready_targets.is_empty()
   )
   var herbivore_forage_active := (
-    body.is_in_group(&"prey") and not plant_ready_targets.is_empty()
+    body.is_in_group(&"prey") and w_seek > 0.0
   )
   var predator_has_prey := (
     body.is_in_group(&"mobs") and not body.is_in_group(&"prey") and not prey_pts_live.is_empty()
@@ -2325,6 +2397,7 @@ func _build_motor_context(
     "awareness_radius": float(motor_p.get("awareness_radius", 0.0)),
     "awareness_cone_extra": float(motor_p.get("awareness_cone_extra", 0.0)),
     "awareness_cone_cos_threshold": cos(deg_to_rad(half_deg)),
+    "awareness_forward_cone_only": bool(motor_p.get("awareness_forward_cone_only", false)),
     "creature_facing": facing_display,
     "static_obstacles": geom_aabbs,
     "weight_obstacle": weight_obstacle_ctx,

@@ -4,6 +4,7 @@
     "speed": 400.0,
     "awareness_radius": 1500.0,
     "awareness_cone_extra": 3000.0,
+    "awareness_forward_cone_only": true,
     "predator_prey_awareness_omni": false,
     "awareness_cone_half_angle_deg": 50.0,
     "predator_duel_boot_awareness_ticks": 0,

@@ -7,6 +7,7 @@
     "motor_tie_cost_epsilon": 0.55,
     "awareness_radius": 1500.0,
     "awareness_cone_extra": 3000.0,
+    "awareness_forward_cone_only": true,
     "herbivore_threat_awareness_omni": false,
     "herbivore_flee_panic_radius_px": 220.0,
     "herbivore_alert_seek_scale": 0.5,
