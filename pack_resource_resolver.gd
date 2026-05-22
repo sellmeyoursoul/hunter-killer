@@ -41,6 +41,27 @@ static func _normalized_pack_root(pack_root: String) -> String:
   return s
 
 
+## Loads the full **`pack_resources.json`** root (empty **`Dictionary`** when missing or malformed).
+static func load_pack_root(pack_root: String) -> Dictionary:
+  var json_path := "%s/pack_resources.json" % _normalized_pack_root(pack_root)
+  if not FileAccess.file_exists(json_path):
+    return {}
+  var txt := FileAccess.get_file_as_string(json_path)
+  var parsed: Variant = JSON.parse_string(txt)
+  if typeof(parsed) != TYPE_DICTIONARY:
+    return {}
+  return parsed
+
+
+## **`creature_motor`** overlay from pack root ([CREATURE_MOVEMENT_V2.md §A.1](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+static func load_creature_motor_overlay(pack_root: String) -> Dictionary:
+  var root := load_pack_root(pack_root)
+  var cm: Variant = root.get("creature_motor", {})
+  if typeof(cm) != TYPE_DICTIONARY:
+    return {}
+  return cm
+
+
 ## Loads **`shared_resources`** only (empty **`Dictionary`** when **`pack_resources.json`** is absent or malformed).
 static func load_shared_resources_map(pack_root: String) -> Dictionary:
   var json_path := "%s/pack_resources.json" % _normalized_pack_root(pack_root)

@@ -53,8 +53,14 @@ func get_perception_params() -> Dictionary:
 func get_creature_motor_params() -> Dictionary:
   var cm: Variant = _merged.get("creature_motor", {})
   if typeof(cm) != TYPE_DICTIONARY:
-    return (_Merge.default_root()["creature_motor"] as Dictionary).duplicate(true)
+    return _Merge.default_creature_motor_params()
   return cm.duplicate(true)
+
+
+## Spine + profile + optional pack [code]creature_motor[/code] overlay for one creature instance.
+func get_creature_motor_params_for_pack(pack_root: String) -> Dictionary:
+  var base := get_creature_motor_params()
+  return _Merge.merge_creature_motor_pack_overlay(base, pack_root)
 
 
 ## Full merged root (advanced callers / tests).

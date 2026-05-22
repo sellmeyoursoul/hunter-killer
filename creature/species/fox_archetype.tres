@@ -5,18 +5,18 @@
 
 [sub_resource type="Resource" id="sub_loco"]
 script = ExtResource("2_loco")
-max_speed = 6.0
-acceleration = 24.0
-friction = 14.0
+max_speed = 7.0
+acceleration = 28.0
+friction = 12.0
 
 [resource]
 script = ExtResource("1_def")
-species_id = &"rabbit"
-display_name = "Rabbit"
-asset_pack_root = "res://assets/creatures/rabbit"
-feeding_mode = 0
+species_id = &"fox"
+display_name = "Fox"
+asset_pack_root = "res://assets/creatures/fox"
+feeding_mode = 1
 caloric_needs = 30
-creature_size = 0.85
-collision_capsule_radius = 0.3
-collision_capsule_height = 1.0
+creature_size = 1.0
+collision_capsule_radius = 0.35
+collision_capsule_height = 1.1
 locomotion_profile = SubResource("sub_loco")

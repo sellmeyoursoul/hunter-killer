@@ -50,6 +50,16 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
+## Creature goal drivers & habitual replay
+
+| Item | Priority | Draft plan | Notes |
+|------|----------|------------|--------|
+| **`ExperienceRing` + map/ring disagree predicate** | Medium | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §5.1 Action 3 | **Phase 1:** predicate **dormant** (map-only). When ring ships: implement disagree rule (draft: `success_rate` vs ring failure / `replay_delta` sign flip); `change_stability` tie-break + `tie_key` parity already specified. |
+| **Trait → Tier-2 urgency channels (non-stub)** | Medium | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3.3.1 | Phase 1: **`trait_tier2_mapper.gd`** stub (zero deltas). Future: per-trait coefficients into `urgency_find_food`, `urgency_avoid_hostiles`, etc. |
+| **Slot B `current_fit` — full qualitative matchers** | Medium | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §5.1.4 | Phase 1: classifier flags only. Long-term: squeeze fingerprint, LoS hide, durable local state per §5.1 table. |
+
+---
+
 ## Creature / foraging (draft design)
 
 | Item | Priority | Draft plan | Notes |
@@ -60,11 +70,21 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
+## Creature motor profiles & CI (draft design)
+
+| Item | Priority | Draft plan | Notes |
+|------|----------|------------|--------|
+| **`creature_motor_profile_ship` numerics** | Medium | [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) §A.1 | **Stub only** until gameplay baseline exists; finalize before release exports. |
+| **Ship executable automated regression** (`creature_motor_ship` feature tag) | Medium | [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) §A.1, §G.1 | **Deferred (B-10):** CI strategy for ship profile — export preset vs harness vs both — subsumes headless/executable tests, not merge-unit tests alone. Blocked on real ship profile values. |
+| **Dev profile aberrant tuning table** | Low | [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) §A.1 | Per-key extreme overrides for wiring regression (small circles / obviously wrong locomotion). Lands with first §G.1 dev regression test. |
+
+---
+
 ## Perception & awareness (draft design)
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|-------|
-| **Line of sight / occlusion** — solids reduce or block effective **awareness** (cone/radius) | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | Future: ray or grid checks vs props/tiles; pairs with **memory** (last known) and **squeeze** / `fit_size` hiding (ENVIRONMENT property catalog). |
+| **Line of sight / occlusion** — solids reduce or block effective **awareness** (cone/radius) | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §7.4 | **Deferred this phase (B-8).** Future: **Godot 3D ray** vs props/tiles; pairs with memory (last known) and squeeze / `fit_size` hiding. |
 
 ---
 

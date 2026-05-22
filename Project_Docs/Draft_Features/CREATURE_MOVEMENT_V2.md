@@ -21,8 +21,17 @@
 **Canonical `pack_resources.json` shape (chosen):**
 
 - **`"creature_motor": { … }`** at the pack root (**inline object**) holds **everything that defines movement weighing** for that species — weights, hold ticks, chaos, thresholds, Tier-2 multipliers once split, optional future keys. **Do not use** a `.tres` indirection unless we explicitly add `"creature_motor_path"` later.
+- **`"strategy_class_tags": { … }`** (**optional sibling**, not nested under **`creature_motor`**) — species-specific **Slot B** modality extensions for locale priors / habitual replay (**[CREATURE_GOAL_DRIVERS.md §5.1 — Action 1](CREATURE_GOAL_DRIVERS.md)**):
+  - **`extra_modalities`**: `string[]` of **`snake_case`** ids unioned at spawn with the engine **core modality resource** → per-instance **`effective_modality_allowlist`**.
+  - Example: `{ "strategy_class_tags": { "extra_modalities": ["ambush_stalk"] } }`.
+  - **Pole facet tags** are **not** pack-extensible (fixed eight ids in engine code).
+- **`"goal_kinds": { … }`** (**optional sibling**, not nested under **`creature_motor`**) — species-specific **goal-category** extensions for locale priors / write gates (**[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**):
+  - **`extra_goal_kinds`**: array of objects — each adds a **`snake_case`** **`id`** unioned at spawn with engine **core `GoalKind`** ids → per-instance **`effective_goal_kinds`**.
+  - Required per entry: **`id`**, **`parent_tier2`** (`find_food` | `avoid_hostiles` | `find_mate` | `preserve_calories`). Optional: **`salient_writes`** (default true), **`context_overlay`** (hint for **`context_hash`** compositor).
+  - Example: `{ "goal_kinds": { "extra_goal_kinds": [{ "id": "nest_defense", "parent_tier2": "avoid_hostiles", "context_overlay": "nest_fingerprint" }] } }`.
+  - **Core** ids (`find_food`, `avoid_hostiles`, `shelter`, `find_mate`) are **not** pack-overridable; packs only **add** kinds.
 
-**Resolution rule (instantiation):** Every spawned creature gets `creature_motor` as **`default_creature_motor_params()` shallow-merged with the pack overlay** (see below). **`default_creature_motor_params()`** is the **only** authoritative place that composes (**merged into one dict**):
+**Resolution rule (instantiation):** Every spawned creature gets `creature_motor` as **`default_creature_motor_params()` shallow-merged with the pack overlay** (see below). **`effective_goal_kinds`** and **`effective_modality_allowlist`** merge from the same **`pack_resources.json`** at spawn (**`CreatureDefinition.asset_pack_root`**). **`default_creature_motor_params()`** is the **only** authoritative place that composes (**merged into one dict**):
 
 1. **Species-agnostic spine** — hard defaults so nothing runs with missing dicts.
 
@@ -40,23 +49,23 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 
 | Locked id | Audience | Behavioral intent |
 |-----------|----------|-------------------|
-| **`creature_motor_profile_dev`** | Editor, CI, builds **without** the ship feature tag below | **Stay put:** prefer **idle** (**`Vector2.ZERO`**) translation; tune weights / speed / lookahead so effective **displacement is negligible**. **Facing** tracks a deterministic **ordinal probe** over cardinals (~*one directional emphasis tick at a time* in test harness vernacular)—enough motion signal to validate wiring **without wandering the map**. Use for automated detection of absent/malformed pack `creature_motor`. |
-| **`creature_motor_profile_ship`** | **Ship / release exports** when the export feature **`creature_motor_ship`** is enabled | **Midpoint curve:** neutral-ish behavior across motivation-trait extremes (moderate exploration, moderate hold jitter, compassionate balance not pegged)—until pack keys overlay species-specific shaping. |
+| **`creature_motor_profile_dev`** | Editor, CI, builds **without** the ship feature tag below | **Aberrant probe profile:** tune weights/speed/explore/hold toward **extreme ends of each knob's spectrum** so effective behavior **clearly deviates** from acceptable ship norms — e.g. **tight looping / small circles**, excessive idle spin, or other obviously wrong locomotion. Purpose: **detect wiring regressions** (missing pack overlay, broken merge, absent seek/threat builder) — **not** approximate real creature behavior. Per-key guidance: when unsure, pick the **opposite extreme** from the intended ship midpoint for that scalar. |
+| **`creature_motor_profile_ship`** | **Ship / release exports** when export feature **`creature_motor_ship`** is enabled | **Stub only until gameplay baseline exists:** ship numerics are **guesswork** today. Implement as **empty overlay** (spine-only) or placeholder dict with **`<<Comment: FINALIZE BEFORE SHIP>>`** on every intended override key. **Do not** treat stub values as release tuning. Finalize after playtest baseline establishes neutral species curve. |
 
 **Profile selection (build flag — defaults to dev):**
 
 - **Chosen mechanism:** Godot **export custom feature tag** **`creature_motor_ship`** (set on **production / ship presets only** in the Export dialog → *Features*, or equivalent export metadata).
 - **Runtime rule:** **`default_creature_motor_params()`** calls `OS.has_feature(&"creature_motor_ship")` and merges **`creature_motor_profile_ship`** when true; otherwise merges **`creature_motor_profile_dev`** (default for editor runs, unstamped exports, missing tag). Merge helpers keyed by those two identifiers may exist for tests (**e.g.** `apply_creature_motor_profile_ship(base)`) — names must preserve the **_dev** / **_ship** suffixes; **`default_creature_motor_params()`** remains the **single entry** that performs profile selection + spine merge for production codepaths.
 
-<<Comment: If CI needs **ship** without a packaged export, add a preset that includes **`creature_motor_ship`**, or a tiny harness that calls merge with **`creature_motor_profile_ship`** directly—avoid env knobs unless unavoidable.>>
-
-<<Comment: Exact numeric tuning for **`creature_motor_profile_dev`** (near-zero displacement, cardinal probe sequencing) lands with the first regression test named in §G — keep both profiles authoritative only inside `game_config_merge.gd`, referenced explicitly from **`default_creature_motor_params()`**.>>
+**CI / ship executable testing (deferred — B-10):** Strategy for validating **`creature_motor_ship`** builds — export preset vs harness vs both — **deferred until `creature_motor_profile_ship` has real numerics**. Requires broader **automated regression against a ship-tagged executable**, not profile-merge unit tests alone. Track in **[ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)**.
 
 **LLM note:** **`mode` / inference** tying into `creature_motor` is **out of scope** for this refactor. Packs may still record `mode: "scripted"` for clarity; ENGINE implements scripted path only until LLM motor phase.
 
 ### A.2 Single intent path (herbivore + carnivore logic merged)
 
 **Principle:** There is **one** scripted motor pipeline: **`AiDriver`** builds **one** `MotorContext`; **`CardinalAvoidance.pick_best_move_intent`** scores one cost stack. Species differences are **data** (`CreatureDefinition.feeding_mode`, diet policy, trait multipliers), not parallel `if prey / if mobs` code paths scattered through `ai_driver.gd`.
+
+**Unified target builder (resolved — B-7):** Collapse predator/prey seek/threat forks into **one method on `AiDriver`** in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) (name TBD, e.g. `_build_motor_target_lists`). **Inputs:** body, motor params, awareness scan, `CreatureDefinition`, `feeding_mode`. **Outputs:** **`SeekCandidate[]`** + **`ThreatSample[]`**. **`_build_motor_context`** consumes this output — **no** standalone `MotorTargetPolicy.gd` class.
 
 **Unified “targets” ontology (design target):**
 
@@ -69,9 +78,35 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 
 **SeekCandidate — single relevance list (resolved):**
 
-- The motor consumes **one routed `SeekCandidate[]`** (possibly empty). Each entry carries **spatial / affordance facts** (`consumable_now`, mover vs stationary, LOS flags when wired — **§D**) plus **relevance**.
-- **Relevance combines** (**at minimum** interpretation): (**a**) **affinity with the creature’s top active concern / Tier-2 focus** (“top concern”: e.g. acute hunger biases food-like entries even if secondary goals exist — align with **`MotorContext`** + motivation tree tier weights), and (**b**) **proximity to addressing that concern** (distance, reachability placeholders, directional alignment — whichever the façade exposes for that candidate class).
+- The motor consumes **one routed `SeekCandidate[]`** (possibly empty). Each entry carries **spatial / affordance facts** (`consumable_now`, mover vs stationary; **LoS flags deferred** — **§D**) plus **relevance**.
+- **Relevance combines** (**at minimum** interpretation): (**a**) **affinity with the derived dominant Tier-2 leaf** (**§A.2.3** — not a separate authored field on each **`SeekCandidate`**), and (**b**) **proximity to addressing that concern** (distance, reachability placeholders, directional alignment).
 - **Do not maintain** parallel first-class seek vs pursuit ingest paths — **ingress normalizes into this one list**; diet / `feeding_mode` only filters **membership or metadata**, not duplicated arrays.
+
+#### A.2.3 Derived dominant Tier-2 leaf (phase-1 resolved)
+
+**`dominant_tier2_leaf`** is **derived each tick** in [`_build_motor_context`](../../AI_int_lib/ai_driver.gd) (or **`trait_tier2_mapper`** output path) — **not** stored on individual **`SeekCandidate`** entries and **not** a persistent config field.
+
+**Derivation order (phase 1):**
+
+| Priority | Condition | `dominant_tier2_leaf` |
+|----------|-----------|------------------------|
+| **0** | `calorie_ratio < starvation_override_food_ceiling` (default **0.10**) | **Find food** — **overrides** acute threat / jeopardy for dominance + motor urgency |
+| 1 | Acute personal threat (imminent mob / **`tactic_jeopardy_egress`** / jeopardy path) | **Avoid hostiles** — skipped when priority **0** active |
+| 2 | `calorie_ratio < seek_priority_food_ceiling` (default **~0.80**) | **Find food** |
+| 3 | `calorie_ratio ≥ preserve_bias_food_floor` (default **~0.90**) | **Preserve calories** |
+| 4 | `find_mate` urgency enabled (stub **0** today) | **Find mate** |
+| else | — | **Preserve calories** (idle / low urgency) |
+
+**Write gates vs derived leaf:** Successful **eat** still writes **`find_food`** even in mid Preserve band (**[CREATURE_MEMORY.md §14.4](CREATURE_MEMORY.md)**). Motor **weights** may smoothstep Preserve↔Find in 0.80–0.90; **salient writes** follow **outcome resolution**.
+
+**Consumers (same derived value per tick):**
+
+- **`SeekCandidate` relevance** — filter/boost entries compatible with dominant leaf (**§A.2**).
+- **Salient write gates** → **`GoalKind`** routing (**[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)**, **GOAL_DRIVERS §4.1**).
+- **`LocalePriorMap` consult** — projection, **`context_hash`**, threat pass **§14.3**.
+- Future: **`goal_seek_targets`** filtered by dominant leaf (**§A.2.2**).
+
+**Phase-1 code note:** Today hunger/jeopardy paths in **`ai_driver.gd`** approximate this stack; formalize as one **`derive_dominant_tier2_leaf(...)`** when refactoring.
 
 **Examples:**
 
@@ -80,6 +115,38 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 - **Rival predator** → **`hostile = true`** (Tier 2 *Avoid hostiles*) — never “food,” separate channel from seek.
 
 <<Comment: `DietRegistry` / `FoodIntakePolicy` should classify **interaction** (“can bite bush”); motor should classify **salience** (“target appears in seekers or hostiles”). Split keeps eating code from routing code.>>
+
+#### A.2.1 `MotorContext` tactic classifier flags (phase-1 — salient write)
+
+**Authority:** Full emitter contract — **[CREATURE_GOAL_DRIVERS.md §5.1.1](CREATURE_GOAL_DRIVERS.md)**; write gates — **[CREATURE_MEMORY.md §14](CREATURE_MEMORY.md)**.
+
+When building **`MotorContext`** ([`_build_motor_context`](../../AI_int_lib/ai_driver.gd)), motor / perception **may set** boolean tactic flags for the tick. **`goal_source_memory.gd`** reads them to build **`modality_tags[]`** when **`tactic_classifier_active`** is true. **Do not** write **`LocalePriorMap`** from cardinal code directly.
+
+| Key | Role |
+|-----|------|
+| `tactic_classifier_active` | **`true`** if any tactic flag below is set |
+| `tactic_in_squeeze` | → `squeeze_commit` |
+| `tactic_jeopardy_egress` | → `flee_retreat` |
+| `tactic_hide_viable` | → `hide_stealth` |
+| `tactic_return_home_payoff` | → `return_home` |
+| `tactic_lasting_local_change` | → `lasting_local_change` |
+| `tactic_fight_active` | → `fight` (stub) |
+| `conspecific_aid_count` | Pole inference: `squeeze_commit` → `community` vs `individual` |
+| `hide_hold_still` | Pole inference: `hide_stealth` → `stability` vs `change` |
+
+Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`find_food`** salient writes still use §5.1.1 **default modality / `explorer` pole** path.
+
+#### A.2.2 Goal seek vs food seek (phase-1 posture)
+
+**Target (§A.2):** one **`SeekCandidate[]`** ingress and **`goal_seek_cost`** — not parallel **`food_seek_targets`** / **`pursuit_targets`** forks. **Code today** still uses **`food_seek_*`** keys in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) / [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd).
+
+**Phase-1 locale priors:** Ship **`believed_goal_source_bias`** (**[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)**) **without** full **`SeekCandidate`** migration. **Rename/wrapper** (`goal_seek_cost` aliasing `food_seek_cost`) may land in the memory PR; **full** §A.2 list unification stays on Foundations checklist (**§G.2**).
+
+| Layer | Phase 1 | Later (§A.2) |
+|-------|---------|----------------|
+| Instance targets | `food_seek_targets` + `weight_seek_ready_food` | `goal_seek_targets` filtered by **derived** dominant Tier-2 (**§A.2.3**) |
+| Habitual patches | **`believed_goal_source_bias`** vector + sector costs | Same — **never** merged into seek target list |
+| `replay_weight` | Multiplicative on pull + seek when hash matches | Same on **`weight_seek_goal`** |
 
 ### A.3 Motivation tree (framework)
 
@@ -91,19 +158,32 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 |------|----------------|
 | **Not exploration-only down-weight** | **Preserve calories** may **suppress or strongly reduce** Tier-2 **Find food** weights when **`calorie_ratio`** is above a **per-creature preserve floor** — more than tweaking generic exploration noise alone. |
 | **Per creature** | Floors / ceilings ship as **defaults in `default_creature_motor_params()`** (spine ∪ selected **`creature_motor_profile_*`**) and **overrides** in **`pack_resources.json` → `creature_motor`** / future **`CreatureDefinition`** exports so each archetype tunes the band. |
-| **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** interpolate (smoothstep recommended) so behavior does not flip-tick between tiers — smoothness parameterized by **`preserve_seek_blend_smoothness`** (authoring semantics TBD, e.g. blend aggressiveness **`0`**–**`1`**). **`Avoid hostiles`** / jeopardy **override this hunger band** whenever **acute personal threat** applies (**today**); **future pack engage** may reorder that stack (**[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** preamble, *Threat vs offensive*). |
-| **Motor keys** (author in **`creature_motor`** when wiring) | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**. |
+| **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** **smoothstep** blend; **`preserve_seek_blend_smoothness`** (**default 0.5**, range **0…1**) = blend **aggressiveness** (higher → sharper Preserve↔Seek transition). **`calorie_ratio < starvation_override_food_ceiling`** (**default 0.10**): **Find food** overrides acute threat (**§A.2.3** priority **0**). **`Avoid hostiles`** / jeopardy **override** hunger band when acute threat applies — **except** starvation priority **0**. |
+| **Motor keys** | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**, **`starvation_override_food_ceiling`** — defaults in **`default_creature_motor_params()`** only; omit from pack **`creature_motor`** unless overriding. |
 
 ##### Believed goal source / habitual locales (future — overlays goal memory)
 
 Once memory tracks **regions or outcomes that reliably satisfied a Tier-2 goal** (nutrition first — mates, nests, bolt-holes reuse the same façade):
 
-- **Nearby habitual locale** (within **`believed_goal_hotspot_near_radius_px`** — distance TBD, configurable per creature / pack): bias movement toward that anchor (“this patch has paid off before” for whichever **active seek leaf** dominates).
-- **No nearby habitual source** (nothing within **`believed_goal_seek_escalate_radius_px`** — TBD / configurable): **elevate urgency for the dominant Tier-2 seek concern** (**Find food** in early builds; analogous rise for mates when enabled) inside the Preserve/Seek calorie-band logic described above.
-- **Threat vs escalate ordering:** **[CREATURE_MEMORY.md §14 — Escalation vs acute threat](CREATURE_MEMORY.md)** — acute threat does **not** instantly abandon escalate/hotspot evaluation; **local locale priors** inform threat-response (flight / hide / fight) **before** **Avoid hostiles** hard-win.
-- **Trait-scaled habitual replay:** **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)** (trait × strategy-class × **`believed_goal_*`**). Backends and **`context_hash`** overlays: **[CREATURE_MEMORY.md §§2.1–2.2](CREATURE_MEMORY.md)**; strategy-class **`<<Question>>` Actions 1–3** live in **GOAL_DRIVERS §5**. Same façade, **no forked ingress**.
+- **Nearby habitual locale** (within **`believed_goal_hotspot_near_radius_px`** — default **250 px**, same as **`locale_prior_projection_radius_px`** — **[CREATURE_MEMORY.md §10 / §14.1](CREATURE_MEMORY.md)**): **vector pull** toward top locale-prior patches (**not** fake seek targets).
+- **No nearby habitual source** (no locale prior within **hotspot** **250 px**, but creature still within **`believed_goal_seek_escalate_radius_px`** — default **1000 px**): **elevate urgency** via **`weight_seek_ready_food`** (or future **`weight_seek_goal`**) and Preserve/Find band — **not** via **`pull_dir`** formula.
+- **Threat vs escalate ordering:** **[CREATURE_MEMORY.md §14.3](CREATURE_MEMORY.md)** — acute threat does **not** instantly abandon escalate/hotspot evaluation; locale priors inform **replay / modality choice** before **Avoid hostiles** hard-win (**no** separate flee cardinal from priors phase 1).
+- **Trait-scaled habitual replay:** **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)** (trait × strategy-class × **`believed_goal_*`**). Backends and **`context_hash`** overlays: **[CREATURE_MEMORY.md §§2.1–2.2](CREATURE_MEMORY.md)**; tag vocabulary + validation — **GOAL_DRIVERS §5.1** (**Actions 1–3 Resolved**). Same façade, **no forked ingress**.
 
-Implementation slots: motor context **`believed_goal_source_bias`** — **hybrid** habitual direction + **`weight_coarse_sector_goal_bias`** blend (**[CREATURE_MEMORY.md §14 — projection](CREATURE_MEMORY.md)**). Fed from [CREATURE_MEMORY.md §§2–2.2 / §10](CREATURE_MEMORY.md). Trait blend hooks run in the **same** Tier-2 / mapper stack as habitual bias; obey **[CREATURE_GOAL_DRIVERS.md §3 — Trait application order](CREATURE_GOAL_DRIVERS.md)** where multiple axes touch the same weights. **Stub during ENGINE refactor until memory lands.**
+**Resolved (cardinal consumption — phase 1):** [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) adds **additive** cost terms from **`MotorContext.believed_goal_source_bias`** (**[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)**). Per candidate cardinal step **`d`** (unit direction):
+
+```text
+effective_pull_weight = weight_believed_goal_pull * replay_weight   // when consult context_hash matches; GOAL_DRIVERS §5.1
+cost += -dot(d, pull_dir) * effective_pull_weight * pull_mag
+for s in 0..7:
+  cost += -sector_weights[s] * align(d, sector_s) * weight_coarse_sector_goal_bias
+```
+
+- **`replay_weight`** ([GOAL_DRIVERS §5.1](CREATURE_GOAL_DRIVERS.md)): **`prior_base * (1 + replay_delta/100)`**, **`prior_base = stored_strength`** — **multiplicative** on **`weight_believed_goal_pull`** and optionally **`weight_seek_ready_food`**; **not** a second direction; **not** additive on costs.
+- **Hotspot / escalate:** adjust **`weight_seek_ready_food`** and Preserve/Find thresholds above — **not** the vector lines.
+- **Precise remembered bushes** stay in **`food_seek_targets`** only — **do not** append centroid to seek lists.
+
+Implementation slots: **`believed_goal_source_bias`** populated by **`goal_source_memory.project_believed_goal_bias(...)`**; keys **`weight_believed_goal_pull`**, **`believed_goal_hotspot_near_radius_px`** in **`creature_motor`** (**MEMORY §10**). Trait replay obeys **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**. **Stub zero bias** acceptable until memory PR lands.
 
 <<Comment: First implementation may omit `believed_goal_*`; document keys in **`creature_motor`** packs when wired. Nutritional hotspots may be the first consumer — still keyed generically so mates/shelter/evasion stacks without renames later.>>
 
@@ -166,7 +246,7 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 
 **Canonical keys** (pack `creature_motor` ∪ merge defaults comments): **`goal_memory_precise_radius_px`**, **`goal_memory_moving_last_known_radius_px`**, **`goal_memory_forget_radius_px`**, **`goal_memory_ttl_sec`**, **`goal_memory_coarse_ttl_sec`**, **`goal_memory_max_entries`**, **`weight_seek_remembered_goal`**, **`weight_coarse_sector_goal_bias`**, plus **`believed_goal_*`** habitual locale knobs (**§A.3.1**).
 
-**Code hooks:** **`_goal_belief_reset()`**, **`_goal_belief_sync_from_scene()`**, optional **`creature/motor/goal_source_memory.gd`** — see [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd).
+**Code hooks:** **`_goal_belief_reset()`**, **`_goal_belief_sync_from_scene()`**, **`_goal_belief_maintain()`**, **`_goal_belief_merge_into_motor_context()`** — see [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) and **[CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)**. **`goal_source_memory.gd`** for locale priors.
 
 **Examples — stationary bushes:** beliefs key on **`instance_id`** (**`bush_food.gd`** stable **`global_position`**).
 
@@ -183,11 +263,11 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 | **Squeeze / fit_size** | Small creatures behind `passible == false` façade — seekers and threats ultimately respect **LOS** alongside distance once pipeline ships (**resolved** below). |
 | **Planner opacity** | Conservative motor until squeeze “learned” — unchanged. |
 
-**LOS vs distance-only gates (resolved)**
+**LOS vs distance-only gates (resolved — phase 1 deferral)**
 
-- **Target behavior:** **`SeekCandidate` (and symmetrical threat sampling)** exposes an **`occluded` / `line_of_sight_clear`** truth (exact API TBD) so candidates **blocked by squeeze/occluders/props** are not scored as blindly reachable solely from **distance + cone**.
-- **Interim (movement Foundations phase):** Until LOS infra lands, gated targets may continue using **distance + forward cone (+ environmental placeholders)** already in scripted motor — good enough for **foundations** integration; callers document “pre-LOS caveat” for bushes/mobs tucked behind occlusion.
-- **Follow-up:** Wire LOS per [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) + backlog in **§E**, then tighten seek/threat façade so **`SeekCandidate`** list matches physical reachability — **movement phase need not stall** waiting for LOS, but LOS is **in scope soon after** Foundations pass.
+- **Target behavior (future):** **`SeekCandidate` (and symmetrical threat sampling)** exposes **`occluded` / `line_of_sight_clear`** so candidates blocked by squeeze/occluders/props are not scored as blindly reachable from **distance + cone** alone.
+- **Phase 1 (this round — out of scope):** Continue **distance + forward cone (+ environmental placeholders)** in scripted motor. **No** `occluded` field work, **no** LoS API changes in Foundations PR.
+- **Follow-up:** Wire LoS via **Godot 3D ray** queries per [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md) + backlog **§E** — after gameplay baseline and **ship profile** stabilization.
 
 ---
 
@@ -195,7 +275,7 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 
 **Today:** scripted motor uses primarily **distance + forward cone**.
 
-**LOS track:** Implements **explicit reachability/occlusion checks** aligning **Tier-2 hostile detection** and **Find-food `SeekCandidate` credibility with §D** squeeze/hiding truths (see backlog + ENVIRONMENT MODEL).
+**LOS track (deferred):** **Godot 3D ray** occlusion checks aligning **Tier-2 hostile detection** and **Find-food `SeekCandidate` credibility with §D** — **not** this phase. See [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
 
 Tracking: [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
 
@@ -223,44 +303,54 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 ### G.1 Config / packs
 
-- [ ] **`creature_motor` object** under **`assets/creatures/<pack>/pack_resources.json`** overlays merged defaults (movement-weighing keys in one nested object).
+- [x] **`creature_motor` object** under **`assets/creatures/<pack>/pack_resources.json`** overlays merged defaults (movement-weighing keys in one nested object).
 
-- [ ] **`game_config_merge.gd`** defines **`creature_motor_profile_ship`** and **`creature_motor_profile_dev`**; **`default_creature_motor_params()`** explicitly references **both** profiles and merges **one** spine + chosen profile via **`OS.has_feature(&"creature_motor_ship")`** (default **dev** when tag absent).
+- [x] **`game_config_merge.gd`** defines **`creature_motor_profile_ship`** (Phase 3 retune) and **`creature_motor_profile_dev`** (extreme aberrant overrides); **`default_creature_motor_params()`** merges spine + profile via **`use_ship_motor_profile()`** (`OS.has_feature(&"creature_motor_ship")` or editor **`hunter_killer_debug/use_ship_motor_profile`**).
 
-- [ ] Missing or partial pack `creature_motor` shallow-merges without crash; regression test asserts **profile-backed `default_creature_motor_params()`** when pack missing/malformed (**dev vs ship** via **`creature_motor_ship`** export feature).
+- [x] Missing or partial pack `creature_motor` shallow-merges without crash; regression test asserts **dev profile** produces **aberrant** locomotion (wiring detector). **Ship executable CI** deferred until **`creature_motor_profile_ship`** finalized (**§A.1**).
 
 ### G.2 Code structure
 
-- [ ] **`GameConfig` / instantiation:** motor dict resolved **per creature instance** via **§A.1** (**`default_creature_motor_params()`** ∪ pack overlay — **no** global `creature_motor` layer): **`CreatureDefinition.asset_pack_root`** → **`pack_resources.json`** `creature_motor` keys overlay profile-backed defaults; duel `mob`, duel `player`, resolver smoke scenes, etc. behave the same mechanically; **only the pack pointer on the spawned definition** differs.
+- [x] **`GameConfig` / instantiation:** motor dict resolved **per creature instance** via **§A.1** (**`default_creature_motor_params()`** ∪ pack overlay — **no** global `creature_motor` layer): **`CreatureDefinition.asset_pack_root`** → **`pack_resources.json`** `creature_motor` keys overlay profile-backed defaults; duel `mob`, duel `player`, resolver smoke scenes, etc. behave the same mechanically; **only the pack pointer on the spawned definition** differs.
 
-- [ ] **`AiDriver`**: no predator/prey branching for **building `SeekCandidate[]` vs `ThreatSample[]`** beyond a **`MotorTargetPolicy`** / builder from `CreatureDefinition` + perception (**one seek list ingress** — **§A.2**).
+- [x] **`AiDriver`**: no predator/prey branching for **building `SeekCandidate[]` vs `ThreatSample[]`** — **one `AiDriver` method** from `CreatureDefinition` + perception (**§A.2** unified builder; **not** a separate `MotorTargetPolicy` class).
 
-- [ ] **`CardinalAvoidance`**: single scoring path — optional **subtract** chase pull as one term parameterized by targets, not separate `pursuit_targets` fork unless profiling demands it internally only.
+- [x] **`CardinalAvoidance`**: single scoring path — optional **subtract** chase pull as one term parameterized by targets, not separate `pursuit_targets` fork unless profiling demands it internally only.
 
 ### G.3 Motivation tree
 
-- [ ] Explicit **tier weights** structure in code **or** config (stub **mate** = 0).
+- [x] Explicit **tier weights** structure in code **or** config (stub **mate** = 0).
 
-- [ ] **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**: **defaults ~0.90 / ~0.80** (+ blend knob as implemented), overridable per creature via **`creature_motor`** / definition; Preserve may **suppress** Find food near full; jeopardy unaffected.
+- [x] **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**: defaults **~0.90 / ~0.80 / 0.5** in **`default_creature_motor_params()`**; **`preserve_seek_blend_smoothness`** = smoothstep aggressiveness **0…1**; jeopardy overrides via **§A.2.3**.
 
-- [ ] **`believed_goal_source_bias`** (motor-context façade): habitual patch bias + escalate hooks; radii **`believed_goal_hotspot_near_radius_px`**, **`believed_goal_seek_escalate_radius_px`** ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md); **§A.3.1** here).
+- [x] **`believed_goal_source_bias`** per **[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)** — **`goal_source_memory`**, top-3 centroid, **`cell_x/cell_y`** rows; cardinal additive pull + sector costs (**§A.3.1**); **`weight_believed_goal_pull`**, hotspot/projection **250 px**, escalate **1000 px** + **`escalate_seek_multiplier`** ([MEMORY §10](CREATURE_MEMORY.md)).
 
-- [ ] **Traits** plumbed **or** documented with `<<Comment>>` for first knob — **pole meaning** anchored in **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** (**Survival-plan vision** + shorthand table); **−100…+100** scale, **0 = midpoint**; mapper applies **trait application order** (**strongest `abs` first**; tie **`explorer_builder` → `change_stability` → `compassion_self_interest` → `community_individual`**).
+- [x] **Traits → Tier-2:** **[CREATURE_GOAL_DRIVERS.md §3.3.1](CREATURE_GOAL_DRIVERS.md)** — **`trait_tier2_mapper.gd`** urgency channels; **phase-1 stub** (zero deltas). Replay traits via **§5** unchanged.
 
 ### G.4 Memory prerequisites (subset of CREATURE_MEMORY §13 — after movement slice)
 
-- [ ] **Unified ENGINE movement baseline** (**§G.2** / duel smoke) green **before** shipping persistent memory merge that mutates **`SeekCandidate`**.
+- [x] **Unified ENGINE movement baseline** (**§G.2** / duel smoke) green **before** shipping persistent memory merge that mutates **`SeekCandidate`**.
 
-- [ ] Prerequisites **predator calorie + locomotion calorie cost** before claiming pred memory parity ([CREATURE_MEMORY.md §13](CREATURE_MEMORY.md)).
+- [ ] Prerequisites **predator calorie + locomotion calorie cost** before claiming pred memory parity ([CREATURE_MEMORY.md §13](CREATURE_MEMORY.md)) — **deferred** (herbivore MVP).
 
-- [ ] When memory lands: precise merge respects **consumable_now** freeze; **`goal_memory_coarse_ttl_sec`** enforced; **no** coarse phantom **`Vector2` seek**; **re-tune** if motor quality regresses (**§B.3**).
+- [x] When memory lands: precise merge respects **consumable_now** freeze; **`goal_memory_coarse_ttl_sec`** enforced; **no** coarse phantom **`Vector2` seek**; **re-tune** if motor quality regresses (**§B.3**).
+
+- [x] **`strategy_class_tags.extra_modalities`** (optional pack sibling, **§A.1**) merged at spawn → **`effective_modality_allowlist`**; salient writes pass **`validate_episode_tags`** per **[CREATURE_GOAL_DRIVERS.md §5.1 — Action 1](CREATURE_GOAL_DRIVERS.md)**.
+
+- [x] **`goal_kinds.extra_goal_kinds`** (optional pack sibling, **§A.1**) merged at spawn → **`effective_goal_kinds`**; salient writes pass **`validate_goal_kind`** per **[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**.
+
+- [x] **`find_food` `context_hash`** per **[CREATURE_MEMORY.md §2.1.1](CREATURE_MEMORY.md)** (`explore_coverage_cell_px`, world-zero origin, food **`SeekCandidate`** anchor, OOB reject write).
+
+- [ ] **`MotorContext` tactic classifier flags** (**§A.2.1**) populated when detectors exist; **`goal_source_memory.gd`** salient path per **[CREATURE_GOAL_DRIVERS.md §5.1.1](CREATURE_GOAL_DRIVERS.md)** — **stub false** until detectors ship; salient path uses default modalities.
+
+- [x] **`replay_weight` multiplicative** on **`weight_believed_goal_pull`** / seek when consult hash matches — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (not additive cardinal fork).
 
 ---
 
 ## H. Dependencies
 
 - [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) — V1 fork inventory **to deprecate**.
-- [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) — **canonical** motivation tree Tier-1/2, **`CreatureDefinition`** trait axes + application order, habitual **`believed_goal_*`** modulation (**strategy-class** Actions 1–3).
+- [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) — **canonical** motivation tree Tier-1/2, **`CreatureDefinition`** trait axes + application order, habitual **`believed_goal_*`** modulation (**§5.1** strategy-class tags — **Resolved**).
 - [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; success-pattern façade (**§2.1**); trait-mediated habitual replay consumption (**§2.2**); routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
 - [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) — field catalog; traits.
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) — must stay consistent (**heredity out of scope** here; genome doc may evolve separately).
@@ -272,6 +362,16 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-05-20 | **Tier B closure:** §A.1 dev=aberrant extremes / ship=stub; B-10 ship executable CI deferred; §A.2 **`AiDriver`** unified builder; §D/E LoS phase-1 out of scope; §G.1/G.2 checklist aligned. |
+| 2026-05-20 | **§A.2.3 / §A.3.1:** priority **0** starvation override; **`starvation_override_food_ceiling`**; write-gate note; **§C** `_goal_belief_*` hooks → MEMORY §5.5. |
+| 2026-05-19 | **§A.2.3 / §A.3.1:** derived **`dominant_tier2_leaf`**; **`preserve_seek_blend_smoothness`** default **0.5** (smoothstep aggressiveness). |
+| 2026-05-19 | **§G.3:** trait → Tier-2 stub + **`trait_tier2_mapper.gd`** per **GOAL_DRIVERS §3.3.1**. |
+| 2026-05-19 | **§A.3.1:** **`believed_goal_seek_escalate_radius_px`** default **1000 px** (hotspot **250 px**). |
+| 2026-05-19 | **§A.3.1 / §A.2.2:** **`believed_goal_source_bias`** cardinal additive costs; **`replay_weight` multiplicative**; hotspot **250 px**; goal-seek vs food-seek phase-1 posture. |
+| 2026-05-19 | **§A.2.1:** **`MotorContext`** tactic classifier flags for salient emitter (**GOAL_DRIVERS §5.1.1**). |
+| 2026-05-19 | **§G.4:** checklist **`find_food` `context_hash`** (**MEMORY §2.1.1**). |
+| 2026-05-19 | **§A.1:** optional pack sibling **`goal_kinds.extra_goal_kinds`** (species GoalKind extensions); spawn merge note for **`effective_goal_kinds`**. §G.4 checklist. |
+| 2026-05-19 | **§A.1:** optional pack sibling **`strategy_class_tags.extra_modalities`** (species Slot B extensions); cross-link **GOAL_DRIVERS §5.1 Action 1 Resolved**. §A.3.1 stale **`<<Question>>` Actions 1–3** ref removed. |
 | 2026-05-17 | **Three-way split:** motivation tree framework + **§A.4** trait content moved to **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; **§A.3** stub + **§A.3.1** motor keys/integration retained; **§A.4** = pointer to **GOAL_DRIVERS §3**; **§G**, **§H**, habitual replay bullets updated. |
 | 2026-05-16 | **§A.3.1:** **Trait-scaled habitual replay** — **`believed_goal_*`** from **`context_hash` / LocalePriorMap**, then **§A.4 traits** modulate **reapplication** ([CREATURE_MEMORY §2.2](CREATURE_MEMORY.md)); **`explorer_builder` vs environment-alter vs explore** illustrative; drift **still out-of-scope**. Implementation slots → **MEMORY §§2–2.2**. |
 | 2026-05-16 | **Naming alignment (`goal_*`):** generalized belief keys (**`goal_memory_*`**, **`weight_seek_remembered_goal`**, **`believed_goal_*`**, **`_goal_belief`** hooks); **§B**, **§C**, **§F**, **§G** synced with [CREATURE_MEMORY.md](CREATURE_MEMORY.md); **§B.2** retitled (**`feeding_mode` ingress** vs diet-archetype memory). |

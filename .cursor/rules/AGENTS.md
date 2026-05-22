@@ -21,11 +21,16 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 
 **Applies when:** You add or change formatted source code.
 
-**Follow the project style guide:**
+**Follow the project style guide** (workspace [`.editorconfig`](../../.editorconfig) is authoritative for indent):
 
-- Use 2-space indentation.
+- Use **2-space indentation** with **spaces only** — **never** insert tab characters (`\t`) in source. Godot GDScript **fails to parse** files that mix tabs and spaces in the same file.
+- When editing an existing file, **match its current indent** (this repo’s `.gd` files use spaces). Do not reindent whole files unless the task requires it.
 - Put the opening brace on the same line when the language's usual style allows it.
 - Put spaces around operators.
+
+**Editor / Cursor:** Use **Insert Spaces** (not tabs) for `.gd` and other project sources. Workspace [`.vscode/settings.json`](../../.vscode/settings.json) enforces this for VS Code / Cursor; Godot Editor has its own indent settings — keep them on spaces, size 2, for GDScript.
+
+**After editing any `*.gd` file:** Run `python tools/check_gdscript_no_tabs.py` from the repo root (exit 0 required). See [gdscript_indent.md](./focus/gdscript_indent.md) for recovery if tabs were introduced.
 
 ## Documenting / comments
 
@@ -77,6 +82,7 @@ Detailed rules live only in these files; add more pointers here as new focus are
 
 - **Project_Docs (start here):** [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) — layout, tiers, promotion, and maintenance (`Draft_Features/`, `Definitive_Features/`, `Completed_Features/`)
 - **Creature goal drivers (Tier-2 / traits / habitual replay semantics):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — canonical hub; implementation in [CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) + persistence in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)
+- **GDScript indent (spaces only, no tabs):** [gdscript_indent.md](./focus/gdscript_indent.md)
 - **Logging (policy, PII, volume):** [logging_instr.md](./focus/logging_instr.md)
 - **Runtime / in-game AI agents (embedded LLM), not IDE assistants:** [agentic_coding.md](./focus/agentic_coding.md)
 - **Assets (`res://assets/`, `pack_resources.json`, variants):** [asset_management.md](./focus/asset_management.md) — full design in archived [ASSET_MANAGEMENT_PLAN.md](../../Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md)

@@ -5,15 +5,18 @@ const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vital
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
+const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
+
+@export var obstacle_lookahead_px: float = 96.0
 
 @export var isHostile = false
 @export var definition: Resource
 @export var speed = 400
 @export var creature_size: float = 26.0
-@export var caloric_needs: int = 10
+@export var caloric_needs: int = 30
 
 var screen_size: Vector2
-var current_calories: float = 10.0
+var current_calories: float = 30.0
 var _starvation_fired: bool = false
 var _calorie_baseline_drain_per_sec: float = 1.0
 var _calorie_cost_per_px_moved: float = 0.002
@@ -21,6 +24,7 @@ var creature_move_intent: Vector2 = Vector2.ZERO
 var current_velocity: Vector2 = Vector2.ZERO
 var last_move_direction: Vector2 = Vector2.RIGHT
 var _food_intake_policy: Resource
+var _wall_slide_pick: RefCounted
 
 enum ControlMode {
   HUMAN,
@@ -60,6 +64,7 @@ func _ready() -> void:
   collision_mask = 1
   motion_mode = MOTION_MODE_FLOATING
   hide()
+  _wall_slide_pick = _SlidePickScr.new()
   _apply_diet_defaults()
   _refresh_calorie_burn_params()
   var ad := get_node_or_null("/root/AiDriver")
@@ -72,6 +77,11 @@ func _apply_diet_defaults() -> void:
     var def := _CreatureDefinition.new()
     def.feeding_mode = _CreatureDefinition.FeedingMode.HERBIVORE
     definition = def
+  elif definition.get_script() == _CreatureDefinition:
+    var cap: Variant = (definition as Resource).get("caloric_needs")
+    if typeof(cap) == TYPE_INT:
+      caloric_needs = int(cap)
+      current_calories = float(caloric_needs)
   _food_intake_policy = _DietRegistry.default_food_intake_policy(get_feeding_mode())
 
 
@@ -165,8 +175,35 @@ func _clamp_to_playfield() -> void:
   position = _PlayfieldClamp.clamp_position(position, _footprint_half_for_clamp(), screen_size)
 
 
+func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
+  if heading.length_squared() < 1e-8:
+    return heading
+  var inc := heading.normalized()
+  var space := get_world_2d().direct_space_state
+  if space == null or _wall_slide_pick == null:
+    return inc
+  var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  var origin := global_position
+  var target := origin + inc * lookahead
+  var query := PhysicsRayQueryParameters2D.create(origin, target)
+  query.collision_mask = 1
+  query.exclude = [get_rid()]
+  var ray_hit: Dictionary = space.intersect_ray(query)
+  if ray_hit.is_empty():
+    return inc
+  var normal_v: Variant = ray_hit.get("normal", Vector2.ZERO)
+  if typeof(normal_v) != TYPE_VECTOR2:
+    return inc
+  var n := normal_v as Vector2
+  if n.length_squared() < 1e-12:
+    return inc
+  return _wall_slide_pick.pick_tangent_closer(inc, n)
+
+
 func _physics_process(delta: float) -> void:
   var intent := _read_move_intent()
+  if control_mode == ControlMode.ENGINE or control_mode == ControlMode.AI:
+    intent = _engine_heading_with_wall_slide(intent)
   var env_mult := _sample_movement_speed_multiplier()
   var target_speed := float(speed) * env_mult
   velocity = intent * target_speed

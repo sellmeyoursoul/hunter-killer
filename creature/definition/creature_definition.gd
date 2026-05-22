@@ -16,7 +16,7 @@ enum FeedingMode {
 
 @export var feeding_mode: FeedingMode = FeedingMode.HERBIVORE
 
-@export var caloric_needs: int = 10
+@export var caloric_needs: int = 30
 ## Multiplies merged [code]creature_motor[/code] baseline drain after global defaults are applied.
 @export var calorie_baseline_drain_multiplier: float = 1.0
 ## Multiplies distance-based calorie cost (2D uses px; 3D uses world units — keep consistent per phase).

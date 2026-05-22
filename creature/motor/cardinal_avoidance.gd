@@ -5,6 +5,7 @@ class_name CardinalAvoidance
 extends Object
 
 const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
+const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false.
 static var _tie_order: Array[Vector2] = [
@@ -329,7 +330,9 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   }
   var env_grid: Variant = ctx.get("environment_grid", null)
   var food_targets: Array = ctx.get("food_seek_targets", []) as Array
+  var prey_seek_targets: Array = ctx.get("prey_seek_targets", []) as Array
   var w_seek_food_raw: float = float(ctx.get("weight_seek_ready_food", 0.0))
+  var w_seek_prey_raw: float = float(ctx.get("weight_seek_prey", 0.0))
   var imminent_pts: Array = ctx.get("imminent_mob_points", []) as Array
   var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius_px", 0.0))
   var unready_food: Array = ctx.get("unready_food_avoid_targets", []) as Array
@@ -363,17 +366,23 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var w_pin: float = float(ctx.get("weight_obstacle_pin_predator", 0.0))
 
   var chaos_amp := float(ctx.get("motor_intent_cost_chaos", 0.0))
-  var chaos_rng: RandomNumberGenerator = null
-  if chaos_amp > 1e-10:
-    chaos_rng = RandomNumberGenerator.new()
-    var s_seed := int(ctx.get("motor_chaos_seed", 0))
-    if s_seed == 0:
-      s_seed = int(hash(creature_pos))
-    chaos_rng.seed = maxi(1, absi(s_seed))
+  var chaos_seed_base := int(ctx.get("motor_chaos_seed", 0))
+  if chaos_seed_base == 0:
+    chaos_seed_base = int(hash(creature_pos))
+  var pick_tick := int(ctx.get("motor_pick_tick", 0))
+
+  var goal_in_sight := (
+    not food_targets.is_empty()
+    or not prey_seek_targets.is_empty()
+    or not pursuit_targets.is_empty()
+  )
+  var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
+  var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
   var best_cost := INF
+  var scored: Array = []
   for d in order:
     var step := d * speed * lookahead
     var predicted := creature_pos + step
@@ -416,6 +425,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       strat_prey_pin,
       w_shield,
       w_pin,
+      prey_seek_targets,
+      w_seek_prey_raw,
     )
     if w_idle_explore > 0.0 and allow_explore:
       if d.length_squared() < 1e-14:
@@ -438,12 +449,66 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       cost += exploration_trail_repulsion_cost(
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
-    if chaos_rng != null:
-      cost += chaos_rng.randf_range(-chaos_amp, chaos_amp)
+    cost += believed_goal_step_cost(d, ctx)
+    if chaos_amp > 1e-10 and d.length_squared() > 1e-14:
+      var dir_rng := RandomNumberGenerator.new()
+      var dir_seed := chaos_seed_base
+      dir_seed ^= int(d.x * 92837111) ^ int(d.y * 689287499) ^ pick_tick
+      dir_rng.seed = maxi(1, absi(dir_seed))
+      cost += dir_rng.randf_range(-chaos_amp, chaos_amp)
+    scored.append({"dir": d, "cost": cost})
     if cost < best_cost:
       best_cost = cost
       best_d = d
+  if plateau_random and not goal_in_sight:
+    var tied_dirs: Array[Vector2] = []
+    for item in scored:
+      if typeof(item) != TYPE_DICTIONARY:
+        continue
+      var c_cost := float((item as Dictionary).get("cost", INF))
+      if c_cost > best_cost + tie_eps:
+        continue
+      var c_dir: Variant = (item as Dictionary).get("dir", Vector2.ZERO)
+      if typeof(c_dir) == TYPE_VECTOR2 and (c_dir as Vector2).length_squared() > 1e-14:
+        tied_dirs.append(c_dir as Vector2)
+    if tied_dirs.size() > 1:
+      var prng := RandomNumberGenerator.new()
+      var pseed := chaos_seed_base ^ pick_tick * 1664525 ^ 0x7F4A7C15
+      prng.seed = maxi(1, absi(pseed))
+      return tied_dirs[prng.randi_range(0, tied_dirs.size() - 1)]
   return best_d
+
+
+## Additive habitual-goal costs per cardinal step ([CREATURE_MEMORY.md §14.1](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)).
+static func believed_goal_step_cost(d: Vector2, ctx: Dictionary) -> float:
+  var bias_v: Variant = ctx.get("believed_goal_source_bias", {})
+  if typeof(bias_v) != TYPE_DICTIONARY:
+    return 0.0
+  var bias: Dictionary = bias_v
+  var pull_dir: Vector2 = bias.get("pull_dir", Vector2.ZERO)
+  var pull_mag := clampf(float(bias.get("pull_mag", 0.0)), 0.0, 1.0)
+  var w_pull := float(ctx.get("weight_believed_goal_pull", 0.0))
+  var cost := 0.0
+  if pull_mag > 1e-8 and w_pull > 1e-8 and d.length_squared() > 1e-12:
+    var u_pull := pull_dir.normalized() if pull_dir.length_squared() > 1e-12 else Vector2.ZERO
+    cost += -d.normalized().dot(u_pull) * w_pull * pull_mag
+  var sector_raw: Variant = bias.get("sector_weights", [])
+  if typeof(sector_raw) != TYPE_ARRAY:
+    return cost
+  var w_sector := float(ctx.get("weight_coarse_sector_goal_bias", 0.0))
+  if w_sector <= 1e-8 or d.length_squared() < 1e-12:
+    return cost
+  var sectors: Array = sector_raw
+  for s in range(mini(sectors.size(), 8)):
+    var sw := float(sectors[s])
+    if sw <= 1e-8:
+      continue
+    cost += (
+      -sw
+      * _GoalMem.align_step_with_sector(d, s)
+      * w_sector
+    )
+  return cost
 
 
 ## Closest point on axis-aligned `[center ± half]` to [param world_point] ([param half] nonnegative per axis).
@@ -598,6 +663,8 @@ static func cost_at_prediction(
   strategic_prey_pin_pos: Vector2 = Vector2.ZERO,
   weight_obstacle_shield_prey: float = 0.0,
   weight_obstacle_pin_predator: float = 0.0,
+  prey_seek_targets: Array = [],
+  weight_seek_prey: float = 0.0,
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -700,6 +767,15 @@ static func cost_at_prediction(
     imminent_mob_points,
     imminent_mob_radius,
   )
+  if weight_seek_prey > 0.0 and not prey_seek_targets.is_empty():
+    total += food_seek_cost_at_prediction(
+      predicted,
+      half,
+      prey_seek_targets,
+      weight_seek_prey,
+      imminent_mob_points,
+      imminent_mob_radius,
+    )
   total += unready_food_avoid_cost_at_prediction(
     predicted, half, unready_food_targets, weight_avoid_unready_food, eps
   )
@@ -755,6 +831,8 @@ static func cost_at_prediction_aware(
   strategic_prey_pin_pos: Vector2 = Vector2.ZERO,
   weight_obstacle_shield_prey: float = 0.0,
   weight_obstacle_pin_predator: float = 0.0,
+  prey_seek_targets: Array = [],
+  weight_seek_prey: float = 0.0,
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -795,4 +873,6 @@ static func cost_at_prediction_aware(
     strategic_prey_pin_pos,
     weight_obstacle_shield_prey,
     weight_obstacle_pin_predator,
+    prey_seek_targets,
+    weight_seek_prey,
   )

@@ -2,7 +2,7 @@
 
 > **Purpose:** **Authoritative working spec** for **creature memory** — what an agent **stores** and **updates** so it can pursue [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) **goals** (survival, reproduction, trait-shaped priorities). Memory is **not** a telemetry dump of every seen object.
 
-> **Motor / motivation alignment (read first):** **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (strategy-class **`<<Question>>`** Actions **1–3**). **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — unified scripted motor, **`SeekCandidate`** ingress, **`creature_motor`** pack merge, **Preserve vs Find** thresholds (**§A.3.1**), phasing (ENGINE movement Foundations **before** full memory wiring). **This doc:** **what** to remember and how beliefs / locale priors feed **`MotorContext`** (**§§2, 10**).
+> **Motor / motivation alignment (read first):** **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`GoalKind`** registry (**§4.1**), **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (**§5.1** strategy-class tags — **Actions 1–3 Resolved**). **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — unified scripted motor, **`SeekCandidate`** ingress, **`creature_motor`** + **`strategy_class_tags`** + **`goal_kinds`** pack merge (**§A.1**), **Preserve vs Find** thresholds (**§A.3.1**), phasing (ENGINE movement Foundations **before** full memory wiring). **This doc:** **what** to remember and how beliefs / locale priors feed **`MotorContext`** (**§§2, 10**).
 
 **Location:** `Draft_Features/` while design stabilizes; **promote** to `Definitive_Features/` when contract vs code (see [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md)). **Live code notes:** [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) (**`_goal_belief`** design block), [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd).
 
@@ -12,9 +12,17 @@
 
 **Phase name:** Creature memory (**goal-generalized** beliefs + success patterns)
 
-**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** + [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2** → **GOAL_DRIVERS §5**), and **§14 open decisions** until learning-layer knobs are settled.
+**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** + [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2** → **GOAL_DRIVERS §5**). **LocalePriorMap** contract — **§14** (row schema **§14.2**, projection **§14.1**, threat pass **§14.3**).
 
 **Explicit non-authority:** **Which** entities count as **`SeekCandidate` / consumable_now / food_candidate** vs **friend/foe** is governed by **`CreatureDefinition`** + ingestion policy ([CREATURE_MOVEMENT_V2.md §A.2 — `feeding_mode` / DietRegistry posture](CREATURE_MOVEMENT_V2.md)). **Memory** stores **belief records** keyed by stable instance ids **where applicable** and **does not** restate predator/omnivore/herbivore branching.
+
+**Phase-1 scope (resolved — May 2026):**
+
+| Ships | Stub / deferred |
+|-------|-----------------|
+| **`find_food`** + **`avoid_hostiles`** LocalePriorMap (write, consult, replay) | **`shelter`**, **`find_mate`**, pack **`extra_goal_kinds`** — registry only; no salient writes |
+| **`_goal_belief`** for stationary **`food_plants`** (**§5.5**) | Moving belief targets (prey, mobs) |
+| **`outcome_envelope`** + per-GoalKind hooks (**§14.4**) | **`ExperienceRing`**, Δ-calorie reward shaping |
 
 **Out of scope (explicit non-goals):**
 
@@ -49,7 +57,7 @@ Reserve the word **belief** for **salient world facts** (tiered targets, payload
 **Framework contract:** **two optional backends → one façade** consumed by scripted motor (**[CREATURE_MOVEMENT_V2.md §A.3.1 — Believed goal source / habitual locales](CREATURE_MOVEMENT_V2.md)**):
 
 1. **`LocalePriorMap`** — writes/reads hashed aggregates → projects into **`believed_goal_source_bias`** (+ hotspot / escalate radii: **`believed_goal_hotspot_near_radius_px`**, **`believed_goal_seek_escalate_radius_px`** — §10).
-2. **`ExperienceRing`** (optional phase-1) — bounded episodic traces for **novelty / retry** (“try improbable again later”); merges into the **same** façade-only signals so Tier-2 **does not** fork (**§14** knobs: ring size, ε sampling, eviction).
+2. **`ExperienceRing`** (**deferred — future phase only**) — bounded episodic traces for **novelty / retry** (“try improbable again later”); merges into the **same** façade-only signals so Tier-2 **does not** fork (**§14** knobs: ring size, ε sampling, eviction). Phase 1 = **`LocalePriorMap` only**.
 
 **Façade fusion (when both backends active):** agree → **one** motor input; disagree → **[CREATURE_GOAL_DRIVERS.md §5.1 — Action 3 backend merge](CREATURE_GOAL_DRIVERS.md)** (`change_stability` sign, then stable **`tie_key`** odd/even).
 
@@ -75,11 +83,49 @@ flowchart LR
 - **`ExperienceRing`:** **Deferred — future phase** (**§14**). Phase 1 = **`LocalePriorMap` only**; episodic ring, ε sampling, and ring eviction **not** in current scope.
 - **Do not** use the label **belief tags** for success patterns — avoids colliding with **belief records** (instance-target memory, §§5–6).
 
-**`context_hash` (concept):** coarse situation fingerprint. Composite key **`(GoalKind, …)`** with **per-`GoalKind` overlays** (**spatial / fingerprint layering — resolved in §14**): e.g. uniform **grid cell** for foraging, squeeze/nest **fingerprints** for **`GoalKind.shelter`**, etc. — **not** one global spatial hash pasted onto every goal. Keep definitions at **consistent higher-order layering** (**goal ordinal / tier**) so composite **third-order** goals can reuse **the same scheme** (§14 row and example therein). Phase-1 *candidate*: **grid cell** for nutrition overlays; sibling keys layered by goal author. **Strategy-class tags**, **`<<Question>>` Actions 1–3**, and trait replay modulation — **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)**. Other §14 knobs (normalization, gates, …) stay open where marked. Optional tags paired with **`context_hash`** feed **`believed_goal_*`** once **Actions 1–3** **`Resolved:`** there.
+**`context_hash` (concept):** coarse situation fingerprint. **`LocalePriorMap`** row key includes **`GoalKind`**, **`context_hash`**, and **`modality_tag`** (**§14**). **`context_hash`** values are produced by **per-`GoalKind` overlays** (**spatial / fingerprint layering — resolved in §14**): e.g. uniform **grid cell** for **`find_food`**, squeeze/nest **fingerprints** for **`shelter`** (deferred numerics), etc. — **not** one global spatial hash pasted onto every goal. **Phase-1 `find_food` numerics — Resolved:** **§2.1.1** below. **Strategy-class tags** — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (**Resolved**).
 
-### 2.2 Trait-mediated replay (**context_hash × motivation traits`)
+#### 2.1.1 `find_food` — `grid_cell` compositor (phase-1 resolved)
 
-**Canonical narrative:** illustrative **`explorer_builder`** tension table, strategy-class **`Resolved`** prose + **`<<Question>>` Actions 1–3** — **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)**.
+**Scope:** **`find_food`** and **`avoid_hostiles`** use **`grid_cell`** compositors in phase 1 (**§2.1.1**, **§2.1.2**). **`shelter`**, **`find_mate`**, pack **`extra_goal_kinds`**, and other overlays **defer** numerics until their write paths ship.
+
+| Parameter | Phase-1 choice |
+|-----------|----------------|
+| **Cell size** | Reuse merged **`creature_motor.explore_coverage_cell_px`** (default **52** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)); same floor division as explore trail in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd). **`cell_px = max(16, explore_coverage_cell_px)`**. |
+| **Origin** | **World `Vector2.ZERO`** — **not** [`EnvironmentGridBaked.origin_world`](../../environment/environment_grid_baked.gd) (terrain grid may use a different origin). |
+| **Anchor** | **Dominant food `SeekCandidate` world position at outcome** (the resource patch), **not** creature body position — patch-centric locale memory. |
+| **Out of bounds** | **Reject entire salient write** (no clamp-to-edge). When **`EnvironmentGridBaked`** is valid, require anchor cell indices **`cell_x`, `cell_y`** ∈ **`[0, cell_width) × [0, cell_height)`** under this compositor. If env grid is missing/invalid at outcome, **reject** salient write. |
+| **Hash input** | **Includes `GoalKind`** wire id **and** grid indices (redundant with row’s **`GoalKind`** column — intentional for stable lookup / tests). |
+
+**Cell indices** (anchor = food **`SeekCandidate`** position **`p`**):
+
+```text
+cell_x = floor(p.x / cell_px)
+cell_y = floor(p.y / cell_px)
+```
+
+**`context_hash` value** (phase-1 — Godot `hash` on deterministic payload; impl may use equivalent stable mix):
+
+```text
+context_hash = hash([goal_kind_wire_id, cell_x, cell_y])
+```
+
+- **`goal_kind_wire_id`**: e.g. `&"find_food"` (**[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**).
+- Return **sentinel / failure** from compositor when OOB → caller **skips** persist (**no** `LocalePriorMap` row update).
+
+**Replay consult:** Recompute **`context_hash`** with the **same** rules from the **current** dominant food **`SeekCandidate`** anchor, or **nearest eligible** seek target when the consult path differs from the dominant anchor (e.g. dominant bush occluded / out of cone but another eligible food candidate is nearer).
+
+**2D only:** Phase-1 façade is **XY**; no Z term in bucket id.
+
+**Implementation hook (code PR):** `context_hash_for_find_food(goal_kind, anchor: Vector2, motor_p, env_grid) -> int` (or `-1` = reject).
+
+#### 2.1.2 `avoid_hostiles` — `grid_cell` compositor (phase-1 resolved)
+
+Same numerics as **§2.1.1** except **anchor** = **creature body position at outcome**. **`context_hash_for_avoid_hostiles(...)`**.
+
+### 2.2 Trait-mediated replay (**context_hash × motivation traits**) (**context_hash × motivation traits`)
+
+**Canonical narrative:** illustrative **`explorer_builder`** tension table, strategy-class tag vocabulary + validation + replay formulas — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (**Actions 1–3 Resolved**).
 
 **This file (data path):** **`LocalePriorMap`** / **`ExperienceRing`** (**§2.1**) → **`believed_goal_source_bias`** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**). Trait scalar semantics (**−100…+100**, spawn-fixed today): **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**.
 
@@ -117,7 +163,7 @@ Memory categories **rollup** to Tier-2 leaves (**[CREATURE_GOAL_DRIVERS.md §4](
 
 4. **Danger / mates / full evasion** — extend tables as systems land (**same abstraction** wherever possible).
 
-<<Comment: If §2 “success patterns” outruns code capacity, implement **`LocalePriorMap`** minimally as **counters-only** (“times **`context_hash`** yielded payoff for **`GoalKind`**) feeding **`believed_goal_source_bias`**; defer **`ExperienceRing`** (**§2.1**).>>
+**Resolved (phase-1 LocalePriorMap MVP):** **Full row stats** per **§14** normalization (**`attempt_count`**, **`success_count`**, **`success_delta`**, **`stored_strength`**, EWMA decay, strategy-class tags at write) — **not** counters-only. Row fields — **§14.2**. **`ExperienceRing`** remains deferred (**§2.1**).
 
 ---
 
@@ -150,7 +196,58 @@ Enter **Precise** when the creature holds a fresh belief **and** distance-from-b
 
 When a remembered entity **re-enters the creature’s active zone of sensory awareness** (**same definition** as scripted motor fusion — CREATURE_MOVEMENT_V2 Foundations), **drop it from coarse-only treatment** — **snap to Precise**: refresh position/affordance from live scanner, freeze snapshots per refresh rules (**§5.1 stationaries** unchanged).
 
-<<Comment: LRU cap (`goal_memory_max_entries`) interacts with TTL — evict weakest/oldest globally when bursting; document tie-break vs coarse TTL ordering in implementing PR?>>
+**Resolved (LRU vs coarse TTL — phase 1):** When **`goal_memory_max_entries`** is exceeded, **LRU eviction wins** over waiting for coarse TTL. Evict the entry with **lowest merge use count**; tie-break **least recently merged** into motor context (**§5.5**). Coarse TTL and global **`goal_memory_ttl_sec`** still apply on non-LRU paths.
+
+### 5.5 `_goal_belief` — instance memory implementation (phase-1 resolved)
+
+**Purpose:** Remember **specific instances** (this bush) after they leave awareness. Complements **`LocalePriorMap`** (patch habits). **Phase-1 scope:** stationary **`food_plants`** only (`goal_kind = find_food`).
+
+**Storage:** Single **`_goal_belief: Dictionary`** on **`AiDriver`** — **not** per-duel-subject tables (**GB-S2**). Key = target **`instance_id`**.
+
+#### Entry schema
+
+| Field | Type | When set | Used for |
+|-------|------|----------|----------|
+| **`instance_id`** | int / `StringName` | First sighting | Dictionary key |
+| **`goal_kind`** | wire id | First sighting | Phase 1: `find_food` |
+| **`tier`** | `PRECISE` \| `COARSE` | Maintenance | Motor merge path |
+| **`last_world_pos`** | `Vector2` | Sync + frozen OOA | Precise seek; coarse sector anchor |
+| **`last_observed_ms`** | int | Live sighting | **`goal_memory_ttl_sec`** |
+| **`coarse_entered_ms`** | int | Precise→Coarse | **`goal_memory_coarse_ttl_sec`** |
+| **`consumable_now`** | bool (frozen) | Last live read | Ready vs unready merge |
+| **`merge_use_count`** | int | Each motor merge | LRU eviction score |
+| **`last_merged_ms`** | int | Each motor merge | LRU tie-break |
+| **`anticipated_calories`** | float (optional) | Last live read | Payload stub |
+
+**Do not store** egocentric sector in the entry — recompute each tick (**§5.2**).
+
+#### Functions
+
+##### `_goal_belief_reset() -> void`
+
+- **When:** **Per creature spawn** (**GB-R1**) **and** same lifecycle as **`_mob_hist` reset** (round/session boundaries) **and** when a tracked **goal episode completes** (optional hygiene).
+- **Effect:** `_goal_belief.clear()`.
+
+##### `_goal_belief_sync_from_scene(live_food: Dictionary) -> void`
+
+- **When:** After live awareness ingest, before maintenance/merge.
+- **Input:** Awareness pass returns **`{ "ready": [{pos, instance_id}, …], "unready": […] }`** — **`instance_id` carried in awareness pass** (**GB-S1**); resolve node by **nearest `food_plants` group member** to each reported position when id absent.
+- **Effect:** Upsert seen entries → **`PRECISE`**, refresh pos, freeze **`consumable_now`**, bump **`last_observed_ms`**.
+
+##### `_goal_belief_maintain(creature_pos: Vector2, now_ms: int, motor_p: Dictionary) -> void`
+
+- Precise→Coarse when distance **>** `goal_memory_precise_radius_px` but **≤** forget radius.
+- Evict on coarse TTL, global TTL, forget radius.
+- **LRU at cap:** evict **lowest `merge_use_count`**; tie **least recently merged** (**GB-M1**, **GB-M2**).
+
+##### `_goal_belief_merge_into_motor_context(ctx: Dictionary, creature_pos: Vector2, motor_p: Dictionary) -> void`
+
+- **Precise:** append to `food_seek_targets` / `unready_food_targets` scaled by **`weight_seek_remembered_goal`** — **max 25** remembered precise merges per tick (**GB-MG2**).
+- **Coarse:** increment **`believed_goal_source_bias.sector_weights[8]`**; normalize so **max sector weight = 1.0** (**GB-MG1**).
+- **Dedupe:** **skip** belief merge if **`instance_id` already in live awareness lists** (**GB-MG3**).
+- Increment **`merge_use_count`** / **`last_merged_ms`** on each merged entry.
+
+**LocalePriorMap:** `_goal_belief` does **not** write locale priors; consumption outcomes still call **`goal_source_memory.try_salient_write`**.
 
 ---
 
@@ -162,7 +259,7 @@ Type-specific blobs **orthogonal** to tier geometry:
 |-----------|-------------------------|
 | **Nutrition / food** | `anticipated_calories` (estimate from memory or last sensory read), ripeness-ish flags mirrored from **`consumable_now`**. |
 | **Mate** | Compatibility / courtship cues when designed (size bracket, hormonal flag, lineage avoid list). |
-| **Finding shelter** (`GoalKind.shelter`) | `estimated_squeeze_body_size`, `estimated_hostile_size`, `confidence` (**§7**) — qualitative “fit” not raw editor truth unless skill maxed (**future progression**). |
+| **Finding shelter** (`shelter`) | `estimated_squeeze_body_size`, `estimated_hostile_size`, `confidence` (**§7**) — qualitative “fit” not raw editor truth unless skill maxed (**future progression**). Wire id — **[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**. |
 
 Payloads attach to belief entries; **routing** ignores unknown fields gracefully.
 
@@ -174,7 +271,7 @@ Payloads attach to belief entries; **routing** ignores unknown fields gracefully
 
 ### 7.1 Goal framing
 
-Treat **bolt-holes**, **squeeze pockets**, future **birthing nests** as **`GoalKind.shelter`** records — same **tier / TTL / coarse** rules (**§5**). **Shelter/rest comfort** modulation (*reward safe recovery*) aligns with CREATURE_MOVEMENT motivation tree commentary once rest vitals tie in.
+Treat **bolt-holes**, **squeeze pockets**, future **birthing nests** as **`shelter`** goal-kind records — same **tier / TTL / coarse** rules (**§5**). **Shelter/rest comfort** modulation (*reward safe recovery*) aligns with CREATURE_MOVEMENT motivation tree commentary once rest vitals tie in.
 
 ### 7.2 Size comparison (skills — not authoritative editor reads)
 
@@ -195,9 +292,9 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 ### 7.4 Line of sight (scope boundary)
 
-**Explicitly out-of-scope — this authoring round.**
+**Explicitly out-of-scope — this authoring round** (movement Foundations + memory phase 1).
 
-**Near-term posture:** Leverage whatever **Godot 3D** offers for **persistent bodies/occluders** (physics rays, occlusion queries — details TBD in implementation spike). Supplement with **semantic factors owned by Environment / Plant / prop bodies** when grid-only truth fails (**ENVIRONMENT MODEL** extensions).
+**Future implementation (resolved):** **Godot 3D** physics **ray** queries against persistent bodies/occluders when LoS lands (**[CREATURE_MOVEMENT_V2.md §D–E](CREATURE_MOVEMENT_V2.md)** deferred). Supplement with **semantic factors** owned by Environment / Plant / prop bodies when grid-only truth fails (**ENVIRONMENT MODEL** extensions).
 
 **Skills cross-link:** Future **skill-based actions** SHOULD include **hide / stealth** verbs that mutate **effective LoS footprint** (**CREATURE_MOVEMENT_V2 Tier-2 / future action layer**) — coordinated with occlusion backlog (**[ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)** *Line of sight / occlusion*).
 
@@ -207,7 +304,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 ### 8.1 Read order
 
-1. **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (**§5**, strategy-class **`<<Question>>`**).
+1. **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (**§5.1** strategy-class tags).
 2. **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — **`SeekCandidate`**, **`creature_motor`** merge, Preserve vs Find (**§A.3.1**), phased acceptance (**§G**).
 3. **This file** — belief lifecycle + payload tiers (**§§5–6**); success-pattern backends (**§2.1**); projection + **§14** storage/tuning (**backend rows Resolved**; **`ExperienceRing`** deferred).
 4. **[ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)** — geometry truths.
@@ -216,7 +313,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 | Area | Paths / notes |
 |------|----------------|
-| Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; future generalized `_goal_belief_*` façade. |
+| Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; **`_goal_belief_*`** (**§5.5**); **`goal_source_memory.gd`** salient hooks (**§14.4**). |
 | Config merge spine | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — commented **`goal_*`** placeholders (**§10**); pack overlay via **`creature_motor`** (**CREATURE_MOVEMENT_V2 §A.1**). |
 | Cardinal costs | [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd). |
 | Stationary flora anchor | [`assets/plants/bush_food.gd`](../../assets/plants/bush_food.gd) — **`global_position`**, **`instance_id`**. |
@@ -238,34 +335,52 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 
 **Policy:** **`food_memory_*` / `_food_belief` / `believed_food_*` identifiers are deprecated** throughout **code** and active **Draft/Definitive** docs. Implement only **`goal_*`** / **`_goal_belief`** (**no parser aliases**, **no transitional save-key bridges** unless a maintainer mandates a dedicated migration spike). *[Completed_Features/](../Completed_Features/)* snapshots may lag.
 
-| Planned key | Role |
-|-------------|------|
-| `goal_memory_precise_radius_px` | Tier boundary — precise vs coarse (**~1000 px** starter in commented merge defaults). Stationary beliefs use exact coords inside envelope. |
-| `goal_memory_moving_last_known_radius_px` | **Moving** credible disk (**clamp ≤ `goal_memory_precise_radius_px`** unless waived). Starter **≈50 px** per CREATURE_MOVEMENT_V2 §F. |
-| `goal_memory_forget_radius_px` | Beyond → hard drop / LRU candidate. |
-| `goal_memory_coarse_ttl_sec` | Forget after **N seconds continuously coarse** (**starter ~15**). |
-| `goal_memory_ttl_sec` | Time since last live observation TTL (orthogonal to coarse-only timer). |
-| `goal_memory_max_entries` | LRU cap. |
-| `weight_seek_remembered_goal` | Motor weight bridging precise merge into **`SeekCandidate`**. |
-| `weight_coarse_sector_goal_bias` | Egocentric 8-way weak bias (coarse tier). |
+| Planned key | Default (phase-1) | Role / tuning |
+|-------------|-------------------|---------------|
+| `goal_memory_precise_radius_px` | **1000** | Inside → precise tier can merge exact coords into seek |
+| `goal_memory_moving_last_known_radius_px` | **50** | Moving targets — deferred phase 1 |
+| `goal_memory_forget_radius_px` | **2400** | Beyond → evict (LRU candidate) |
+| `goal_memory_coarse_ttl_sec` | **15** | Forget after N seconds continuously coarse |
+| `goal_memory_ttl_sec` | **15** | Forget since last **live** observation |
+| `goal_memory_max_entries` | **25** | LRU cap; eviction = lowest **`merge_use_count`**, tie least recently merged |
+| `weight_seek_remembered_goal` | **8.0** | Scales cardinal **seek pull** toward **precise** remembered bush positions (merged into `food_seek_targets`). **~0.5×** default **`weight_seek_ready_food`** (16): remembered targets nudge direction but **weaker than live in-cone food**. **Raise** → chases stale GPS harder (may ignore fresher live cues). **Lower** → memory barely affects pathing. |
+| `weight_coarse_sector_goal_bias` | **3.0** | Scales **`sector_weights[s]`** in cardinal cost (**§14.1**). Multiplies egocentric 8-way bias from **coarse** beliefs only. **0** = off. **Raise** → stronger weak turn toward “food was that way” without exact coords. Keep **well below** live seek weights so coarse bias stays a hint. |
 
-**Belief / habitual locale stubs** (**CREATURE_MOVEMENT_V2 §A.3.1**): **`believed_goal_hotspot_near_radius_px`**, **`believed_goal_seek_escalate_radius_px`**, motor field **`believed_goal_source_bias`**. Nutritional hotspots may ship first — keys stay **goal-generic** so mates / nests / evasion stacks reuse wiring.
+**Wire defaults:** Uncomment / set in **`default_creature_motor_params()`** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) (**GB-10**).
+
+**Belief / habitual locale** (**CREATURE_MOVEMENT_V2 §A.3.1**, projection **§14.1**):
+
+| Planned key | Default (phase-1) | Role |
+|-------------|-------------------|------|
+| `believed_goal_hotspot_near_radius_px` | **250** | **Hotspot** and **`locale_prior_projection_radius_px`** — one knob. Rows within radius feed centroid. |
+| `believed_goal_seek_escalate_radius_px` | **1000** | Outside hotspot, ≤ this radius → escalate dominant Tier-2 seek (**§14**). |
+| `weight_believed_goal_pull` | **6.4** | Scales habitual **vector** attraction (**§14.1**); **0.4×** **`weight_seek_ready_food`** (16). |
+| `locale_prior_pull_w_norm` | **3.0** | Denominator for **`pull_mag`** centroid scaling (**§14.1**). |
+| `locale_prior_ewma_alpha` | **0.15** | Per-tick soft decay on in-row **`success_delta`** / **`stored_strength`**. |
+| `locale_prior_write_blend` | **0.35** | Per-write lerp for **`stored_strength`** toward **`success_rate`** (**§14.2**). |
+| `salient_write_max_per_sec` | **100** | Per-creature safety valve on salient writes/sec (**§14**). |
+| `believed_goal_source_bias` | — | **`MotorContext`** façade: **`pull_dir`**, **`pull_mag`**, **`sector_weights[8]`** — not a config scalar. |
+
+**LocalePriorMap row fields (phase-1 — §14.1):** persist **`cell_x`**, **`cell_y`** at salient write (from §2.1.1 compositor); optional **`anchor_world`** mirror for debug. **Required** for centroid projection — **`context_hash` alone is not invertible**.
 
 **LocalePriorMap decay / eviction** (**§14 Resolved** — mirrors in **`game_config_merge.gd`** / pack merge; not belief keys):
 
-| Planned key | Role |
-|-------------|------|
-| `locale_prior_max_buckets` | LRU cap on **`LocalePriorMap`** rows per creature (**default 100**). |
-| `locale_prior_idle_evict_base_sec` | Base idle time before bucket eligible for eviction (**default 10**). |
-| `locale_prior_idle_evict_per_attempt_sec` | Added idle seconds per **`attempt_count`** beyond first (**default 1**): **`idle_evict_sec = base + (attempt_count - 1) * per_attempt`**. |
-| `locale_prior_ewma_alpha` | Soft decay on **`success_delta`** / **`stored_strength`** while row remains (**tune in play**). |
+| Planned key | Default (phase-1) | Role |
+|-------------|-------------------|------|
+| `locale_prior_max_buckets` | **100** | LRU cap on **`LocalePriorMap`** rows per creature. |
+| `locale_prior_idle_evict_base_sec` | **10** | Base idle time before bucket eligible for eviction. |
+| `locale_prior_idle_evict_per_attempt_sec` | **1** | Added idle sec per **`attempt_count`** beyond first: **`idle_evict_sec = base + (attempt_count - 1) * per_attempt`**. |
+
+**Replay / Slot B formula keys** (authoritative defaults **`default_creature_motor_params()`** only — **[CREATURE_GOAL_DRIVERS.md §5.1.2](CREATURE_GOAL_DRIVERS.md)**): `replay_bell_k`, `replay_w_fit`, `replay_w_store`, `replay_n_sat`, `replay_n_min`, `urgency_boost_linear_slope`, `replay_urgency_slot_b_min`. Omit from pack JSON unless overriding.
+
+| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window). Defaults in **`default_creature_motor_params()`** only.
 
 ---
 
 ## 11. Cross-ported resolutions (CREATURE_MODEL §9 & related)
 
 - **Hunger — derived (resolved vs [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) §9):** Treat **`hunger` / satiation** as **derived**, not authoritative stored vitals alongside **`current_calories`**. Persist **canonical** **`current_calories`** and **capacity / needs** thresholds the model owns; **each tick** (or wherever vitals gate motor) derive a **ratio or %**, then feed **rules** and **weight / factor adjusts** — e.g. rest vs forage bands, **hungry-enough-to-hunt**, satiation unlocking **mate / explore / other Tier-2** mixes. Avoid a redundant persisted **`hunger`** scalar unless a save format or foreign API mandates a mirrored field.
-- **Food deep inside squeeze cavities (resolved):** **Finding** those resources (e.g. **food bushes** beyond naive range/visibility) **should require exploration**, not instant goal telegraphy. Exploration outcomes **seed locale priors** (**§2.1**) and **belief entries** (**§§5–6**) as usual. Successful **persistent** use fits an **ecological niche** pattern — e.g. **living/foraging chiefly in predator-excluding squeeze** — expressible as **`GoalKind` + overlay `context_hash`** (**§14**) and habitual **`believed_goal_*`** replay (**§2.2**) without a bespoke branch. Distance-only vs LoS stubs stay secondary to **[CREATURE_MOVEMENT_V2.md §D interim](CREATURE_MOVEMENT_V2.md)** posture during implementation (**reaffirm in memory PR**).
+- **Food deep inside squeeze cavities (resolved):** **Finding** those resources (e.g. **food bushes** beyond naive range/visibility) **should require exploration**, not instant goal telegraphy. Exploration outcomes **seed locale priors** (**§2.1**) and **belief entries** (**§§5–6**) as usual. Successful **persistent** use fits an **ecological niche** pattern — e.g. **living/foraging chiefly in predator-excluding squeeze** — expressible as **`GoalKind` + overlay `context_hash`** (**§14**) and habitual **`believed_goal_*`** replay (**§2.2**) without a bespoke branch. Distance-only vs LoS stubs stay secondary to **[CREATURE_MOVEMENT_V2.md §D](CREATURE_MOVEMENT_V2.md)** phase-1 deferral.
 
 ---
 
@@ -280,25 +395,29 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 
 ## 13. Acceptance criteria (when implementing)
 
-- [ ] **Phasing respected:** ENGINE movement Foundations (**CREATURE_MOVEMENT_V2 §G.2**) green before heavy belief merge regressions (**§G.4** there).  
-- [ ] Precise merges respect **consumable_now** freeze / payload freeze until live refresh (**CREATURE_MOVEMENT_V2 §C**).  
-- [ ] Stationary beliefs = **exact** coords in precise envelope; movers = disk radius policy (**§5.1**) — **no coarse phantom vectors** surfaced as micromanaged GPS.  
-- [ ] Coarse TTL (**§5.3**) + re-awareness promotion (**§5.4**) covered by deterministic tests **if feasible**.  
-- [ ] **`goal_*`** / **`believed_goal_*`** keys documented in **`game_config_merge.gd`** and pack authoring when wired (**§10 — no deprecated `food_memory_*` in active codepaths**).  
-- [ ] **`SeekCandidate` unify** regression check post-memory — predator/prey ingestion **already** routed through single list (**§A.2**).  
-- [ ] Predator locomotion prerequisites before claiming predator memory parity (**§4 bullet 2**).  
-- [ ] Future LoS / stealth alignment notes trace to ENVIRONMENT backlog + **`GoalKind.shelter`**.  
-- [ ] **Learning layer (§2.1 / §14):** **`LocalePriorMap`** → **`believed_goal_*`** façade is gated and tunable — or **defer** with explicit MVP (**counters-only**, §4 note) recorded in changelog / implementing PR once §14 rows settle or are waived.
+- [x] **Phasing respected:** ENGINE movement Foundations (**CREATURE_MOVEMENT_V2 §G.2**) green before heavy belief merge regressions (**§G.4** there).  
+- [x] Precise merges respect **consumable_now** freeze / payload freeze until live refresh (**CREATURE_MOVEMENT_V2 §C**).  
+- [x] Stationary beliefs = **exact** coords in precise envelope; movers = disk radius policy (**§5.1**) — **no coarse phantom vectors** surfaced as micromanaged GPS.  
+- [x] Coarse TTL (**§5.3**) + re-awareness promotion (**§5.4**) covered by deterministic tests **if feasible** (`_test_goal_belief_coarse_ttl`).  
+- [x] **`goal_*`** / **`believed_goal_*`** keys documented in **`game_config_merge.gd`** and pack authoring when wired (**§10 — no deprecated `food_memory_*` in active codepaths**).  
+- [x] **`SeekCandidate` unify** regression check post-memory — predator/prey ingestion **already** routed through single list (**§A.2**).  
+- [ ] Predator locomotion prerequisites before claiming predator memory parity (**§4 bullet 2**) — **deferred** (herbivore MVP).  
+- [ ] Future LoS / stealth alignment notes trace to ENVIRONMENT backlog + **`shelter`** `GoalKind` — **deferred**.  
+- [x] **Learning layer (§2.1 / §14):** **`LocalePriorMap`** MVP = **full row stats** (**§4**, **§14.2**) → **`believed_goal_*`** façade; write gates + projection **§14.1** + threat scope **§14.3**.
 
 ---
 
-## 14. Outstanding design decisions (success patterns & motor façade)
+## 14. Success patterns & motor façade (phase-1 contract)
 
-Resolve **before** treating learning-layer code as contract-frozen. Keep the **`<<Question: …>>` markers** plus table until replaced with terse **Resolved:** prose in-line or beside each row ([.cursor/rules/AGENTS.md](../../.cursor/rules/AGENTS.md)). Cross-links: **§§2.1–2.2**, [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** (strategy-class **`Resolved`** + **`<<Question>>` Actions **1–3**).
+**Phase-1 learning layer** contracts below are **Resolved** unless marked deferred. Strategy-class replay — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (**Actions 1–3 Resolved**). **`<<Comment: …>>`** markers remain only for **future optimization** (e.g. Δ-calorie reward shaping), not open blockers.
 
 **Strategy-class tags & trait × habitual replay:** Authoritative **`Resolved`** prose (**tag set**, **per-family top-3** strength ranking, cross-family multiply, **map/ring façade merge**) — **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)** (**Actions 1–3 Resolved**). **§14 below** = projection geometry, gates, reward shaping — not duplicated there.
 
-**Resolved (**`context_hash` — overlays & layering**):** **`LocalePriorMap` / episodic backends** SHOULD use **`(GoalKind, overlay…)`**, i.e. **per `GoalKind`** spatial regimes and fingerprint payloads (grid cell vs squeeze/nest keys, …) rather than **one global uniform grid** pasted onto every motivation. Normalize **definitions at a consistent higher-order level** (**goal ordinal / tier** — taxonomy **TBD**): when a **third-order composite goal** appears (example: behaviors that **“crush” less plentiful sources** — spend effort removing or collapsing **economically worse** patches — **to make room / attention for more plentiful ones**, i.e. **reshape local resource layout**), **`context_hash` compositor rules** SHOULD **reuse that same layering discipline** so **prior aggregates and episodic replay** (**§§2.1–2.2**) do not fork into bespoke hash stacks **per whim**. Per-overlay detail (cell size, origin, clamp-to-playfield, alignment to awareness envelopes) locks with implementation as each **`GoalKind` / overlay ships.
+**Resolved (**`context_hash` — overlays & layering**):** **Per `GoalKind`** compositors (**§2.1.1** `find_food`, **§2.1.2** `avoid_hostiles`); other overlays defer.
+
+**Resolved (multi-modality salient write — phase 1):** One gated episode upserts **up to 3** rows — one per top-3 **`modality_tag`** ([GOAL_DRIVERS §5.1 Action 3](CREATURE_GOAL_DRIVERS.md)). Same **`outcome_envelope`** on each row. **`find_food`** open forage (empty modalities): single row with modality id **`open_forage`**.
+
+**Resolved (`pole_facet_tag` on row — phase 1):** Persist rank-1 **`pole_facet_tag`** (`StringName`) per row at write for stable Slot A replay (**§14.2**).
 
 **Resolved (Outcome → reward shaping — phase 1):** **`LocalePriorMap`** / **`ExperienceRing`** updates use **boolean / tiered** **`outcome_envelope`** only — no Δ-calorie or per-goal magnitude scalars in this pass. Aligns with **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** episode write (**`outcome_envelope`**: success tier, damage/jeopardy, goal delta stub) and Slot B **`success_count`** / **`success_delta`** (**§5.1**).
 
@@ -318,24 +437,29 @@ success_delta = EWMA_alpha * reward_scalar    // reward_scalar ∈ { -1, 0, +1 }
 stored_strength blend uses success_rate / visit pattern (Action 2 bell path)
 ```
 
-**Normalization (phase-1):** One aggregate row per **`(GoalKind, context_hash[, modality])`** — goals do **not** share one EWMA. **At most one salient write per goal-outcome episode** (**write gates** below); distinct **`GoalKind`** only when dominance rules allow separate completed outcomes in the same tick (rare). Per-**`GoalKind`** buckets, not calorie scaling.
+**Normalization (phase-1):** One aggregate row per **`(GoalKind, context_hash, modality_tag)`** — per-modality stats for Slot B **confidence** (**[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)**). Goals do **not** share one EWMA across **`GoalKind`**. **At most one salient write per goal-outcome episode** (**write gates** below); distinct **`GoalKind`** only when dominance rules allow separate completed outcomes in the same tick (rare). Wire ids — **[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**.
 
 <<Comment: **Future optimization** — after playtest, reconsider: **Δ calories** (nutrition-rich signal), **per-`GoalKind` scalar** maps (escape vs food), **multi-goal composite magnitudes**, **hybrid** (tier for counts + bounded magnitude for EWMA), and **per-goal write caps**. Experience should show whether boolean tiers are enough or magnitude/domination needs tighter shaping.>>
 
-**Resolved (Write gates — phase 1):** Controls **when** **`LocalePriorMap`** / **`ExperienceRing`** may update — memory is **not** a telemetry dump (§1 **Purpose**). **Salience = goal priority at outcome**, not proximity alone.
+**Resolved (Salient episode emitter — phase 1):** Canonical owner **[`goal_source_memory.gd`](../../creature/memory/goal_source_memory.gd)** — **[CREATURE_GOAL_DRIVERS.md §5.1.1](CREATURE_GOAL_DRIVERS.md)**. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** calls **`try_salient_write(...)`** only after write gates pass below. **`goal_source_memory.gd`** computes **`context_hash`**, builds **`modality_tags[]`** / **`pole_facet_tags[]`** (classifier flags or per-`GoalKind` defaults — **poles are not** defined on **`goal_kinds`** pack entries), validates, persists **`LocalePriorMap`** rows. **`MotorContext`** tactic classifier keys — **[CREATURE_MOVEMENT_V2.md §A.2.1](CREATURE_MOVEMENT_V2.md)**.
 
-**Tier-2 dominance (primary gate):** Write only when the outcome matches the **Tier-2 leaf that owned pursuit at outcome resolution** → **`GoalKind`**.
+**Resolved (Write gates — phase 1):** Controls **when** **`LocalePriorMap`** / **`ExperienceRing`** may update — memory is **not** a telemetry dump (§1 **Purpose**). **Salience = goal priority at outcome**, not proximity alone. **Emitter does not decide** Find food vs Find mate — write gates + §4.1 routing do.
 
-| Scenario | Write? |
-|----------|--------|
-| **`Find food` dominant**, successful eat | **Yes** → nutrition |
-| **`Find mate` dominant**, food in front + `hunger > 0`, eats opportunistically | **No** — mate still owned pursuit; not “accomplishing find food” |
-| Hunger high enough **`Find food` wins over `Find mate`** at bite time | **Yes** → nutrition only |
-| **`Find mate` dominant**, threat → flee | **Yes** → danger/shelter **`GoalKind`** when **Avoid hostiles** owns outcome (**[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)** hard-win) |
-| **Fleeing** (Avoid dominant), sees mate | **No** mate write — incidental; not a realistic “find mate” pattern |
-| **Neutral** tier | **No** (outcome shaping) |
+**Tier-2 dominance (primary gate):** Write only when the outcome matches the **Tier-2 leaf that owned pursuit at outcome resolution** → **`GoalKind`** wire id (**[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)** routing table).
 
-**One write per goal outcome:** **At most one** salient success-pattern write per **completed goal-outcome episode** per creature per tick. Primary limit on **writes/sec**; optional global ceiling (**~1–2/sec** in **`creature_motor`**) is a **safety valve** only.
+| Scenario | Write? | `GoalKind` (when yes) |
+|----------|--------|------------------------|
+| **`Find food` dominant**, successful eat | **Yes** | `find_food` |
+| **Successful eat in mid Preserve band (0.80–0.90)** | **Yes** | `find_food` — outcome-driven; motor may still smoothstep weights |
+| **`Find mate` dominant**, food in front + `hunger > 0`, eats opportunistically | **No** — mate still owned pursuit | — |
+| Hunger high enough **`Find food` wins over `Find mate`** at bite time | **Yes** | `find_food` |
+| **`Find mate` dominant**, threat → flee | **Yes** when **Avoid hostiles** owns outcome | `avoid_hostiles` or `shelter` per §4.1 |
+| **Fleeing** (Avoid dominant), sees mate | **No** mate write | — |
+| **Squeeze / bolt-hole payoff** while Avoid owns outcome | **Deferred** | `shelter` — phase 1: **`avoid_hostiles` only** |
+| **Neutral** tier | **No** | — |
+| **Preserve calories** dominant | **No** salient write | — |
+
+**One write per goal outcome:** **At most one** salient success-pattern write per **completed goal-outcome episode** per creature per tick. Optional per-creature safety valve **`salient_write_max_per_sec`** (**default 100** in **`creature_motor`**) — high ceiling; primary spam control remains one-per-outcome + same-goal continuation.
 
 **Same-goal continuation (replaces per-bucket cooldown as primary policy):** While the **same Tier-2 leaf** stays active, pursuing **the next target of that goal** (e.g. second bush while still **`Find food`**, more food in sight after first success) is **one goal activity** — **no second write**.
 
@@ -356,7 +480,7 @@ idle_evict_sec = locale_prior_idle_evict_base_sec + (attempt_count - 1) * locale
 // defaults: base=10, per_attempt=1  →  attempt_count=1 → 10s idle; attempt_count=100 → 109s idle
 ```
 
-- **`last_used_time`** updates on **write** or **replay consult** (implementation picks one; document both in PR if they diverge).
+- **`last_used_time`** updates on **both** salient **write** and **replay consult** (any read that uses the row for projection, ranking, or **`replay_rank_score`**).
 - When **`now - last_used_time > idle_evict_sec`**, bucket is **eligible for removal** (subject to LRU cap below).
 - **Low `attempt_count`** → **shorter** idle window → **forgotten sooner** than high-traffic patches.
 
@@ -364,39 +488,181 @@ idle_evict_sec = locale_prior_idle_evict_base_sec + (attempt_count - 1) * locale
 
 **Beliefs (§5):** **`goal_memory_coarse_ttl_sec`**, **`goal_memory_forget_radius_px`**, **`goal_memory_max_entries`** apply to **instance belief targets** only — not locale prior rows.
 
-**Resolved (`believed_goal_source_bias` projection — phase 1):** **Hybrid** habitual geometry + existing coarse-sector channel.
-
-1. **`LocalePriorMap`** → weighted neighbor blend (centroid-style attraction from top **`replay_rank_score`** buckets near the creature) for **`believed_goal_source_bias`** direction / strength.
-2. **Blend** with **`weight_coarse_sector_goal_bias`** (**§10**) — same **8-way egocentric sector** weak bias used for **coarse belief** tier (**CREATURE_MOVEMENT_V2 §F**); habitual locales **do not** spoof precise-tier seek.
-
-**Façade shape (phase-1 contract):** **`MotorContext.believed_goal_source_bias`** = directional habitual pull (scalar or unit vector) **plus** per-sector weights aligned to coarse belief sectors — one projection path into scripted cardinal scorer (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**).
+**Resolved (`believed_goal_source_bias` projection — phase 1):** **Hybrid** habitual geometry + coarse-sector channel. **Numerics — §14.1**; cardinal consumption — **[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)** + **§A.2.2**.
 
 **Resolved (escalation vs acute threat — phase 1):** **[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)** hotspot / escalate radii interact with **threat** as follows:
 
 | Signal | Behavior |
 |--------|----------|
-| **Inside `believed_goal_hotspot_near_radius_px`** | Bias toward known good patches (dominant seek leaf). |
-| **Outside hotspot, inside `believed_goal_seek_escalate_radius_px`** | Elevate urgency for **dominant Tier-2 seek** (e.g. **Find food**) when no familiar locale — **escalate role** active. |
-| **New acute threat** | **Do not** instantly **release** escalate/hotspot evaluation into blind flee. **First:** run **threat-response** pass using **local `LocalePriorMap`** (modalities **`flee_retreat`**, **`hide_stealth`**, **`fight`** when implemented) — **locale resources** (squeeze, cover, bolt-holes) inform **flight vs hold vs fight**. |
+| **Inside `believed_goal_hotspot_near_radius_px`** (**250 px** default) | Bias toward known good patches (dominant seek leaf). |
+| **Outside hotspot, inside `believed_goal_seek_escalate_radius_px`** (**1000 px** default) | Elevate urgency for **dominant Tier-2 seek** (e.g. **Find food**) when no familiar locale in hotspot — **escalate role** active. |
+| **New acute threat** | **Do not** instantly **release** escalate/hotspot evaluation into blind flee. **First:** **threat-response** pass per **§14.3** (ordering + replay consult — **not** a separate flee cardinal term phase 1). |
 | **After threat-response pass** | **Avoid hostiles** hard-win (**[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**) may apply if jeopardy remains acute — not on the first threat frame alone. |
 
 **Regression:** **Empty map + threat** (no shelter priors) vs **hotspot-rich + threat** (strong **`hide_stealth` / `squeeze_commit`** priors) — escalate must not behave as if no local memory exists while threat evaluation runs.
 
+#### 14.1 `believed_goal_source_bias` projection numerics (phase-1 resolved)
+
+**Owner:** [`goal_source_memory.gd`](../../creature/memory/goal_source_memory.gd) — **`project_believed_goal_bias(creature_pos, dominant_goal_kind, motor_p) -> Dictionary`**.
+
+**Row storage (Option A — resolved):** On each salient write, persist **`cell_x`**, **`cell_y`** from the active **`GoalKind`** compositor ( **`find_food` — §2.1.1** ). Cell center for projection:
+
+```text
+cell_px = max(16, explore_coverage_cell_px)
+patch_center = Vector2((cell_x + 0.5) * cell_px, (cell_y + 0.5) * cell_px)
+```
+
+**Spatial filter:** Include row iff **`row.goal_kind == dominant_goal_kind`** at consult **and** `distance(creature_pos, patch_center) <= believed_goal_hotspot_near_radius_px`. **Phase 1:** **`avoid_hostiles`** rows **excluded from centroid / `pull_dir`** — consult for **`replay_rank_score`** and threat-response ordering only (**§14.3**). Only **`find_food`** (and future seek goals) feed hotspot vector pull.
+
+**Top-N (resolved):** Sort included rows by **`replay_rank_score`** ([GOAL_DRIVERS §5.1](CREATURE_GOAL_DRIVERS.md)); take **top 3**; tie-break **`stored_strength`**, then **`last_used_time`**.
+
+**Centroid (vector channel — locale priors only):**
+
+```text
+w_i = replay_rank_score(row_i)
+centroid = sum(w_i * patch_center_i) / max(sum(w_i), epsilon)
+pull_dir = normalize(centroid - creature_pos)   // zero vector if sum(w_i) == 0
+pull_mag = clamp(sum(w_i) / locale_prior_pull_w_norm, 0.0, 1.0)   // default 3.0 — §10
+```
+
+**Sector channel (coarse beliefs only — §5.2):** Build **`sector_weights[8]`** from **belief** records in coarse tier (egocentric **N…NW**, **`+Y = N`**). **Do not** add locale-prior cells into sector_weights (vector channel covers patch geography).
+
+**Façade shape (phase-1 contract):**
+
+```text
+MotorContext.believed_goal_source_bias = {
+  pull_dir: Vector2,           // unit or zero
+  pull_mag: float,             // 0..1
+  sector_weights: float[8],    // from coarse beliefs only
+}
+```
+
+**Do not** append **`centroid`** or patch centers to **`food_seek_targets`** / future **`goal_seek_targets`** — precise seek stays **instance `SeekCandidate`** + **`weight_seek_remembered_goal`** only.
+
+**`replay_weight` at consult (phase-1 — multiplicative, [GOAL_DRIVERS §5.1](CREATURE_GOAL_DRIVERS.md)):** When current consult **`context_hash`** matches a stored row for dominant **`GoalKind`**:
+
+```text
+effective_pull_weight = weight_believed_goal_pull * replay_weight
+// replay_weight = locale_prior_strength * (1 + replay_delta / 100)
+```
+
+**`replay_weight` scales pull magnitude only** — it is **not** a second direction source. **`replay_delta`** does **not** replace **`pull_dir`**.
+
+**Hotspot / escalate (unchanged roles):** **Hotspot** = priors within **`believed_goal_hotspot_near_radius_px`** (**250 px** default). **Escalate** = creature has **no** qualifying prior within hotspot but is still within **`believed_goal_seek_escalate_radius_px`** (**1000 px** default) → adjust **`weight_seek_ready_food`** (or future **`weight_seek_goal`**) and **Preserve/Find** band per **[CREATURE_MOVEMENT_V2 §A.3.1](CREATURE_MOVEMENT_V2.md)** — **not** the vector formula above.
+
+**Cardinal scorer (phase-1 — additive costs, [CREATURE_MOVEMENT_V2 §A.3.1](CREATURE_MOVEMENT_V2.md)):** Per candidate cardinal step **`d`** (unit direction from creature):
+
+```text
+cost += -dot(d, pull_dir) * effective_pull_weight * pull_mag    // attraction
+for s in 0..7:
+  cost += -sector_weights[s] * align(d, sector_s) * weight_coarse_sector_goal_bias
+```
+
+**`align(d, sector_s)` (resolved — sector-arc membership):** weight **1.0** if cardinal step **`d`** falls in egocentric sector **`s`**'s **45°** arc (**N…NW**, **`+Y = N`**), else **0** — not a continuous dot product.
+
+**Implementation hooks:** `goal_source_memory.project_believed_goal_bias(...)`; [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) reads **`believed_goal_source_bias`** + **`weight_believed_goal_pull`** from **`MotorContext`**.
+
+#### 14.2 `LocalePriorMap` row schema (phase-1 resolved)
+
+**Phase-1 MVP:** **Full row stats** per **§14** normalization — **not** counters-only (**§4**).
+
+**Primary key (one row):** **`(goal_kind, context_hash, modality_tag)`** — `goal_kind` = wire id (**[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**); `modality_tag` = single Slot B tactic id (e.g. `squeeze_commit`, `flee_retreat`).
+
+| Field | Type / range | When set / updated |
+|-------|----------------|-------------------|
+| `goal_kind` | `StringName` / wire id | Write + consult |
+| `context_hash` | `int` | Write + consult (must match active compositor) |
+| `modality_tag` | `StringName` | Write (one tactic id per row; **`open_forage`** for empty-modality find_food) |
+| `pole_facet_tag` | `StringName` | Write — rank-1 pole at write time; **not** re-inferred at replay |
+| `cell_x` | `int` | Salient write — compositor §2.1.1 / §2.1.2 |
+| `cell_y` | `int` | Salient write |
+| `attempt_count` | `int` ≥ 0 | Increment on gated salient write |
+| `success_count` | `int` ≥ 0 | Increment on Success tier (**§14** table) |
+| `success_delta` | `float` | EWMA of **`reward_scalar`**; soft decay **§10** `locale_prior_ewma_alpha` |
+| `stored_strength` | `float` 0…1 | On each gated salient write after count bump: `success_rate = success_count / max(attempt_count, 1)`; `stored_strength = lerp(stored_strength, success_rate, locale_prior_write_blend)` (**default write blend 0.35** — §10); per-tick EWMA decay via **`locale_prior_ewma_alpha`** |
+| `last_used_time` | time (sec) | **Write and replay consult** — resets idle eviction clock |
+
+**Not stored per row:** full **`pole_facet_tags[]`** episode set — only **`pole_facet_tag`** rank-1 on each row. Poles are **not** pack-defined per **`goal_kinds`** entry. Slot A at replay reads **`pole_facet_tag`** from the row (or matching modality row).
+
+**Optional debug field:** `anchor_world` (`Vector2`) — mirror of cell center at write; not required for hash lookup.
+
+#### 14.4 `outcome_envelope`, hooks, and per-GoalKind outcomes (phase-1 resolved)
+
+**Principle:** **Simple case** — salient write when the **situation that triggered the goal is resolved** (ate / jeopardy cleared). **Partial success** — goal-specific flags (`insufficient_yield`, etc.).
+
+**Shared struct:**
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `tier` | enum | `SUCCESS` \| `PARTIAL_SUCCESS` \| `FAILURE` \| `NEUTRAL` \| `NEAR_DEATH` |
+| `goal_resolved` | bool | Triggering situation cleared |
+| `goal_kind` | wire id | After routing |
+| `insufficient_yield` | bool | Low-calorie bush; Find food still active |
+| `jeopardy_at_outcome` | bool | Near-death / damage flag |
+
+**`PARTIAL_SUCCESS`:** same storage as Success (`reward_scalar +1`); flags tune replay later.
+
+##### `find_food`
+
+| Outcome | Write? | `tier` |
+|---------|--------|--------|
+| Consumption completes | Yes | `SUCCESS` or `PARTIAL_SUCCESS` + `insufficient_yield` |
+| Mid Preserve band eat | Yes | `SUCCESS` |
+| Approach without bite | **No** (phase 1 — **out of scope**; deferred) | `NEUTRAL` |
+
+**Hook:** `_on_food_consumption_outcome` → `goal_source_memory.try_salient_write`.
+
+##### `avoid_hostiles`
+
+| Outcome | Write? | `tier` |
+|---------|--------|--------|
+| **Jeopardy clears** (`tactic_jeopardy_egress` true→false) while Avoid owned pursuit | Yes | `SUCCESS` — **situation resolved** |
+| Jeopardy clears after near-death / damage | Yes | `NEAR_DEATH` → `reward_scalar −1` |
+| Starvation override **reversed escape** — creature returns to **any acute danger** within **`escape_reversal_window_sec`** (default **1 s**, tune) | **No** — suppress; **retry on next clean escape** |
+| Threat still acute at clear edge | No | `NEUTRAL` |
+
+**Hook:** `_on_jeopardy_cleared` → `try_salient_write` unless reversal suppression ([GOAL_DRIVERS §5.1.5](CREATURE_GOAL_DRIVERS.md)).
+
+**Reversal detection (AH-7):** Track escape episode while jeopardy active. Suppress write at jeopardy-clear if **`calorie_ratio < starvation_override_food_ceiling`**, dominance flipped **Avoid → Find food** during episode, and creature re-enters **any** imminent threat (not only original mob — supports **trailing hostile train**). After suppression, **retry** when a later escape ends with clean jeopardy clear.
+
+#### 14.3 Threat-response pass (phase-1 scope — resolved)
+
+**Ordering (unchanged):** Acute threat → consult local **`LocalePriorMap`** for threat modalities (**`flee_retreat`**, **`hide_stealth`**, **`fight`**, **`squeeze_commit` / `shelter`**) → then **Avoid hostiles** hard-win if jeopardy remains (**[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**).
+
+**Phase-1 algorithm scope — resolved:**
+
+| Does | Does not (phase 1) |
+|------|---------------------|
+| Consult rows matching **`dominant_goal_kind`** derived per **[CREATURE_MOVEMENT_V2 §A.2.3](CREATURE_MOVEMENT_V2.md)** | Add a **separate flee cardinal cost term** driven only by locale priors |
+| Rank rows via **`replay_rank_score`** ([GOAL_DRIVERS §5.1](CREATURE_GOAL_DRIVERS.md)) | Override mob-repulsion / jeopardy hard-win on frame one |
+| Prefer modalities present on rows (**`hide_stealth`**, **`squeeze_commit`**, etc.) when choosing among **replay** candidates | Full **`current_fit`** qualitative matchers (**§5.1.4** long-term) until detectors ship |
+| Feed **habitual bias** only through normal **`believed_goal_source_bias`** + existing threat motor | Treat locale priors as fake **`Vector2`** flee targets |
+
+**Implementers:** Threat pass = **ordering + memory consult for replay ranking / modality choice**; cardinal flee still comes from **live threat samples** and **`tactic_jeopardy_egress`** when set. When tactic classifiers are stubbed false, threat pass may no-op beyond ordering until **§A.2.1** flags land.
+
 **Deferred — `ExperienceRing` (future phase):** **Not** in phase-1 implementation. **`LocalePriorMap`** alone feeds **`believed_goal_*`**; backend map/ring merge (**GOAL_DRIVERS §5.1**) applies when ring ships. Each trace carries the **same strategy-class tag set** as map salient writes (**§5.1** episode write) — no parallel vocabulary. Revisit: cap per **`GoalKind`**, **ε** sampling, FIFO vs merge eviction — **§14** table row.
 
-**Resolved (excised — `action_tag`):** **Do not** introduce a separate episodic **`action_tag`** enum or motor-intent ordinal snapshot field. Tactic memory (“which approach in this situation”) is **`modality_tags[]`** + Slot B / per-modality map stats (**GOAL_DRIVERS §5.1**); personality color is **`pole_facet_tags[]`** + Slot A. Legacy examples (`retreat`, `commit_cardinal`, `stalk`) map to **modality ids** (e.g. **`flee_retreat`**, **`squeeze_commit`**, **`hide_stealth`**) or new modalities via **Action 1** pack extension — not a second ontology.
+**Resolved (excised — `action_tag`):** **Do not** introduce a separate episodic **`action_tag`** enum or motor-intent ordinal snapshot field. Tactic memory (“which approach in this situation”) is **`modality_tags[]`** + Slot B / per-modality map stats (**GOAL_DRIVERS §5.1**); personality color is **`pole_facet_tags[]`** + Slot A. Legacy examples (`retreat`, `commit_cardinal`, `stalk`) map to **modality ids** (e.g. **`flee_retreat`**, **`squeeze_commit`**, **`hide_stealth`**) or species **`strategy_class_tags.extra_modalities[]`** — not a second ontology.
 
 | Topic | Why it matters | Starter options |
 |-------|----------------|-----------------|
-| **context_hash** | Defines **“same situation”** for aggregates; resolution vs RAM vs designer legibility | **Per `GoalKind` overlays** (grid cell, squeeze/nest fingerprint, …); **`GoalKind` + goal-order / tier** keep composite third-order goals on **the same compositing discipline**; cell size / origin / clamp / awareness alignment **per overlay** (see §2.1, resolved paragraph above) |
-| **Outcome → reward** | Priors need a bump rule when events land | **Resolved (phase 1):** tiered **`outcome_envelope`** → **`reward_scalar ∈ {-1,0,+1}`**; **`success_count`** on success tier; **`success_delta`** = EWMA of scalar; separate rows per **`GoalKind`**. **Future:** Δ calories, per-goal scalars, composites (**<<Comment>>** under Resolved prose above) |
-| **Write gates** | Prevents per-tick noise from filling LocalePriorMap | **Resolved (phase 1):** dominant Tier-2 at outcome → **`GoalKind`**; **one write per goal outcome**; same-goal multi-target = no second write; **Success + `insufficient_yield`** for low-calorie bush; Avoid override; optional max-writes/sec safety valve |
+| **LocalePriorMap row shape** | Multi-modality writes vs aggregate wording | **Resolved — §14.2:** one row per **`(goal_kind, context_hash, modality_tag)`** + **`pole_facet_tag`** + stats; up to **3** rows per episode |
+| **context_hash** | Defines **“same situation”** | **`find_food` §2.1.1**; **`avoid_hostiles` §2.1.2** (creature cell); shelter deferred |
+| **Outcome → reward / envelope** | When priors update | **Resolved — §14.4:** goal-resolved simple case + per-GoalKind partial success; **`reward_scalar ∈ {-1,0,+1}`** |
+| **Write gates** | Noise control | **Resolved:** outcome-driven **`GoalKind`**; mid-band eat → `find_food`; AH-7 reversal suppress; one write per outcome |
+| **`GoalKind` registry** | Row keys | **Resolved — GOAL_DRIVERS §4.1** |
+| **LocalePriorMap MVP** | Counters-only vs full EWMA/tags | **Resolved:** full row stats per §14 normalization (**not** counters-only) |
+| **`last_used_time`** | Eviction clock | **Resolved:** updates on **write and replay consult** |
+| **Threat-response algorithm** | Priors vs flee cardinal | **Resolved — §14.3:** ordering only; **`replay_rank_score` / modality choice**; no separate flee cardinal term phase 1 |
 | **Prior decay / forget** | When locale prior buckets fade / drop | **Resolved (phase 1):** soft EWMA in-row; idle evict **`10 + (attempt_count-1)s`**; LRU **`locale_prior_max_buckets`** default **100**; **not** belief TTL parity |
-| **believed_goal_source_bias geometry** | Single projection path into MotorContext | **Resolved:** hybrid centroid-style habitual pull + **`weight_coarse_sector_goal_bias`** (**§10**) |
-| **Escalation vs threat** | **“No hotspot”** urgency vs survival ordering | **Resolved:** threat → **local prior threat-response** first; escalate role not instant-abandoned; Avoid hard-win **after** evaluation pass |
+| **believed_goal_source_bias geometry** | Single projection path into MotorContext | **Resolved — §14.1:** anchors **`cell_x/cell_y`**, radius **250 px**, top **3**, vector from priors + sectors from coarse beliefs, additive cardinal costs |
+| **`replay_weight` motor path** | Multiplicative vs additive | **Resolved:** **multiplicative** on **`weight_believed_goal_pull`** at consult; **not** a second direction; see GOAL_DRIVERS §5.1 |
+| **Escalation vs threat** | **“No hotspot”** urgency vs survival ordering | **Resolved:** hotspot **250 px**, escalate **1000 px**; threat → local prior threat-response first; Avoid hard-win after pass |
 | **ExperienceRing** | Novelty / retry versus engineering cost | **Deferred — future phase** (**§2.1**); traces reuse **§5.1** tag sets; phase 1 = **`LocalePriorMap` only** |
 | **`action_tag` (excised)** | Avoid duplicate tactic vocabulary | **Resolved:** no separate field; **`modality_tags[]` / `pole_facet_tags[]`** only (**GOAL_DRIVERS §5.1**) |
-| **trait × context_hash replay** | Same remembered prior, different **personality** on reapply (**§2.2**) | **Semantics + Actions 1–3:** **[CREATURE_GOAL_DRIVERS.md §5](CREATURE_GOAL_DRIVERS.md)** (**tag set**, top-3, multiply, map/ring merge **`Resolved`**); **§14** rows above = projection / gates / reward; future **learned trait drift** — **GOAL_DRIVERS §3.4** |
+| **trait × context_hash replay** | Same remembered prior, different **personality** on reapply (**§2.2**) | **Semantics:** **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (**tag set**, validation, top-3, multiply, map/ring merge **`Resolved`**); **§14** rows above = projection / gates / reward; future **learned trait drift** — **GOAL_DRIVERS §3.4** |
+| **strategy-class tag validation** | **`LocalePriorMap`** row keys + salient-write gate | **Resolved:** **[CREATURE_GOAL_DRIVERS.md §5.1 — Action 1](CREATURE_GOAL_DRIVERS.md)** (split allowlist, pack **`strategy_class_tags`**, reject/strip policy) |
+| **Salient-write emitter** | Who builds episode tags at outcome | **Resolved:** **`goal_source_memory.gd`** + **[GOAL_DRIVERS §5.1.1](CREATURE_GOAL_DRIVERS.md)**; tactic classifier on **`MotorContext`**; infer default modality; poles global (not per **`goal_kinds`**) |
 
 **Cross-cutting discipline:** GoalKind parity across §§5–6, MotorContext, and **`goal_*` / `believed_goal_*`** (**§10**) — mates / nests / evasion reuse the **same** façade (**§2 third-layer invariant:** no forked memory silos).
 
@@ -406,6 +672,16 @@ idle_evict_sec = locale_prior_idle_evict_base_sec + (attempt_count - 1) * locale
 
 | Date | Change |
 |------|--------|
+| 2026-05-20 | **Tier B closure:** §2.1.1 nearest-eligible consult; §10 defaults (`locale_prior_pull_w_norm` **3.0**, `locale_prior_ewma_alpha` **0.15**, `locale_prior_write_blend` **0.35**, `weight_believed_goal_pull` **6.4**, `salient_write_max_per_sec` **100**); §14.1 sector-arc **`align`**; §14.2 write blend; §14.4 failed-forage deferred; §7.4 Godot 3D ray future. |
+| 2026-05-20 | **Tier A closure:** phase-1 scope box; **§2.1.2** `avoid_hostiles` compositor; **§5.5** `_goal_belief` implementation; **§10** defaults + tuning; **§14** multi-row + **`pole_facet_tag`**; **§14.4** outcome/hooks; AH-7 reversal; mid-band eat write; shelter write deferred. |
+| 2026-05-19 | **§14 closure:** §14.2 row schema; §14.3 threat pass scope; MVP full stats; **`last_used_time`** write+consult; §14 title/intro hygiene. |
+| 2026-05-19 | **§10:** cross-link **GOAL_DRIVERS §5.1.2** replay `creature_motor` keys. |
+| 2026-05-19 | **§10 / §14.1:** **`believed_goal_seek_escalate_radius_px`** default **1000 px** (hotspot/projection **250 px** unchanged). |
+| 2026-05-19 | **§14.1 Resolved:** `believed_goal_source_bias` numerics — row **`cell_x/cell_y`**, hotspot=projection **250 px**, top **3**, cardinal additive costs; **`replay_weight`** multiplicative on pull only. |
+| 2026-05-19 | **§14:** salient emitter **Resolved** — **`goal_source_memory.gd`**, cross-link **GOAL_DRIVERS §5.1.1**; §14 table row. |
+| 2026-05-19 | **§2.1.1 Resolved:** `find_food` **`grid_cell`** compositor — `explore_coverage_cell_px`, origin world zero, food **`SeekCandidate`** anchor, OOB reject salient write, **`hash([goal_kind, cell_x, cell_y])`**. |
+| 2026-05-19 | **§14:** **`GoalKind` registry Resolved** (GOAL_DRIVERS §4.1); write-gate table uses wire ids; normalization locked to **`(GoalKind, context_hash, modality_tag)`** per row. |
+| 2026-05-19 | **Hygiene + GOAL_DRIVERS §5.1 Action 1:** strategy-class validation **Resolved** (split allowlist, pack **`strategy_class_tags`**, reject/strip); stale **`<<Question>>` Actions 1–3** refs removed; **`ExperienceRing`** phase-1 wording aligned (**deferred**). §14 table row added. |
 | 2026-05-18 | **§14 Resolved (excised):** **`action_tag`** removed — episodic/map salient writes use **GOAL_DRIVERS §5.1** tag sets only; §2.1 experience-trace row updated. |
 | 2026-05-18 | **§14 Resolved:** **`believed_goal_source_bias`** hybrid + coarse-sector blend; **escalation vs threat** (local priors before Avoid hard-win); **ExperienceRing deferred** future phase. |
 | 2026-05-18 | **§14 Resolved:** **LocalePriorMap decay/eviction** — soft EWMA; idle **`10+(attempt_count-1)s`**; LRU cap **100**; separate from belief forget; **`locale_prior_*`** keys in §10. |

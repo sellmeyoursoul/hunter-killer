@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://drx8gkc8yay1y"]
 
 [ext_resource type="Script" uid="uid://cfwahw2d47tyc" path="res://mob.gd" id="1_1qmh0"]
+[ext_resource type="Resource" path="res://creature/species/fox_archetype.tres" id="4_fox_def"]
 [ext_resource type="Script" path="res://creature/awareness_debug_overlay.gd" id="3_aware_dbg"]
 [ext_resource type="Texture2D" uid="uid://sevod3d6i4b0" path="res://art/enemyFlyingAlt_1.png" id="2_gfurk"]
 [ext_resource type="Texture2D" uid="uid://cdrmgsweant3w" path="res://art/enemyFlyingAlt_2.png" id="3_ieysi"]
@@ -66,6 +67,7 @@ gravity_scale = 0.0
 lock_rotation = true
 can_sleep = false
 script = ExtResource("1_1qmh0")
+definition = ExtResource("4_fox_def")
 metadata/_edit_group_ = true
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="." unique_id=650156661]

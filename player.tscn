@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://d2c1s3qmdi4ti"]
 
 [ext_resource type="Script" uid="uid://cqk1me3rctpww" path="res://player.gd" id="1_sweqy"]
+[ext_resource type="Resource" path="res://creature/species/rabbit_archetype.tres" id="3_rabbit_def"]
 [ext_resource type="Script" path="res://creature/awareness_debug_overlay.gd" id="2_aware_dbg"]
 [ext_resource type="Texture2D" uid="uid://ceramo61k86ur" path="res://art/playerGrey_up1.png" id="2_2hs0m"]
 [ext_resource type="Texture2D" uid="uid://dvktfb4y01t7m" path="res://art/playerGrey_up2.png" id="3_1jxqw"]
@@ -41,6 +42,7 @@ collision_layer = 2
 collision_mask = 1
 motion_mode = 1
 script = ExtResource("1_sweqy")
+definition = ExtResource("3_rabbit_def")
 metadata/_edit_group_ = true
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="." unique_id=298383437]

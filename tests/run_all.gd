@@ -16,6 +16,10 @@ const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvBake := preload("res://environment/environment_grid_bake.gd")
 const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
+const _Tier2Dom := preload("res://creature/motor/tier2_dominance.gd")
+const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
+const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
+const _BelievedSector := preload("res://creature/motor/believed_goal_sector.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
@@ -27,6 +31,7 @@ const _EXPANDING_CARDINAL_EXPLORE_SCR := preload("res://creature/motor/expanding
 const _CarnivorePursuit := preload("res://creature/motor/carnivore_pursuit.gd")
 const _MobScr := preload("res://mob.gd")
 const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
+const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
 
 var _failures: int = 0
 
@@ -38,6 +43,12 @@ func _init() -> void:
 
 func _run_all() -> void:
   _test_merge_defaults_and_override()
+  _test_creature_motor_v2_profiles()
+  _test_creature_pack_motor_overlays()
+  _test_goal_source_memory()
+  _test_locale_prior_escalate_seek()
+  _test_escape_reversal_suppression()
+  _test_goal_belief_coarse_ttl()
   _test_load_merged_config_repo_fallback()
   _test_hunter_killer_debug_project_settings()
   _test_tokens()
@@ -47,6 +58,8 @@ func _run_all() -> void:
   _test_cardinal_avoidance()
   _test_obstacle_strategy_shield_pin()
   _test_expanding_cardinal_explore()
+  _test_predator_chase_motor_ctx()
+  _test_no_goal_plateau_random()
   _test_food_seek_motor()
   _test_explore_idle_when_no_pickup()
   _test_explore_trail_repulsion_motor()
@@ -118,7 +131,15 @@ func _test_merge_defaults_and_override() -> void:
   var m2: Dictionary = res["merged"]
   _assert(m2["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 1, "missing file perception default")
   _assert(str(base["creature_motor"].get("mode", "")) == "scripted", "default creature_motor.mode scripted")
-  _assert(int(base["creature_motor"].get("scripted_intent_hold_physics_ticks", -1)) == 8, "default scripted intent hold")
+  var spine: Dictionary = _Merge.creature_motor_spine()
+  _assert(
+    int(spine.get("scripted_intent_hold_physics_ticks", -1)) == 8,
+    "spine scripted intent hold",
+  )
+  _assert(
+    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", -1.0)), 0.0),
+    "default root uses dev profile (zero seek)",
+  )
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_closing", 0.0)), 1.05), "default weight_closing")
@@ -157,8 +178,8 @@ func _test_merge_defaults_and_override() -> void:
     "default carnivore_explore_rotate_physics_ticks",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", 0.0)), 16.0),
-    "default weight_seek_ready_food",
+    is_equal_approx(float(spine.get("weight_seek_ready_food", 0.0)), 16.0),
+    "spine weight_seek_ready_food",
   )
   _assert(
     is_equal_approx(float(base["creature_motor"].get("food_seek_imminent_mob_radius_px", 0.0)), 100.0),
@@ -215,6 +236,271 @@ func _test_merge_defaults_and_override() -> void:
   )
 
 
+func _test_creature_motor_v2_profiles() -> void:
+  var spine := _Merge.creature_motor_spine()
+  var dev := _Merge.apply_creature_motor_profile_dev(spine.duplicate(true))
+  var ship := _Merge.apply_creature_motor_profile_ship(spine.duplicate(true))
+  _assert(
+    is_equal_approx(float(dev.get("weight_seek_ready_food", -1.0)), 0.0),
+    "dev profile zero seek",
+  )
+  _assert(
+    is_equal_approx(float(dev.get("motor_intent_cost_chaos", 0.0)), 8.0),
+    "dev profile high chaos",
+  )
+  _assert(
+    is_equal_approx(float(ship.get("weight_seek_ready_food", -1.0)), 16.0),
+    "ship stub leaves spine seek",
+  )
+  var pack_over := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/resolver_smoke",
+  )
+  _assert(
+    is_equal_approx(float(pack_over.get("weight_seek_ready_food", 0.0)), 12.0),
+    "pack creature_motor overlay wins",
+  )
+  _assert(
+    _Tier2Dom.derive_dominant_tier2_leaf(0.05, true, 0.0, spine) == _Tier2Dom.LEAF_FIND_FOOD,
+    "starvation override find food",
+  )
+  _assert(
+    _Tier2Dom.derive_dominant_tier2_leaf(0.5, true, 0.0, spine) == _Tier2Dom.LEAF_AVOID_HOSTILES,
+    "acute threat avoid hostiles",
+  )
+  var bias_empty: Dictionary = _GoalMem.project_believed_goal_bias(
+    Vector2.ZERO, &"find_food", spine, null
+  )
+  _assert(bias_empty.get("pull_mag", -1.0) == 0.0, "believed pull_mag zero without store")
+  _assert(
+    _BelievedSector.align_step_with_sector(Vector2(0.0, -1.0), 0) > 0.9,
+    "sector arc N for up step",
+  )
+
+
+func _test_creature_pack_motor_overlays() -> void:
+  var base := _Merge.default_creature_motor_params()
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/rabbit",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 16.0),
+    "rabbit pack restores food seek under dev profile",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("motor_intent_cost_chaos", -1.0)), 2.2),
+    "rabbit pack duel motor chaos",
+  )
+  _assert(
+    bool(rabbit_m.get("herbivore_threat_awareness_omni", false)),
+    "rabbit pack omnidirectional threat awareness",
+  )
+  var fox_m := _Merge.merge_creature_motor_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_seek_prey", 0.0)), 22.0),
+    "fox pack restores prey seek under dev profile",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_seek_ready_food", -1.0)), 0.0),
+    "fox pack does not enable bush food seek",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_pursuit_closing", 0.0)), 1.35),
+    "fox pack pursuit closing tuned",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_pursuit_dist", 0.0)), 0.55),
+    "fox pack pursuit dist tuned",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("weight_stuck_escape_explore", 0.0)), 2.2),
+    "rabbit pack stuck escape explore weight",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("herbivore_expanding_explore_mul", 0.0)), 3.0),
+    "rabbit pack herbivore expanding explore mul",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 8.0),
+    "rabbit pack restores intent hold ticks",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
+    "fox pack duel motor chaos",
+  )
+  _assert(
+    not bool(fox_m.get("predator_prey_awareness_omni", true)),
+    "fox pack uses forward cone prey awareness",
+  )
+  var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
+  _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
+  _assert(
+    _GkReg.validate_goal_kind(&"find_food", rabbit_kinds),
+    "rabbit pack validates find_food",
+  )
+  var rabbit_mods := _GoalMem.effective_modality_allowlist_for_pack("res://assets/creatures/rabbit")
+  _assert(rabbit_mods.size() >= 6, "rabbit pack modality allowlist includes core set")
+  var rabbit_def: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
+  _assert(
+    str(rabbit_def.get("asset_pack_root")) == "res://assets/creatures/rabbit",
+    "rabbit archetype points at rabbit pack",
+  )
+  var fox_def: Resource = load("res://creature/species/fox_archetype.tres") as Resource
+  _assert(fox_def != null, "fox archetype loads")
+  _assert(
+    str(fox_def.get("asset_pack_root")) == "res://assets/creatures/fox",
+    "fox archetype points at fox pack",
+  )
+
+
+func _test_goal_source_memory() -> void:
+  var spine := _Merge.creature_motor_spine()
+  var motor_p := spine.duplicate(true)
+  var grid := _EnvGrid.new()
+  grid.cell_width = 32
+  grid.cell_height = 32
+  grid.cell_size_px = 52.0
+  grid.cell_kind_ids = PackedInt32Array()
+  grid.cell_kind_ids.resize(32 * 32)
+  var anchor := Vector2(120.0, 80.0)
+  var bad_hash := _GoalMem.context_hash_for_find_food(
+    _GkReg.GK_FIND_FOOD, Vector2(99999.0, 99999.0), motor_p, grid
+  )
+  _assert(bad_hash < 0, "OOB anchor rejects context_hash")
+  var good_hash := _GoalMem.context_hash_for_find_food(
+    _GkReg.GK_FIND_FOOD, anchor, motor_p, grid
+  )
+  _assert(good_hash >= 0, "in-bounds anchor yields context_hash")
+  var store := _GoalMem.new()
+  var kinds := _GkReg.core_goal_kinds()
+  var mods := _GoalMem.effective_modality_allowlist_for_pack("")
+  var motor_ctx := {"tactic_classifier_active": false, "tactic_jeopardy_egress": false}
+  var ok := store.try_salient_write(
+    _GkReg.GK_FIND_FOOD,
+    &"find_food",
+    anchor,
+    motor_p,
+    grid,
+    motor_ctx,
+    {"tier": _GoalMem.TIER_SUCCESS},
+    kinds,
+    mods,
+    {},
+  )
+  _assert(ok, "salient write succeeds in-bounds")
+  var bias: Dictionary = _GoalMem.project_believed_goal_bias(
+    Vector2(100.0, 70.0),
+    _GkReg.GK_FIND_FOOD,
+    motor_p,
+    store,
+    anchor,
+    grid,
+    motor_ctx,
+    [],
+    {},
+  )
+  _assert(float(bias.get("pull_mag", 0.0)) > 0.0, "pull_mag positive after write")
+  var replay_w := float(bias.get("replay_weight", 1.0))
+  _assert(replay_w >= 1.0, "replay_weight at least 1 when row matches")
+  var dup := store.try_salient_write(
+    _GkReg.GK_FIND_FOOD,
+    &"find_food",
+    anchor,
+    motor_p,
+    grid,
+    motor_ctx,
+    {"tier": _GoalMem.TIER_SUCCESS},
+    kinds,
+    mods,
+    {},
+  )
+  _assert(not dup, "same-goal continuation blocks second write")
+  _assert(_GkReg.validate_goal_kind(&"find_food", kinds), "validate_goal_kind core")
+  _assert(not _GkReg.validate_goal_kind(&"bogus", kinds), "validate_goal_kind rejects unknown")
+
+
+func _test_locale_prior_escalate_seek() -> void:
+  var motor_p := _Merge.creature_motor_spine()
+  var store := _GoalMem.new()
+  var grid := _EnvGrid.new()
+  grid.cell_width = 8
+  grid.cell_height = 8
+  grid.cell_size_px = 52.0
+  grid.cell_kind_ids = PackedInt32Array()
+  grid.cell_kind_ids.resize(64)
+  var anchor := Vector2(400.0, 400.0)
+  store.try_salient_write(
+    _GkReg.GK_FIND_FOOD,
+    &"find_food",
+    anchor,
+    motor_p,
+    grid,
+    {},
+    {"tier": _GoalMem.TIER_SUCCESS},
+    _GkReg.core_goal_kinds(),
+    _GoalMem.effective_modality_allowlist_for_pack(""),
+    {},
+  )
+  var creature_pos := Vector2.ZERO
+  var mul := _GoalMem.escalate_seek_multiplier(
+    store, creature_pos, motor_p, _GkReg.GK_FIND_FOOD, 0.0
+  )
+  _assert(mul > 1.1, "escalate seek when prior in band but outside hotspot")
+  var mul_hot := _GoalMem.escalate_seek_multiplier(
+    store, anchor, motor_p, _GkReg.GK_FIND_FOOD, 0.85
+  )
+  _assert(is_equal_approx(mul_hot, 1.0), "no escalate when hotspot pull active")
+
+
+func _test_escape_reversal_suppression() -> void:
+  var ad: Node = _AiDriverScr.new()
+  var body := RigidBody2D.new()
+  var bid := body.get_instance_id()
+  var motor_p := _Merge.creature_motor_spine()
+  ad._escape_episode_by_body[bid] = {
+    "active": false,
+    "dominance_flipped": true,
+    "reentered_threat_ms": Time.get_ticks_msec(),
+  }
+  var suppress: bool = ad.call(
+    "_escape_reversal_suppresses_write", body, motor_p, 0.05
+  )
+  _assert(suppress, "AH-7 suppresses avoid write after reversal re-threat")
+  body.queue_free()
+  ad.queue_free()
+
+
+func _test_goal_belief_coarse_ttl() -> void:
+  var ad: Node = _AiDriverScr.new()
+  var motor_p := _Merge.creature_motor_spine()
+  motor_p["goal_memory_coarse_ttl_sec"] = 15.0
+  motor_p["goal_memory_precise_radius_px"] = 1000.0
+  motor_p["goal_memory_forget_radius_px"] = 5000.0
+  var now_ms := Time.get_ticks_msec()
+  var iid := 424242
+  ad.set("_goal_belief", {
+    iid: {
+      "instance_id": iid,
+      "goal_kind": _GkReg.GK_FIND_FOOD,
+      "tier": &"COARSE",
+      "last_world_pos": Vector2(800.0, 800.0),
+      "last_observed_ms": now_ms - 5000,
+      "coarse_entered_ms": now_ms - 20000,
+      "consumable_now": true,
+      "merge_use_count": 0,
+      "last_merged_ms": 0,
+    },
+  })
+  ad.call("_goal_belief_maintain", Vector2.ZERO, now_ms, motor_p)
+  var beliefs: Dictionary = ad.get("_goal_belief")
+  _assert(not beliefs.has(iid), "coarse belief evicted after coarse TTL")
+  ad.queue_free()
+
+
 func _test_load_merged_config_repo_fallback() -> void:
   var res: Dictionary = _Merge.load_merged_config("user://__does_not_exist_merged_test__.json")
   var merged: Dictionary = res["merged"]
@@ -228,8 +514,12 @@ func _test_hunter_killer_debug_project_settings() -> void:
     "project defines hunter_killer_debug/draw_awareness",
   )
   _assert(
-    ProjectSettings.get_setting("hunter_killer_debug/draw_awareness") == false,
-    "draw_awareness defaults to off",
+    ProjectSettings.has_setting("hunter_killer_debug/use_ship_motor_profile"),
+    "project defines hunter_killer_debug/use_ship_motor_profile",
+  )
+  _assert(
+    ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile") == false,
+    "use_ship_motor_profile defaults to off",
   )
 
 
@@ -806,6 +1096,89 @@ func _test_expanding_cardinal_explore() -> void:
   var c0: Vector2 = X.pick_cardinal(36, 0, 0)
   var c1: Vector2 = X.pick_cardinal(36, 0, 1)
   _assert(c0.is_equal_approx(Vector2.RIGHT) and c1.is_equal_approx(Vector2.DOWN), "phase_seed rotates cardinal ordering")
+  var expand_ctx := {
+    "creature_position": Vector2(200.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(800.0, 800.0),
+    "mobs": [],
+    "creature_facing": Vector2.RIGHT,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "weight_explore_idle_penalty": 10.0,
+    "weight_explore_turn_bias": 0.0,
+    "exploration_blend_multiplier": 1.0,
+    "expanding_explore_hint": Vector2.UP,
+    "weight_expanding_explore_hint": 2.2,
+    "motor_stuck_allow_expand_hint": true,
+  }
+  var intent_up: Vector2 = _Motor.pick_best_move_intent(expand_ctx)
+  _assert(intent_up.is_equal_approx(Vector2.UP), "expand hint aligned UP beats idle when hint weight high")
+
+
+func _test_predator_chase_motor_ctx() -> void:
+  var prey_pos := Vector2(300.0, 200.0)
+  var pursuit := [
+    {"position": prey_pos, "velocity": Vector2(-40.0, 0.0), "cost_scale": 1.0},
+  ]
+  var ctx := {
+    "creature_position": Vector2(200.0, 200.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(800.0, 800.0),
+    "mobs": [],
+    "creature_facing": Vector2.RIGHT,
+    "food_seek_targets": [],
+    "prey_seek_targets": [prey_pos],
+    "weight_seek_prey": 22.0,
+    "weight_seek_ready_food": 0.0,
+    "pursuit_targets": pursuit,
+    "weight_pursuit_dist": 0.55,
+    "weight_pursuit_closing": 1.35,
+    "weight_pursuit_dist_sq": 48.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_explore_trail_repulsion": 0.0,
+    "exploration_blend_multiplier": 0.0,
+    "explore_trail_centers": [],
+  }
+  var intent: Vector2 = _Motor.pick_best_move_intent(ctx)
+  _assert(intent.is_equal_approx(Vector2.RIGHT), "predator chase picks +X toward prey without explore idle")
+
+
+func _test_no_goal_plateau_random() -> void:
+  var center := Vector2(500.0, 500.0)
+  var seen: Dictionary = {}
+  for tick in 48:
+    var ctx := {
+      "creature_position": center,
+      "creature_speed": 400.0,
+      "lookahead_sec": 0.15,
+      "bounds_min": Vector2.ZERO,
+      "bounds_max": Vector2(1000.0, 1000.0),
+      "mobs": [],
+      "creature_facing": Vector2.RIGHT,
+      "food_seek_targets": [],
+      "prey_seek_targets": [],
+      "pursuit_targets": [],
+      "weight_seek_ready_food": 0.0,
+      "weight_seek_prey": 0.0,
+      "weight_explore_idle_penalty": 0.0,
+      "weight_explore_turn_bias": 0.0,
+      "weight_expanding_explore_hint": 0.0,
+      "motor_intent_cost_chaos": 0.0,
+      "motor_no_goal_plateau_random": true,
+      "motor_tie_cost_epsilon": 2.0,
+      "motor_pick_tick": tick,
+      "motor_chaos_seed": 90210 ^ tick,
+      "shuffle_tie_break": false,
+    }
+    var d: Vector2 = _Motor.pick_best_move_intent(ctx)
+    if d.length_squared() > 1e-14:
+      seen[str(d)] = true
+  _assert(seen.size() >= 2, "no-goal plateau random spreads across cardinals")
 
 
 func _test_food_seek_motor() -> void:
@@ -1136,7 +1509,7 @@ func _test_creature_3d_template_scenes_load() -> void:
   root_c.queue_free()
   var rabbit: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
   _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
-  _assert(rabbit.get("species_id") == &"rabbit_archetype", "rabbit archetype id")
+  _assert(rabbit.get("species_id") == &"rabbit", "rabbit archetype id")
   _assert(rabbit.get("locomotion_profile") != null, "rabbit has locomotion profile")
 
 

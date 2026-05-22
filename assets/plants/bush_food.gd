@@ -73,6 +73,9 @@ func _on_calorie_body_entered(body: Node2D) -> void:
     return
   var grant: int = maxi(0, max_calories)
   body.call(&"add_calories_from_food", grant)
+  var ad := get_node_or_null("/root/AiDriver")
+  if ad != null and ad.has_method(&"notify_food_consumption_outcome"):
+    ad.call(&"notify_food_consumption_outcome", body, self, false)
   current_calories = 0.0
   _player_visit_locked = true
   _refresh_sprite()

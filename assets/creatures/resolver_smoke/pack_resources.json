@@ -1,5 +1,8 @@
 {
   "notes": "Headless-test-only pack for PackResourceResolver; safe to delete once superseded.",
+  "creature_motor": {
+    "weight_seek_ready_food": 12.0
+  },
   "shared_resources": {
     "obstacle_tex": "res://assets/environment/obstacle_rocks/pile-of-rocks.png"
   }

@@ -10,8 +10,10 @@ const _PlayerScr := preload("res://player.gd")
 
 @export var isHostile = true
 @export var definition: Resource
+## ENGINE duel cruise speed (px/s); matches [code]Player.speed[/code] so carnivore keeps pace with prey.
+@export var speed: float = 400.0
 @export var creature_size: float = 48.0
-@export var caloric_needs: int = 10
+@export var caloric_needs: int = 30
 @export var obstacle_lookahead_px: float = 96.0
 @export var obstacle_ray_margin_px: float = 14.0
 @export var env_ahead_probe_px: float = 52.0
@@ -20,7 +22,7 @@ var obstacle_cone_half_angle_deg: float = 22.0
 
 var _calorie_baseline_drain_per_sec: float = 1.0
 var _calorie_cost_per_px_moved: float = 0.002
-var current_calories: float = 10.0
+var current_calories: float = 30.0
 var creature_move_intent: Vector2 = Vector2.ZERO
 var last_move_direction: Vector2 = Vector2.RIGHT
 var screen_size: Vector2
@@ -55,7 +57,7 @@ func _ready() -> void:
   screen_size = get_viewport_rect().size
   _wall_slide_pick = _SlidePickScr.new()
   _apply_diet_defaults()
-  _spawn_cruise_speed = maxf(120.0, linear_velocity.length())
+  _spawn_cruise_speed = maxf(speed, maxf(120.0, linear_velocity.length()))
   var v0 := linear_velocity
   if v0.length_squared() > 1e-6:
     _last_heading = v0.normalized()
@@ -80,6 +82,11 @@ func _apply_diet_defaults() -> void:
     var def := _CreatureDefinition.new()
     def.feeding_mode = _CreatureDefinition.FeedingMode.CARNIVORE
     definition = def
+  elif definition.get_script() == _CreatureDefinition:
+    var cap: Variant = (definition as Resource).get("caloric_needs")
+    if typeof(cap) == TYPE_INT:
+      caloric_needs = int(cap)
+      current_calories = float(caloric_needs)
   _food_intake_policy = _DietRegistry.default_food_intake_policy(get_feeding_mode())
 
 
@@ -181,6 +188,31 @@ func _physics_process(delta: float) -> void:
   _physics_process_legacy_cruise(delta)
 
 
+func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
+  if heading.length_squared() < 1e-8:
+    return heading
+  var inc := heading.normalized()
+  var space := get_world_2d().direct_space_state
+  if space == null:
+    return inc
+  var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  var origin := global_position
+  var target := origin + inc * lookahead
+  var query := PhysicsRayQueryParameters2D.create(origin, target)
+  query.collision_mask = 1
+  query.exclude = [get_rid()]
+  var hit: Dictionary = space.intersect_ray(query)
+  if hit.is_empty():
+    return inc
+  var normal_v: Variant = hit.get("normal", Vector2.ZERO)
+  if typeof(normal_v) != TYPE_VECTOR2:
+    return inc
+  var n := normal_v as Vector2
+  if n.length_squared() < 1e-12:
+    return inc
+  return _wall_slide_pick.pick_tangent_closer(inc, n)
+
+
 func _physics_process_engine(delta: float) -> void:
   var grid := _environment_grid()
   var mult := _terrain_speed_multiplier_here(grid)
@@ -189,7 +221,10 @@ func _physics_process_engine(delta: float) -> void:
     heading = _last_heading
   else:
     _last_heading = heading
-  linear_velocity = heading * (_spawn_cruise_speed * mult)
+  heading = _engine_heading_with_wall_slide(heading)
+  if heading.length_squared() > 1e-6:
+    _last_heading = heading.normalized()
+  linear_velocity = heading * (speed * mult)
   _clamp_to_playfield()
   if heading.length_squared() > 1e-6:
     last_move_direction = heading.normalized()

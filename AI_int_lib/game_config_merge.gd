@@ -19,9 +19,10 @@ static func default_perception_params() -> Dictionary:
   }
 
 
-## Defaults for scripted vs LLM creature motor; see [Completed_Features/MOB_AVOIDANCE_PLAN.md](../Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md).
-## `creature_half_extent_x` / `creature_half_extent_y` must be **positive** in authored JSON; runtime clamps at max(0, …).
-static func default_creature_motor_params() -> Dictionary:
+const _PackRes := preload("res://pack_resource_resolver.gd")
+
+## Species-agnostic motor spine ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+static func creature_motor_spine() -> Dictionary:
   return {
     "mode": "scripted",
     "lookahead_sec": 0.15,
@@ -108,17 +109,112 @@ static func default_creature_motor_params() -> Dictionary:
     "weight_obstacle_pin_predator": 22.0,
     ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
     "carnivore_explore_rotate_physics_ticks": 36,
-    ## Goal-target memory (planned — not wired; see [code]ai_driver.gd[/code] [_goal_belief] comment block).
-    ## Draft defaults: precise-tier merge from CREATURE_MEMORY §5–§11; stationary = exact coords; movers = disk [code]goal_memory_moving_last_known_radius_px[/code].
-    # "goal_memory_precise_radius_px": 1000.0,
-    # "goal_memory_moving_last_known_radius_px": 50.0,
-    # "goal_memory_forget_radius_px": 2400.0,
-    # "goal_memory_ttl_sec": 45.0,
-    # "goal_memory_coarse_ttl_sec": 15.0,
-    # "goal_memory_max_entries": 32,
-    # "weight_seek_remembered_goal": 8.0,
-    # "weight_coarse_sector_goal_bias": 0.0,
+    ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+    "preserve_bias_food_floor": 0.90,
+    "seek_priority_food_ceiling": 0.80,
+    "preserve_seek_blend_smoothness": 0.5,
+    "starvation_override_food_ceiling": 0.10,
+    ## Habitual locale / memory ([CREATURE_MEMORY.md §10](../Project_Docs/Draft_Features/CREATURE_MEMORY.md)) — wired in memory phase.
+    "weight_believed_goal_pull": 6.4,
+    "believed_goal_hotspot_near_radius_px": 250.0,
+    "believed_goal_seek_escalate_radius_px": 1000.0,
+    "believed_goal_escalate_seek_mul": 1.35,
+    "believed_goal_escalate_preserve_blend": 0.55,
+    "locale_prior_pull_w_norm": 3.0,
+    "locale_prior_ewma_alpha": 0.15,
+    "locale_prior_write_blend": 0.35,
+    "locale_prior_max_buckets": 100,
+    "locale_prior_idle_evict_base_sec": 10.0,
+    "locale_prior_idle_evict_per_attempt_sec": 1.0,
+    "salient_write_max_per_sec": 100.0,
+    "escape_reversal_window_sec": 1.0,
+    "replay_bell_k": 1.4,
+    "replay_w_fit": 0.4,
+    "replay_w_store": 0.6,
+    "replay_n_sat": 10.0,
+    "replay_n_min": 3.0,
+    "goal_memory_precise_radius_px": 1000.0,
+    "goal_memory_moving_last_known_radius_px": 50.0,
+    "goal_memory_forget_radius_px": 2400.0,
+    "goal_memory_ttl_sec": 45.0,
+    "goal_memory_coarse_ttl_sec": 15.0,
+    "goal_memory_max_entries": 25,
+    "weight_seek_remembered_goal": 8.0,
+    "weight_coarse_sector_goal_bias": 3.0,
   }
+
+
+## Aberrant wiring-detector profile — extreme ends of knobs ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+static func creature_motor_profile_dev() -> Dictionary:
+  return {
+    "weight_seek_ready_food": 0.0,
+    "weight_seek_prey": 0.0,
+    "weight_explore_turn_bias": 2.5,
+    "weight_explore_idle_penalty": 0.5,
+    "weight_explore_trail_repulsion": 0.15,
+    "weight_expanding_explore_hint": 3.0,
+    "motor_intent_cost_chaos": 8.0,
+    "scripted_intent_hold_physics_ticks": 1,
+    "explore_intent_hold_extra_ticks": 0,
+  }
+
+
+## Ship / release stub — finalize before export ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+static func creature_motor_profile_ship() -> Dictionary:
+  return {
+    ## Phase 3 retune — spine-like seek for playtest/ship ([PHASE1_MOTOR_BASELINE.md](../Project_Docs/AI_Notes/PHASE1_MOTOR_BASELINE.md)).
+    "weight_seek_ready_food": 16.0,
+    "weight_seek_prey": 22.0,
+    "motor_intent_cost_chaos": 0.0,
+    "weight_explore_turn_bias": 0.14,
+    "weight_explore_idle_penalty": 10.5,
+    "weight_explore_trail_repulsion": 2.35,
+    "weight_believed_goal_pull": 5.2,
+    "locale_prior_pull_w_norm": 3.0,
+    "locale_prior_write_blend": 0.32,
+    "believed_goal_escalate_seek_mul": 1.4,
+  }
+
+
+## True when ship motor profile should merge (export tag or editor QA setting).
+static func use_ship_motor_profile() -> bool:
+  if OS.has_feature(&"creature_motor_ship"):
+    return true
+  if OS.has_feature("editor"):
+    return bool(ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile", false))
+  return false
+
+
+## Merges spine + selected build profile ([code]creature_motor_ship[/code] export feature when set).
+static func default_creature_motor_params() -> Dictionary:
+  var spine := creature_motor_spine()
+  var profile := (
+    creature_motor_profile_ship()
+    if use_ship_motor_profile()
+    else creature_motor_profile_dev()
+  )
+  return _merge_dict_shallow(spine, profile)
+
+
+## Test / harness helper — apply ship profile overlay on [param base].
+static func apply_creature_motor_profile_ship(base: Dictionary) -> Dictionary:
+  return _merge_dict_shallow(base, creature_motor_profile_ship())
+
+
+## Test / harness helper — apply dev profile overlay on [param base].
+static func apply_creature_motor_profile_dev(base: Dictionary) -> Dictionary:
+  return _merge_dict_shallow(base, creature_motor_profile_dev())
+
+
+## Per-spawn pack overlay: [param motor_p] ∪ [code]pack_resources.json[/code] [code]creature_motor[/code] ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+static func merge_creature_motor_pack_overlay(motor_p: Dictionary, pack_root: String) -> Dictionary:
+  var root := str(pack_root).strip_edges()
+  if root.is_empty():
+    return motor_p.duplicate(true)
+  var over := _PackRes.load_creature_motor_overlay(root)
+  if over.is_empty():
+    return motor_p.duplicate(true)
+  return _merge_dict_shallow(motor_p, over)
 
 
 ## Defaults for [code]inference_client[/code]; empty [code]INFERENCE_BASE_URL[/code] means AI cannot arm until set.

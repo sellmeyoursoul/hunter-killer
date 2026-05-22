@@ -21,7 +21,7 @@ func apply_parent_definition(def: Variant) -> void:
   definition = def
   if definition != null:
     var cap: Variant = definition.get("caloric_needs")
-    current_calories = float(cap) if cap != null else 10.0
+    current_calories = float(cap) if cap != null else 30.0
 
 
 ## Params:
@@ -46,7 +46,7 @@ func apply_burn_from_globals(baseline_per_sec: float, cost_per_unit_moved: float
 
 ## Adds bush-style calories; clamps at [member CreatureDefinition.caloric_needs] when definition set.
 func add_calories_from_plant(grant: int) -> void:
-  var cap := 10
+  var cap := 30
   if definition != null:
     var c: Variant = definition.get("caloric_needs")
     if c != null:
