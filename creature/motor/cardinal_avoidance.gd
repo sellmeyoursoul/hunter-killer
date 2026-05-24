@@ -17,6 +17,61 @@ static var _tie_order: Array[Vector2] = [
 ]
 
 
+## Lookahead distance for cardinal static probes (patrol block test, stuck escape, tie-break filter).
+static func motor_cardinal_probe_step(he_xy: Vector2) -> float:
+  return maxf(maxf(he_xy.x, he_xy.y) * 2.8, 40.0)
+
+
+## Nearest surface separation between footprint at [param creature_pos] and static AABB obstacles.
+static func footprint_static_clearance(creature_pos: Vector2, he_xy: Vector2, static_obs: Array) -> float:
+  var best_clear := INF
+  for ob in static_obs:
+    if typeof(ob) != TYPE_DICTIONARY:
+      continue
+    var op: Vector2 = ob.get("position", Vector2.ZERO)
+    var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+    var ohe := Vector2.ZERO
+    if typeof(ohe_raw) == TYPE_VECTOR2:
+      ohe = ohe_raw as Vector2
+    var sep := INF
+    if ohe.x > 0.0 and ohe.y > 0.0:
+      var sep_closest_c := closest_point_on_aabb(creature_pos, he_xy, op)
+      var sep_closest_o := closest_point_on_aabb(op, ohe, creature_pos)
+      sep = sep_closest_c.distance_to(sep_closest_o)
+    else:
+      sep = creature_pos.distance_to(op) - maxf(he_xy.x, he_xy.y)
+    best_clear = minf(best_clear, sep)
+  return best_clear
+
+
+## True when a unit cardinal step would leave the footprint pinched against static geometry.
+static func cardinal_step_blocked(
+  creature_pos: Vector2,
+  he_xy: Vector2,
+  direction: Vector2,
+  static_obs: Array,
+  min_clearance_px: float,
+) -> bool:
+  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance_px <= 0.0:
+    return false
+  var step := motor_cardinal_probe_step(he_xy)
+  var probe_pos := creature_pos + direction.normalized() * step
+  return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance_px
+
+
+## First direction in [param order] that also appears in [param tied_dirs] (deterministic plateau tie-break).
+static func first_tied_dir_in_eval_order(tied_dirs: Array, order: Array) -> Vector2:
+  for d in order:
+    if typeof(d) != TYPE_VECTOR2 or (d as Vector2).length_squared() < 1e-14:
+      continue
+    for td in tied_dirs:
+      if typeof(td) == TYPE_VECTOR2 and (td as Vector2).is_equal_approx(d as Vector2):
+        return d as Vector2
+  if not tied_dirs.is_empty() and typeof(tied_dirs[0]) == TYPE_VECTOR2:
+    return tied_dirs[0] as Vector2
+  return Vector2.ZERO
+
+
 ## World-space distance from mob point to creature footprint ([param creature_center], [param creature_half]) used for awareness gating (matches clearance reference frame).
 static func awareness_gate_distance(creature_center: Vector2, creature_half: Vector2, mob_pos: Vector2) -> float:
   var half := creature_half
@@ -27,7 +82,8 @@ static func awareness_gate_distance(creature_center: Vector2, creature_half: Vec
 
 
 ## Effective reach: [param base_radius] plus [param cone_extra] when [param mob_pos] lies in forward sector about [param facing].
-## When [param forward_cone_only] is true, targets outside the forward cone have zero reach (no rear disk).
+## Default ([param forward_cone_only] false): omnidirectional disk at [param base_radius]; forward sector extends to [param base_radius] + [param cone_extra].
+## Legacy ([param forward_cone_only] true): targets outside the forward cone have zero reach (no rear disk).
 static func effective_awareness_reach(
   creature_center: Vector2,
   mob_pos: Vector2,
@@ -385,14 +441,23 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
     or not prey_seek_targets.is_empty()
     or not pursuit_targets.is_empty()
   )
+  var has_active_goal := bool(ctx.get("motor_has_active_goal", goal_in_sight))
   var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
   var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
+  var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance_px", 4.0))
+  var filter_blocked_cardinals := not has_active_goal and block_min_clr > 0.0 and not static_obs.is_empty()
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
   var best_cost := INF
   var scored: Array = []
   for d in order:
+    if (
+      filter_blocked_cardinals
+      and d.length_squared() > 1e-14
+      and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
+    ):
+      continue
     var step := d * speed * lookahead
     var predicted := creature_pos + step
     var cost := cost_at_prediction(
@@ -479,13 +544,20 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       if c_cost > best_cost + tie_eps:
         continue
       var c_dir: Variant = (item as Dictionary).get("dir", Vector2.ZERO)
-      if typeof(c_dir) == TYPE_VECTOR2 and (c_dir as Vector2).length_squared() > 1e-14:
-        tied_dirs.append(c_dir as Vector2)
+      if typeof(c_dir) != TYPE_VECTOR2:
+        continue
+      var dir_v := c_dir as Vector2
+      if dir_v.length_squared() < 1e-14:
+        continue
+      if filter_blocked_cardinals and cardinal_step_blocked(
+        creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+      ):
+        continue
+      tied_dirs.append(dir_v)
     if tied_dirs.size() > 1:
-      var prng := RandomNumberGenerator.new()
-      var pseed := chaos_seed_base ^ pick_tick * 1664525 ^ 0x7F4A7C15
-      prng.seed = maxi(1, absi(pseed))
-      return tied_dirs[prng.randi_range(0, tied_dirs.size() - 1)]
+      return first_tied_dir_in_eval_order(tied_dirs, order)
+    if tied_dirs.size() == 1:
+      return tied_dirs[0]
   return best_d
 
 

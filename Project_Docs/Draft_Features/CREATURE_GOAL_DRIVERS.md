@@ -36,8 +36,8 @@ Tier 1 — Don’t die
 
 | Tier 2 leaf | Implemented today (approx.) | Extension / stub |
 |-------------|----------------------------|------------------|
-| **Avoid hostiles** | Mob costs, imminent gating food seek, jeopardy forced turn, `weight_obstacle_shield_prey` | Unified **threat samples**; acute threat **dominates** Tier-2 until **pack combat / nest defense** allows trait-driven **engage** (**§3** preamble) |
-| **Find food** | Live `food_plants` + prey positions → seek; hunger scales explore | **Goal-target memory** (**CREATURE_MOVEMENT_V2 §C**; tier rules **[CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)**); **Preserve cross-over** (**CREATURE_MOVEMENT_V2 §A.3.1**); habitual **`believed_goal_*`** bias (**§5** below); **`feeding_mode`** filters **`SeekCandidate`** ingress (**CREATURE_MOVEMENT_V2 §B.2**) |
+| **Avoid hostiles** | Mob costs, imminent gating food seek, jeopardy forced turn, `weight_obstacle_shield_prey` | Unified **threat samples**; acute threat **dominates** Tier-2 until **pack combat / nest defense** allows trait-driven **engage** (**§3** preamble); threat **live samples** use same **§E.1** awareness geometry unless **`herbivore_threat_awareness_omni`** |
+| **Find food** | Live `food_plants` + prey positions → seek; hunger scales explore | **Goal-target memory** (**CREATURE_MOVEMENT_V2 §C**; tier rules **[CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)**); **Preserve cross-over** (**CREATURE_MOVEMENT_V2 §A.3.1**); habitual **`believed_goal_*`** bias (**§5** below); **`feeding_mode`** filters **`SeekCandidate`** ingress (**CREATURE_MOVEMENT_V2 §B.2**); live ingest gated by **zone of awareness** (**CREATURE_MOVEMENT_V2 §E.1** — radius disk + forward cone); **no goal** → patrol lock (**MOVEMENT §A.3.1**) |
 | **Find mate** | — | **`MotivationWeights.mate_urgency` / slot in context** defaulted to zero; species or story enables later (**[CREATURE_MEMORY.md §3 — Mates row](CREATURE_MEMORY.md)**) |
 | **Preserve calories** | Burn per distance (`game_config_merge`), hunger explore modifiers | Cross-threshold blend with **Find food** (**CREATURE_MOVEMENT_V2 §A.3.1**); thrift / posture / idle when **sated** |
 
@@ -752,7 +752,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Topic | Authority |
 |-------|-----------|
-| **Motivation tree framework; trait poles; trait application order; `GoalKind` registry (§4.1); trait Tier-2 stub §3.3.1; strategy-class §5.1.1–§5.1.4; salient emitter** | **This file** |
+| **Motivation tree framework; trait poles; trait application order; `GoalKind` registry (§4.1); trait Tier-2 stub §3.3.1; strategy-class §5.1.1–§5.1.4; salient emitter; live awareness zone (§2 ↔ MOVEMENT §E.1)** | **This file** |
 | **`creature_motor` merge, `SeekCandidate`, Preserve/Seek thresholds, `MotorContext` tactic flags, implementation phasing** | **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** |
 | **`goal_*`, `believed_goal_*`, beliefs, locale priors, §14.2 row schema, §14.1 projection, §14.3 threat pass** | **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** (strategy-class **Actions 1–3 Resolved**; **`find_food` `context_hash` — §2.1.1**; emitter §5.1.1) |
 
@@ -764,6 +764,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Date | Change |
 |------|--------|
+| 2026-05-23 | **§2 / §6:** live **`SeekCandidate`** / threat ingest cross-link **CREATURE_MOVEMENT_V2 §E.1** (hybrid radius + forward cone awareness). |
 | 2026-05-20 | **Tier A:** starvation exception **§3**; **§4.1** `avoid_hostiles` compositor + shelter stub writes; **§5.1.1** `open_forage`, **`pole_facet_tag`** on row; **§5.1.5** escape reversal (AH-7a–c). |
 | 2026-05-19 | **§3.3.1 / §5.1.2–§5.1.4:** trait Tier-2 **stub** + **`trait_tier2_mapper.gd`** urgency channels; replay keys in **`default_creature_motor_params()`**; **`external_urgency`** bitmask + linear boost; phase-1 **`current_fit`** classifier rules; Action 3 disagree **dormant**. |
 | 2026-05-19 | **§5.1 combine Resolved:** **`locale_prior_strength` := `stored_strength`**; **`replay_weight` multiplicative** on **`weight_believed_goal_pull`** / seek weights only — not additive; not a second direction (**MEMORY §14.1**). |

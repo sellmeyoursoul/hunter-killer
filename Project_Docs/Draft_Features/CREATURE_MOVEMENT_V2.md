@@ -160,6 +160,7 @@ Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`
 | **Per creature** | Floors / ceilings ship as **defaults in `default_creature_motor_params()`** (spine ∪ selected **`creature_motor_profile_*`**) and **overrides** in **`pack_resources.json` → `creature_motor`** / future **`CreatureDefinition`** exports so each archetype tunes the band. |
 | **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** **smoothstep** blend; **`preserve_seek_blend_smoothness`** (**default 0.5**, range **0…1**) = blend **aggressiveness** (higher → sharper Preserve↔Seek transition). **`calorie_ratio < starvation_override_food_ceiling`** (**default 0.10**): **Find food** overrides acute threat (**§A.2.3** priority **0**). **`Avoid hostiles`** / jeopardy **override** hunger band when acute threat applies — **except** starvation priority **0**. |
 | **Motor keys** | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**, **`starvation_override_food_ceiling`** — defaults in **`default_creature_motor_params()`** only; omit from pack **`creature_motor`** unless overriding. |
+| **No-goal patrol lock (phase-1 — resolved)** | When **`motor_has_active_goal`** is false, skip per-tick cardinal tie roulette; **[`no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)** picks a random unit cardinal or **`Vector2.ZERO`**, holds for **`motor_no_goal_patrol_lock_sec`** (duel packs default **1.0** s), re-rolls when expired if still no goal. Goal surfacing clears lock and restores normal motor. Key: **`motor_no_goal_patrol_lock_sec`** (**0** = legacy explore/patrol motor). |
 
 ##### Believed goal source / habitual locales (future — overlays goal memory)
 
@@ -266,16 +267,50 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 **LOS vs distance-only gates (resolved — phase 1 deferral)**
 
 - **Target behavior (future):** **`SeekCandidate` (and symmetrical threat sampling)** exposes **`occluded` / `line_of_sight_clear`** so candidates blocked by squeeze/occluders/props are not scored as blindly reachable from **distance + cone** alone.
-- **Phase 1 (this round — out of scope):** Continue **distance + forward cone (+ environmental placeholders)** in scripted motor. **No** `occluded` field work, **no** LoS API changes in Foundations PR.
+- **Phase 1 (this round — out of scope):** Continue **§E.1 hybrid radius + forward cone** (+ environmental placeholders) in scripted motor. **No** `occluded` field work, **no** LoS API changes in Foundations PR.
 - **Follow-up:** Wire LoS via **Godot 3D ray** queries per [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md) + backlog **§E** — after gameplay baseline and **ship profile** stabilization.
 
 ---
 
-## E. Line of sight & awareness (related backlog)
+## E. Line of sight & awareness
 
-**Today:** scripted motor uses primarily **distance + forward cone**.
+### E.1 Zone of awareness — radius + forward cone (resolved — phase 1)
 
-**LOS track (deferred):** **Godot 3D ray** occlusion checks aligning **Tier-2 hostile detection** and **Find-food `SeekCandidate` credibility with §D** — **not** this phase. See [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
+**Normative geometry** for live sensory ingest (food plants, mobs, prey, threats, re-awareness promotion — **[CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)**). Matches [`CardinalAvoidance.effective_awareness_reach`](../../creature/motor/cardinal_avoidance.gd) and [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_effective_awareness_reach_for_driver`.
+
+| Key | Role |
+|-----|------|
+| `awareness_radius` | Base omnidirectional reach (px) from creature center to target (footprint gate distance when half-extents apply). When **`≤ 0`**, live **food** ingest returns empty lists; mob cost may treat distance as unbounded (HK legacy). |
+| `awareness_cone_extra` | Extra reach (px) when target lies in the **forward sector**. When **`≤ 0`**, half-angle alone does not extend reach beyond `awareness_radius`. |
+| `awareness_cone_half_angle_deg` | Forward sector half-angle (degrees); facing = `last_move_direction` (or `Vector2.RIGHT`). |
+
+Let **`u`** = unit vector creature → target, **`f`** = facing. Target is **in forward sector** when **`u·f ≥ cos(θ)`** (`θ` = half-angle).
+
+**Effective reach (default — hybrid zone):**
+
+| Target bearing | Effective reach |
+|----------------|-----------------|
+| In forward sector | **`awareness_radius + awareness_cone_extra`** |
+| Outside forward sector | **`awareness_radius`** |
+
+**Default posture (resolved):** **`awareness_forward_cone_only = false`** — zone = **rear/peripheral disk** plus **forward extended wedge**. Duel packs (rabbit, fox) ship this hybrid unless a species explicitly opts into cone-only legacy.
+
+**Legacy opt-in:** **`awareness_forward_cone_only = true`** restricts live awareness to the forward sector only (reach **`0`** behind the creature). Reserve for strict frontal-sensing species; not the default for ENGINE movement or memory re-awareness.
+
+**Same math, same tick — consumers:**
+
+- `_motor_food_plants_in_awareness_by_readiness` → live food seek + `_goal_belief_sync_from_scene`
+- `_motor_mobs_array` → mob repulsion + gated live / ghost memory
+- `_herbivore_predator_threat_sample`, `_collect_prey_positions`, `_pursuit_targets_for_predator` (unless `herbivore_threat_awareness_omni` / `predator_prey_awareness_omni`)
+- Debug overlay — [`awareness_debug_overlay.gd`](../../creature/awareness_debug_overlay.gd) (base disk + forward extra band)
+
+**Species overrides:** Prey pursuit may use separate **`predator_prey_awareness_cone_extra`** (defaults **0** — does not reuse plant `awareness_cone_extra`).
+
+### E.2 Line of sight (deferred backlog)
+
+**Phase 1:** Zone of awareness remains **distance + cone** only — no occlusion ray tests.
+
+**LOS track (future):** **Godot 3D ray** checks aligning **Tier-2 hostile detection** and **Find-food `SeekCandidate` credibility with §D** — see [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
 
 Tracking: [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
 
@@ -362,6 +397,8 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-05-23 | **§A.3.1:** no-goal **patrol lock** — random cardinal + idle, **`motor_no_goal_patrol_lock_sec`** (1s duel default), goal interrupt. |
+| 2026-05-23 | **§E.1 Resolved:** zone of awareness = **radius disk + forward cone extension** (default `awareness_forward_cone_only = false`); duel packs + memory re-awareness cross-link. |
 | 2026-05-20 | **Tier B closure:** §A.1 dev=aberrant extremes / ship=stub; B-10 ship executable CI deferred; §A.2 **`AiDriver`** unified builder; §D/E LoS phase-1 out of scope; §G.1/G.2 checklist aligned. |
 | 2026-05-20 | **§A.2.3 / §A.3.1:** priority **0** starvation override; **`starvation_override_food_ceiling`**; write-gate note; **§C** `_goal_belief_*` hooks → MEMORY §5.5. |
 | 2026-05-19 | **§A.2.3 / §A.3.1:** derived **`dominant_tier2_leaf`**; **`preserve_seek_blend_smoothness`** default **0.5** (smoothstep aggressiveness). |

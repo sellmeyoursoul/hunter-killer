@@ -10,6 +10,7 @@ var _dev_toggle: bool = false
 
 func _ready() -> void:
   z_index = 50
+  visible = true
   set_process(true)
   set_process_unhandled_input(true)
 
@@ -54,20 +55,49 @@ func _awareness_debug_allowed(ad: Node) -> bool:
   return false
 
 
+## Resolves merged motor params for the parent creature (pack overlay when available).
+func _motor_params_for_parent(ad: Node, par: Node) -> Dictionary:
+  if par is PhysicsBody2D and ad != null and ad.has_method(&"get_debug_motor_params_for_body"):
+    var pack_motor: Variant = ad.call("get_debug_motor_params_for_body", par)
+    if typeof(pack_motor) == TYPE_DICTIONARY:
+      return pack_motor as Dictionary
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_creature_motor_params"):
+    var global_motor: Variant = gc.call("get_creature_motor_params")
+    if typeof(global_motor) == TYPE_DICTIONARY:
+      return global_motor as Dictionary
+  return {}
+
+
+## Filled sector from [param center] between [param ang0] and [param ang1] out to [param radius].
+func _filled_sector(center: Vector2, radius: float, ang0: float, ang1: float, col: Color, segments: int = 32) -> void:
+  if radius <= 0.0:
+    return
+  var pts := PackedVector2Array()
+  pts.append(center)
+  for i in range(segments + 1):
+    var t := float(i) / float(segments)
+    var ang := lerpf(ang0, ang1, t)
+    pts.append(center + Vector2.from_angle(ang) * radius)
+  if pts.size() >= 3:
+    draw_colored_polygon(pts, col)
+
+
 func _draw() -> void:
   if not _overlay_enabled():
     return
   var ad := get_node_or_null("/root/AiDriver")
   if not _awareness_debug_allowed(ad):
     return
-  var motor: Dictionary = GameConfig.get_creature_motor_params()
+  var par := get_parent()
+  var motor: Dictionary = _motor_params_for_parent(ad, par)
   var r0 := float(motor.get("awareness_radius", 0.0))
   if r0 <= 0.0:
     return
   var extra := float(motor.get("awareness_cone_extra", 0.0))
   var half_deg := float(motor.get("awareness_cone_half_angle_deg", 45.0))
+  var forward_cone_only := bool(motor.get("awareness_forward_cone_only", false))
   var facing := Vector2.RIGHT
-  var par := get_parent()
   if par != null:
     var fd: Variant = par.get("last_move_direction")
     if typeof(fd) == TYPE_VECTOR2:
@@ -75,28 +105,35 @@ func _draw() -> void:
       if fv.length() > 1e-4:
         facing = fv.normalized()
 
-  var base_col := Color(0.25, 0.82, 1.0, 0.38)
-  draw_arc(Vector2.ZERO, r0, 0.0, TAU, 72, base_col, 2.0, true)
+  var hf := deg_to_rad(half_deg)
+  var ang := facing.angle()
+  var a0 := ang - hf
+  var a1 := ang + hf
+  var reach := r0 + maxf(0.0, extra)
 
-  if extra > 0.0:
-    var hf := deg_to_rad(half_deg)
-    var ang := facing.angle()
-    var a0 := ang - hf
-    var a1 := ang + hf
-    var rim := Color(0.25, 1.0, 0.62, 0.52)
-    draw_arc(Vector2.ZERO, r0 + extra, a0, a1, 36, rim, 2.0, true)
-    draw_line(
-      Vector2.from_angle(a0) * r0,
-      Vector2.from_angle(a0) * (r0 + extra),
-      Color(rim.r, rim.g, rim.b, 0.42),
-      2.0,
-    )
-    draw_line(
-      Vector2.from_angle(a1) * r0,
-      Vector2.from_angle(a1) * (r0 + extra),
-      Color(rim.r, rim.g, rim.b, 0.42),
-      2.0,
-    )
+  if forward_cone_only:
+    _filled_sector(Vector2.ZERO, reach, a0, a1, Color(0.25, 0.82, 1.0, 0.16), 36)
+    draw_arc(Vector2.ZERO, reach, a0, a1, 36, Color(0.25, 1.0, 0.62, 0.72), 4.0, true)
+    draw_line(Vector2.ZERO, Vector2.from_angle(a0) * reach, Color(0.25, 1.0, 0.62, 0.55), 3.0)
+    draw_line(Vector2.ZERO, Vector2.from_angle(a1) * reach, Color(0.25, 1.0, 0.62, 0.55), 3.0)
+  else:
+    draw_circle(Vector2.ZERO, r0, Color(0.25, 0.82, 1.0, 0.12))
+    draw_arc(Vector2.ZERO, r0, 0.0, TAU, 72, Color(0.25, 0.82, 1.0, 0.55), 4.0, true)
+    if extra > 0.0:
+      _filled_sector(Vector2.ZERO, reach, a0, a1, Color(0.25, 1.0, 0.62, 0.14), 24)
+      draw_arc(Vector2.ZERO, reach, a0, a1, 36, Color(0.25, 1.0, 0.62, 0.72), 4.0, true)
+      draw_line(
+        Vector2.from_angle(a0) * r0,
+        Vector2.from_angle(a0) * reach,
+        Color(0.25, 1.0, 0.62, 0.55),
+        3.0,
+      )
+      draw_line(
+        Vector2.from_angle(a1) * r0,
+        Vector2.from_angle(a1) * reach,
+        Color(0.25, 1.0, 0.62, 0.55),
+        3.0,
+      )
 
   var carn_overlay := par != null and par.is_in_group(&"mobs")
   if carn_overlay:
@@ -104,7 +141,7 @@ func _draw() -> void:
       if typeof(wp) != TYPE_VECTOR2:
         continue
       var world_p := wp as Vector2
-      draw_circle(to_local(world_p), 7.0, Color(0.35, 1.0, 0.45, 0.92))
+      draw_circle(to_local(world_p), 9.0, Color(0.35, 1.0, 0.45, 0.92))
     return
 
   for item in ad.get_debug_motor_mobs_snapshot():
@@ -120,4 +157,4 @@ func _draw() -> void:
     var world_p2 := wp2 as Vector2
     var lp := to_local(world_p2)
     var col := Color(1.0, 0.52, 0.08, 0.92) if src == "gated" else Color(0.88, 0.22, 1.0, 0.92)
-    draw_circle(lp, 7.0, col)
+    draw_circle(lp, 9.0, col)

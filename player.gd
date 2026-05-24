@@ -265,6 +265,12 @@ func start(pos: Vector2) -> void:
     hb.disabled = false
 
 
+## Sets initial duel facing from [method AiDriver._randomize_duel_spawn_facing] (public API; no private cross-script access).
+func apply_duel_spawn_facing(facing: Vector2) -> void:
+  if facing.length_squared() > 1e-12:
+    last_move_direction = facing.normalized()
+
+
 func set_control_mode(mode: ControlMode) -> void:
   control_mode = mode
 

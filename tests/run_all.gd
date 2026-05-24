@@ -8,6 +8,7 @@ const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
+const _NoGoalPatrolLockScr := preload("res://creature/motor/no_goal_patrol_lock.gd")
 const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _PlayerScr := preload("res://player.gd")
@@ -65,6 +66,10 @@ func _run_all() -> void:
   _test_explore_trail_repulsion_motor()
   _test_jeopardy_forced_turn()
   _test_scripted_intent_hold()
+  _test_no_goal_patrol_lock()
+  _test_bush_proximity_pickup_adjacent()
+  _test_herbivore_forage_plateau_release()
+  _test_eaten_bush_moves_to_unready_not_seek()
   _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
   _test_duel_spawn_facing_variance()
@@ -299,8 +304,12 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack uses forward cone threat awareness",
   )
   _assert(
-    bool(rabbit_m.get("awareness_forward_cone_only", false)),
-    "rabbit pack enables forward-cone-only live awareness",
+    not bool(rabbit_m.get("awareness_forward_cone_only", true)),
+    "rabbit pack uses hybrid radius disk + forward cone awareness",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
+    "rabbit pack no-goal patrol lock duration",
   )
   var fox_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
@@ -343,8 +352,12 @@ func _test_creature_pack_motor_overlays() -> void:
     "fox pack uses forward cone prey awareness",
   )
   _assert(
-    bool(fox_m.get("awareness_forward_cone_only", false)),
-    "fox pack enables forward-cone-only live awareness",
+    not bool(fox_m.get("awareness_forward_cone_only", true)),
+    "fox pack uses hybrid radius disk + forward cone awareness",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
+    "fox pack no-goal patrol lock duration",
   )
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
@@ -1160,35 +1173,57 @@ func _test_predator_chase_motor_ctx() -> void:
 
 func _test_no_goal_plateau_random() -> void:
   var center := Vector2(500.0, 500.0)
-  var seen: Dictionary = {}
-  for tick in 48:
-    var ctx := {
-      "creature_position": center,
-      "creature_speed": 400.0,
-      "lookahead_sec": 0.15,
-      "bounds_min": Vector2.ZERO,
-      "bounds_max": Vector2(1000.0, 1000.0),
-      "mobs": [],
-      "creature_facing": Vector2.RIGHT,
-      "food_seek_targets": [],
-      "prey_seek_targets": [],
-      "pursuit_targets": [],
-      "weight_seek_ready_food": 0.0,
-      "weight_seek_prey": 0.0,
-      "weight_explore_idle_penalty": 0.0,
-      "weight_explore_turn_bias": 0.0,
-      "weight_expanding_explore_hint": 0.0,
-      "motor_intent_cost_chaos": 0.0,
-      "motor_no_goal_plateau_random": true,
-      "motor_tie_cost_epsilon": 2.0,
-      "motor_pick_tick": tick,
-      "motor_chaos_seed": 90210 ^ tick,
-      "shuffle_tie_break": false,
-    }
-    var d: Vector2 = _Motor.pick_best_move_intent(ctx)
-    if d.length_squared() > 1e-14:
-      seen[str(d)] = true
-  _assert(seen.size() >= 2, "no-goal plateau random spreads across cardinals")
+  var base_ctx := {
+    "creature_position": center,
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(1000.0, 1000.0),
+    "mobs": [],
+    "static_obstacles": [],
+    "creature_half_extents": Vector2(13.5, 30.5),
+    "creature_facing": Vector2.RIGHT,
+    "food_seek_targets": [],
+    "prey_seek_targets": [],
+    "pursuit_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "weight_seek_prey": 0.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_expanding_explore_hint": 0.0,
+    "motor_intent_cost_chaos": 0.0,
+    "motor_no_goal_plateau_random": true,
+    "motor_tie_cost_epsilon": 2.0,
+    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_pick_tick": 0,
+    "motor_chaos_seed": 90210,
+    "shuffle_tie_break": false,
+  }
+  var d_a: Vector2 = _Motor.pick_best_move_intent(base_ctx)
+  var d_b: Vector2 = _Motor.pick_best_move_intent(base_ctx)
+  _assert(d_a.is_equal_approx(d_b), "no-goal plateau tie uses deterministic eval order")
+  _assert(d_a.is_equal_approx(Vector2.UP), "no-goal plateau tie picks first eval-order cardinal")
+  var blocked_ctx := base_ctx.duplicate(true)
+  blocked_ctx["static_obstacles"] = [
+    {"position": Vector2(560.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
+  ]
+  var d_blocked: Vector2 = _Motor.pick_best_move_intent(blocked_ctx)
+  _assert(
+    not d_blocked.is_equal_approx(Vector2.RIGHT),
+    "motor cost picker skips blocked cardinals on plateau ties",
+  )
+  var seek_ctx := base_ctx.duplicate(true)
+  seek_ctx["food_seek_targets"] = [Vector2(600.0, 500.0)]
+  seek_ctx["weight_seek_ready_food"] = 16.0
+  seek_ctx["motor_has_active_goal"] = true
+  seek_ctx["static_obstacles"] = [
+    {"position": Vector2(560.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
+  ]
+  var d_seek: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
+  _assert(
+    d_seek.is_equal_approx(Vector2.RIGHT),
+    "active goal seek keeps blocked-filter off so motor can step toward targets",
+  )
 
 
 func _test_food_seek_motor() -> void:
@@ -1820,6 +1855,173 @@ func _test_scripted_intent_hold() -> void:
   _assert(cold.is_equal_approx(right), "idle incumbent skips hold")
 
 
+func _test_no_goal_patrol_lock() -> void:
+  var pick := Callable(_NoGoalPatrolLockScr, &"pick_or_hold")
+  var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
+  var st: Dictionary = {}
+  reset.call(st)
+  var first: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  var second: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  _assert(first.is_equal_approx(second), "patrol lock holds intent within lock window")
+  st["locked_until_ms"] = Time.get_ticks_msec() - 1
+  var third: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  _assert(int(st.get("reroll_count", 0)) >= 2, "expired patrol lock increments reroll count")
+  reset.call(st)
+  _NoGoalPatrolLockScr.reset_state(st)
+  var saw_idle := false
+  for i in 64:
+    reset.call(st)
+    var intent: Vector2 = pick.call(st, 0.01, 1000 ^ i) as Vector2
+    if intent.is_equal_approx(Vector2.ZERO):
+      saw_idle = true
+      break
+  _assert(saw_idle, "patrol lock pick set includes stay-still")
+  reset.call(st)
+  st["locked_intent"] = Vector2.RIGHT
+  st["locked_until_ms"] = Time.get_ticks_msec() + 5000
+  reset.call(st)
+  _assert(not st.has("locked_intent"), "reset_state clears patrol lock on goal interrupt path")
+  var block_right := func(dir: Vector2) -> bool:
+    return dir.is_equal_approx(Vector2.RIGHT)
+  for i in 32:
+    reset.call(st)
+    var blocked_pick: Vector2 = pick.call(st, 0.01, 9000 ^ i, block_right) as Vector2
+    _assert(
+      not blocked_pick.is_equal_approx(Vector2.RIGHT),
+      "patrol lock skips blocked cardinal directions",
+    )
+
+
+func _test_bush_proximity_pickup_adjacent() -> void:
+  var BushScr := load("res://assets/plants/bush_food.gd") as Script
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(player_scene != null, "player scene loads for bush proximity pickup")
+  var main := Node2D.new()
+  root.add_child(main)
+  var bush := Node2D.new()
+  bush.set_script(BushScr)
+  main.add_child(bush)
+  bush.call("_ready")
+  bush.global_position = Vector2(200.0, 200.0)
+  var prey: Node = player_scene.instantiate()
+  main.add_child(prey)
+  prey.global_position = bush.global_position + Vector2(0.0, -66.0)
+  var cals_before := float(prey.get("current_calories"))
+  bush.call("_try_proximity_pickup_for_players")
+  _assert(float(bush.get("current_calories")) < 1.0, "adjacent footprint pickup drains bush pool")
+  _assert(float(prey.get("current_calories")) > cals_before, "adjacent footprint pickup grants calories")
+  main.queue_free()
+
+
+func _test_herbivore_forage_plateau_release() -> void:
+  if not _AiDriverScr.can_instantiate():
+    push_warning("skip forage plateau test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 4242
+  var motor_p := {
+    "motor_forage_plateau_ticks": 3,
+    "motor_forage_plateau_radius_px": 95.0,
+    "motor_stuck_escape_ticks": 1,
+  }
+  var ctx := {
+    "weight_seek_ready_food": 16.0,
+    "food_seek_targets": [Vector2(100.0, 0.0)],
+    "creature_position": Vector2(100.0, -66.0),
+    "creature_half_extents": Vector2(13.5, 30.5),
+  }
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
+  _assert(
+    not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p)),
+    "forage plateau not released before threshold",
+  )
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
+  _assert(
+    bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p)),
+    "forage plateau releases after threshold ticks adjacent to food",
+  )
+  driver.set("_forage_plateau_ticks_by_body", {})
+  var body_id_unready := 5252
+  var ctx_unready := {
+    "weight_seek_ready_food": 0.0,
+    "weight_avoid_unready_food": 5.5,
+    "food_seek_targets": [],
+    "unready_food_avoid_targets": [Vector2(100.0, 0.0)],
+    "creature_position": Vector2(100.0, -66.0),
+    "creature_half_extents": Vector2(13.5, 30.5),
+  }
+  for _i in 3:
+    driver.call("_track_herbivore_forage_plateau", body_id_unready, ctx_unready, Vector2.ZERO, 0, motor_p)
+  _assert(
+    bool(driver.call("_herbivore_forage_plateau_release", body_id_unready, motor_p)),
+    "forage plateau tracks adjacent unready bush after eating",
+  )
+  driver.queue_free()
+
+
+func _test_eaten_bush_moves_to_unready_not_seek() -> void:
+  if not _AiDriverScr.can_instantiate():
+    push_warning("skip eaten bush readiness test — AiDriver script did not compile")
+    return
+  var BushScr := load("res://assets/plants/bush_food.gd") as Script
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(player_scene != null, "player scene loads for eaten bush readiness")
+  var main := Node2D.new()
+  root.add_child(main)
+  var bush := Node2D.new()
+  bush.set_script(BushScr)
+  main.add_child(bush)
+  bush.call("_ready")
+  bush.global_position = Vector2(80.0, 0.0)
+  bush.set("current_calories", 0.0)
+  bush.set("_player_visit_locked", true)
+  var prey: Node = player_scene.instantiate()
+  main.add_child(prey)
+  prey.global_position = Vector2.ZERO
+  prey.set("last_move_direction", Vector2.RIGHT)
+  prey.set("current_calories", 10.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var base := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/rabbit",
+  )
+  var he := Vector2(13.5, 30.5)
+  var split: Dictionary = driver.call(
+    "_motor_food_plants_in_awareness_by_readiness",
+    motor_p,
+    prey.global_position,
+    he,
+    Vector2.RIGHT,
+  )
+  var ready: Array = split.get("ready", []) as Array
+  var unready: Array = split.get("unready", []) as Array
+  _assert(ready.is_empty(), "depleted bush is not a ready seek target")
+  _assert(unready.size() == 1, "depleted bush stays in unready awareness list")
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, prey)
+  _assert(
+    (ctx.get("food_seek_targets", []) as Array).is_empty(),
+    "depleted bush removed from food_seek_targets",
+  )
+  _assert(
+    not bool(ctx.get("motor_has_active_goal", true)),
+    "only unready bush nearby does not block patrol via motor_has_active_goal",
+  )
+  var nudge: Vector2 = driver.call(
+    "_herbivore_nudge_away_from_unready_if_idle",
+    ctx,
+    Vector2.ZERO,
+    motor_p,
+  ) as Vector2
+  _assert(nudge.length_squared() > 1e-12, "idle adjacent to unready bush nudges away")
+  driver.queue_free()
+  main.queue_free()
+
+
 func _test_perception_risk_hints() -> void:
   var p0 := Vector2.ZERO
 
@@ -1979,6 +2181,18 @@ func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
   prey.global_position = hunter.global_position + Vector2(80.0, 0.0)
   var ahead_arr: Array = driver.call("_collect_prey_positions", hunter, cone_strict, pos_h, he)
   _assert(ahead_arr.size() == 1, "prey ahead still tracked with forward_cone_only")
+  prey.global_position = hunter.global_position + Vector2(150.0, 0.0)
+  var fox_hybrid := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params().duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  var hybrid_arr: Array = driver.call(
+    "_collect_prey_positions", hunter, fox_hybrid, pos_h, he
+  )
+  _assert(
+    hybrid_arr.size() == 1,
+    "fox hybrid pack sees prey in forward cone beyond base radius disk",
+  )
   driver.queue_free()
   main.queue_free()
 
@@ -1987,7 +2201,11 @@ func _test_forward_cone_only_awareness() -> void:
   var reach_disk := _Motor.effective_awareness_reach(
     Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, false
   )
-  _assert(is_equal_approx(reach_disk, 500.0), "legacy disk reach applies behind creature")
+  _assert(is_equal_approx(reach_disk, 500.0), "hybrid disk reach applies behind creature")
+  var reach_ahead := _Motor.effective_awareness_reach(
+    Vector2.ZERO, Vector2(100.0, 0.0), 500.0, 200.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, false
+  )
+  _assert(is_equal_approx(reach_ahead, 700.0), "hybrid forward cone adds cone_extra to base radius")
   var reach_cone := _Motor.effective_awareness_reach(
     Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, true
   )
@@ -1999,6 +2217,7 @@ func _test_forward_cone_only_awareness() -> void:
   _test_forward_cone_only_food_gating(ad_script)
   _test_forward_cone_only_threat_gating(ad_script)
   _test_sated_herbivore_explore_with_off_cone_food(ad_script)
+  _test_sated_predator_ignores_prey(ad_script)
 
 
 func _test_forward_cone_only_food_gating(ad_script: Script) -> void:
@@ -2123,6 +2342,52 @@ func _test_sated_herbivore_explore_with_off_cone_food(ad_script: Script) -> void
   _assert(
     float(ctx.get("exploration_blend_multiplier", 0.0)) > 0.0,
     "sated rabbit with off-cone bush keeps exploration blend",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_sated_predator_ignores_prey(ad_script: Script) -> void:
+  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(mob_scene != null and player_scene != null, "mob and player scenes load for sated predator test")
+  var main := Node2D.new()
+  root.add_child(main)
+  var predator: Node = mob_scene.instantiate()
+  var prey: Node = player_scene.instantiate()
+  main.add_child(predator)
+  main.add_child(prey)
+  predator.global_position = Vector2.ZERO
+  prey.global_position = Vector2(120.0, 0.0)
+  predator.set("last_move_direction", Vector2.RIGHT)
+  predator.set("current_calories", float(predator.get("caloric_needs")))
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params().duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, predator)
+  _assert(
+    not (driver.call("_prey_positions_for_predator_motor", predator) as Array).is_empty(),
+    "sated fox still perceives prey in awareness cone",
+  )
+  _assert(
+    float(ctx.get("weight_seek_prey", -1.0)) <= 0.0,
+    "sated fox does not seek prey at full calories",
+  )
+  _assert(
+    (ctx.get("prey_seek_targets", []) as Array).is_empty(),
+    "sated fox motor ctx omits prey seek targets",
+  )
+  _assert(
+    (ctx.get("pursuit_targets", []) as Array).is_empty(),
+    "sated fox motor ctx omits pursuit targets",
+  )
+  _assert(
+    not bool(ctx.get("motor_has_active_goal", true)),
+    "sated fox with visible rabbit has no active hunt goal",
   )
   driver.queue_free()
   main.queue_free()

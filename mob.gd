@@ -77,6 +77,15 @@ func prepare_duel_spawn() -> void:
     screen_size = get_viewport_rect().size
 
 
+## Sets initial duel facing from [method AiDriver._randomize_duel_spawn_facing] (updates ENGINE fallback heading).
+func apply_duel_spawn_facing(facing: Vector2) -> void:
+  if facing.length_squared() <= 1e-12:
+    return
+  var f := facing.normalized()
+  last_move_direction = f
+  _last_heading = f
+
+
 func _apply_diet_defaults() -> void:
   if definition == null:
     var def := _CreatureDefinition.new()

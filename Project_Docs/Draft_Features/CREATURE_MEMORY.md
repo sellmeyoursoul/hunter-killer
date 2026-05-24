@@ -29,7 +29,7 @@
 - Full utility-AI or MMO-scale persistence.  
 - Replacing live sensory awareness with memory-only (**memory merges after / augments live sense**, same story as movement doc §C port).  
 - Gender / full `CreatureStats` field catalog (**[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)**).  
-- Full **LoS/occlusion wiring** this round (**§7.4** deferral note; **movement Foundations** path may remain distance + cone until LoS lands — see CREATURE_MOVEMENT_V2 §D–E).
+- Full **LoS/occlusion wiring** this round (**§7.4** deferral note; **movement Foundations** path uses **§E.1 hybrid radius + forward cone** until LoS lands — see CREATURE_MOVEMENT_V2 §D–E).
 
 ---
 
@@ -194,7 +194,7 @@ Enter **Precise** when the creature holds a fresh belief **and** distance-from-b
 
 ### 5.4 Re-awareness: Coarse → Precise
 
-When a remembered entity **re-enters the creature’s active zone of sensory awareness** (**same definition** as scripted motor fusion — CREATURE_MOVEMENT_V2 Foundations), **drop it from coarse-only treatment** — **snap to Precise**: refresh position/affordance from live scanner, freeze snapshots per refresh rules (**§5.1 stationaries** unchanged).
+When a remembered entity **re-enters the creature’s active zone of sensory awareness** — **same definition** as scripted motor live ingest (**[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)** — hybrid **`awareness_radius`** disk plus forward **`awareness_cone_extra`** wedge; default **`awareness_forward_cone_only = false`**), **drop it from coarse-only treatment** — **snap to Precise**: refresh position/affordance from live scanner, freeze snapshots per refresh rules (**§5.1 stationaries** unchanged).
 
 **Resolved (LRU vs coarse TTL — phase 1):** When **`goal_memory_max_entries`** is exceeded, **LRU eviction wins** over waiting for coarse TTL. Evict the entry with **lowest merge use count**; tie-break **least recently merged** into motor context (**§5.5**). Coarse TTL and global **`goal_memory_ttl_sec`** still apply on non-LRU paths.
 
@@ -313,7 +313,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 | Area | Paths / notes |
 |------|----------------|
-| Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; **`_goal_belief_*`** (**§5.5**); **`goal_source_memory.gd`** salient hooks (**§14.4**). |
+| Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; **`_goal_belief_*`** (**§5.5**); **`goal_source_memory.gd`** salient hooks (**§14.4**). Live zone geometry — **[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)**. |
 | Config merge spine | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — commented **`goal_*`** placeholders (**§10**); pack overlay via **`creature_motor`** (**CREATURE_MOVEMENT_V2 §A.1**). |
 | Cardinal costs | [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd). |
 | Stationary flora anchor | [`assets/plants/bush_food.gd`](../../assets/plants/bush_food.gd) — **`global_position`**, **`instance_id`**. |
@@ -672,6 +672,7 @@ for s in 0..7:
 
 | Date | Change |
 |------|--------|
+| 2026-05-23 | **§5.4 / §8.2:** re-awareness zone = **CREATURE_MOVEMENT_V2 §E.1** hybrid radius + forward cone (default not cone-only). |
 | 2026-05-20 | **Tier B closure:** §2.1.1 nearest-eligible consult; §10 defaults (`locale_prior_pull_w_norm` **3.0**, `locale_prior_ewma_alpha` **0.15**, `locale_prior_write_blend` **0.35**, `weight_believed_goal_pull` **6.4**, `salient_write_max_per_sec` **100**); §14.1 sector-arc **`align`**; §14.2 write blend; §14.4 failed-forage deferred; §7.4 Godot 3D ray future. |
 | 2026-05-20 | **Tier A closure:** phase-1 scope box; **§2.1.2** `avoid_hostiles` compositor; **§5.5** `_goal_belief` implementation; **§10** defaults + tuning; **§14** multi-row + **`pole_facet_tag`**; **§14.4** outcome/hooks; AH-7 reversal; mid-band eat write; shelter write deferred. |
 | 2026-05-19 | **§14 closure:** §14.2 row schema; §14.3 threat pass scope; MVP full stats; **`last_used_time`** write+consult; §14 title/intro hygiene. |

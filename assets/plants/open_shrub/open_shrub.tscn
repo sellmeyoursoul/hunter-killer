@@ -1,4 +1,4 @@
-[gd_scene load_steps=5 format=3 uid="uid://bushopen001hk01"]
+[gd_scene load_steps=6 format=3 uid="uid://bushopen001hk01"]
 
 [ext_resource type="Script" path="res://assets/plants/bush_food.gd" id="1_script"]
 [ext_resource type="Texture2D" uid="uid://bhkplntopn01" path="res://assets/plants/open_shrub/open_shrub.png" id="2_tex0"]
@@ -6,6 +6,9 @@
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_body"]
 radius = 36.0
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_pickup"]
+radius = 58.0
 
 [node name="OpenShrub" type="Node2D"]
 script = ExtResource("1_script")
@@ -30,4 +33,4 @@ collision_mask = 2
 monitoring = true
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="CalorieArea"]
-shape = SubResource("CircleShape2D_body")
+shape = SubResource("CircleShape2D_pickup")

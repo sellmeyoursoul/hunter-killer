@@ -34,8 +34,8 @@ version_control/autoload_on_startup=true
 
 [hunter_killer_debug]
 
-draw_awareness=true
 use_ship_motor_profile=false
+draw_awareness=true
 
 [input]
 

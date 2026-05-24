@@ -1,10 +1,10 @@
 {
-  "notes": "Carnivore duel pack — prey pursuit + predator jeopardy under dev motor profile (pack overrides dev chaos/prey zeroing).",
+  "notes": "Carnivore duel pack — prey pursuit + predator jeopardy; hybrid awareness (rear disk + forward cone extension).",
   "creature_motor": {
     "speed": 400.0,
-    "awareness_radius": 1500.0,
-    "awareness_cone_extra": 3000.0,
-    "awareness_forward_cone_only": true,
+    "awareness_radius": 75.0,
+    "awareness_cone_extra": 200.0,
+    "awareness_forward_cone_only": false,
     "predator_prey_awareness_omni": false,
     "awareness_cone_half_angle_deg": 50.0,
     "predator_duel_boot_awareness_ticks": 0,
@@ -13,6 +13,7 @@
     "motor_no_goal_chaos_mul": 2.8,
     "motor_goal_sight_chaos_mul": 0.2,
     "motor_tie_cost_epsilon": 0.55,
+    "motor_no_goal_patrol_lock_sec": 1.0,
     "weight_seek_ready_food": 0.0,
     "weight_seek_prey": 22.0,
     "weight_pursuit_dist": 0.55,
