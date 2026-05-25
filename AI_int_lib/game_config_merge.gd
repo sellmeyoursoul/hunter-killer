@@ -75,6 +75,8 @@ static func creature_motor_spine() -> Dictionary:
     "weight_explore_trail_repulsion": 2.35,
     ## Expanding cardinal explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 4-leg cycle.
     "expanding_explore_base_physics_ticks": 36,
+    ## Active seek + patrol stay-still: physics ticks per cardinal while sweeping awareness ([code]seek_stationary_look.gd[/code]).
+    "seek_stationary_look_segment_physics_ticks": 9,
     ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
     "weight_expanding_explore_hint": 0.12,
     ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
@@ -107,6 +109,13 @@ static func creature_motor_spine() -> Dictionary:
     ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
     "weight_obstacle_shield_prey": 28.0,
     "weight_obstacle_pin_predator": 22.0,
+    "predator_chase_edge_band_px": 110.0,
+    "predator_chase_edge_weight_mul": 0.12,
+    "predator_chase_pin_scale": 0.15,
+    "predator_stalemate_full_ticks": 6,
+    "herbivore_flee_toward_threat_penalty": 8.0,
+    "herbivore_flee_corner_edge_px": 48.0,
+    "herbivore_flee_corner_threat_move_px": 120.0,
     ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
     "carnivore_explore_rotate_physics_ticks": 36,
     ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).

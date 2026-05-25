@@ -9,6 +9,7 @@ const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 const _NoGoalPatrolLockScr := preload("res://creature/motor/no_goal_patrol_lock.gd")
+const _SeekStationaryLookScr := preload("res://creature/motor/seek_stationary_look.gd")
 const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _PlayerScr := preload("res://player.gd")
@@ -35,6 +36,15 @@ const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd
 const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
 
 var _failures: int = 0
+
+
+func _ai_driver_script() -> Script:
+  return load("res://AI_int_lib/ai_driver.gd") as Script
+
+
+func _ai_driver_can_instantiate() -> bool:
+  var scr := _ai_driver_script()
+  return scr != null and scr.can_instantiate()
 
 
 func _init() -> void:
@@ -67,6 +77,7 @@ func _run_all() -> void:
   _test_jeopardy_forced_turn()
   _test_scripted_intent_hold()
   _test_no_goal_patrol_lock()
+  _test_seek_stationary_look()
   _test_bush_proximity_pickup_adjacent()
   _test_herbivore_forage_plateau_release()
   _test_eaten_bush_moves_to_unready_not_seek()
@@ -378,6 +389,8 @@ func _test_creature_pack_motor_overlays() -> void:
     str(fox_def.get("asset_pack_root")) == "res://assets/creatures/fox",
     "fox archetype points at fox pack",
   )
+  _assert(str(rabbit_def.get("display_name")) == "Rabbit", "rabbit display_name for HUD")
+  _assert(str(fox_def.get("display_name")) == "Fox", "fox display_name for HUD")
 
 
 func _test_goal_source_memory() -> void:
@@ -1864,7 +1877,7 @@ func _test_no_goal_patrol_lock() -> void:
   var second: Vector2 = pick.call(st, 1.0, 90210) as Vector2
   _assert(first.is_equal_approx(second), "patrol lock holds intent within lock window")
   st["locked_until_ms"] = Time.get_ticks_msec() - 1
-  var third: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  var _third: Vector2 = pick.call(st, 1.0, 90210) as Vector2
   _assert(int(st.get("reroll_count", 0)) >= 2, "expired patrol lock increments reroll count")
   reset.call(st)
   _NoGoalPatrolLockScr.reset_state(st)
@@ -1892,6 +1905,22 @@ func _test_no_goal_patrol_lock() -> void:
     )
 
 
+func _test_seek_stationary_look() -> void:
+  var pick := Callable(_SeekStationaryLookScr, &"pick_facing")
+  var seg := 3
+  var phase_seed := 7
+  var seen: Dictionary = {}
+  for tick in 12:
+    var f: Vector2 = pick.call(seg, tick, phase_seed) as Vector2
+    seen[f] = true
+  _assert(seen.size() >= 3, "stationary look sweeps multiple cardinals over one cycle")
+  var a: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
+  var b: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
+  _assert(a.is_equal_approx(b), "stationary look is deterministic for tick + seed")
+  var c: Vector2 = pick.call(seg, seg, phase_seed) as Vector2
+  _assert(not a.is_equal_approx(c), "stationary look advances facing across segment boundary")
+
+
 func _test_bush_proximity_pickup_adjacent() -> void:
   var BushScr := load("res://assets/plants/bush_food.gd") as Script
   var player_scene: PackedScene = load("res://player.tscn") as PackedScene
@@ -1914,7 +1943,7 @@ func _test_bush_proximity_pickup_adjacent() -> void:
 
 
 func _test_herbivore_forage_plateau_release() -> void:
-  if not _AiDriverScr.can_instantiate():
+  if not _ai_driver_can_instantiate():
     push_warning("skip forage plateau test — AiDriver script did not compile")
     return
   var driver: Node = _AiDriverScr.new()
@@ -1962,7 +1991,7 @@ func _test_herbivore_forage_plateau_release() -> void:
 
 
 func _test_eaten_bush_moves_to_unready_not_seek() -> void:
-  if not _AiDriverScr.can_instantiate():
+  if not _ai_driver_can_instantiate():
     push_warning("skip eaten bush readiness test — AiDriver script did not compile")
     return
   var BushScr := load("res://assets/plants/bush_food.gd") as Script
@@ -2134,6 +2163,215 @@ func _test_ai_driver_helpers() -> void:
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(1)).contains("START"), "gbnf ARMED")
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(2)).contains("RIGHT"), "gbnf PLAYING")
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
+  var motor_p := _Merge.creature_motor_spine()
+  var bounds_max := Vector2(1000.0, 600.0)
+  var he := Vector2(18.0, 44.0)
+  var pred_pos := Vector2(980.0 - he.x, 300.0)
+  var prey_pos := Vector2(990.0 - 13.5, 300.0)
+  var ctx := {
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": bounds_max,
+    "prey_seek_targets": [prey_pos],
+    "pursuit_targets": [],
+    "static_obstacles": [],
+  }
+  _assert(
+    bool(d.call("_predator_edge_chase_pin_active", ctx, motor_p, pred_pos, he)),
+    "predator edge pin when prey is on playfield edge without static block",
+  )
+  var flee_dir: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    Vector2(990.0, 300.0),
+    Vector2(900.0, 300.0),
+    bounds_max,
+    Vector2(13.5, 30.5),
+    42,
+    motor_p,
+  )
+  _assert(
+    flee_dir.dot(Vector2.LEFT) < 0.25,
+    "cornered prey does not flee back toward edge-pinned threat",
+  )
+  var obs_aabb := [
+    {"position": Vector2(300.0, 350.0), "half_extents": Vector2(55.0, 55.0)},
+  ]
+  var pred_h := Vector2(300.0, 180.0)
+  var prey_h := Vector2(300.0, 520.0)
+  var hunt_ctx := {
+    "prey_seek_targets": [prey_h],
+    "pursuit_targets": [],
+    "static_obstacles": obs_aabb,
+  }
+  _assert(
+    bool(d.call("_predator_obstructed_hunt_active", hunt_ctx, motor_p, pred_h, he, 2)),
+    "obstructed hunt when solid blocks cardinal toward visible prey",
+  )
+  var flank: Vector2 = d.call(
+    "_predator_obstructed_hunt_intent",
+    pred_h,
+    prey_h,
+    he,
+    obs_aabb,
+    Vector2.ZERO,
+    bounds_max,
+    99,
+    2,
+    motor_p,
+  )
+  _assert(
+    flank.length_squared() > 1e-12 and not flank.is_equal_approx(Vector2.ZERO),
+    "obstructed hunt picks a flank step toward prey",
+  )
+  var corner_obs := [{"position": Vector2(500.0, 350.0), "half_extents": Vector2(100.0, 100.0)}]
+  var fox_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/fox",
+  )
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var fox_he := Vector2(18.0, 44.0)
+  var prey_he := Vector2(13.5, 30.5)
+  var fox_corner := Vector2(408.0, 242.0)
+  var prey_corner := Vector2(435.0, 242.0)
+  var flank_corner: Vector2 = d.call(
+    "_predator_obstructed_hunt_intent",
+    fox_corner,
+    prey_corner,
+    fox_he,
+    corner_obs,
+    Vector2.ZERO,
+    bounds_max,
+    77,
+    2,
+    fox_m,
+  )
+  var corner_min_clr := float(fox_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  _assert(
+    flank_corner.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked",
+        fox_corner,
+        fox_he,
+        flank_corner,
+        corner_obs,
+        corner_min_clr,
+      )
+    ),
+    "obstructed hunt at obstacle corner picks an unblocked step",
+  )
+  _assert(
+    bool(
+      d.call(
+        "_predator_hunt_stalemate_allowed",
+        {
+          "prey_seek_targets": [prey_corner],
+          "pursuit_targets": [],
+          "static_obstacles": corner_obs,
+        },
+        fox_m,
+        fox_corner,
+        fox_he,
+        6,
+      )
+    ),
+    "stalemate escape allowed after sustained corner stall",
+  )
+  var esc_corner: Vector2 = d.call(
+    "_pick_stuck_escape_cardinal",
+    fox_corner,
+    fox_he,
+    corner_obs,
+    77,
+    6,
+    fox_m,
+  )
+  _assert(
+    esc_corner.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked",
+        fox_corner,
+        fox_he,
+        esc_corner,
+        corner_obs,
+        corner_min_clr,
+      )
+    ),
+    "geometry escape at corner picks a traversable cardinal",
+  )
+  var flee_corner: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    Vector2(418.0, 238.0),
+    Vector2(395.0, 310.0),
+    bounds_max,
+    prey_he,
+    55,
+    rabbit_m,
+    corner_obs,
+  )
+  _assert(
+    flee_corner.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked",
+        Vector2(418.0, 238.0),
+        prey_he,
+        flee_corner,
+        corner_obs,
+        float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0)),
+      )
+    ),
+    "cornered prey flee avoids blocked cardinals at obstacle corner",
+  )
+  var edge_intent: Vector2 = d.call(
+    "_predator_edge_chase_intent",
+    Vector2(300.0, 80.0),
+    Vector2(300.0, 380.0),
+    fox_he,
+    Vector2.ZERO,
+    bounds_max,
+    42,
+  )
+  _assert(
+    edge_intent.dot(Vector2.DOWN) > 0.85,
+    "edge chase intercept picks closing cardinal toward prey",
+  )
+  _assert(
+    bool(
+      d.call(
+        "_predator_edge_parallel_chase_stalled",
+        Vector2(300.0, 80.0),
+        Vector2(300.0, 380.0),
+        Vector2.LEFT,
+        0,
+        motor_p,
+      )
+    ),
+    "parallel west chase at wall is treated as edge stall",
+  )
+  var edge_ctx := {
+    "prey_seek_targets": [Vector2(400.0, 550.0)],
+    "pursuit_targets": [],
+    "static_obstacles": [],
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": bounds_max,
+  }
+  _assert(
+    bool(
+      d.call(
+        "_predator_hunt_stalemate_allowed",
+        edge_ctx,
+        fox_m,
+        Vector2(400.0, 50.0),
+        fox_he,
+        3,
+      )
+    ),
+    "stalemate allowed at playfield edge after sustained stall",
+  )
   d.free()
   _test_food_plant_awareness_gating(AD)
   _test_carnivore_prey_awareness_gating(AD)
@@ -2210,8 +2448,8 @@ func _test_forward_cone_only_awareness() -> void:
     Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, true
   )
   _assert(is_equal_approx(reach_cone, 0.0), "forward_cone_only zeroes reach behind creature")
-  var ad_script: Script = _AiDriverScr
-  if not ad_script.can_instantiate():
+  var ad_script: Script = _ai_driver_script()
+  if not _ai_driver_can_instantiate():
     push_warning("skip ai_driver cone gating tests — AiDriver script did not compile")
     return
   _test_forward_cone_only_food_gating(ad_script)
@@ -2394,7 +2632,7 @@ func _test_sated_predator_ignores_prey(ad_script: Script) -> void:
 
 
 func _test_duel_spawn_facing_variance() -> void:
-  if not _AiDriverScr.can_instantiate():
+  if not _ai_driver_can_instantiate():
     push_warning("skip duel spawn facing test — AiDriver script did not compile")
     return
   var main := Node2D.new()

@@ -445,7 +445,10 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
   var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
   var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance_px", 4.0))
-  var filter_blocked_cardinals := not has_active_goal and block_min_clr > 0.0 and not static_obs.is_empty()
+  var filter_blocked_cardinals := bool(ctx.get("motor_filter_blocked_cardinals", false))
+  filter_blocked_cardinals = (
+    filter_blocked_cardinals or (not has_active_goal)
+  ) and block_min_clr > 0.0 and not static_obs.is_empty()
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO

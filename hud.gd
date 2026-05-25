@@ -1,5 +1,7 @@
 extends CanvasLayer
 
+const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
+
 @export var vitals_poll_frames: int = 10
 
 signal start_game
@@ -112,6 +114,22 @@ func _format_vitals_line(role: String, cur_i: int, mx_i: int) -> String:
   return "%s %d / %d" % [role, cur_i, mx_i]
 
 
+## Display label for a duel creature from [CreatureDefinition] ([code]display_name[/code], then [code]species_id[/code], else node name).
+func _creature_display_name(creature: Node) -> String:
+  if creature == null:
+    return "Creature"
+  var def_v: Variant = creature.get("definition")
+  if def_v != null and def_v.get_script() == _CreatureDefinition:
+    var def := def_v as Resource
+    var display := str(def.get("display_name")).strip_edges()
+    if not display.is_empty():
+      return display
+    var species := str(def.get("species_id")).strip_edges()
+    if not species.is_empty():
+      return species
+  return creature.name
+
+
 func _refresh_vitals_labels() -> void:
   _resolve_duel_creatures()
   if _herbivore != null:
@@ -122,7 +140,9 @@ func _refresh_vitals_labels() -> void:
     ):
       var mx_i := int(mx_h)
       var cur_f := clampf(float(cur_h), 0.0, float(mx_i))
-      $HerbivoreCaloriesLabel.text = _format_vitals_line("Herbivore", int(round(cur_f)), mx_i)
+      $HerbivoreCaloriesLabel.text = _format_vitals_line(
+        _creature_display_name(_herbivore), int(round(cur_f)), mx_i
+      )
   if _carnivore != null:
     var mx_c: Variant = _carnivore.get("caloric_needs")
     var mx_ci := int(mx_c) if typeof(mx_c) == TYPE_INT or typeof(mx_c) == TYPE_FLOAT else 10
@@ -133,7 +153,9 @@ func _refresh_vitals_labels() -> void:
         cur_ci = int(round(clampf(float(cur_c), 0.0, float(mx_ci))))
       else:
         cur_ci = 0
-    $CarnivoreCaloriesLabel.text = _format_vitals_line("Carnivore", cur_ci, mx_ci)
+    $CarnivoreCaloriesLabel.text = _format_vitals_line(
+      _creature_display_name(_carnivore), cur_ci, mx_ci
+    )
 
 
 func _process(_delta: float) -> void:
