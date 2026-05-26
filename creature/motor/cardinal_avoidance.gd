@@ -6,13 +6,18 @@ extends Object
 
 const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
+const _MotorOctScr := preload("res://creature/motor/motor_oct_directions.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false.
 static var _tie_order: Array[Vector2] = [
   Vector2(0.0, -1.0),
+  Vector2(_MotorOctScr.SQ2, -_MotorOctScr.SQ2),
   Vector2(1.0, 0.0),
+  Vector2(_MotorOctScr.SQ2, _MotorOctScr.SQ2),
   Vector2(0.0, 1.0),
+  Vector2(-_MotorOctScr.SQ2, _MotorOctScr.SQ2),
   Vector2(-1.0, 0.0),
+  Vector2(-_MotorOctScr.SQ2, -_MotorOctScr.SQ2),
   Vector2.ZERO,
 ]
 
@@ -116,9 +121,10 @@ static func effective_awareness_reach(
   return reach
 
 
-## Builds evaluation order: fixed [member _tie_order] or **shuffled cardinals** + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
+## Builds evaluation order: fixed tie list or **shuffled headings** + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
+## Builds evaluation order: eight seek headings (N, NE, …, NW) plus idle last.
 ## Params:
-## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code] (force [member _tie_order]), [code]tie_shuffle_seed[/code], [code]creature_position[/code].
+## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code] (force tie list), [code]tie_shuffle_seed[/code], [code]creature_position[/code].
 ## Returns:
 ## - Array of unit directions ending with [code]Vector2.ZERO[/code].
 static func evaluation_order_from_ctx(ctx: Dictionary) -> Array[Vector2]:
@@ -131,13 +137,10 @@ static func evaluation_order_from_ctx(ctx: Dictionary) -> Array[Vector2]:
     rng_seed = 1
   var rng := RandomNumberGenerator.new()
   rng.seed = rng_seed
-  var dirs: Array[Vector2] = [
-    Vector2(0.0, -1.0),
-    Vector2(1.0, 0.0),
-    Vector2(0.0, 1.0),
-    Vector2(-1.0, 0.0),
-  ]
-  var i := 3
+  var dirs: Array[Vector2] = []
+  for d in _MotorOctScr.SEEK_DIRECTIONS:
+    dirs.append(d)
+  var i := dirs.size() - 1
   while i > 0:
     var j := rng.randi_range(0, i)
     var tmp: Vector2 = dirs[i]
@@ -346,11 +349,11 @@ static func interior_env_cost_at(
   return 0.0
 
 
-## Picks unit intent in tie-order preference among cardinals + idle.
+## Picks unit intent in tie-order preference among cardinals (or eight seek headings) + idle.
 ## Params:
-## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]motor_intent_cost_chaos[/code] (uniform jitter ± this amount per candidate cost; breaks symmetric plateaus; 0 disables), [code]motor_chaos_seed[/code] ([code]tie_shuffle_seed[/code] XOR body id typical), [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty), [code]expanding_explore_hint[/code] + [code]weight_expanding_explore_hint[/code] (no ready-food: bias toward expanding cardinal sweep — see [code]expanding_cardinal_explore.gd[/code] [code]Explore[/code]).
+## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]motor_seek_oct_directions[/code] (eight-way food/prey seek), [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]motor_intent_cost_chaos[/code] (uniform jitter ± this amount per candidate cost; breaks symmetric plateaus; 0 disables), [code]motor_chaos_seed[/code] ([code]tie_shuffle_seed[/code] XOR body id typical), [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty), [code]expanding_explore_hint[/code] + [code]weight_expanding_explore_hint[/code] (no ready-food: bias toward expanding cardinal sweep — see [code]expanding_cardinal_explore.gd[/code] [code]Explore[/code]).
 ## Returns:
-## - Normalized cardinal `Vector2` or `Vector2.ZERO`.
+## - Normalized unit `Vector2` (cardinal or diagonal during seek) or `Vector2.ZERO`.
 ## Usage:
 ## - `CardinalAvoidance.pick_best_move_intent({ "creature_position": p, "bounds_max": sz, "mobs": [...] })`
 static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
@@ -441,14 +444,11 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
     or not prey_seek_targets.is_empty()
     or not pursuit_targets.is_empty()
   )
-  var has_active_goal := bool(ctx.get("motor_has_active_goal", goal_in_sight))
   var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
   var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
   var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance_px", 4.0))
   var filter_blocked_cardinals := bool(ctx.get("motor_filter_blocked_cardinals", false))
-  filter_blocked_cardinals = (
-    filter_blocked_cardinals or (not has_active_goal)
-  ) and block_min_clr > 0.0 and not static_obs.is_empty()
+  filter_blocked_cardinals = filter_blocked_cardinals and block_min_clr > 0.0 and not static_obs.is_empty()
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
@@ -561,7 +561,27 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       return first_tied_dir_in_eval_order(tied_dirs, order)
     if tied_dirs.size() == 1:
       return tied_dirs[0]
-  return best_d
+  if best_d.length_squared() > 1e-12:
+    return best_d.normalized()
+  if typeof(expand_hint_raw) == TYPE_VECTOR2:
+    var zh_fb: Vector2 = expand_hint_raw as Vector2
+    if zh_fb.length_squared() > 1e-12:
+      var uh_fb := zh_fb.normalized()
+      if (
+        not filter_blocked_cardinals
+        or not cardinal_step_blocked(
+          creature_pos, footprint_half, uh_fb, static_obs, block_min_clr
+        )
+      ):
+        return uh_fb
+  for d_fb in _MotorOctScr.SEEK_DIRECTIONS:
+    if (
+      filter_blocked_cardinals
+      and cardinal_step_blocked(creature_pos, footprint_half, d_fb, static_obs, block_min_clr)
+    ):
+      continue
+    return d_fb
+  return Vector2.ZERO
 
 
 ## Additive habitual-goal costs per cardinal step ([CREATURE_MEMORY.md §14.1](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)).

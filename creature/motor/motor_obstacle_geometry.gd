@@ -159,3 +159,62 @@ static func filter_samples_by_radius(
     if creature_center.distance_squared_to(p) <= r2:
       out.append(p)
   return out
+
+
+## True when segment [param a]→[param b] crosses [param rect] (endpoints inside count as hit).
+static func _segment_intersects_rect(a: Vector2, b: Vector2, rect: Rect2) -> bool:
+  if rect.has_point(a) or rect.has_point(b):
+    return true
+  var mn := rect.position
+  var mx := rect.position + rect.size
+  var corners := [
+    Vector2(mn.x, mn.y),
+    Vector2(mx.x, mn.y),
+    Vector2(mx.x, mx.y),
+    Vector2(mn.x, mx.y),
+  ]
+  for i in range(corners.size()):
+    var c0: Vector2 = corners[i]
+    var c1: Vector2 = corners[(i + 1) % corners.size()]
+    if Geometry2D.segment_intersects_segment(a, b, c0, c1) != null:
+      return true
+  return false
+
+
+## True when the hunter→prey segment intersects a static AABB (bush / rock on the chase line).
+## Params:
+## - hunter_pos / prey_pos: Footprint centers in world space.
+## - hunter_he / prey_he: Capsule half-extents used to pad obstacle rects.
+## - static_obs: Motor AABB dicts with [code]position[/code] and [code]half_extents[/code].
+## - min_clearance_px: Extra padding beyond footprint halves.
+static func chase_segment_blocked_by_aabbs(
+  hunter_pos: Vector2,
+  hunter_he: Vector2,
+  prey_pos: Vector2,
+  prey_he: Vector2,
+  static_obs: Array,
+  min_clearance_px: float,
+) -> bool:
+  if prey_pos == Vector2.ZERO or static_obs.is_empty() or min_clearance_px <= 0.0:
+    return false
+  if hunter_pos.distance_squared_to(prey_pos) < 64.0:
+    return false
+  var pad := maxf(
+    min_clearance_px,
+    maxf(maxf(hunter_he.x, hunter_he.y), maxf(prey_he.x, prey_he.y)) * 0.35,
+  )
+  for ob in static_obs:
+    if typeof(ob) != TYPE_DICTIONARY:
+      continue
+    var op: Vector2 = ob.get("position", Vector2.ZERO)
+    var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+    var ohe := Vector2.ZERO
+    if typeof(ohe_raw) == TYPE_VECTOR2:
+      ohe = ohe_raw as Vector2
+    if ohe.x <= 0.0 or ohe.y <= 0.0:
+      continue
+    var inflated := ohe + Vector2(pad, pad)
+    var rect := Rect2(op - inflated, inflated * 2.0)
+    if _segment_intersects_rect(hunter_pos, prey_pos, rect):
+      return true
+  return false

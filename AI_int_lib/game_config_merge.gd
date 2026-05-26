@@ -79,6 +79,8 @@ static func creature_motor_spine() -> Dictionary:
     "seek_stationary_look_segment_physics_ticks": 9,
     ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
     "weight_expanding_explore_hint": 0.12,
+    ## Active food/prey seek: eight headings (N..NW) and wall-clock lock per pick ([code]seek_direction_commit.gd[/code]).
+    "motor_seek_direction_lock_sec": 1.0,
     ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
     "weight_seek_prey": 22.0,
     ## Consecutive physics ticks with nonzero intent but displacement below [code]motor_stuck_move_epsilon_px[/code] before escape shaping runs.
@@ -112,10 +114,20 @@ static func creature_motor_spine() -> Dictionary:
     "predator_chase_edge_band_px": 110.0,
     "predator_chase_edge_weight_mul": 0.12,
     "predator_chase_pin_scale": 0.15,
+    "predator_chase_closing_intent_dot": 0.35,
+    "predator_obstructed_hunt_lock_ticks": 10,
+    "predator_obstructed_max_toward_dot": 0.22,
+    "predator_edge_kill_close_mul": 1.35,
+    "predator_edge_kill_close_pad_px": 12.0,
     "predator_stalemate_full_ticks": 6,
     "herbivore_flee_toward_threat_penalty": 8.0,
+    "herbivore_flee_obstacle_shield_scale": 14.0,
+    "herbivore_flee_shield_max_toward_dot": 0.15,
+    "herbivore_flee_shield_min_away_dot": -0.05,
+    "herbivore_flee_shield_require_chase_block": true,
     "herbivore_flee_corner_edge_px": 48.0,
     "herbivore_flee_corner_threat_move_px": 120.0,
+    "motor_playfield_corner_band_px": 56.0,
     ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
     "carnivore_explore_rotate_physics_ticks": 36,
     ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).

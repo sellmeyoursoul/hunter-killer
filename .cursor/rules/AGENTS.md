@@ -52,6 +52,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 - Add unit tests that cover the important code paths and meaningful edge cases.
 - Prefer a clear Arrange-Act-Assert (or equivalent) structure.
 - Use test names that state intent.
+- Godot *.exe path is "C:\Program Files (x86)\Steam\steamapps\common\Godot Engine\godot.windows.opt.tools.64.exe"
 
 ## Project Docs interactions
 

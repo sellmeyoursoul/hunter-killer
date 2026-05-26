@@ -31,6 +31,7 @@ var _main: Node = null
 var _spawn_cruise_speed: float = 200.0
 var _last_heading: Vector2 = Vector2.RIGHT
 var _wall_slide_pick: RefCounted
+var _wall_slide_toward_hint: Vector2 = Vector2.ZERO
 var _food_intake_policy: Resource
 var _starvation_fired: bool = false
 var control_mode: int = 0
@@ -219,7 +220,18 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   var n := normal_v as Vector2
   if n.length_squared() < 1e-12:
     return inc
+  if _wall_slide_toward_hint.length_squared() > 1e-12:
+    return _wall_slide_pick.pick_tangent_toward(inc, n, _wall_slide_toward_hint)
   return _wall_slide_pick.pick_tangent_closer(inc, n)
+
+
+## Biases wall tangents during obstructed prey chase so the fox flanks toward the rabbit, not along the bush forever.
+func set_wall_slide_toward_hint(dir: Vector2) -> void:
+  _wall_slide_toward_hint = dir.normalized() if dir.length_squared() > 1e-12 else Vector2.ZERO
+
+
+func clear_wall_slide_toward_hint() -> void:
+  _wall_slide_toward_hint = Vector2.ZERO
 
 
 func _physics_process_engine(delta: float) -> void:

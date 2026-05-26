@@ -1,11 +1,17 @@
-## Holds a random cardinal or idle intent while no motor goal is active ([Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1).
+## Holds a random eight-way or idle intent while no motor goal is active ([Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1).
 extends Object
 
+const _MotorOctScr := preload("res://creature/motor/motor_oct_directions.gd")
+
 const _OPTIONS: Array[Vector2] = [
-  Vector2.RIGHT,
-  Vector2.LEFT,
-  Vector2.UP,
-  Vector2.DOWN,
+  Vector2(0.0, -1.0),
+  Vector2(_MotorOctScr.SQ2, -_MotorOctScr.SQ2),
+  Vector2(1.0, 0.0),
+  Vector2(_MotorOctScr.SQ2, _MotorOctScr.SQ2),
+  Vector2(0.0, 1.0),
+  Vector2(-_MotorOctScr.SQ2, _MotorOctScr.SQ2),
+  Vector2(-1.0, 0.0),
+  Vector2(-_MotorOctScr.SQ2, -_MotorOctScr.SQ2),
   Vector2.ZERO,
 ]
 
@@ -20,9 +26,9 @@ static func reset_state(io_state: Dictionary) -> void:
 ## - io_state: Per-body mutable dict; stores [code]locked_intent[/code], [code]locked_until_ms[/code], [code]reroll_count[/code].
 ## - lock_sec: Wall-clock hold duration before a new random pick (seconds).
 ## - rng_seed: Mixed with [code]reroll_count[/code] for deterministic re-roll seeds.
-## - is_blocked: Optional [code]Callable(Vector2) -> bool[/code]; when valid, only unblocked cardinals / idle are eligible.
+## - is_blocked: Optional [code]Callable(Vector2) -> bool[/code]; when valid, only unblocked headings / idle are eligible.
 ## Returns:
-## - Unit cardinal direction or [code]Vector2.ZERO[/code] (stay still).
+## - Unit seek direction or [code]Vector2.ZERO[/code] (stay still).
 static func pick_or_hold(
   io_state: Dictionary, lock_sec: float, rng_seed: int, is_blocked: Callable = Callable()
 ) -> Vector2:

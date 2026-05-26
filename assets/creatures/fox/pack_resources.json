@@ -44,6 +44,8 @@
     "predator_chase_pin_scale": 0.15,
     "predator_obstacle_probe_px": 280.0,
     "predator_obstacle_slip_expand_weight": 7.0,
+    "predator_obstructed_hunt_lock_ticks": 8,
+    "predator_obstructed_max_toward_dot": 0.18,
     "weight_obstacle": 3.2,
     "motor_stuck_turn_bias_scale": 0.25,
     "motor_stuck_idle_penalty_scale": 2.5,

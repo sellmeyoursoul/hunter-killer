@@ -23,3 +23,53 @@ func pick_tangent_closer(incoming_unit: Vector2, wall_normal_unit: Vector2) -> V
   if cross_z >= 0.0:
     return t
   return -t
+
+
+## Picks the wall tangent that best continues egress away from [param away_unit] (flee / jeopardy).
+## Params:
+## - incoming_unit: Normalized motor intent before the ray hit (used only when [param away_unit] is zero).
+## - wall_normal_unit: Outward wall normal from [method PhysicsDirectSpaceState2D.intersect_ray].
+## - away_unit: Preferred escape bearing (typically prey position minus threat); need not be tangent to the wall.
+## Returns:
+## - Unit slide heading along the wall that maximizes separation from the threat, not minimal turn from [param incoming_unit].
+func pick_tangent_away_from(
+  incoming_unit: Vector2, wall_normal_unit: Vector2, away_unit: Vector2
+) -> Vector2:
+  if away_unit.length_squared() < 1e-12:
+    return pick_tangent_closer(incoming_unit, wall_normal_unit)
+  var n := wall_normal_unit
+  if n.length_squared() < 1e-10:
+    return incoming_unit.normalized()
+  n = n.normalized()
+  var away := away_unit.normalized()
+  var t := Vector2(-n.y, n.x).normalized()
+  var best := t
+  var best_score := -INF
+  for c: Vector2 in [t, -t]:
+    var score: float = c.dot(away) - maxf(0.0, c.dot(-away)) * 2.0
+    if score > best_score:
+      best_score = score
+      best = c
+  return best
+
+
+## Picks the wall tangent that best continues closing on [param toward_unit] (predator flank around cover).
+func pick_tangent_toward(
+  incoming_unit: Vector2, wall_normal_unit: Vector2, toward_unit: Vector2
+) -> Vector2:
+  if toward_unit.length_squared() < 1e-12:
+    return pick_tangent_closer(incoming_unit, wall_normal_unit)
+  var n := wall_normal_unit
+  if n.length_squared() < 1e-10:
+    return incoming_unit.normalized()
+  n = n.normalized()
+  var toward := toward_unit.normalized()
+  var t := Vector2(-n.y, n.x).normalized()
+  var best := t
+  var best_score := -INF
+  for c: Vector2 in [t, -t]:
+    var score: float = c.dot(toward) - maxf(0.0, c.dot(-toward)) * 2.0
+    if score > best_score:
+      best_score = score
+      best = c
+  return best

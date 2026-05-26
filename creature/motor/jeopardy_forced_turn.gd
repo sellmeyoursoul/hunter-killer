@@ -2,13 +2,7 @@
 extends Object
 
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
-
-const _CARDINALS: Array[Vector2] = [
-  Vector2(0.0, -1.0),
-  Vector2(1.0, 0.0),
-  Vector2(0.0, 1.0),
-  Vector2(-1.0, 0.0),
-]
+const _MotorOctScr := preload("res://creature/motor/motor_oct_directions.gd")
 
 const _INTENT_EPS_SQ := 25e-8
 const _COST_TIE_EPS := 1e-4
@@ -170,8 +164,8 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var w_avoid_unready: float = float(ctx.get("weight_avoid_unready_food", 0.0))
 
   var candidates: Array[Vector2] = []
-  for d in _CARDINALS:
-    if _intent_match(d, straight):
+  for d in _MotorOctScr.SEEK_DIRECTIONS:
+    if _intent_match(d, straight) or d.dot(straight) > 0.92:
       continue
     candidates.append(d)
 
