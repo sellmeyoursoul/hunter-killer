@@ -672,5 +672,38 @@ static func escalate_seek_multiplier(
   return 1.0
 
 
+## Threat-response consult ([CREATURE_MEMORY.md §14.3](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)): rank [code]avoid_hostiles[/code] rows only — no flee cardinal term.
+func consult_threat_response(
+  creature_pos: Vector2,
+  motor_p: Dictionary,
+  motor_ctx: Dictionary,
+  traits: Dictionary,
+) -> Dictionary:
+  var best_mod := &""
+  var best_rank := 0.0
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
+  var ctx_hash := context_hash_for_avoid_hostiles(
+    _GkReg.GK_AVOID_HOSTILES, creature_pos, motor_p, motor_ctx.get("environment_grid", null)
+  )
+  for key in _rows.keys():
+    var row: Dictionary = _rows[key]
+    if row.get("goal_kind") != _GkReg.GK_AVOID_HOSTILES:
+      continue
+    var mod: StringName = row.get("modality_tag", &"")
+    if mod == &"":
+      continue
+    row["last_used_time"] = Time.get_ticks_msec() / 1000.0
+    _rows[key] = row
+    var rank := _replay_rank_score(row, motor_p, motor_ctx, creature_pos, traits, hotspot_r)
+    if rank > best_rank:
+      best_rank = rank
+      best_mod = mod
+  return {
+    "preferred_modality": best_mod,
+    "replay_rank_score": best_rank,
+    "consult_context_hash": ctx_hash,
+  }
+
+
 static func align_step_with_sector(d: Vector2, sector_s: int) -> float:
   return _SectorScr.align_step_with_sector(d, sector_s)

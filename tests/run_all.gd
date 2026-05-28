@@ -19,6 +19,8 @@ const _EnvBake := preload("res://environment/environment_grid_bake.gd")
 const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
 const _Tier2Dom := preload("res://creature/motor/tier2_dominance.gd")
+const _TraitTier2 := preload("res://creature/motor/trait_tier2_mapper.gd")
+const _TacticScr := preload("res://creature/motor/motor_tactic_classifier.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _BelievedSector := preload("res://creature/motor/believed_goal_sector.gd")
@@ -60,6 +62,7 @@ func _run_all() -> void:
   _test_creature_motor_v2_profiles()
   _test_creature_pack_motor_overlays()
   _test_goal_source_memory()
+  _test_motor_motivation_wiring()
   _test_locale_prior_escalate_seek()
   _test_escape_reversal_suppression()
   _test_goal_belief_coarse_ttl()
@@ -73,10 +76,14 @@ func _run_all() -> void:
   _test_cardinal_avoidance()
   _test_obstacle_strategy_shield_pin()
   _test_playfield_corner_escape()
+  _test_world_corner_static_wedge_escape()
+  _test_playfield_open_corner_escape()
   _test_predator_cover_pin_flank()
   _test_herbivore_flee_cover()
+  _test_herbivore_flee_obstacle_slip()
   _test_expanding_cardinal_explore()
   _test_predator_chase_motor_ctx()
+  _test_predator_prey_memory_chase()
   _test_no_goal_plateau_random()
   _test_food_seek_motor()
   _test_explore_idle_when_no_pickup()
@@ -89,6 +96,7 @@ func _run_all() -> void:
   _test_seek_stationary_look()
   _test_bush_proximity_pickup_adjacent()
   _test_herbivore_forage_plateau_release()
+  _test_herbivore_food_awareness_latch()
   _test_eaten_bush_moves_to_unready_not_seek()
   _test_mob_avoidance_acceptance()
   _test_ai_driver_helpers()
@@ -467,6 +475,105 @@ func _test_goal_source_memory() -> void:
   _assert(not dup, "same-goal continuation blocks second write")
   _assert(_GkReg.validate_goal_kind(&"find_food", kinds), "validate_goal_kind core")
   _assert(not _GkReg.validate_goal_kind(&"bogus", kinds), "validate_goal_kind rejects unknown")
+
+
+func _test_motor_motivation_wiring() -> void:
+  var spine := _Merge.creature_motor_spine()
+  _assert(
+    is_equal_approx(_Tier2Dom.preserve_find_food_seek_scale(0.75, spine), 1.0),
+    "preserve scale full seek below seek ceiling",
+  )
+  _assert(
+    is_equal_approx(_Tier2Dom.preserve_find_food_seek_scale(0.95, spine), 0.0),
+    "preserve scale zero at preserve floor",
+  )
+  var mid_scale: float = _Tier2Dom.preserve_find_food_seek_scale(0.85, spine)
+  _assert(mid_scale > 0.2 and mid_scale < 1.0, "preserve scale mid-band partial")
+  var base: _TraitTier2.Tier2UrgencyChannels = _TraitTier2.base_urgency_channels_from_dominant(
+    _Tier2Dom.LEAF_FIND_FOOD, spine
+  )
+  var out := _TraitTier2.apply_trait_urgency_channels(
+    base, {"explorer_builder": 80.0}, spine
+  )
+  _assert(
+    is_equal_approx(out.urgency_find_food, base.urgency_find_food),
+    "trait tier2 stub leaves find_food urgency",
+  )
+  var static_obs := [{"position": Vector2(120.0, 120.0), "half_extents": Vector2(20.0, 20.0)}]
+  var tactics := _TacticScr.build_motor_ctx_tactics(
+    Vector2(100.0, 120.0),
+    Vector2(8.0, 8.0),
+    1.0,
+    Vector2.RIGHT,
+    spine,
+    static_obs,
+    null,
+    {"in_awareness": true, "gate_dist": 250.0},
+    false,
+    [],
+    Vector2.ZERO,
+  )
+  _assert(bool(tactics.get("tactic_in_squeeze", false)), "tight static clearance sets squeeze")
+  _assert(bool(tactics.get("tactic_hide_viable", false)), "alert band sets hide_viable")
+  var store := _GoalMem.new()
+  var grid := _EnvGrid.new()
+  grid.cell_width = 8
+  grid.cell_height = 8
+  grid.cell_size_px = 52.0
+  grid.cell_kind_ids = PackedInt32Array()
+  grid.cell_kind_ids.resize(64)
+  var flee_ctx := {
+    "tactic_classifier_active": true,
+    "tactic_jeopardy_egress": true,
+    "environment_grid": grid,
+  }
+  store.try_salient_write(
+    _GkReg.GK_AVOID_HOSTILES,
+    &"avoid_hostiles",
+    Vector2(200.0, 200.0),
+    spine,
+    grid,
+    flee_ctx,
+    {"tier": _GoalMem.TIER_SUCCESS},
+    _GkReg.core_goal_kinds(),
+    _GoalMem.effective_modality_allowlist_for_pack(""),
+    {},
+  )
+  var threat: Dictionary = store.consult_threat_response(
+    Vector2(200.0, 200.0), spine, flee_ctx, {}
+  )
+  _assert(
+    threat.get("preferred_modality", &"") == &"flee_retreat",
+    "threat consult prefers flee_retreat row",
+  )
+  var squeeze_ctx := {
+    "tactic_classifier_active": true,
+    "tactic_in_squeeze": true,
+    "conspecific_aid_count": 0,
+    "environment_grid": grid,
+  }
+  _assert(
+    store.try_salient_write(
+      _GkReg.GK_FIND_FOOD,
+      &"find_food",
+      Vector2(120.0, 80.0),
+      spine,
+      grid,
+      squeeze_ctx,
+      {"tier": _GoalMem.TIER_SUCCESS},
+      _GkReg.core_goal_kinds(),
+      _GoalMem.effective_modality_allowlist_for_pack(""),
+      {},
+    ),
+    "squeeze classifier writes find_food salient row",
+  )
+  var row_key := ""
+  for k in store._rows.keys():
+    var row: Dictionary = store._rows[k]
+    if row.get("modality_tag", &"") == &"squeeze_commit":
+      row_key = k
+      break
+  _assert(row_key != "", "locale row uses squeeze_commit modality")
 
 
 func _test_locale_prior_escalate_seek() -> void:
@@ -1217,6 +1324,168 @@ func _test_playfield_corner_escape() -> void:
   )
 
 
+func _test_world_corner_static_wedge_escape() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip world corner wedge test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var he := Vector2(13.5, 30.5)
+  var wedge_pos := Vector2(he.x + 12.0, bounds_max.y - he.y - 14.0)
+  var bush := [{"position": Vector2(118.0, 518.0), "half_extents": Vector2(78.0, 78.0)}]
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var esc_a: Vector2 = d.call(
+    "_pick_stuck_escape_cardinal",
+    wedge_pos,
+    he,
+    bush,
+    55,
+    4,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+  )
+  var esc_b: Vector2 = d.call(
+    "_pick_stuck_escape_cardinal",
+    wedge_pos,
+    he,
+    bush,
+    55,
+    4,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+  )
+  _assert(
+    esc_a.length_squared() > 1e-12
+    and esc_a.is_equal_approx(esc_b)
+    and not bool(d.call("_cardinal_step_blocked", wedge_pos, he, esc_a, bush, block_clr)),
+    "world corner + static wedge escape is stable and traversable",
+  )
+  var flee_a: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    wedge_pos,
+    Vector2(40.0, 420.0),
+    bounds_max,
+    he,
+    55,
+    rabbit_m,
+    bush,
+  )
+  var flee_b: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    wedge_pos,
+    Vector2(40.0, 420.0),
+    bounds_max,
+    he,
+    55,
+    rabbit_m,
+    bush,
+  )
+  _assert(
+    flee_a.length_squared() > 1e-12
+    and flee_a.is_equal_approx(flee_b)
+    and not bool(d.call("_cardinal_step_blocked", wedge_pos, he, flee_a, bush, block_clr)),
+    "wedged prey flee heading is stable and unblocked",
+  )
+  _assert(
+    bool(
+      d.call(
+        "_creature_playfield_corner_wedge_active",
+        wedge_pos,
+        he,
+        bush,
+        Vector2.ZERO,
+        bounds_max,
+        rabbit_m,
+      )
+    ),
+    "world corner + static geometry registers as corner wedge",
+  )
+  var esc_c: Vector2 = d.call(
+    "_latched_stuck_escape_intent",
+    55,
+    wedge_pos,
+    he,
+    bush,
+    2,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+  )
+  var esc_d: Vector2 = d.call(
+    "_latched_stuck_escape_intent",
+    55,
+    wedge_pos,
+    he,
+    bush,
+    2,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+  )
+  _assert(
+    esc_c.length_squared() > 1e-12 and esc_c.is_equal_approx(esc_d),
+    "wedged prey latched escape is stable across ticks",
+  )
+  var fox_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/fox",
+  )
+  var rotate_a: Vector2 = d.call("_predator_hunt_stuck_rotate_intent", 91, 3, fox_m)
+  var rotate_b: Vector2 = d.call("_predator_hunt_stuck_rotate_intent", 91, 9, fox_m)
+  _assert(
+    rotate_a.length_squared() > 1e-12 and rotate_a.is_equal_approx(rotate_b),
+    "predator hunt rotate intent stable across stuck tick count",
+  )
+
+
+func _test_playfield_open_corner_escape() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip open playfield corner escape test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var he := Vector2(13.5, 30.5)
+  var corner_pos := Vector2(he.x + 10.0, he.y + 12.0)
+  var esc_a: Vector2 = d.call(
+    "_pick_playfield_interior_escape_cardinal",
+    corner_pos,
+    he,
+    [],
+    71,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+  )
+  var esc_b: Vector2 = d.call(
+    "_herbivore_latched_corner_escape_intent",
+    71,
+    corner_pos,
+    he,
+    [],
+    Vector2.ZERO,
+    bounds_max,
+    rabbit_m,
+  )
+  _assert(
+    esc_a.length_squared() > 1e-12
+    and esc_a.is_equal_approx(esc_b)
+    and (esc_a.x > 0.35 or esc_a.y < -0.35),
+    "open map corner picks stable interior-opening escape",
+  )
+
+
 func _test_predator_cover_pin_flank() -> void:
   var AD := load("res://AI_int_lib/ai_driver.gd") as Script
   if AD == null or not AD.can_instantiate():
@@ -1300,6 +1569,56 @@ func _test_herbivore_flee_cover() -> void:
   )
 
 
+func _test_herbivore_flee_obstacle_slip() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip herbivore flee obstacle slip test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var prey_he := Vector2(13.5, 30.5)
+  var rock := [{"position": Vector2(540.0, 300.0), "half_extents": Vector2(40.0, 40.0)}]
+  var prey_pos := Vector2(530.0, 300.0)
+  var threat_pos := Vector2(400.0, 300.0)
+  var away := Vector2.RIGHT
+  var nudged: Vector2 = d.call(
+    "_herbivore_flee_obstacle_nudge_intent",
+    away,
+    prey_pos,
+    prey_he,
+    rock,
+    threat_pos,
+    91,
+    rabbit_m,
+  )
+  _assert(
+    nudged.length_squared() > 1e-12
+    and not nudged.is_equal_approx(away)
+    and absf(nudged.y) > 0.45,
+    "flee nudge slips tangentially off obstacle instead of driving into rock face",
+  )
+  var shaped := {"static_obstacles": rock, "weight_expanding_explore_hint": 0.0}
+  var slip_ok: bool = d.call(
+    "_motor_obstacle_slip_shaping",
+    shaped,
+    rabbit_m,
+    prey_pos,
+    prey_he,
+    91,
+    0,
+    prey_pos - threat_pos,
+    true,
+  )
+  _assert(
+    slip_ok
+    and float(shaped.get("weight_expanding_explore_hint", 0.0)) > 10.0,
+    "flee-direction slip shaping arms expand hint before contact",
+  )
+
+
 func _test_expanding_cardinal_explore() -> void:
   var X := _EXPANDING_CARDINAL_EXPLORE_SCR.Explore
   var L0: Dictionary = X.locate(36, 0)
@@ -1372,6 +1691,85 @@ func _test_predator_chase_motor_ctx() -> void:
   }
   var intent: Vector2 = _Motor.pick_best_move_intent(ctx)
   _assert(intent.is_equal_approx(Vector2.RIGHT), "predator chase picks +X toward prey without explore idle")
+
+
+func _test_predator_prey_memory_chase() -> void:
+  var ad_script := _ai_driver_script()
+  if ad_script == null or not ad_script.can_instantiate():
+    push_warning("skip predator prey memory chase test — AiDriver script did not compile")
+    return
+  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
+  _assert(mob_scene != null and player_scene != null, "mob and player scenes load for prey memory chase")
+  var main := Node2D.new()
+  root.add_child(main)
+  var predator: Node = mob_scene.instantiate()
+  var prey: Node = player_scene.instantiate()
+  main.add_child(predator)
+  main.add_child(prey)
+  predator.global_position = Vector2(400.0, 300.0)
+  prey.global_position = Vector2(470.0, 300.0)
+  predator.set("last_move_direction", Vector2.RIGHT)
+  predator.set("current_calories", 0.0)
+  var driver: Node = ad_script.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params().duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  driver.call("_build_motor_context", motor_p, {}, predator)
+  prey.global_position = Vector2(200.0, 300.0)
+  var live: Array = driver.call("_prey_positions_for_predator_motor", predator) as Array
+  _assert(live.is_empty(), "prey outside awareness after breaking fox cone")
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, predator)
+  var mem_targets: Array = ctx.get("prey_seek_targets", []) as Array
+  _assert(not mem_targets.is_empty(), "memory fills prey_seek_targets when prey leaves cone")
+  _assert(
+    float(ctx.get("weight_seek_prey", 0.0)) > 0.0,
+    "memory chase applies prey seek weight",
+  )
+  _assert(
+    bool(ctx.get("motor_has_active_goal", false)),
+    "memory chase keeps motor_has_active_goal true",
+  )
+  var intent: Vector2 = _Motor.pick_best_move_intent(ctx)
+  _assert(
+    intent.length_squared() > 1e-12 and intent.dot(Vector2.LEFT) > 0.5,
+    "memory chase cardinal moves toward last known prey bearing",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var mem_tgt: Vector2 = (ctx.get("prey_seek_targets", []) as Array)[0] as Vector2
+  var chase_a: Vector2 = driver.call(
+    "_predator_latched_memory_chase_intent",
+    55,
+    predator.global_position,
+    mem_tgt,
+    Vector2(18.0, 44.0),
+    [],
+    Vector2.ZERO,
+    bounds_max,
+    motor_p,
+  )
+  var chase_b: Vector2 = driver.call(
+    "_predator_latched_memory_chase_intent",
+    55,
+    predator.global_position,
+    mem_tgt,
+    Vector2(18.0, 44.0),
+    [],
+    Vector2.ZERO,
+    bounds_max,
+    motor_p,
+  )
+  _assert(
+    chase_a.length_squared() > 1e-12
+    and chase_a.is_equal_approx(chase_b)
+    and chase_a.dot(Vector2.LEFT) > 0.5,
+    "latched memory chase heading is stable across ticks",
+  )
+  driver.queue_free()
+  main.queue_free()
 
 
 func _test_no_goal_plateau_random() -> void:
@@ -2245,13 +2643,20 @@ func _test_herbivore_forage_plateau_release() -> void:
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
   _assert(
-    not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p)),
+    not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
     "forage plateau not released before threshold",
   )
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.ZERO, 0, motor_p)
   _assert(
-    bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p)),
-    "forage plateau releases after threshold ticks adjacent to food",
+    bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
+    "forage plateau releases after threshold ticks while idle near food",
+  )
+  driver.set("_forage_plateau_ticks_by_body", {})
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.RIGHT, 5, motor_p)
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.RIGHT, 5, motor_p)
+  _assert(
+    not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
+    "ready-food plateau ignores motor-stuck while still pursuing",
   )
   driver.set("_forage_plateau_ticks_by_body", {})
   var body_id_unready := 5252
@@ -2266,8 +2671,40 @@ func _test_herbivore_forage_plateau_release() -> void:
   for _i in 3:
     driver.call("_track_herbivore_forage_plateau", body_id_unready, ctx_unready, Vector2.ZERO, 0, motor_p)
   _assert(
-    bool(driver.call("_herbivore_forage_plateau_release", body_id_unready, motor_p)),
+    bool(driver.call("_herbivore_forage_plateau_release", body_id_unready, motor_p, ctx_unready)),
     "forage plateau tracks adjacent unready bush after eating",
+  )
+  driver.queue_free()
+
+
+func _test_herbivore_food_awareness_latch() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip herbivore food latch test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var body_id := 8181
+  var food_targets: Array = [Vector2(500.0, 200.0)]
+  var latched := bool(
+    driver.call("_herbivore_food_latch_merge", body_id, [Vector2(500.0, 200.0)], food_targets, motor_p)
+  )
+  _assert(latched and food_targets.size() == 1, "food latch records ready bush")
+  _assert(bool(driver.call("_herbivore_food_latch_active", body_id)), "food latch stays active")
+  var ctx := {
+    "creature_position": Vector2(200.0, 200.0),
+    "food_seek_targets": [Vector2(500.0, 200.0)],
+    "weight_seek_ready_food": 16.0,
+    "creature_half_extents": Vector2(13.5, 30.5),
+    "herbivore_food_latched": true,
+  }
+  driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector2.RIGHT, 3, motor_p)
+  _assert(
+    not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
+    "plateau does not drop latched ready-food pursuit",
   )
   driver.queue_free()
 

@@ -149,6 +149,8 @@ static func creature_motor_spine() -> Dictionary:
     "locale_prior_idle_evict_per_attempt_sec": 1.0,
     "salient_write_max_per_sec": 100.0,
     "escape_reversal_window_sec": 1.0,
+    "tactic_squeeze_clearance_px": 28.0,
+    "tactic_conspecific_aid_radius_px": 120.0,
     "replay_bell_k": 1.4,
     "replay_w_fit": 0.4,
     "replay_w_store": 0.6,
