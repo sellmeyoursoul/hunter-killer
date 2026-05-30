@@ -1,16 +1,15 @@
 extends RefCounted
 ## Preload namespace: [member Explore.pick_cardinal], [member Explore.locate]. Used by [code]AiDriver[/code] (carnivore + herbivore food search) and [code]CardinalAvoidance[/code] hints.
 ##
-## Pattern: ordering RIGHT → DOWN → LEFT → UP. Dwell **n** physics ticks per leg; after **four** legs, **n ← 2n**.
+## Pattern: ordering N → NE → … → NW ([code]eight_way_directions.gd[/code]). Dwell **n** physics ticks per leg; after **eight** legs, **n ← 2n**.
+
+
+const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
 
 class Explore:
-  const CARDINALS: Array[Vector2] = [
-    Vector2.RIGHT,
-    Vector2.DOWN,
-    Vector2.LEFT,
-    Vector2.UP,
-  ]
+  static func leg_count() -> int:
+    return _EightWay.DIRECTIONS.size()
 
 
   ## Segment length for cycle [param cycle_index]: [code]base_ticks * 2^cycle_index[/code].
@@ -20,7 +19,7 @@ class Explore:
 
 
   static func cycle_duration_ticks(base_ticks: int, cycle_index: int) -> int:
-    return 4 * segment_ticks_for_cycle(base_ticks, cycle_index)
+    return leg_count() * segment_ticks_for_cycle(base_ticks, cycle_index)
 
 
   ## Maps monotonic time to cycle index, segment index, and segment tick budget.
@@ -40,6 +39,7 @@ class Explore:
 
   static func pick_cardinal(base_ticks: int, effective_tick: int, phase_seed: int) -> Vector2:
     var loc: Dictionary = locate(base_ticks, effective_tick)
-    var ps := (phase_seed % 4 + 4) % 4
-    var slot := (int(loc["segment_index"]) + ps) % 4
-    return CARDINALS[slot]
+    var n_legs := leg_count()
+    var ps := (phase_seed % n_legs + n_legs) % n_legs
+    var slot := (int(loc["segment_index"]) + ps) % n_legs
+    return _EightWay.DIRECTIONS[slot]

@@ -1,1 +1,3 @@
-place instructions.md in ~/.claude/rules
+Agent rules live in `.cursor/rules/*.mdc` (see `core.mdc`, `alwaysApply: true`).
+
+`AGENTS.md` and `focus/*.md` are compatibility stubs for doc links.

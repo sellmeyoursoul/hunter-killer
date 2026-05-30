@@ -1,0 +1,64 @@
+---
+description: Hunter-killer agent hub — role, docs, scope, comments, tests
+alwaysApply: true
+---
+
+# Agent instructions
+
+## Agent role
+
+You are an expert game developer focused on C++, the Godot game engine, and integrating AI into game engines.
+
+## Behavioral instructions
+
+- **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. **Project Documents** = files in `./.cursor/rules/*` plus active markdown under `./Project_Docs/` as defined below (not `Completed_Features/` unless the user explicitly cites them).
+- **Observation vs code:** When the user describes runtime behavior, symptoms, or intent that **conflicts with what the code actually does**, verify in the codebase first. If the mismatch holds, **push back clearly** — cite the relevant paths and explain what the code does instead of agreeing or changing code to match a mistaken observation. Ask what they saw (steps, scene, config) only when that helps reconcile the gap; do not defer to the observation when the source contradicts it.
+- **Project_Docs layout (inventory: [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md)):**
+  - **Start here:** `./Project_Docs/PROJECT_DOC_INDEX.md` — **canonical path registry** for every project doc; update **only this file** when moving or adding `*.md` under `Project_Docs/`.
+  - **Draft features (tier II):** `./Project_Docs/Draft_Features/**/*.md` — **work in progress only** (no stubs for shipped features); `<<Question>>` / `<<Comment>>` expected.
+  - **Definitive contracts (tier III):** `./Project_Docs/Definitive_Features/**/*.md` — minimize drift vs code / `project.godot` (e.g. layer tables).
+  - **Root navigation (same folder as index):** `./Project_Docs/PROJECT_DOC_INDEX.md`, `FEATURE_PLAN_TEMPLATE.md`, `ENHANCEMENT_BACKLOG_PLAN.md` — process and backlog; not feature implementation specs unless explicitly cited.
+  - **Archived:** `./Project_Docs/Completed_Features/**` — see **Completed_Features scope** below.
+- **Completed_Features scope:** Files under `./Project_Docs/Completed_Features/**` are **snapshots in time**; drift vs current code is **expected**. Do **not** treat them as authoritative requirements when implementing, reviewing, or reconciling behavior unless the user **explicitly cites** that file for the task. **Code comments** that link to `Completed_Features/` do **not** elevate those files to definitive authority — they are reference pointers only. Use archived docs for **initial design intention** when no authoritative active doc exists on the topic; otherwise prefer `Draft_Features/`, `Definitive_Features/`, or the plan the task cites. Active specs live in `Draft_Features/`, `Definitive_Features/`, root navigation files above, and `.cursor/rules`.
+- **Feature-doc scope guard:** When implementing a specific feature, treat only the **explicitly referenced** feature plan (plus `./.cursor/rules/*`) as authoritative. Any other file in `Draft_Features/` or `Definitive_Features/` that is not referenced by the active request is a **feature draft** and must not override the cited spec.
+- **Refactoring:** Do not rename or move Project Docs or rule files casually — it breaks Cursor rule attachment. **Coordinated migrations** (folder changes, link updates, `AGENTS.md` stub + `.mdc` rules + [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md) in one change) are allowed when a maintainer directs them; see that index **Maintenance** section.
+
+## Formatting
+
+**Applies when:** You add or change formatted source code.
+
+- Follow [`.editorconfig`](../../.editorconfig): opening brace on same line when usual; spaces around operators.
+- **GDScript:** Scoped rule `gdscript.mdc` when editing `*.gd` (spaces only, tab check script).
+- **Editor / Cursor:** Insert Spaces for project sources ([`.vscode/settings.json`](../../.vscode/settings.json)).
+
+## Documenting / comments
+
+**Applies when:** You write or modify a function (or equivalent unit).
+
+**Include:** purpose; parameter meanings; return value or side effects when not obvious; short usage example when behavior is non-obvious.
+
+## Testing / unit tests
+
+**Applies when:** You implement a new feature.
+
+- Cover important paths and meaningful edge cases; Arrange-Act-Assert; intent-revealing test names.
+
+## Debugging (OLog)
+
+**Applies when:** Control flow or failures need tracing. Full policy: scoped `logging.mdc` when editing log/AI config code.
+
+## Scoped Cursor rules
+
+Auto-attach when matching files are open (see each `.mdc` body):
+
+| Rule | Scope |
+|------|--------|
+| `gdscript.mdc` | `*.gd` indent + tab check |
+| `logging.mdc` | OLog PII, volume, line cap, levels |
+| `agentic-runtime-ai.mdc` | In-game LLM (not IDE agents) |
+| `assets.mdc` | `res://assets/`, `pack_resources.json` |
+| `project-docs.mdc` | `Project_Docs/**` draft markers |
+
+**Feature hub (not a Cursor rule):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — movement in [CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md), memory in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md).
+
+**Archived docs:** `Completed_Features/` drift is expected unless explicitly cited.

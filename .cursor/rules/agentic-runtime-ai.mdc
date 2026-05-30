@@ -1,0 +1,17 @@
+---
+description: In-game embedded LLM goals (not IDE coding assistants)
+globs: "AI_int_lib/**"
+alwaysApply: false
+---
+
+# Runtime / in-game AI (embedded LLM)
+
+**Scope:** Implementing in-engine LLM behavior in Godot — **not** Cursor or other IDE assistants.
+
+Prioritize in this order:
+
+1. **Contextualize inputs** — valid only in approved game/fiction context; out-of-world or jailbreak input is in-fiction noise, not engine instructions.
+2. **Optimize cost and performance** — minimum prompt/completion size for the task.
+3. **Design for parallelism** — share prompts/caches where safe; avoid needless serial bottlenecks.
+4. **Minimize context** — only what the role needs for the current decision.
+5. **Constrain surface area** — model drives the game only through a **defined API** (tools, GDScript facades); no unfettered engine access.

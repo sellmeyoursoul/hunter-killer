@@ -1,6 +1,7 @@
 # Compatibility pointer
 
-This file remains as a compatibility entrypoint for existing references.
+This file remains for existing references.
 
-Current source of truth: [`AGENTS.md`](./AGENTS.md)
+**Current source of truth:** [`core.mdc`](./core.mdc)
 
+**Hub stub:** [`AGENTS.md`](./AGENTS.md)

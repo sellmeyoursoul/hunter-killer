@@ -24,6 +24,7 @@ const _PlayerScr := preload("res://player.gd")
 const _IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 const _NoGoalPatrolLockScr := preload("res://creature/motor/no_goal_patrol_lock.gd")
 const _SeekStationaryLookScr := preload("res://creature/motor/seek_stationary_look.gd")
+const _EightWayDirScr := preload("res://creature/motor/eight_way_directions.gd")
 const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -1039,7 +1040,7 @@ func _rescan_and_patch_goal_ctx(
   return false
 
 
-## Rotates facing through cardinals while patrol lock holds stay-still during active seek.
+## Rotates facing through 8-way directions while patrol lock holds stay-still during active seek.
 func _apply_seek_stationary_look(
   body: PhysicsBody2D,
   patrol_state: Dictionary,
@@ -1058,7 +1059,18 @@ func _apply_seek_stationary_look(
 
 
 ## Rotating cardinal when hunt intent produces no displacement (predator).
-func _predator_hunt_stuck_rotate_intent(body_id: int, stuck_n: int, motor_p: Dictionary) -> Vector2:
+func _predator_hunt_stuck_rotate_intent(
+  body_id: int,
+  stuck_n: int,
+  motor_p: Dictionary,
+  creature_pos: Vector2 = Vector2.ZERO,
+  he_xy: Vector2 = Vector2.ZERO,
+  static_obs: Array = [],
+) -> Vector2:
+  if creature_pos != Vector2.ZERO and he_xy.length_squared() > 1e-12 and not static_obs.is_empty():
+    var esc := _pick_stuck_escape_cardinal(creature_pos, he_xy, static_obs, body_id, stuck_n, motor_p)
+    if esc.length_squared() > 1e-12:
+      return esc
   var rot_ticks := maxi(4, int(motor_p.get("predator_hunt_stuck_rotate_ticks", 10)))
   var hint := _ExploreScr.Explore.pick_cardinal(
     rot_ticks, _physics_ticks, body_id ^ stuck_n ^ _duel_motor_round_salt
@@ -1122,19 +1134,9 @@ func _herbivore_locked_flee_intent(
   return dir
 
 
-## Picks the unit cardinal that best aligns with [param world_dir] (for memory search hint).
+## Picks the unit 8-way direction that best aligns with [param world_dir] (for memory search hint).
 static func _cardinal_best_aligned_to(world_dir: Vector2) -> Vector2:
-  if world_dir.length_squared() < 1e-12:
-    return Vector2.ZERO
-  var u := world_dir.normalized()
-  var best := Vector2.RIGHT
-  var best_dot := -INF
-  for c in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
-    var d := u.dot(c)
-    if d > best_dot:
-      best_dot = d
-      best = c
-  return best
+  return _EightWayDirScr.best_aligned_to(world_dir)
 
 
 ## Flee cardinal that moves away from [param threat_pos] without hugging the playfield edge.
@@ -1156,16 +1158,14 @@ func _herbivore_bounded_flee_intent(
   var center := bounds_max * 0.5
   var to_center := center - creature_pos
   var center_u := to_center.normalized() if to_center.length_squared() > 1e-12 else Vector2.ZERO
-  var cardinals: Array[Vector2] = [
-    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
-  ]
+  var dirs := _EightWayDirScr.DIRECTIONS
   var step := maxf(72.0, maxf(he_xy.x, he_xy.y) * 3.0)
   var block_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
-  var best_d := Vector2.RIGHT
+  var best_d := _EightWayDirScr.DIRECTIONS[0]
   var best_score := -INF
   var max_edge_clear := -INF
-  for k in 4:
-    var c: Vector2 = cardinals[(body_id + k + _physics_ticks) % 4]
+  for k in dirs.size():
+    var c: Vector2 = dirs[(body_id + k + _physics_ticks) % dirs.size()]
     if not static_obs.is_empty() and _cardinal_step_blocked(
       creature_pos, he_xy, c, static_obs, block_clr
     ):
@@ -1187,8 +1187,8 @@ func _herbivore_bounded_flee_intent(
       best_d = c
   if max_edge_clear < float(motor_p.get("herbivore_flee_corner_edge_px", 48.0)):
     best_score = -INF
-    for k in 4:
-      var c2: Vector2 = cardinals[(body_id + k + _physics_ticks) % 4]
+    for k in dirs.size():
+      var c2: Vector2 = dirs[(body_id + k + _physics_ticks) % dirs.size()]
       if not static_obs.is_empty() and _cardinal_step_blocked(
         creature_pos, he_xy, c2, static_obs, block_clr
       ):
@@ -1332,6 +1332,25 @@ func _herbivore_nudge_away_from_unready_if_idle(
   var away := _cardinal_best_aligned_to(pos - nearest)
   if away.length_squared() > 1e-12:
     return away
+  return raw_intent
+
+
+## When hunt is active, never emit a stay-still intent — step toward the nearest prey sample instead.
+## Params:
+## - ctx: Motor context from [_build_motor_context].
+## - raw_intent: Intent chosen this tick (may be [code]Vector2.ZERO[/code] from cost ties or patrol lock).
+## Returns:
+## - Cardinal toward prey when [param raw_intent] is idle and prey/pursuit targets exist; otherwise [param raw_intent].
+func _predator_hunt_nudge_if_idle(ctx: Dictionary, raw_intent: Vector2) -> Vector2:
+  if raw_intent.length_squared() > 1e-8:
+    return raw_intent
+  var pos: Vector2 = ctx.get("creature_position", Vector2.ZERO)
+  var prey_pos := _nearest_prey_pos_from_ctx(pos, ctx)
+  if prey_pos == Vector2.ZERO:
+    return raw_intent
+  var toward := _cardinal_best_aligned_to(prey_pos - pos)
+  if toward.length_squared() > 1e-12:
+    return toward
   return raw_intent
 
 
@@ -1669,17 +1688,14 @@ func _begin_playing_for_creature_goals_duel() -> void:
     _apply_human_control_on_registered_prey()
 
 
-## Assigns a per-round random cardinal facing to each registered duel creature.
+## Assigns a per-round random 8-way facing to each registered duel creature.
 func _randomize_duel_spawn_facing() -> void:
-  var cardinals: Array[Vector2] = [
-    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
-  ]
   for n in _registered_creatures:
     if not (n is PhysicsBody2D) or not is_instance_valid(n):
       continue
     var body := n as PhysicsBody2D
-    var slot := (body.get_instance_id() ^ _duel_motor_round_salt) & 3
-    var facing: Vector2 = cardinals[slot]
+    var slot := (body.get_instance_id() ^ _duel_motor_round_salt) & 7
+    var facing: Vector2 = _EightWayDirScr.DIRECTIONS[slot]
     if body.has_method(&"apply_duel_spawn_facing"):
       body.call(&"apply_duel_spawn_facing", facing)
     else:
@@ -1922,8 +1938,21 @@ static func _cardinal_step_blocked(
   )
 
 
-## Picks the cardinal step with best static clearance (corner / wall escape).
-## Skips cardinals blocked at the current footprint so latched escape does not repeat a zero-move intent.
+## Escape / stuck paths: near-step pinch rejection ([method CardinalAvoidance.cardinal_step_blocked_for_escape]).
+static func _cardinal_step_blocked_for_escape(
+  creature_pos: Vector2,
+  he_xy: Vector2,
+  direction: Vector2,
+  static_obs: Array,
+  min_clearance_px: float,
+) -> bool:
+  return _MOTOR.cardinal_step_blocked_for_escape(
+    creature_pos, he_xy, direction, static_obs, min_clearance_px
+  )
+
+
+## Picks the 8-way step with best static clearance (corner / wall escape).
+## Skips blocked directions at the current footprint so latched escape does not repeat a zero-move intent.
 func _pick_stuck_escape_cardinal(
   creature_pos: Vector2,
   he_xy: Vector2,
@@ -1932,24 +1961,24 @@ func _pick_stuck_escape_cardinal(
   stuck_n: int,
   motor_p: Dictionary = {},
 ) -> Vector2:
-  var cardinals: Array[Vector2] = [
-    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
-  ]
+  var dirs := _EightWayDirScr.DIRECTIONS
   var step := _motor_cardinal_probe_step(he_xy)
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
   var phase := maxi(0, stuck_n) >> 3
-  var start_i := (body_id + phase) & 3
+  var start_i := (body_id + phase) & 7
   var best_d := Vector2.ZERO
   var best_clear := -INF
-  for k in 4:
-    var c: Vector2 = cardinals[(start_i + k) % 4]
-    if not static_obs.is_empty() and _cardinal_step_blocked(
+  var clr_now := _MOTOR.footprint_static_clearance(creature_pos, he_xy, static_obs)
+  for k in dirs.size():
+    var c: Vector2 = dirs[(start_i + k) % dirs.size()]
+    if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
       creature_pos, he_xy, c, static_obs, min_clr
     ):
       continue
     var probe_pos := creature_pos + c * step
     var info := _static_obstacle_slip_info(probe_pos, he_xy, static_obs)
     var cl := float(info.get("clearance", -INF))
+    cl += maxf(0.0, cl - clr_now) * 0.85
     if cl > best_clear:
       best_clear = cl
       best_d = c
@@ -1973,7 +2002,9 @@ func _latched_stuck_escape_intent(
       var locked: Variant = rec.get("dir", Vector2.ZERO)
       if typeof(locked) == TYPE_VECTOR2 and (locked as Vector2).length_squared() > 1e-12:
         var min_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
-        if not _cardinal_step_blocked(creature_pos, he_xy, locked as Vector2, static_obs, min_clr):
+        if not _cardinal_step_blocked_for_escape(
+          creature_pos, he_xy, locked as Vector2, static_obs, min_clr
+        ):
           return locked as Vector2
         _geometry_escape_lock_by_body.erase(body_id)
   var esc := _pick_stuck_escape_cardinal(creature_pos, he_xy, static_obs, body_id, stuck_n)
@@ -2067,6 +2098,21 @@ func _nearest_prey_pos_from_ctx(creature_pos: Vector2, ctx: Dictionary) -> Vecto
   return Vector2.ZERO
 
 
+## True when [param prey_pos] sits inside the predator edge-chase band (playfield corner pin).
+func _predator_prey_edge_pinned(
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  prey_pos: Vector2,
+  motor_p: Dictionary,
+  prey_he: Vector2 = Vector2(13.5, 30.5),
+) -> bool:
+  if prey_pos == Vector2.ZERO:
+    return false
+  var edge_band := float(motor_p.get("predator_chase_edge_band_px", 110.0))
+  var prey_margin := _footprint_edge_margin(prey_pos, prey_he, bounds_min, bounds_max)
+  return prey_margin <= edge_band * 1.45
+
+
 ## True when visible prey is pinned near the playfield edge and the predator is edge-stalled (not blocked by static geometry).
 func _predator_edge_chase_pin_active(
   ctx: Dictionary, motor_p: Dictionary, creature_pos: Vector2, he: Vector2
@@ -2078,13 +2124,11 @@ func _predator_edge_chase_pin_active(
     return false
   var bounds_min: Vector2 = ctx.get("bounds_min", Vector2.ZERO)
   var bounds_max: Vector2 = ctx.get("bounds_max", Vector2.ZERO)
+  if not _predator_prey_edge_pinned(bounds_min, bounds_max, prey_pos, motor_p):
+    return false
   var edge_band := float(motor_p.get("predator_chase_edge_band_px", 110.0))
   var pred_margin := _footprint_edge_margin(creature_pos, he, bounds_min, bounds_max)
   if pred_margin > edge_band:
-    return false
-  var prey_he := Vector2(13.5, 30.5)
-  var prey_margin := _footprint_edge_margin(prey_pos, prey_he, bounds_min, bounds_max)
-  if prey_margin > edge_band * 1.45:
     return false
   var static_obs: Array = ctx.get("static_obstacles", []) as Array
   var slip := _static_obstacle_slip_info(creature_pos, he, static_obs)
@@ -2125,11 +2169,12 @@ func _predator_edge_parallel_chase_stalled(
   raw_intent: Vector2,
   stuck_n: int,
   motor_p: Dictionary,
+  prey_edge_pinned: bool = false,
 ) -> bool:
   if stuck_n >= maxi(1, int(motor_p.get("motor_stuck_escape_ticks", 8))):
     return true
   if raw_intent.length_squared() < 1e-12 or prey_pos == Vector2.ZERO:
-    return false
+    return prey_edge_pinned and stuck_n >= 1
   var to_prey := prey_pos - creature_pos
   if to_prey.length_squared() < 1e-12:
     return false
@@ -2137,6 +2182,41 @@ func _predator_edge_parallel_chase_stalled(
   if closing.length_squared() < 1e-12:
     return false
   return raw_intent.normalized().dot(closing) < 0.35
+
+
+## True when no prey-closing 8-way step is in-bounds and escape-valid (wall-slide trap).
+func _predator_preyward_escape_open(
+  creature_pos: Vector2,
+  prey_pos: Vector2,
+  he: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  min_clr: float,
+  min_closing_dot: float = 0.55,
+) -> bool:
+  var to_prey := prey_pos - creature_pos
+  if to_prey.length_squared() < 64.0:
+    return true
+  var prey_u := to_prey.normalized()
+  var step := _motor_cardinal_probe_step(he)
+  for c in _EightWayDirScr.DIRECTIONS:
+    if c.dot(prey_u) < min_closing_dot:
+      continue
+    if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
+      creature_pos, he, c, static_obs, min_clr
+    ):
+      continue
+    var probe := creature_pos + c * step
+    if (
+      probe.x - he.x < bounds_min.x
+      or probe.x + he.x > bounds_max.x
+      or probe.y - he.y < bounds_min.y
+      or probe.y + he.y > bounds_max.y
+    ):
+      continue
+    return true
+  return false
 
 
 ## True when live prey is visible but static geometry blocks the direct cardinal toward prey.
@@ -2155,13 +2235,23 @@ func _predator_obstructed_hunt_active(
   if prey_pos == Vector2.ZERO:
     return false
   var static_obs: Array = ctx.get("static_obstacles", []) as Array
-  if static_obs.is_empty():
-    return false
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
+  var bounds_min: Vector2 = ctx.get("bounds_min", Vector2.ZERO)
+  var bounds_max: Vector2 = ctx.get("bounds_max", Vector2.ZERO)
   var toward_card := _cardinal_best_aligned_to(prey_pos - creature_pos)
   if toward_card.length_squared() > 1e-12:
     if _cardinal_step_blocked(creature_pos, he, toward_card, static_obs, min_clr):
       return true
+  if stuck_n >= 1 or bool(ctx.get("creature_nav_slip_active", false)):
+    if not _predator_preyward_escape_open(
+      creature_pos, prey_pos, he, static_obs, bounds_min, bounds_max, min_clr
+    ):
+      # Playfield boundary pin: closing steps go OOB but prey is cornered — edge chase handles it.
+      if _predator_prey_edge_pinned(bounds_min, bounds_max, prey_pos, motor_p):
+        return false
+      return true
+  if static_obs.is_empty():
+    return false
   var probe_px := float(motor_p.get("predator_obstacle_probe_px", 280.0))
   return _creature_geometry_pinched(creature_pos, he, static_obs, probe_px)
 
@@ -2180,19 +2270,31 @@ func _predator_obstructed_hunt_intent(
 ) -> Vector2:
   if prey_pos == Vector2.ZERO:
     return Vector2.ZERO
-  var cardinals: Array[Vector2] = [
-    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
-  ]
+  var dirs := _EightWayDirScr.DIRECTIONS
   var step := _motor_cardinal_probe_step(he)
   var min_clr := float(_motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
   var to_prey := prey_pos - creature_pos
   var prey_u := to_prey.normalized() if to_prey.length_squared() > 1e-12 else Vector2.ZERO
   var flank_u := Vector2(-prey_u.y, prey_u.x) if prey_u.length_squared() > 1e-12 else Vector2.ZERO
+  var clr_now := _MOTOR.footprint_static_clearance(creature_pos, he, static_obs)
+  var prey_close_w := 95.0
+  var clr_gain_w := 18.0
+  var esc_stuck := stuck_n
+  if esc_stuck < 1 and not _predator_preyward_escape_open(
+    creature_pos, prey_pos, he, static_obs, bounds_min, bounds_max, min_clr
+  ):
+    esc_stuck = 1
+  if esc_stuck >= 2:
+    prey_close_w = 8.0
+    clr_gain_w = 140.0
+  elif esc_stuck >= 1:
+    prey_close_w = 35.0
+    clr_gain_w = 55.0
   var best_d := Vector2.ZERO
   var best_score := -INF
-  for k in 4:
-    var c: Vector2 = cardinals[(body_id + k + stuck_n + _physics_ticks) % 4]
-    if _cardinal_step_blocked(creature_pos, he, c, static_obs, min_clr):
+  for k in dirs.size():
+    var c: Vector2 = dirs[(body_id + k + stuck_n + _physics_ticks) % dirs.size()]
+    if _cardinal_step_blocked_for_escape(creature_pos, he, c, static_obs, min_clr):
       continue
     var probe := creature_pos + c * step
     if (
@@ -2204,9 +2306,12 @@ func _predator_obstructed_hunt_intent(
       continue
     var info := _static_obstacle_slip_info(probe, he, static_obs)
     var clearance := float(info.get("clearance", 0.0))
+    var near_step := maxf(maxf(he.x, he.y) * 0.65, 10.0)
+    var clr_near := _MOTOR.footprint_static_clearance(creature_pos + c.normalized() * near_step, he, static_obs)
     var score := clearance * 0.35 - probe.distance_to(prey_pos) * 0.15
+    score += maxf(0.0, clr_near - clr_now) * clr_gain_w
     if prey_u.length_squared() > 1e-12:
-      score += c.dot(prey_u) * 95.0
+      score += c.dot(prey_u) * prey_close_w
       if flank_u.length_squared() > 1e-12:
         score += absf(c.dot(flank_u)) * 45.0
     if score > best_score:
@@ -2219,20 +2324,26 @@ func _predator_obstructed_hunt_intent(
   )
   if esc.length_squared() > 1e-12:
     return esc
-  return _predator_hunt_stuck_rotate_intent(body_id, stuck_n, _motor_p)
+  return _predator_hunt_stuck_rotate_intent(
+    body_id, stuck_n, _motor_p, creature_pos, he, static_obs
+  )
 
 
 ## Softens edge / pin costs so a carnivore can close on prey hugging the playfield boundary.
 func _predator_edge_chase_ctx_shaping(
-  ctx: Dictionary, motor_p: Dictionary, creature_pos: Vector2, he: Vector2
+  ctx: Dictionary, motor_p: Dictionary, creature_pos: Vector2, _he: Vector2
 ) -> void:
-  if not _predator_edge_chase_pin_active(ctx, motor_p, creature_pos, he):
+  if not _predator_hunt_active_in_ctx(ctx):
+    return
+  var prey_pos := _nearest_prey_pos_from_ctx(creature_pos, ctx)
+  var bounds_min: Vector2 = ctx.get("bounds_min", Vector2.ZERO)
+  var bounds_max: Vector2 = ctx.get("bounds_max", Vector2.ZERO)
+  if not _predator_prey_edge_pinned(bounds_min, bounds_max, prey_pos, motor_p):
     return
   ctx["predator_edge_chase_active"] = true
-  ctx["weight_edge"] = (
-    float(ctx.get("weight_edge", 0.0))
-    * float(motor_p.get("predator_chase_edge_weight_mul", 0.12))
-  )
+  var edge_mul := float(motor_p.get("predator_chase_edge_weight_mul", 0.12))
+  ctx["weight_edge"] = float(ctx.get("weight_edge", 0.0)) * edge_mul
+  ctx["weight_interior"] = float(ctx.get("weight_interior", 0.0)) * edge_mul
   ctx["weight_obstacle_pin_predator"] = (
     float(ctx.get("weight_obstacle_pin_predator", 0.0))
     * float(motor_p.get("predator_chase_pin_scale", 0.15))
@@ -2241,7 +2352,7 @@ func _predator_edge_chase_ctx_shaping(
   ctx["weight_expanding_explore_hint"] = 0.0
 
 
-## Cardinal step toward prey that stays in-bounds when closing along a wall.
+## 8-way step toward prey that stays in-bounds when closing along a wall.
 func _predator_edge_chase_intent(
   creature_pos: Vector2,
   prey_pos: Vector2,
@@ -2252,16 +2363,14 @@ func _predator_edge_chase_intent(
 ) -> Vector2:
   if prey_pos == Vector2.ZERO:
     return Vector2.ZERO
-  var cardinals: Array[Vector2] = [
-    Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN,
-  ]
+  var dirs := _EightWayDirScr.DIRECTIONS
   var step := maxf(72.0, maxf(he.x, he.y) * 3.0)
   var to_prey := prey_pos - creature_pos
   var prey_u := to_prey.normalized() if to_prey.length_squared() > 1e-12 else Vector2.ZERO
   var best_d := Vector2.ZERO
   var best_score := -INF
-  for k in 4:
-    var c: Vector2 = cardinals[(body_id + k + _physics_ticks) % 4]
+  for k in dirs.size():
+    var c: Vector2 = dirs[(body_id + k + _physics_ticks) % dirs.size()]
     var probe := creature_pos + c * step
     if (
       probe.x - he.x < bounds_min.x
@@ -2812,7 +2921,7 @@ func _build_motor_context(
   elif predator_lost_visual:
     var mem_pos_lost: Vector2 = predator_memory["position"]
     var toward := mem_pos_lost - pos
-    expand_hint = _cardinal_best_aligned_to(toward)
+    expand_hint = _EightWayDirScr.best_aligned_to(toward)
     if expand_hint.length_squared() > 1e-12:
       w_expand_hint_out = maxf(
         w_expand_hint_out,
@@ -2942,6 +3051,12 @@ func _build_motor_context(
     w_dist_out *= float(motor_p.get("herbivore_flee_dist_mul", 2.8))
     w_dist_sq_out *= float(motor_p.get("herbivore_flee_dist_sq_mul", 2.2))
     w_close_out *= float(motor_p.get("herbivore_flee_close_mul", 1.85))
+  elif (
+    is_predator_body
+    and predator_hunt_motivated
+    and (not prey_pts_live.is_empty() or not pursuit_targets.is_empty())
+  ):
+    w_edge_out = 0.0
 
   var motor_has_active_goal := false
   if body.is_in_group(&"prey"):
@@ -2951,7 +3066,14 @@ func _build_motor_context(
       or w_seek > 0.0
     )
   elif is_predator_body:
-    motor_has_active_goal = w_seek_prey > 0.0 or predator_lost_visual
+    motor_has_active_goal = (
+      w_seek_prey > 0.0
+      or predator_lost_visual
+      or (
+        predator_hunt_motivated
+        and (not prey_pts_live.is_empty() or not pursuit_targets.is_empty())
+      )
+    )
 
   var prey_seek_motor: Array = prey_pts_live if predator_hunt_motivated else []
   var pursuit_motor: Array = pursuit_targets if predator_hunt_motivated else []
@@ -2960,6 +3082,19 @@ func _build_motor_context(
     and predator_hunt_motivated
     and (not prey_pts_live.is_empty() or not pursuit_targets.is_empty())
   )
+  var motor_seek_filter_wall_hits := false
+  var weight_seek_backtrack := 0.0
+  if motor_has_active_goal and not herbivore_flee_active:
+    var seek_translating := w_seek > 0.0 or w_seek_prey > 0.0 or predator_lost_visual
+    if seek_translating:
+      motor_seek_filter_wall_hits = true
+      if (
+        is_predator_body
+        and predator_hunt_motivated
+        and (not prey_pts_live.is_empty() or not pursuit_targets.is_empty())
+      ):
+        motor_seek_filter_wall_hits = false
+      weight_seek_backtrack = float(motor_p.get("weight_seek_backtrack", 14.0))
 
   return {
     "creature_position": pos,
@@ -3028,6 +3163,9 @@ func _build_motor_context(
     "herbivore_alert": herbivore_alert,
     "motor_has_active_goal": motor_has_active_goal,
     "motor_filter_blocked_cardinals": filter_blocked_cardinals,
+    "motor_seek_filter_wall_hits": motor_seek_filter_wall_hits,
+    "weight_seek_backtrack": weight_seek_backtrack,
+    "creature_last_move_direction": facing_display,
   }
 
 
@@ -3098,11 +3236,17 @@ func _physics_process(_delta: float) -> void:
       _motor_obstacle_slip_shaping(
         ctx, motor_p, pred_pos, he_nav, body_id, stuck_n, toward_nav, is_prey_body
       )
+      if is_pred and hunt_active:
+        _predator_edge_chase_ctx_shaping(ctx, motor_p, pred_pos, he_nav)
       if hunt_active and _predator_hunt_stalemate_allowed(
         ctx, motor_p, pred_pos, he_nav, stuck_n
       ):
         _predator_hunt_stalemate_shaping(ctx, motor_p, pred_pos, body_id, stuck_n, subj)
-      if stuck_n >= stuck_thr and not bool(ctx.get("creature_nav_slip_active", false)):
+      if (
+        stuck_n >= stuck_thr
+        and not bool(ctx.get("creature_nav_slip_active", false))
+        and not (is_pred and bool(ctx.get("predator_edge_chase_active", false)))
+      ):
         var ws0 := float(ctx.get("weight_seek_ready_food", 0.0))
         if is_pred:
           ctx["weight_seek_ready_food"] = ws0 * float(motor_p.get("motor_stuck_prey_pull_scale", 1.5))
@@ -3148,7 +3292,7 @@ func _physics_process(_delta: float) -> void:
           )
           ctx["weight_explore_turn_bias"] *= float(motor_p.get("motor_stuck_turn_bias_scale", 0.25))
           ctx["weight_explore_idle_penalty"] *= float(motor_p.get("motor_stuck_idle_penalty_scale", 2.5))
-      elif stuck_n >= 1:
+      elif stuck_n >= 1 and not (is_pred and bool(ctx.get("predator_edge_chase_active", false))):
         ctx["motor_stuck_allow_expand_hint"] = true
         ctx["weight_expanding_explore_hint"] = maxf(
           float(ctx.get("weight_expanding_explore_hint", 0.0)),
@@ -3165,8 +3309,6 @@ func _physics_process(_delta: float) -> void:
           ctx["motor_has_active_goal"] = false
           _forage_plateau_ticks_by_body[body_id] = 0
       var has_active_goal := bool(ctx.get("motor_has_active_goal", true))
-      if is_pred and hunt_active:
-        _predator_edge_chase_ctx_shaping(ctx, motor_p, pred_pos, he_nav)
       var patrol_lock_sec := float(motor_p.get("motor_no_goal_patrol_lock_sec", 0.0))
       var patrol_state := _no_goal_patrol_lock_state_for(body_id)
       var raw_intent: Vector2
@@ -3200,6 +3342,8 @@ func _physics_process(_delta: float) -> void:
         raw_intent = _MOTOR.pick_best_move_intent(ctx)
       if is_prey_body:
         raw_intent = _herbivore_nudge_away_from_unready_if_idle(ctx, raw_intent, motor_p)
+      if hunt_active:
+        raw_intent = _predator_hunt_nudge_if_idle(ctx, raw_intent)
       if hunt_active and _predator_obstructed_hunt_active(
         ctx, motor_p, pred_pos, he_nav, stuck_n
       ):
@@ -3209,7 +3353,9 @@ func _physics_process(_delta: float) -> void:
             body_id, pred_pos, he_nav, static_obs_nav, stuck_n, motor_p
           )
           if raw_intent.length_squared() < 1e-12:
-            raw_intent = _predator_hunt_stuck_rotate_intent(body_id, stuck_n, motor_p)
+            raw_intent = _predator_hunt_stuck_rotate_intent(
+              body_id, stuck_n, motor_p, pred_pos, he_nav, static_obs_nav
+            )
         else:
           var prey_obs := _nearest_prey_pos_from_ctx(pred_pos, ctx)
           raw_intent = _predator_obstructed_hunt_intent(
@@ -3229,21 +3375,20 @@ func _physics_process(_delta: float) -> void:
           body_id, pred_pos, he_nav, static_obs_nav, stuck_n, motor_p
         )
         if raw_intent.length_squared() < 1e-12:
-          raw_intent = _predator_hunt_stuck_rotate_intent(body_id, stuck_n, motor_p)
+          raw_intent = _predator_hunt_stuck_rotate_intent(
+            body_id, stuck_n, motor_p, pred_pos, he_nav, static_obs_nav
+          )
       elif hunt_active and bool(ctx.get("predator_edge_chase_active", false)):
         var prey_edge := _nearest_prey_pos_from_ctx(pred_pos, ctx)
-        if _predator_edge_parallel_chase_stalled(
-          pred_pos, prey_edge, raw_intent, stuck_n, motor_p
-        ):
-          raw_intent = _predator_edge_chase_intent(
-            pred_pos,
-            prey_edge,
-            he_nav,
-            ctx.get("bounds_min", Vector2.ZERO) as Vector2,
-            ctx.get("bounds_max", Vector2.ZERO) as Vector2,
-            body_id,
-          )
-          edge_chase_override = raw_intent.length_squared() > 1e-12
+        raw_intent = _predator_edge_chase_intent(
+          pred_pos,
+          prey_edge,
+          he_nav,
+          ctx.get("bounds_min", Vector2.ZERO) as Vector2,
+          ctx.get("bounds_max", Vector2.ZERO) as Vector2,
+          body_id,
+        )
+        edge_chase_override = raw_intent.length_squared() > 1e-12
       elif bool(ctx.get("herbivore_flee_panic", false)):
         var flee_threat := _nearest_position_from_dict_mobs(
           ctx["creature_position"] as Vector2, ctx.get("mobs", []) as Array

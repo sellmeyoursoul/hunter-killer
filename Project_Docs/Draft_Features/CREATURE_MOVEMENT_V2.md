@@ -1,6 +1,6 @@
 # Hunter Killer — Creature movement V2 / unified motor (draft)
 
-> **Purpose:** Working spec for a **movement + motivation refactor**. **Canonical goal drivers** (motivation tree Tier-1/2, `CreatureDefinition` traits, habitual **`believed_goal_*`** modulation): **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**. This file **inherits** **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** cardinal intent pipeline for all species, and **wiring** the motivation tree into `MotorContext` / cardinal scorer.
+> **Purpose:** Working spec for a **movement + motivation refactor**. **Canonical goal drivers** (motivation tree Tier-1/2, `CreatureDefinition` traits, habitual **`believed_goal_*`** modulation): **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**. This file **inherits** **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** 8-way intent pipeline for all species, and **wiring** the motivation tree into `MotorContext` / motor scorer.
 >
 > **Tier:** Draft — supersede branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) when implemented; inventory doc stays authoritative for *current* code until then.
 >
@@ -160,7 +160,7 @@ Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`
 | **Per creature** | Floors / ceilings ship as **defaults in `default_creature_motor_params()`** (spine ∪ selected **`creature_motor_profile_*`**) and **overrides** in **`pack_resources.json` → `creature_motor`** / future **`CreatureDefinition`** exports so each archetype tunes the band. |
 | **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** **smoothstep** blend; **`preserve_seek_blend_smoothness`** (**default 0.5**, range **0…1**) = blend **aggressiveness** (higher → sharper Preserve↔Seek transition). **`calorie_ratio < starvation_override_food_ceiling`** (**default 0.10**): **Find food** overrides acute threat (**§A.2.3** priority **0**). **`Avoid hostiles`** / jeopardy **override** hunger band when acute threat applies — **except** starvation priority **0**. |
 | **Motor keys** | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**, **`starvation_override_food_ceiling`** — defaults in **`default_creature_motor_params()`** only; omit from pack **`creature_motor`** unless overriding. |
-| **No-goal patrol lock (phase-1 — resolved)** | When **`motor_has_active_goal`** is false, skip per-tick cardinal tie roulette; **[`no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)** picks a random unit cardinal or **`Vector2.ZERO`**, holds for **`motor_no_goal_patrol_lock_sec`** (duel packs default **1.0** s), re-rolls when expired if still no goal. Goal surfacing clears lock and restores normal motor. Key: **`motor_no_goal_patrol_lock_sec`** (**0** = legacy explore/patrol motor). |
+| **No-goal patrol lock (phase-1 — resolved)** | When **`motor_has_active_goal`** is false, skip per-tick tie roulette; **[`no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)** picks a random **8-way** unit direction or **`Vector2.ZERO`**, holds for **`motor_no_goal_patrol_lock_sec`** (duel packs default **1.0** s), re-rolls when expired if still no goal. Goal surfacing clears lock and restores normal motor. Key: **`motor_no_goal_patrol_lock_sec`** (**0** = legacy explore/patrol motor). |
 
 ##### Believed goal source / habitual locales (future — overlays goal memory)
 
@@ -171,7 +171,7 @@ Once memory tracks **regions or outcomes that reliably satisfied a Tier-2 goal**
 - **Threat vs escalate ordering:** **[CREATURE_MEMORY.md §14.3](CREATURE_MEMORY.md)** — acute threat does **not** instantly abandon escalate/hotspot evaluation; locale priors inform **replay / modality choice** before **Avoid hostiles** hard-win (**no** separate flee cardinal from priors phase 1).
 - **Trait-scaled habitual replay:** **[CREATURE_GOAL_DRIVERS.md §5 — Habitual replay modulation](CREATURE_GOAL_DRIVERS.md)** (trait × strategy-class × **`believed_goal_*`**). Backends and **`context_hash`** overlays: **[CREATURE_MEMORY.md §§2.1–2.2](CREATURE_MEMORY.md)**; tag vocabulary + validation — **GOAL_DRIVERS §5.1** (**Actions 1–3 Resolved**). Same façade, **no forked ingress**.
 
-**Resolved (cardinal consumption — phase 1):** [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) adds **additive** cost terms from **`MotorContext.believed_goal_source_bias`** (**[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)**). Per candidate cardinal step **`d`** (unit direction):
+**Resolved (motor consumption — phase 1):** [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) adds **additive** cost terms from **`MotorContext.believed_goal_source_bias`** (**[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)**). Per candidate step **`d`** (unit 8-way direction — see definitive [CREATURE_MOVEMENT.md §4.1](../Definitive_Features/CREATURE_MOVEMENT.md)):
 
 ```text
 effective_pull_weight = weight_believed_goal_pull * replay_weight   // when consult context_hash matches; GOAL_DRIVERS §5.1
@@ -241,7 +241,7 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 |------|-----------------------------------------------------|----------------|-----------|
 | **Precise — stationary** | Distance to `last_world_pos` inside **`goal_memory_precise_radius_px`** (~**1000** px cue in commented merge defaults) | Exact **`Vector2`** + frozen affordability (`consumable_now`, optional payloads) | Merge into **`SeekCandidate`** (**§A.2**) |
 | **Precise — moving** | Last-known **`Vector2`** with disk **`goal_memory_moving_last_known_radius_px`** (starter ~**50** px; clamp **`≤ goal_memory_precise_radius_px`** unless waived — **§F**) | Blob + velocity ghost when extrapolating | Same list (**§A.2**) |
-| **Coarse** | Beyond precise envelope; still remembered under forget/LRU rules | Egocentric 8-way sector each tick (**+Y = N**) | Weak cardinal bias (**`weight_coarse_sector_goal_bias`**) — **never** spoof full-precision seek |
+| **Coarse** | Beyond precise envelope; still remembered under forget/LRU rules | Egocentric 8-way sector each tick (**+Y = N**) | Weak sector bias (**`weight_coarse_sector_goal_bias`**) on matching **8-way seek steps**; **never** spoof full-precision seek |
 
 **Alternative storage:** Mob ghosts, explore-grid keyed by **`instance_id`**, precise-only — **memory-phase** choices only (**§B.3**); **does not block** Foundations.
 

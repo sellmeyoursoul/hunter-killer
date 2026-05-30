@@ -1,0 +1,36 @@
+---
+description: GDScript spaces-only indent + tab check
+globs: "**/*.gd"
+alwaysApply: false
+---
+
+# GDScript indentation
+
+Godot **rejects** files that mix tab characters with space indentation in the same file.
+
+## Rules
+
+1. **Spaces only** — 2 spaces per indent ([`.editorconfig`](../../.editorconfig) `[*.gd]`).
+2. **Never paste tab-indented blocks** without re-indenting to spaces first.
+3. **Match the open file** — every new/changed line uses spaces (no `\t`).
+4. **Do not blind `\t` → two-spaces replace** on the whole file; prefer `line.expandtabs(2)` on original tabbed text, or re-indent from git.
+
+## Before marking a coding task done
+
+From repo root:
+
+```powershell
+python tools/check_gdscript_no_tabs.py
+```
+
+Exit code must be `0`.
+
+## Editor alignment
+
+- **Cursor / VS Code:** [`.vscode/settings.json`](../../.vscode/settings.json) — Insert Spaces, `detectIndentation: false`.
+- **Godot Editor:** Text Editor → Indent → **Space**, size **2**.
+
+## Recovery when tabs were introduced
+
+1. `git checkout HEAD -- path/to/file.gd` if committed version is space-clean.
+2. Re-apply changes with spaces only, or `expandtabs(2)` on a tabbed backup; re-run check script.

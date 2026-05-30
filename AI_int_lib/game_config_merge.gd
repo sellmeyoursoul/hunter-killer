@@ -63,6 +63,7 @@ static func creature_motor_spine() -> Dictionary:
     ## Predator (mob) gain on successful prey contact; clamped at that mob's [code]caloric_needs[/code] in [code]mob.gd[/code].
     "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
+    "weight_seek_backtrack": 14.0,
     "food_seek_imminent_mob_radius_px": 100.0,
     "jeopardy_forced_turn_ticks": 5,
     "weight_avoid_unready_food": 5.5,
@@ -73,9 +74,9 @@ static func creature_motor_spine() -> Dictionary:
     "explore_coverage_cell_px": 52.0,
     "explore_trail_max_cells": 96,
     "weight_explore_trail_repulsion": 2.35,
-    ## Expanding cardinal explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 4-leg cycle.
+    ## Expanding 8-way explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 8-leg cycle.
     "expanding_explore_base_physics_ticks": 36,
-    ## Active seek + patrol stay-still: physics ticks per cardinal while sweeping awareness ([code]seek_stationary_look.gd[/code]).
+    ## Active seek + patrol stay-still: physics ticks per 8-way heading while sweeping awareness ([code]seek_stationary_look.gd[/code]).
     "seek_stationary_look_segment_physics_ticks": 9,
     ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
     "weight_expanding_explore_hint": 0.12,
@@ -174,6 +175,7 @@ static func creature_motor_profile_ship() -> Dictionary:
     ## Phase 3 retune — spine-like seek for playtest/ship ([PHASE1_MOTOR_BASELINE.md](../Project_Docs/AI_Notes/PHASE1_MOTOR_BASELINE.md)).
     "weight_seek_ready_food": 16.0,
     "weight_seek_prey": 22.0,
+    "weight_seek_backtrack": 14.0,
     "motor_intent_cost_chaos": 0.0,
     "weight_explore_turn_bias": 0.14,
     "weight_explore_idle_penalty": 10.5,

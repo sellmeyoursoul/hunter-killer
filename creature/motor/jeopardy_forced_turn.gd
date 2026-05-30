@@ -1,17 +1,12 @@
-## Tracks straight-line closure on a forward-cone mob and overrides with a scored cardinal turn when jeopardy persists.
+## Tracks straight-line closure on a forward-cone mob and overrides with a scored 8-way turn when jeopardy persists.
 extends Object
 
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
-
-const _CARDINALS: Array[Vector2] = [
-  Vector2(0.0, -1.0),
-  Vector2(1.0, 0.0),
-  Vector2(0.0, 1.0),
-  Vector2(-1.0, 0.0),
-]
+const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
 const _INTENT_EPS_SQ := 25e-8
 const _COST_TIE_EPS := 1e-4
+const _STRAIGHT_DOT_EPS := 0.995
 
 
 static func reset_state(io_state: Dictionary) -> void:
@@ -20,6 +15,12 @@ static func reset_state(io_state: Dictionary) -> void:
 
 static func _intent_match(a: Vector2, b: Vector2) -> bool:
   return (a - b).length_squared() <= _INTENT_EPS_SQ
+
+
+static func _is_straight_continuation(candidate: Vector2, straight: Vector2) -> bool:
+  if candidate.length_squared() < 1e-12 or straight.length_squared() < 1e-12:
+    return false
+  return candidate.normalized().dot(straight.normalized()) >= _STRAIGHT_DOT_EPS
 
 
 ## Closest mob in the forward cone within [param imminent_radius_px] (footprint clearance).
@@ -121,7 +122,7 @@ static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Di
   return result
 
 
-## Picks a cardinal turn (never [param straight_incumbent] or idle) using motor costs, then widest angle vs [param threat_mob_pos].
+## Picks an 8-way turn (never [param straight_incumbent] or idle) using motor costs, then widest angle vs [param threat_mob_pos].
 static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threat_mob_pos: Vector2) -> Vector2:
   var straight := straight_incumbent
   if straight.length_squared() > _INTENT_EPS_SQ:
@@ -170,8 +171,8 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var w_avoid_unready: float = float(ctx.get("weight_avoid_unready_food", 0.0))
 
   var candidates: Array[Vector2] = []
-  for d in _CARDINALS:
-    if _intent_match(d, straight):
+  for d in _EightWay.DIRECTIONS:
+    if _is_straight_continuation(d, straight):
       continue
     candidates.append(d)
 
@@ -181,7 +182,7 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var best_cost := INF
   var scored: Array = []
   for d in candidates:
-    var predicted := creature_pos + d * speed * lookahead
+    var predicted := creature_pos + d.normalized() * speed * lookahead
     var cost := _Motor.cost_at_prediction(
       predicted,
       mobs,

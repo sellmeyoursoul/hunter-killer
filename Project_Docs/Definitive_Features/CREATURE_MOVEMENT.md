@@ -12,10 +12,10 @@
 
 | Layer | Role |
 |-------|------|
-| **Intent producers** | `AiDriver` (scripted cardinal motor), human input, LLM tokens (`UP`/`DOWN`/`LEFT`/`RIGHT`) |
+| **Intent producers** | `AiDriver` (scripted 8-way motor), human input, LLM tokens (`UP`/`DOWN`/`LEFT`/`RIGHT` — cardinals only today) |
 | **Intent storage** | `creature_move_intent` on `player.gd` / `mob.gd` |
 | **Physics application** | `player.gd` (`CharacterBody2D.move_and_slide`) or `mob.gd` ENGINE path (`linear_velocity = intent × speed`) |
-| **Cardinal planner** | `creature/motor/cardinal_avoidance.gd` — scores 5 candidates (4 cardinals + idle), picks minimum cost |
+| **Motor planner** | `creature/motor/cardinal_avoidance.gd` — scores **9 candidates** (8-way + idle), picks minimum cost |
 | **Driver orchestration** | `AI_int_lib/ai_driver.gd` — context build, stuck/jeopardy/hold, per-body state |
 
 **Move vs not-move:** A creature **stands still** when final intent is `Vector2.ZERO`. There is no separate “movement enabled” flag in ENGINE mode beyond `control_mode == ENGINE` and round/session state.
@@ -75,23 +75,28 @@ flowchart TD
 
 ---
 
-## 4. Cardinal decision — candidates and winner selection
+## 4. Motor decision — 8-way candidates and winner selection
 
-**File:** [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) — `pick_best_move_intent(ctx)`
+**File:** [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) — `pick_best_move_intent(ctx)` (class name retained for compatibility).
 
 ### 4.1 Candidates
 
-| Index | Direction | Meaning |
-|-------|-----------|---------|
-| 0–3 | `UP`, `RIGHT`, `DOWN`, `LEFT` | Unit vectors; step = `dir × creature_speed × lookahead_sec` |
-| 4 | `Vector2.ZERO` | **Idle** — no displacement intent |
+| Count | Directions |
+|-------|------------|
+| **9** | N, NE, E, SE, S, SW, W, NW (+Y = N), then **idle** |
+
+All ENGINE scripted modes (seek, flee, explore, patrol) share the same candidate set.
+
+Unit step vectors are normalized; predicted center = `creature_position + dir.normalized() × creature_speed × lookahead_sec`.
+
+**Shared 8-way table:** [`creature/motor/eight_way_directions.gd`](../../creature/motor/eight_way_directions.gd) — sector order matches [`believed_goal_sector.gd`](../../creature/motor/believed_goal_sector.gd) indices so coarse memory bias aligns with diagonal steps.
 
 ### 4.2 Evaluation order (tie-breaking)
 
 | Mechanism | Config key | Location |
 |-----------|------------|----------|
-| Fixed order | `deterministic_tie_order: true` or `shuffle_tie_break: false` | `evaluation_order_from_ctx()` — default order UP, RIGHT, DOWN, LEFT, ZERO |
-| Shuffled cardinals | `shuffle_tie_break: true` (default) | Fisher–Yates on 4 dirs; idle always last |
+| Fixed order | `deterministic_tie_order: true` or `shuffle_tie_break: false` | `evaluation_order_from_ctx()` — N→NE→…→NW, ZERO |
+| Shuffled directions | `shuffle_tie_break: true` (default) | Fisher–Yates on 8 dirs; idle always last |
 | Shuffle seed | `tie_shuffle_seed` | `AiDriver`: `_physics_ticks ^ instance_id ^ position hash` |
 | Cost jitter | `motor_intent_cost_chaos` | Uniform ± amplitude per candidate after all costs (`motor_chaos_seed`) |
 
@@ -118,7 +123,7 @@ Exploration terms gated by `allow_explore` (unless noted):
 
 **Core function:** `CardinalAvoidance.cost_at_prediction()` (also `cost_at_prediction_aware()` for tests).
 
-For each cardinal `d`, predicted center = `creature_position + d × speed × lookahead_sec`.
+For each candidate step direction `d`, predicted center = `creature_position + d.normalized() × speed × lookahead_sec` (§4.1).
 
 | # | Term | Sign | Formula (conceptual) | Context keys | Default source |
 |---|------|------|----------------------|--------------|----------------|
@@ -133,10 +138,13 @@ For each cardinal `d`, predicted center = `creature_position + d × speed × loo
 | 9 | **Unready food avoid** | + | Σ `weight / dist` to depleted bushes | `unready_food_avoid_targets`, `weight_avoid_unready_food` | herbivore awareness |
 | 10 | **Strategic obstacles** | −/+ | Shield (prey) / pin (predator) via sample points | `aware_obstacle_samples`, `strategic_*`, `weight_obstacle_shield_prey`, `weight_obstacle_pin_predator` | [`motor_obstacle_strategy.gd`](../../creature/motor/motor_obstacle_strategy.gd) |
 | 11 | **Explore idle** | + on idle | Add `weight_explore_idle_penalty` if `d == ZERO` | only if `allow_explore` | scaled by hunger + blend |
-| 12 | **Explore turn bias** | − on aligned cardinals | `−weight × max(0, d·facing)` | `creature_facing` | scaled |
+| 12 | **Explore turn bias** | − on aligned steps | `−weight × max(0, d·facing)` | `creature_facing` | scaled |
 | 13 | **Expanding explore hint** | − | `−weight × max(0, d·hint)` | `expanding_explore_hint` | stuck + baseline hint |
 | 14 | **Trail repulsion** | + | Inverse dist to prior cell centers | `explore_trail_centers`, `weight_explore_trail_repulsion` | `AiDriver` trail |
 | 15 | **Cost chaos** | ± | `randf_range(−chaos, +chaos)` | `motor_intent_cost_chaos`, `motor_chaos_seed` | merged motor |
+| 16 | **Seek backtrack** | + | `weight × max(0, −d·last_move)` | `weight_seek_backtrack`, `creature_last_move_direction`, `motor_seek_filter_wall_hits` | seek only |
+
+**Seek wall filter:** When `motor_seek_filter_wall_hits` is true, candidate steps whose **lookahead** pose drives **into** a playfield edge or static AABB are **skipped** (tangential / parallel motion near walls remains eligible). See `CardinalAvoidance.step_blocked_into_wall()`.
 
 **Awareness gating (mobs, pursuit, food plants):** Samples outside `awareness_radius` (+ forward cone `awareness_cone_extra` when within `awareness_cone_half_angle_deg`) do not contribute.
 
@@ -192,6 +200,7 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 | `calorie_cost_per_px_moved` | `0.002` | Vitals |
 | `predator_prey_meal_calories` | `5` | Contact meal (not motor) |
 | `weight_seek_ready_food` | `16.0` | Pull to ready bushes |
+| `weight_seek_backtrack` | `14.0` | Penalize reversing `last_move_direction` during seek |
 | `food_seek_imminent_mob_radius_px` | `100.0` | Disable seek when mob close |
 | `jeopardy_forced_turn_ticks` | `5` | Prey jeopardy streak |
 | `weight_avoid_unready_food` | `5.5` | Repel locked/depleted bushes |
@@ -281,12 +290,12 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 
 **Predator-only boost:** `weight_obstacle_ctx = weight_obstacle × weight_obstacle_predator_boost`.
 
-### 7.3 Expanding cardinal explore
+### 7.3 Expanding 8-way explore
 
 **File:** [`creature/motor/expanding_cardinal_explore.gd`](../../creature/motor/expanding_cardinal_explore.gd)
 
-- Sweep order RIGHT → DOWN → LEFT → UP; dwell `base × 2^cycle`.
-- `Explore.pick_cardinal(base_ticks, physics_tick, phase_seed)` → unit hint vector.
+- Sweep order N → NE → … → NW; dwell `base × 2^cycle` per **eight-leg** cycle.
+- `Explore.pick_cardinal(base_ticks, physics_tick, phase_seed)` → unit hint vector (8-way).
 - Used when **stuck** (both diets) and as weak baseline via `weight_expanding_explore_hint`.
 
 ### 7.4 Jeopardy forced turn
@@ -294,7 +303,7 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 **File:** [`creature/motor/jeopardy_forced_turn.gd`](../../creature/motor/jeopardy_forced_turn.gd)
 
 - Triggers when incumbent continues toward forward-cone mob within `food_seek_imminent_mob_radius_px` for `required_ticks`.
-- `pick_forced_turn()` re-scores cardinals (separate from main cost) to pick escape heading.
+- `pick_forced_turn()` re-scores **8-way** candidates (separate from main cost) to pick escape heading.
 - Resets intent hold state when fired.
 
 ### 7.5 Scripted intent hold
@@ -304,6 +313,21 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 - New direction must win for `hold_physics_ticks` consecutive ticks.
 - Idle incumbent → immediate adoption of new intent.
 - Hunger scales hold via `hold_mul`.
+
+### 7.6 Seek stationary look (8-way)
+
+**File:** [`creature/motor/seek_stationary_look.gd`](../../creature/motor/seek_stationary_look.gd)
+
+- When no-goal patrol lock holds **idle** but creature is **actively seeking** (`_creature_actively_seeking_patrol`), rotates `creature_facing` through **8 headings** (N→NE→…→NW) without translation.
+- Dwell per heading: `seek_stationary_look_segment_physics_ticks` (default 9 physics ticks).
+- After each rotation, `_rescan_and_patch_goal_ctx` may promote a sensed target and resume 8-way movement via §4.1.
+
+### 7.7 No-goal patrol lock (8-way)
+
+**File:** [`creature/motor/no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)
+
+- When `motor_has_active_goal` is false, picks a random **8-way** direction or idle, holds for `motor_no_goal_patrol_lock_sec`.
+- Blocked-direction filter uses the same step probe as the main motor.
 
 ---
 
@@ -421,6 +445,9 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 | Test area | Covers |
 |-----------|--------|
 | `_test_cardinal_avoidance` | Costs, ties, shuffle, chaos, food seek, awareness |
+| `_test_seek_diagonal_intent` | 8-way food seek + threat repulsion |
+| `_test_seek_wall_filter_and_backtrack` | Seek wall-hit rejection + backtrack penalty |
+| `_test_seek_stationary_look` | 8-way awareness sweep while blocked |
 | `_test_explore_idle_when_no_pickup` | Idle penalty |
 | `_test_explore_trail_repulsion_motor` | Trail cost |
 | `_test_jeopardy_forced_turn` | Jeopardy |
@@ -451,7 +478,10 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 |------|------|
 | `AI_int_lib/ai_driver.gd` | Orchestration, context, state |
 | `AI_int_lib/game_config_merge.gd` | Default motor params |
-| `creature/motor/cardinal_avoidance.gd` | Cardinal planner + costs |
+| `creature/motor/cardinal_avoidance.gd` | 8-way planner + costs (legacy class name) |
+| `creature/motor/eight_way_directions.gd` | Shared N→NW unit vectors + best-align helper |
+| `creature/motor/no_goal_patrol_lock.gd` | Random 8-way + idle patrol hold |
+| `creature/motor/seek_stationary_look.gd` | 8-way facing sweep while seek-blocked |
 | `creature/motor/motor_obstacle_geometry.gd` | Scene obstacle harvest |
 | `creature/motor/motor_obstacle_strategy.gd` | Shield / pin |
 | `creature/motor/expanding_cardinal_explore.gd` | Sweep hint |

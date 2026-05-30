@@ -78,6 +78,8 @@ func _run_all() -> void:
   _test_scripted_intent_hold()
   _test_no_goal_patrol_lock()
   _test_seek_stationary_look()
+  _test_seek_diagonal_intent()
+  _test_seek_wall_filter_and_backtrack()
   _test_bush_proximity_pickup_adjacent()
   _test_herbivore_forage_plateau_release()
   _test_eaten_bush_moves_to_unready_not_seek()
@@ -738,7 +740,7 @@ func _test_cardinal_avoidance() -> void:
   chaos_ctx["shuffle_tie_break"] = false
   var ch_pick: Vector2 = _Motor.pick_best_move_intent(chaos_ctx)
   var ch_len := ch_pick.length()
-  _assert(ch_len < 1e-4 or absf(ch_len - 1.0) < 1e-4, "motor cost chaos yields idle or cardinal only")
+  _assert(ch_len < 1e-4 or absf(ch_len - 1.0) < 1e-4, "motor cost chaos yields idle or unit direction only")
 
   var left_open := {
     "creature_position": Vector2(20.0, 360.0),
@@ -1126,12 +1128,15 @@ func _test_expanding_cardinal_explore() -> void:
   _assert(int(L36["segment_index"]) == 1, "expanding explore rotate after n ticks")
   var L143: Dictionary = X.locate(36, 143)
   _assert(int(L143["segment_index"]) == 3 and int(L143["cycle_index"]) == 0, "expanding explore fourth leg cycle 0")
-  var L144: Dictionary = X.locate(36, 144)
-  _assert(int(L144["cycle_index"]) == 1 and int(L144["segment_index"]) == 0, "expanding explore cycle 1 start")
-  _assert(int(L144["segment_ticks"]) == 72, "expanding explore doubled dwell after fourth rotation")
+  var L287: Dictionary = X.locate(36, 287)
+  _assert(int(L287["segment_index"]) == 7 and int(L287["cycle_index"]) == 0, "expanding explore eighth leg cycle 0")
+  var L288: Dictionary = X.locate(36, 288)
+  _assert(int(L288["cycle_index"]) == 1 and int(L288["segment_index"]) == 0, "expanding explore cycle 1 start")
+  _assert(int(L288["segment_ticks"]) == 72, "expanding explore doubled dwell after eighth rotation")
+  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
   var c0: Vector2 = X.pick_cardinal(36, 0, 0)
   var c1: Vector2 = X.pick_cardinal(36, 0, 1)
-  _assert(c0.is_equal_approx(Vector2.RIGHT) and c1.is_equal_approx(Vector2.DOWN), "phase_seed rotates cardinal ordering")
+  _assert(c0.is_equal_approx(Vector2(0.0, -1.0)) and c1.is_equal_approx(ne), "phase_seed rotates 8-way ordering")
   var expand_ctx := {
     "creature_position": Vector2(200.0, 200.0),
     "creature_speed": 400.0,
@@ -1183,6 +1188,42 @@ func _test_predator_chase_motor_ctx() -> void:
   var intent: Vector2 = _Motor.pick_best_move_intent(ctx)
   _assert(intent.is_equal_approx(Vector2.RIGHT), "predator chase picks +X toward prey without explore idle")
 
+  var corner_prey := Vector2(976.0, 300.0)
+  var pred_approach := Vector2(820.0, 300.0)
+  var fox_he := Vector2(18.0, 44.0)
+  var hunt_corner_ctx := ctx.duplicate(true)
+  hunt_corner_ctx["creature_position"] = pred_approach
+  hunt_corner_ctx["creature_half_extents"] = fox_he
+  hunt_corner_ctx["prey_seek_targets"] = [corner_prey]
+  hunt_corner_ctx["pursuit_targets"] = []
+  hunt_corner_ctx["weight_edge"] = 0.0
+  hunt_corner_ctx["weight_interior"] = 0.0
+  hunt_corner_ctx["motor_has_active_goal"] = true
+  hunt_corner_ctx["motor_seek_filter_wall_hits"] = false
+  var close_intent: Vector2 = _Motor.pick_best_move_intent(hunt_corner_ctx)
+  _assert(
+    close_intent.dot(Vector2.RIGHT) > 0.85,
+    "predator closes on edge-pinned prey when explore edge repulsion is off",
+  )
+  var legacy_corner_ctx := hunt_corner_ctx.duplicate(true)
+  legacy_corner_ctx["weight_edge"] = 0.48
+  legacy_corner_ctx["weight_interior"] = 0.65
+  legacy_corner_ctx["motor_seek_filter_wall_hits"] = true
+  var legacy_intent: Vector2 = _Motor.pick_best_move_intent(legacy_corner_ctx)
+  _assert(
+    legacy_intent.dot(Vector2.RIGHT) < close_intent.dot(Vector2.RIGHT),
+    "legacy edge repulsion and seek wall filter weaken corner closing",
+  )
+  var atop_prey_ctx := ctx.duplicate(true)
+  atop_prey_ctx["creature_position"] = prey_pos
+  atop_prey_ctx["weight_explore_idle_penalty"] = 0.0
+  atop_prey_ctx["exploration_blend_multiplier"] = 0.0
+  var atop_intent: Vector2 = _Motor.pick_best_move_intent(atop_prey_ctx)
+  _assert(
+    atop_intent.length_squared() > 1e-12,
+    "predator hunt never picks idle even when co-located with prey",
+  )
+
 
 func _test_no_goal_plateau_random() -> void:
   var center := Vector2(500.0, 500.0)
@@ -1215,7 +1256,7 @@ func _test_no_goal_plateau_random() -> void:
   var d_a: Vector2 = _Motor.pick_best_move_intent(base_ctx)
   var d_b: Vector2 = _Motor.pick_best_move_intent(base_ctx)
   _assert(d_a.is_equal_approx(d_b), "no-goal plateau tie uses deterministic eval order")
-  _assert(d_a.is_equal_approx(Vector2.UP), "no-goal plateau tie picks first eval-order cardinal")
+  _assert(d_a.is_equal_approx(Vector2.UP), "no-goal plateau tie picks first eval-order direction (N)")
   var blocked_ctx := base_ctx.duplicate(true)
   blocked_ctx["static_obstacles"] = [
     {"position": Vector2(560.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
@@ -1841,7 +1882,8 @@ func _test_jeopardy_forced_turn() -> void:
   var forced := Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
     turn_ctx, Vector2.RIGHT, mob_pos
   ) as Vector2
-  _assert(forced.is_equal_approx(Vector2.UP) or forced.is_equal_approx(Vector2.DOWN), "forced turn is perpendicular when mob is ahead on same line")
+  _assert(forced.length_squared() > 1e-12, "forced turn picks a unit direction")
+  _assert(not forced.is_equal_approx(Vector2.RIGHT), "forced turn avoids continuing straight into threat")
 
 
 func _test_scripted_intent_hold() -> void:
@@ -1910,15 +1952,109 @@ func _test_seek_stationary_look() -> void:
   var seg := 3
   var phase_seed := 7
   var seen: Dictionary = {}
-  for tick in 12:
+  for tick in 24:
     var f: Vector2 = pick.call(seg, tick, phase_seed) as Vector2
     seen[f] = true
-  _assert(seen.size() >= 3, "stationary look sweeps multiple cardinals over one cycle")
+  _assert(seen.size() >= 6, "stationary look sweeps multiple 8-way headings over one cycle")
   var a: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
   var b: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
   _assert(a.is_equal_approx(b), "stationary look is deterministic for tick + seed")
   var c: Vector2 = pick.call(seg, seg, phase_seed) as Vector2
   _assert(not a.is_equal_approx(c), "stationary look advances facing across segment boundary")
+
+
+func _test_seek_diagonal_intent() -> void:
+  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
+  var seek_ctx := {
+    "creature_position": Vector2(500.0, 500.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(1000.0, 1000.0),
+    "mobs": [],
+    "static_obstacles": [],
+    "creature_half_extents": Vector2(13.5, 30.5),
+    "creature_facing": Vector2.RIGHT,
+    "food_seek_targets": [Vector2(620.0, 380.0)],
+    "weight_seek_ready_food": 16.0,
+    "motor_has_active_goal": true,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_expanding_explore_hint": 0.0,
+    "motor_intent_cost_chaos": 0.0,
+    "motor_tie_cost_epsilon": 0.45,
+    "motor_cardinal_block_min_clearance_px": 0.0,
+    "motor_pick_tick": 0,
+    "motor_chaos_seed": 1,
+    "shuffle_tie_break": false,
+  }
+  var d_seek: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
+  _assert(d_seek.is_equal_approx(ne), "motor picks diagonal toward intercardinal food target")
+  var flee_ctx := seek_ctx.duplicate(true)
+  flee_ctx["food_seek_targets"] = []
+  flee_ctx["weight_seek_ready_food"] = 0.0
+  flee_ctx["mobs"] = [{"position": Vector2(520.0, 500.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}]
+  flee_ctx["weight_dist"] = 2.0
+  flee_ctx["weight_closing"] = 1.0
+  var d_flee: Vector2 = _Motor.pick_best_move_intent(flee_ctx)
+  _assert(d_flee.length_squared() > 1e-12, "threat repulsion uses 8-way candidate set")
+  _assert(d_flee.dot(Vector2.RIGHT) < 0.5, "flee intent moves away from threat ahead")
+
+
+func _test_seek_wall_filter_and_backtrack() -> void:
+  var he := Vector2(13.5, 30.5)
+  var obs := [{"position": Vector2(548.0, 500.0), "half_extents": Vector2(24.0, 40.0)}]
+  _assert(
+    Callable(_Motor, &"step_blocked_into_wall").call(
+      Vector2(500.0, 500.0), he, Vector2.RIGHT, 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
+    ),
+    "seek wall filter rejects step into static obstacle",
+  )
+  _assert(
+    not bool(
+      Callable(_Motor, &"step_blocked_into_wall").call(
+        Vector2(500.0, 500.0), he, Vector2.UP, 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
+      )
+    ),
+    "seek wall filter allows parallel slide along obstacle",
+  )
+  var back := float(
+    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector2.DOWN, Vector2.UP, 10.0)
+  )
+  _assert(back > 5.0, "seek backtrack penalizes reversing last move")
+  var forward := float(
+    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector2.UP, Vector2.UP, 10.0)
+  )
+  _assert(forward < 1e-6, "seek backtrack does not penalize continuing direction")
+  var wall_seek_ctx := {
+    "creature_position": Vector2(500.0, 500.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(1000.0, 1000.0),
+    "mobs": [],
+    "static_obstacles": obs,
+    "creature_half_extents": he,
+    "creature_facing": Vector2.RIGHT,
+    "creature_last_move_direction": Vector2.RIGHT,
+    "food_seek_targets": [Vector2(750.0, 500.0)],
+    "weight_seek_ready_food": 16.0,
+    "motor_has_active_goal": true,
+    "motor_seek_filter_wall_hits": true,
+    "weight_seek_backtrack": 14.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_expanding_explore_hint": 0.0,
+    "motor_intent_cost_chaos": 0.0,
+    "motor_tie_cost_epsilon": 0.45,
+    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_pick_tick": 0,
+    "motor_chaos_seed": 1,
+    "shuffle_tie_break": false,
+  }
+  var d_wall: Vector2 = _Motor.pick_best_move_intent(wall_seek_ctx)
+  _assert(not d_wall.is_equal_approx(Vector2.RIGHT), "seek skips into-wall direction toward food")
+  _assert(not d_wall.is_equal_approx(Vector2.LEFT), "seek backtrack penalty avoids immediate reversal")
 
 
 func _test_bush_proximity_pickup_adjacent() -> void:
@@ -2179,6 +2315,38 @@ func _test_ai_driver_helpers() -> void:
     bool(d.call("_predator_edge_chase_pin_active", ctx, motor_p, pred_pos, he)),
     "predator edge pin when prey is on playfield edge without static block",
   )
+  _assert(
+    bool(
+      d.call(
+        "_predator_prey_edge_pinned",
+        Vector2.ZERO,
+        bounds_max,
+        prey_pos,
+        motor_p,
+      )
+    ),
+    "prey on playfield edge counts as edge-pinned for chase shaping",
+  )
+  var approach_prey := Vector2(976.0, 300.0)
+  var approach_pred := Vector2(820.0, 300.0)
+  var approach_ctx := {
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": bounds_max,
+    "prey_seek_targets": [approach_prey],
+    "pursuit_targets": [],
+    "static_obstacles": [],
+    "weight_edge": 0.48,
+    "weight_interior": 0.65,
+  }
+  d.call("_predator_edge_chase_ctx_shaping", approach_ctx, motor_p, approach_pred, he)
+  _assert(
+    bool(approach_ctx.get("predator_edge_chase_active", false)),
+    "edge chase shaping arms when prey is corner-pinned even if predator is still mid-field",
+  )
+  _assert(
+    is_equal_approx(float(approach_ctx.get("weight_edge", 0.48)), 0.48 * 0.12),
+    "edge chase shaping softens explore edge repulsion toward cornered prey",
+  )
   var flee_dir: Vector2 = d.call(
     "_herbivore_bounded_flee_intent",
     Vector2(990.0, 300.0),
@@ -2302,6 +2470,134 @@ func _test_ai_driver_helpers() -> void:
     ),
     "geometry escape at corner picks a traversable cardinal",
   )
+  var rock_pos := Vector2(370.0, 405.0)
+  var shrub_pos := Vector2(540.0, 405.0)
+  var wedge_obs := [
+    {"position": rock_pos, "half_extents": Vector2(70.0, 70.0)},
+    {"position": shrub_pos, "half_extents": Vector2(50.0, 50.0)},
+  ]
+  var fox_wedge := Vector2(465.0, 405.0)
+  var prey_wedge := Vector2(465.0, 180.0)
+  var wedge_intent: Vector2 = d.call(
+    "_predator_obstructed_hunt_intent",
+    fox_wedge,
+    prey_wedge,
+    fox_he,
+    wedge_obs,
+    Vector2.ZERO,
+    bounds_max,
+    88,
+    3,
+    fox_m,
+  )
+  _assert(
+    wedge_intent.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        fox_wedge,
+        fox_he,
+        wedge_intent,
+        wedge_obs,
+        corner_min_clr,
+      )
+    ),
+    "obstructed hunt in rock-shrub wedge picks traversable escape",
+  )
+  _assert(
+    wedge_intent.dot(Vector2.DOWN) > 0.55,
+    "rock-shrub wedge escape backs out of pinch instead of chasing through gap",
+  )
+  var esc_wedge: Vector2 = d.call(
+    "_pick_stuck_escape_cardinal",
+    fox_wedge,
+    fox_he,
+    wedge_obs,
+    88,
+    4,
+    fox_m,
+  )
+  _assert(
+    esc_wedge.length_squared() > 1e-12
+    and esc_wedge.dot(Vector2.DOWN) > 0.55,
+    "geometry escape in rock-shrub wedge exits along corridor",
+  )
+  var south_bounds := Vector2(1000.0, 600.0)
+  var rock_south := Vector2(500.0, 400.0)
+  var shrub_nw := Vector2(420.0, 470.0)
+  var shrub_ne := Vector2(580.0, 470.0)
+  var pocket_obs := [
+    {"position": rock_south, "half_extents": Vector2(75.0, 75.0)},
+    {"position": shrub_nw, "half_extents": Vector2(50.0, 50.0)},
+    {"position": shrub_ne, "half_extents": Vector2(50.0, 50.0)},
+  ]
+  var fox_south := Vector2(500.0, 545.0)
+  var prey_ne := Vector2(650.0, 180.0)
+  var south_hunt_ctx := {
+    "prey_seek_targets": [prey_ne],
+    "pursuit_targets": [],
+    "static_obstacles": pocket_obs,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": south_bounds,
+  }
+  _assert(
+    not bool(
+      d.call(
+        "_predator_preyward_escape_open",
+        fox_south,
+        prey_ne,
+        fox_he,
+        pocket_obs,
+        Vector2.ZERO,
+        south_bounds,
+        corner_min_clr,
+      )
+    ),
+    "south-wall pocket blocks prey-closing cardinals while lateral slide stays open",
+  )
+  _assert(
+    bool(
+      d.call(
+        "_predator_obstructed_hunt_active",
+        south_hunt_ctx,
+        fox_m,
+        fox_south,
+        fox_he,
+        2,
+      )
+    ),
+    "obstructed hunt when prey NE but only wall-parallel steps are open",
+  )
+  var south_flank: Vector2 = d.call(
+    "_predator_obstructed_hunt_intent",
+    fox_south,
+    prey_ne,
+    fox_he,
+    pocket_obs,
+    Vector2.ZERO,
+    south_bounds,
+    91,
+    2,
+    fox_m,
+  )
+  _assert(
+    south_flank.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        fox_south,
+        fox_he,
+        south_flank,
+        pocket_obs,
+        corner_min_clr,
+      )
+    ),
+    "south-wall pocket flank picks a traversable step",
+  )
+  _assert(
+    absf(south_flank.dot(Vector2(1.0, 0.0))) > 0.85,
+    "south-wall pocket flank slides along wall instead of into rock-shrub pinch",
+  )
   var flee_corner: Vector2 = d.call(
     "_herbivore_bounded_flee_intent",
     Vector2(418.0, 238.0),
@@ -2351,6 +2647,41 @@ func _test_ai_driver_helpers() -> void:
       )
     ),
     "parallel west chase at wall is treated as edge stall",
+  )
+  var fox_edge_close := Vector2(920.0, 300.0)
+  var prey_wall := Vector2(990.0 - 13.5, 300.0)
+  var wall_hunt_ctx := {
+    "prey_seek_targets": [prey_wall],
+    "pursuit_targets": [],
+    "static_obstacles": [],
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": bounds_max,
+  }
+  _assert(
+    not bool(
+      d.call(
+        "_predator_obstructed_hunt_active",
+        wall_hunt_ctx,
+        fox_m,
+        fox_edge_close,
+        fox_he,
+        2,
+      )
+    ),
+    "edge-pinned prey does not trigger obstacle flank when only playfield OOB blocks closing",
+  )
+  var wall_close: Vector2 = d.call(
+    "_predator_edge_chase_intent",
+    fox_edge_close,
+    prey_wall,
+    fox_he,
+    Vector2.ZERO,
+    bounds_max,
+    42,
+  )
+  _assert(
+    wall_close.dot(Vector2.RIGHT) > 0.85,
+    "edge chase closes along playfield wall toward pinned prey",
   )
   var edge_ctx := {
     "prey_seek_targets": [Vector2(400.0, 550.0)],

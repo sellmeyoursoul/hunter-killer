@@ -1,0 +1,22 @@
+---
+description: Project_Docs draft markers and tier discipline
+globs: "Project_Docs/**"
+alwaysApply: false
+---
+
+# Project_Docs authoring
+
+**Applies when:** Writing or revising design docs agents implement from.
+
+## Embedded markers
+
+- `<<Question: …>>` — ask the agent for clarification on next read.
+- `<<Comment: …>>` — area needing author/agent resolution.
+
+## Tiers (see [PROJECT_DOC_INDEX.md](../../Project_Docs/PROJECT_DOC_INDEX.md))
+
+- **Draft_Features/** — work in progress; questions/comments expected.
+- **Definitive_Features/** — minimize drift vs code / `project.godot`.
+- **Completed_Features/** — snapshots; not default authority unless explicitly cited.
+
+When moving or adding docs, update **only** `PROJECT_DOC_INDEX.md` for path registry changes.

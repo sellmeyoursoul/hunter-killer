@@ -26,11 +26,11 @@
 
 | Scenario | Setup | Pass criteria (ship profile) |
 |----------|--------|------------------------------|
-| **1. Herbivore forage** | Rabbit pack on Player, calories &lt; ~80% need, ready bushes in cone | Moves toward ready food; avoids depleted bushes when mixed; seek weakens in preserve band (~90%+ calories). With **no plant in cone**, expanding cardinal hint (`herbivore_expanding_explore_mul` × pack hint) sweeps off walls; stuck escape uses `weight_stuck_escape_explore` (not predator prey-floor keys). |
-| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal patrol lock:** random cardinal or still for **`motor_no_goal_patrol_lock_sec`** (1 s); no rapid L/R flip. Chase when prey enters awareness. Memory expand only after first live sight. |
+| **1. Herbivore forage** | Rabbit pack on Player, calories &lt; ~80% need, ready bushes in cone | Moves toward ready food (including diagonals); avoids depleted bushes when mixed; seek weakens in preserve band (~90%+ calories). With **no plant in cone**, expanding **8-way** hint (`herbivore_expanding_explore_mul` × pack hint) sweeps off walls; stuck escape uses `weight_stuck_escape_explore` (not predator prey-floor keys). |
+| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal patrol lock:** random **8-way** direction or still for **`motor_no_goal_patrol_lock_sec`** (1 s); no rapid heading flip. Chase when prey enters awareness. Memory expand only after first live sight. |
 | **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs differ between runs (random lock re-rolls each ~1 s). Chase leg stays directed once prey in cone. |
 | **3. Jeopardy flee** | Fox enters rabbit **awareness cone** (not omni); panic flee only inside `herbivore_flee_panic_radius_px` footprint distance | No flee while fox is off-cone/behind; alert band keeps partial forage seek. |
-| **4. Hunt corner escape** | Fox chasing prey, pinned on shrub AABB | After one tick with intent but no displacement, hunt forces clearance cardinal or rotating explore cardinal (`predator_hunt_stuck_rotate_ticks`). |
+| **4. Hunt corner escape** | Fox chasing prey, pinned on shrub AABB | After one tick with intent but no displacement, hunt forces clearance **8-way** step or rotating explore heading (`predator_hunt_stuck_rotate_ticks`). |
 
 ## Automated verification (headless)
 

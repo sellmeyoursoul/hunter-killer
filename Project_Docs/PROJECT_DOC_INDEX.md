@@ -86,7 +86,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Completed_Features/AI_INSTRUCTIONS_PLAN.md](Completed_Features/AI_INSTRUCTIONS_PLAN.md) | Archived rules refactor. |
-| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see `.cursor/rules/focus/asset_management.md`. |
+| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see `.cursor/rules/assets.mdc` (stub: `focus/asset_management.md`). |
 | [Completed_Features/CREATURE_GOALS.md](Completed_Features/CREATURE_GOALS.md) | **Archived:** v1 Herbivore vs Carnivore duel (opposite spawns, dual HUD, N-creature AiDriver, manual playtest log). Snapshot — drift expected. |
 | [Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md](Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md) | Manual win/cause rows for CREATURE_GOALS balance tuning (companion to archived spec). |
 | [Completed_Features/DtC_AI_INT_PLAN.md](Completed_Features/DtC_AI_INT_PLAN.md) | Dodge-the-Creeps AI integration archive. |
@@ -94,7 +94,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md) | Fork / mirror workflow (historical policy). |
 | [Completed_Features/HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) | Hunger + bushes POC — **implemented**. |
 | [Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md) | Field / perception archive. |
-| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | Supplanted by `.cursor/rules/focus/logging_instr.md`. |
+| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | Supplanted by `.cursor/rules/logging.mdc` (stub: `focus/logging_instr.md`). |
 | [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) | Shipped motor avoidance (code may link here — **reference only** unless task cites this file). |
 | [Completed_Features/OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) | Object / grid avoidance archive. |
 | [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md) | **Completed** Project_Docs reorg (option B) — historical; active policy is **this index** + `AGENTS.md`. |
@@ -105,8 +105,8 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 | Location | Role |
 |----------|------|
-| [.cursor/rules/AGENTS.md](../.cursor/rules/AGENTS.md) | Agent scope; doc precedence. |
-| [.cursor/rules/focus/](../.cursor/rules/focus/) | Narrow policy extracts (logging, assets, agents). |
+| [.cursor/rules/core.mdc](../.cursor/rules/core.mdc) | Agent hub (`alwaysApply`); stub: [AGENTS.md](../.cursor/rules/AGENTS.md). |
+| [.cursor/rules/*.mdc](../.cursor/rules/) | Scoped rules: `gdscript`, `logging`, `agentic-runtime-ai`, `assets`, `project-docs`. Stubs: [focus/](../.cursor/rules/focus/). |
 
 ---
 
@@ -116,6 +116,6 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 2. **New draft:** Add a row under `Draft_Features/` when work starts; remove the row and delete the file when shipped (move to `Completed_Features/` or `Definitive_Features/` per **Promotion** above).
 3. **No draft stubs** for completed features — register `Completed_Features/` (or `Definitive_Features/`) here instead.
 4. **Enhancement backlog:** Link `Draft_Features/…` paths in [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) when tracking active work.
-5. **Coordinated migrations:** Folder or glob changes → update [AGENTS.md](../.cursor/rules/AGENTS.md) in the **same** change set.
+5. **Coordinated migrations:** Folder or glob changes → update [core.mdc](../.cursor/rules/core.mdc), affected `.mdc` rules, and [AGENTS.md](../.cursor/rules/AGENTS.md) stub in the **same** change set.
 6. **Link hygiene:** Use **relative** links from each file’s directory (`../` when crossing folders).
 7. **Duplication:** One canonical path per topic — e.g. mob avoidance: `Completed_Features/MOB_AVOIDANCE_PLAN.md` only, not a duplicate in `Draft_Features/`.

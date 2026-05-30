@@ -1,18 +1,23 @@
-## Pure cardinal motor: score predicted positions and pick lowest-cost intent.
-## Params passed via [param ctx] dictionary — see [Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md](../../Project_Docs/Completed_Features/MOB_AVOIDANCE_PLAN.md).
+## Pure 8-way motor: score predicted positions and pick lowest-cost intent.
+## Params passed via [param ctx] dictionary — see [Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md](../../Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md).
 ## Interior grid costs ([EnvironmentGridBaked]) are optional and gated by [code]ctx.interior_env_motor_active[/code] (OBJECT §8.2 — ENGINE-only nudges).
 class_name CardinalAvoidance
 extends Object
 
 const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
+const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
-## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false.
+## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector2] = [
   Vector2(0.0, -1.0),
+  Vector2(0.7071067811865475, -0.7071067811865475),
   Vector2(1.0, 0.0),
+  Vector2(0.7071067811865475, 0.7071067811865475),
   Vector2(0.0, 1.0),
+  Vector2(-0.7071067811865475, 0.7071067811865475),
   Vector2(-1.0, 0.0),
+  Vector2(-0.7071067811865475, -0.7071067811865475),
   Vector2.ZERO,
 ]
 
@@ -44,7 +49,7 @@ static func footprint_static_clearance(creature_pos: Vector2, he_xy: Vector2, st
   return best_clear
 
 
-## True when a unit cardinal step would leave the footprint pinched against static geometry.
+## True when a unit step in [param direction] would leave the footprint pinched against static geometry.
 static func cardinal_step_blocked(
   creature_pos: Vector2,
   he_xy: Vector2,
@@ -57,6 +62,152 @@ static func cardinal_step_blocked(
   var step := motor_cardinal_probe_step(he_xy)
   var probe_pos := creature_pos + direction.normalized() * step
   return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance_px
+
+
+## Stricter blocked test for stuck / geometry escape: rejects far-probe-only openings and steps that tighten the pinch.
+static func cardinal_step_blocked_for_escape(
+  creature_pos: Vector2,
+  he_xy: Vector2,
+  direction: Vector2,
+  static_obs: Array,
+  min_clearance_px: float,
+) -> bool:
+  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance_px):
+    return true
+  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance_px <= 0.0:
+    return false
+  var clr_now := footprint_static_clearance(creature_pos, he_xy, static_obs)
+  var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, 10.0)
+  var near_pos := creature_pos + direction.normalized() * near_step
+  var clr_near := footprint_static_clearance(near_pos, he_xy, static_obs)
+  if clr_near < min_clearance_px:
+    return true
+  if clr_near < clr_now - 0.35:
+    return true
+  return false
+
+
+## Unit normal from the nearest static AABB toward [param creature_pos] (escape / away-from-wall direction).
+static func closest_static_escape_normal(
+  creature_pos: Vector2,
+  he_xy: Vector2,
+  static_obs: Array,
+) -> Vector2:
+  var best_dist := INF
+  var best_n := Vector2.ZERO
+  for ob in static_obs:
+    if typeof(ob) != TYPE_DICTIONARY:
+      continue
+    var op: Vector2 = ob.get("position", Vector2.ZERO)
+    var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+    var ohe := Vector2.ZERO
+    if typeof(ohe_raw) == TYPE_VECTOR2:
+      ohe = ohe_raw as Vector2
+    if ohe.x <= 0.0 or ohe.y <= 0.0:
+      continue
+    var closest_c := closest_point_on_aabb(creature_pos, he_xy, op)
+    var closest_o := closest_point_on_aabb(op, ohe, creature_pos)
+    var delta := closest_c - closest_o
+    var dist := delta.length()
+    if dist < best_dist and dist > 1e-6:
+      best_dist = dist
+      best_n = delta / dist
+  return best_n
+
+
+## True when a [param step_length] step along [param direction] drives into a playfield edge (tangential slide allowed).
+static func step_blocked_into_playfield_wall(
+  creature_pos: Vector2,
+  half: Vector2,
+  direction: Vector2,
+  step_length: float,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  min_clearance_px: float,
+) -> bool:
+  if direction.length_squared() < 1e-12 or step_length <= 0.0:
+    return false
+  if half.x <= 0.0 or half.y <= 0.0:
+    return false
+  var u := direction.normalized()
+  var predicted := creature_pos + u * step_length
+  if _footprint_outside_bounds(predicted, half, bounds_min, bounds_max):
+    return true
+  var left_now := creature_pos.x - half.x - bounds_min.x
+  var right_now := bounds_max.x - (creature_pos.x + half.x)
+  var top_now := creature_pos.y - half.y - bounds_min.y
+  var bot_now := bounds_max.y - (creature_pos.y + half.y)
+  var left_pred := predicted.x - half.x - bounds_min.x
+  var right_pred := bounds_max.x - (predicted.x + half.x)
+  var top_pred := predicted.y - half.y - bounds_min.y
+  var bot_pred := bounds_max.y - (predicted.y + half.y)
+  const AXIS_EPS := 0.12
+  const CLOSURE_EPS := 0.25
+  if u.x < -AXIS_EPS and left_pred < min_clearance_px and left_pred < left_now - CLOSURE_EPS:
+    return true
+  if u.x > AXIS_EPS and right_pred < min_clearance_px and right_pred < right_now - CLOSURE_EPS:
+    return true
+  if u.y < -AXIS_EPS and top_pred < min_clearance_px and top_pred < top_now - CLOSURE_EPS:
+    return true
+  if u.y > AXIS_EPS and bot_pred < min_clearance_px and bot_pred < bot_now - CLOSURE_EPS:
+    return true
+  return false
+
+
+## True when a [param step_length] step along [param direction] closes on static geometry head-on (parallel slide allowed).
+static func step_blocked_into_static_wall(
+  creature_pos: Vector2,
+  half: Vector2,
+  direction: Vector2,
+  step_length: float,
+  static_obs: Array,
+  min_clearance_px: float,
+) -> bool:
+  if direction.length_squared() < 1e-12 or step_length <= 0.0 or static_obs.is_empty():
+    return false
+  var u := direction.normalized()
+  var predicted := creature_pos + u * step_length
+  var clr_now := footprint_static_clearance(creature_pos, half, static_obs)
+  var clr_pred := footprint_static_clearance(predicted, half, static_obs)
+  if clr_pred >= min_clearance_px:
+    return false
+  var escape_n := closest_static_escape_normal(creature_pos, half, static_obs)
+  if escape_n.length_squared() < 1e-12:
+    return clr_pred < clr_now - 0.25
+  var into_n := -escape_n
+  const INTO_DOT := 0.18
+  if u.dot(into_n) > INTO_DOT and clr_pred < clr_now + 0.35:
+    return true
+  return false
+
+
+## Seek filter: reject lookahead steps that hit playfield or static walls; tangential motion near walls stays eligible.
+static func step_blocked_into_wall(
+  creature_pos: Vector2,
+  half: Vector2,
+  direction: Vector2,
+  step_length: float,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  min_clearance_px: float,
+) -> bool:
+  if min_clearance_px <= 0.0 or direction.length_squared() < 1e-12:
+    return false
+  if step_blocked_into_playfield_wall(
+    creature_pos, half, direction, step_length, bounds_min, bounds_max, min_clearance_px
+  ):
+    return true
+  return step_blocked_into_static_wall(
+    creature_pos, half, direction, step_length, static_obs, min_clearance_px
+  )
+
+
+## Penalize reversing [param direction] against recent travel during seek ([param weight] 0 disables).
+static func seek_backtrack_step_cost(direction: Vector2, last_move: Vector2, weight: float) -> float:
+  if weight <= 1e-8 or direction.length_squared() < 1e-12 or last_move.length_squared() < 1e-12:
+    return 0.0
+  return weight * maxf(0.0, -direction.normalized().dot(last_move.normalized()))
 
 
 ## First direction in [param order] that also appears in [param tied_dirs] (deterministic plateau tie-break).
@@ -116,9 +267,9 @@ static func effective_awareness_reach(
   return reach
 
 
-## Builds evaluation order: fixed [member _tie_order] or **shuffled cardinals** + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
+## Builds evaluation order: fixed [member _tie_order] or **shuffled** 8-way directions + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
 ## Params:
-## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code] (force [member _tie_order]), [code]tie_shuffle_seed[/code], [code]creature_position[/code].
+## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code], [code]tie_shuffle_seed[/code], [code]creature_position[/code].
 ## Returns:
 ## - Array of unit directions ending with [code]Vector2.ZERO[/code].
 static func evaluation_order_from_ctx(ctx: Dictionary) -> Array[Vector2]:
@@ -131,13 +282,10 @@ static func evaluation_order_from_ctx(ctx: Dictionary) -> Array[Vector2]:
     rng_seed = 1
   var rng := RandomNumberGenerator.new()
   rng.seed = rng_seed
-  var dirs: Array[Vector2] = [
-    Vector2(0.0, -1.0),
-    Vector2(1.0, 0.0),
-    Vector2(0.0, 1.0),
-    Vector2(-1.0, 0.0),
-  ]
-  var i := 3
+  var dirs: Array[Vector2] = []
+  for d in _EightWay.DIRECTIONS:
+    dirs.append(d)
+  var i := dirs.size() - 1
   while i > 0:
     var j := rng.randi_range(0, i)
     var tmp: Vector2 = dirs[i]
@@ -189,7 +337,7 @@ static func minimum_footprint_point_clearance(center: Vector2, half: Vector2, po
 
 
 ## Linear pull toward nearest [param food_targets] world point; disabled when any imminent mob is within [param imminent_mob_radius] of [param predicted] footprint. Use [method effective_food_seek_weight] to disable the whole tick from the creature's current footprint.
-## **Goal-target memory (planned):** [param food_targets] should include only **precise-tier** remembered positions (within [code]goal_memory_precise_radius_px[/code] stationary envelope **or** the moving last-known disk per CREATURE_MEMORY). Coarse 8-way memories (N, NE, …) are egocentric and change as the creature moves — implement as a separate weak cardinal bias or perception field ([code]weight_coarse_sector_goal_bias[/code]), not as fake [code]Vector2[/code] targets here.
+## **Goal-target memory (planned):** [param food_targets] should include only **precise-tier** remembered positions (within [code]goal_memory_precise_radius_px[/code] stationary envelope **or** the moving last-known disk per CREATURE_MEMORY). Coarse 8-way memories (N, NE, …) are egocentric — [code]weight_coarse_sector_goal_bias[/code] aligns with matching 8-way steps; do not append stale [code]Vector2[/code] targets here.
 ## Params:
 ## - predicted: Candidate creature center after lookahead.
 ## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
@@ -346,11 +494,11 @@ static func interior_env_cost_at(
   return 0.0
 
 
-## Picks unit intent in tie-order preference among cardinals + idle.
+## Picks unit intent in tie-order preference among 8-way directions + idle.
 ## Params:
-## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]motor_intent_cost_chaos[/code] (uniform jitter ± this amount per candidate cost; breaks symmetric plateaus; 0 disables), [code]motor_chaos_seed[/code] ([code]tie_shuffle_seed[/code] XOR body id typical), [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the cardinal matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty), [code]expanding_explore_hint[/code] + [code]weight_expanding_explore_hint[/code] (no ready-food: bias toward expanding cardinal sweep — see [code]expanding_cardinal_explore.gd[/code] [code]Explore[/code]).
+## - ctx: Dictionary with keys per motor plan (`creature_position`, `bounds_max`, `mobs`, …). Optional: [code]shuffle_tie_break[/code], [code]tie_shuffle_seed[/code], [code]weight_interior[/code], [code]weight_dist_sq[/code], [code]weight_edge[/code], [code]deterministic_tie_order[/code], [code]motor_intent_cost_chaos[/code] (uniform jitter ± this amount per candidate cost; breaks symmetric plateaus; 0 disables), [code]motor_chaos_seed[/code] ([code]tie_shuffle_seed[/code] XOR body id typical), [code]weight_explore_idle_penalty[/code], [code]weight_explore_turn_bias[/code] (no ready-food targets and no high mob threat: penalize idle; [code]weight_explore_turn_bias[/code] lowers cost only for the step matching [code]creature_facing[/code] / last move, not the reverse), [code]explore_trail_centers[/code] + [code]weight_explore_trail_repulsion[/code] (retread penalty), [code]expanding_explore_hint[/code] + [code]weight_expanding_explore_hint[/code] (no ready-food: bias toward expanding 8-way sweep — see [code]expanding_cardinal_explore.gd[/code] [code]Explore[/code]).
 ## Returns:
-## - Normalized cardinal `Vector2` or `Vector2.ZERO`.
+## - Normalized unit direction `Vector2` or `Vector2.ZERO`.
 ## Usage:
 ## - `CardinalAvoidance.pick_best_move_intent({ "creature_position": p, "bounds_max": sz, "mobs": [...] })`
 static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
@@ -441,6 +589,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
     or not prey_seek_targets.is_empty()
     or not pursuit_targets.is_empty()
   )
+  var hunt_active := not prey_seek_targets.is_empty() or not pursuit_targets.is_empty()
   var has_active_goal := bool(ctx.get("motor_has_active_goal", goal_in_sight))
   var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
   var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
@@ -449,19 +598,41 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   filter_blocked_cardinals = (
     filter_blocked_cardinals or (not has_active_goal)
   ) and block_min_clr > 0.0 and not static_obs.is_empty()
+  var filter_seek_wall_hits := bool(ctx.get("motor_seek_filter_wall_hits", false))
+  var w_seek_backtrack := float(ctx.get("weight_seek_backtrack", 0.0))
+  var last_move_raw: Variant = ctx.get("creature_last_move_direction", facing_v)
+  var last_move_v: Vector2 = facing_v
+  if typeof(last_move_raw) == TYPE_VECTOR2 and (last_move_raw as Vector2).length_squared() > 1e-12:
+    last_move_v = (last_move_raw as Vector2).normalized()
+  var step_len := speed * lookahead
 
   var order := evaluation_order_from_ctx(ctx)
   var best_d := Vector2.ZERO
   var best_cost := INF
   var scored: Array = []
   for d in order:
+    if d.length_squared() > 1e-14:
+      if (
+        filter_seek_wall_hits
+        and step_blocked_into_wall(
+          creature_pos,
+          footprint_half,
+          d,
+          step_len,
+          static_obs,
+          bounds_min,
+          bounds_max,
+          block_min_clr,
+        )
+      ):
+        continue
     if (
       filter_blocked_cardinals
       and d.length_squared() > 1e-14
       and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
     ):
       continue
-    var step := d * speed * lookahead
+    var step := d.normalized() * step_len if d.length_squared() > 1e-14 else Vector2.ZERO
     var predicted := creature_pos + step
     var cost := cost_at_prediction(
       predicted,
@@ -506,9 +677,11 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       w_seek_prey_raw,
       forward_cone_only,
     )
-    if w_idle_explore > 0.0 and allow_explore:
-      if d.length_squared() < 1e-14:
+    if d.length_squared() < 1e-14:
+      if w_idle_explore > 0.0 and allow_explore:
         cost += w_idle_explore
+      elif hunt_active:
+        cost += _hunt_idle_penalty(ctx, w_seek_prey_raw, w_idle_explore)
     if w_turn_explore > 0.0 and allow_explore and d.length_squared() > 1e-14:
       var lm := facing_v
       if lm.length_squared() > 1e-12:
@@ -528,6 +701,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
     cost += believed_goal_step_cost(d, ctx)
+    if w_seek_backtrack > 1e-8 and filter_seek_wall_hits and d.length_squared() > 1e-14:
+      cost += seek_backtrack_step_cost(d, last_move_v, w_seek_backtrack)
     if chaos_amp > 1e-10 and d.length_squared() > 1e-14:
       var dir_rng := RandomNumberGenerator.new()
       var dir_seed := chaos_seed_base
@@ -561,7 +736,48 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       return first_tied_dir_in_eval_order(tied_dirs, order)
     if tied_dirs.size() == 1:
       return tied_dirs[0]
+  if hunt_active and best_d.length_squared() < 1e-14:
+    return _best_non_idle_from_scored(scored, creature_pos, footprint_half, static_obs, block_min_clr, filter_blocked_cardinals)
   return best_d
+
+
+## Penalizes staying still while prey or pursuit targets are present (explore idle penalty is off during chase).
+static func _hunt_idle_penalty(ctx: Dictionary, w_seek_prey: float, w_idle_explore: float) -> float:
+  var explicit := float(ctx.get("weight_hunt_idle_penalty", 0.0))
+  if explicit > 1e-8:
+    return explicit
+  return maxf(maxf(w_idle_explore, w_seek_prey * 0.5), 40.0)
+
+
+## When every scored direction ties on idle, pick the lowest-cost cardinal step instead of stopping.
+static func _best_non_idle_from_scored(
+  scored: Array,
+  creature_pos: Vector2,
+  footprint_half: Vector2,
+  static_obs: Array,
+  block_min_clr: float,
+  filter_blocked_cardinals: bool,
+) -> Vector2:
+  var alt_cost := INF
+  var alt_d := Vector2.ZERO
+  for item in scored:
+    if typeof(item) != TYPE_DICTIONARY:
+      continue
+    var c_cost := float((item as Dictionary).get("cost", INF))
+    var c_dir: Variant = (item as Dictionary).get("dir", Vector2.ZERO)
+    if typeof(c_dir) != TYPE_VECTOR2:
+      continue
+    var dir_v := c_dir as Vector2
+    if dir_v.length_squared() < 1e-14:
+      continue
+    if filter_blocked_cardinals and cardinal_step_blocked(
+      creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+    ):
+      continue
+    if c_cost < alt_cost:
+      alt_cost = c_cost
+      alt_d = dir_v
+  return alt_d
 
 
 ## Additive habitual-goal costs per cardinal step ([CREATURE_MEMORY.md §14.1](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)).

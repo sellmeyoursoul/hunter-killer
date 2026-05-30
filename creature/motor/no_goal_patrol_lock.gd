@@ -1,13 +1,7 @@
-## Holds a random cardinal or idle intent while no motor goal is active ([Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1).
+## Holds a random 8-way direction or idle intent while no motor goal is active ([Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1).
 extends Object
 
-const _OPTIONS: Array[Vector2] = [
-  Vector2.RIGHT,
-  Vector2.LEFT,
-  Vector2.UP,
-  Vector2.DOWN,
-  Vector2.ZERO,
-]
+const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
 
 ## Clears patrol lock state (driver calls when a goal surfaces or scripted motor resets).
@@ -20,9 +14,9 @@ static func reset_state(io_state: Dictionary) -> void:
 ## - io_state: Per-body mutable dict; stores [code]locked_intent[/code], [code]locked_until_ms[/code], [code]reroll_count[/code].
 ## - lock_sec: Wall-clock hold duration before a new random pick (seconds).
 ## - rng_seed: Mixed with [code]reroll_count[/code] for deterministic re-roll seeds.
-## - is_blocked: Optional [code]Callable(Vector2) -> bool[/code]; when valid, only unblocked cardinals / idle are eligible.
+## - is_blocked: Optional [code]Callable(Vector2) -> bool[/code]; when valid, only unblocked directions / idle are eligible.
 ## Returns:
-## - Unit cardinal direction or [code]Vector2.ZERO[/code] (stay still).
+## - Unit direction or [code]Vector2.ZERO[/code] (stay still).
 static func pick_or_hold(
   io_state: Dictionary, lock_sec: float, rng_seed: int, is_blocked: Callable = Callable()
 ) -> Vector2:
@@ -44,10 +38,12 @@ static func pick_or_hold(
 
 ## Random patrol option, optionally excluding directions [param is_blocked] marks true.
 static func _pick_random_unblocked(rng: RandomNumberGenerator, is_blocked: Callable) -> Vector2:
+  var options: Array[Vector2] = _EightWay.DIRECTIONS.duplicate()
+  options.append(Vector2.ZERO)
   if not is_blocked.is_valid():
-    return _OPTIONS[rng.randi_range(0, _OPTIONS.size() - 1)]
+    return options[rng.randi_range(0, options.size() - 1)]
   var pool: Array[Vector2] = []
-  for opt in _OPTIONS:
+  for opt in options:
     if not bool(is_blocked.call(opt)):
       pool.append(opt)
   if pool.is_empty():

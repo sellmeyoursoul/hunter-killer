@@ -184,7 +184,7 @@ Enter **Precise** when the creature holds a fresh belief **and** distance-from-b
 
 **Condition:** remembered, **outside** precise envelope, **still within** **`goal_memory_forget_radius_px`** (or LRU / global policies **not superseding** TTL below).
 
-**Representation:** unchanged egocentric model — **8-way sector recomputed each tick** from **`last_world_pos − creature_pos`**: **N, NE, E, SE, S, SW, W, NW** (**45°** sectors; **`+Y = N`** matching `ai_driver` notes). Weak cardinal bias / LLM cues — **not** a bogus map-fixed compass.
+| **Representation:** unchanged egocentric model — **8-way sector recomputed each tick** from **`last_world_pos − creature_pos`**: **N, NE, E, SE, S, SW, W, NW** (**45°** sectors; **`+Y = N`** matching `ai_driver` notes). Weak **8-way step** bias / LLM cues — **not** a bogus map-fixed compass.
 
 ### 5.3 Coarse → forgotten (TTL in coarse state)
 
@@ -344,7 +344,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 | `goal_memory_ttl_sec` | **15** | Forget since last **live** observation |
 | `goal_memory_max_entries` | **25** | LRU cap; eviction = lowest **`merge_use_count`**, tie least recently merged |
 | `weight_seek_remembered_goal` | **8.0** | Scales cardinal **seek pull** toward **precise** remembered bush positions (merged into `food_seek_targets`). **~0.5×** default **`weight_seek_ready_food`** (16): remembered targets nudge direction but **weaker than live in-cone food**. **Raise** → chases stale GPS harder (may ignore fresher live cues). **Lower** → memory barely affects pathing. |
-| `weight_coarse_sector_goal_bias` | **3.0** | Scales **`sector_weights[s]`** in cardinal cost (**§14.1**). Multiplies egocentric 8-way bias from **coarse** beliefs only. **0** = off. **Raise** → stronger weak turn toward “food was that way” without exact coords. Keep **well below** live seek weights so coarse bias stays a hint. |
+| `weight_coarse_sector_goal_bias` | **3.0** | Scales **`sector_weights[s]`** in motor cost (**§14.1**). Multiplies egocentric 8-way bias from **coarse** beliefs only. **0** = off. **Raise** → stronger weak turn toward “food was that way” without exact coords. Keep **well below** live seek weights so coarse bias stays a hint. |
 
 **Wire defaults:** Uncomment / set in **`default_creature_motor_params()`** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) (**GB-10**).
 
@@ -550,7 +550,7 @@ effective_pull_weight = weight_believed_goal_pull * replay_weight
 
 **Hotspot / escalate (unchanged roles):** **Hotspot** = priors within **`believed_goal_hotspot_near_radius_px`** (**250 px** default). **Escalate** = creature has **no** qualifying prior within hotspot but is still within **`believed_goal_seek_escalate_radius_px`** (**1000 px** default) → adjust **`weight_seek_ready_food`** (or future **`weight_seek_goal`**) and **Preserve/Find** band per **[CREATURE_MOVEMENT_V2 §A.3.1](CREATURE_MOVEMENT_V2.md)** — **not** the vector formula above.
 
-**Cardinal scorer (phase-1 — additive costs, [CREATURE_MOVEMENT_V2 §A.3.1](CREATURE_MOVEMENT_V2.md)):** Per candidate cardinal step **`d`** (unit direction from creature):
+**Motor scorer (phase-1 — additive costs, [CREATURE_MOVEMENT_V2 §A.3.1](CREATURE_MOVEMENT_V2.md)):** Per candidate **8-way** step **`d`** (unit direction from creature):
 
 ```text
 cost += -dot(d, pull_dir) * effective_pull_weight * pull_mag    // attraction
@@ -558,7 +558,7 @@ for s in 0..7:
   cost += -sector_weights[s] * align(d, sector_s) * weight_coarse_sector_goal_bias
 ```
 
-**`align(d, sector_s)` (resolved — sector-arc membership):** weight **1.0** if cardinal step **`d`** falls in egocentric sector **`s`**'s **45°** arc (**N…NW**, **`+Y = N`**), else **0** — not a continuous dot product.
+**`align(d, sector_s)` (resolved — sector-arc membership):** weight **1.0** if step **`d`** falls in egocentric sector **`s`**'s **45°** arc (**N…NW**, **`+Y = N`**), else **0** — not a continuous dot product.
 
 **Implementation hooks:** `goal_source_memory.project_believed_goal_bias(...)`; [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) reads **`believed_goal_source_bias`** + **`weight_believed_goal_pull`** from **`MotorContext`**.
 

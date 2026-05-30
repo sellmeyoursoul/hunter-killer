@@ -1,6 +1,8 @@
 extends RefCounted
 class_name CarnivorePursuit
-## Cardinal pursuit toward nearest prey position with playfield OOB penalty (same frame as [CardinalAvoidance]).
+## 8-way pursuit toward nearest prey position with playfield OOB penalty (same frame as [CardinalAvoidance]).
+
+const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
 
 ## Picks a unit direction toward the closest prey, or idle when none.
@@ -24,18 +26,4 @@ static func pick_pursuit_intent(ctx: Dictionary) -> Vector2:
   var delta := best - pos
   if delta.length_squared() < 1.0:
     return Vector2.ZERO
-  var raw := delta.normalized()
-  var cardinals: Array[Vector2] = [
-    Vector2(0.0, -1.0),
-    Vector2(1.0, 0.0),
-    Vector2(0.0, 1.0),
-    Vector2(-1.0, 0.0),
-  ]
-  var best_dir := Vector2.ZERO
-  var best_dot := -2.0
-  for d in cardinals:
-    var dot := raw.dot(d)
-    if dot > best_dot:
-      best_dot = dot
-      best_dir = d
-  return best_dir
+  return _EightWay.best_aligned_to(delta)

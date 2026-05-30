@@ -1,0 +1,17 @@
+---
+description: OLog/print hygiene — PII, volume, line cap, levels
+globs: "oLog_lib/**,AI_int_lib/**,game_config.gd,**/olog_safe.gd"
+alwaysApply: false
+---
+
+# OLog hygiene
+
+- **PII/secrets/tokens:** never; paths: redact home username when feasible.
+- **Volume:** no full prompts/grids/binary; use counts/summaries/short excerpts; large debug only behind dev flags + truncation.
+- **Length:** respect `MAX_LOG_LINE_CHARS` in `oLog_lib/olog.gd` (`_truncate_line`); suffix ` [truncated]`.
+
+## Levels
+
+- `error()` — always; failures and violated assumptions.
+- `info()` — lifecycle / major state (subsystem start/stop).
+- `debug()` — branch tracing when needed; do not flood logs.
