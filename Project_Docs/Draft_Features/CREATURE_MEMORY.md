@@ -401,7 +401,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 - [x] Coarse TTL (**§5.3**) + re-awareness promotion (**§5.4**) covered by deterministic tests **if feasible** (`_test_goal_belief_coarse_ttl`).  
 - [x] **`goal_*`** / **`believed_goal_*`** keys documented in **`game_config_merge.gd`** and pack authoring when wired (**§10 — no deprecated `food_memory_*` in active codepaths**).  
 - [x] **`SeekCandidate` unify** regression check post-memory — predator/prey ingestion **already** routed through single list (**§A.2**).  
-- [ ] Predator locomotion prerequisites before claiming predator memory parity (**§4 bullet 2**) — **deferred** (herbivore MVP).  
+- [x] Predator locomotion prerequisites before claiming predator memory parity (**§4 bullet 2**) — prey meal + movement calorie burn wired (`mob.gd`, `player.gd`, `creature_motor` keys).  
 - [ ] Future LoS / stealth alignment notes trace to ENVIRONMENT backlog + **`shelter`** `GoalKind` — **deferred**.  
 - [x] **Learning layer (§2.1 / §14):** **`LocalePriorMap`** MVP = **full row stats** (**§4**, **§14.2**) → **`believed_goal_*`** façade; write gates + projection **§14.1** + threat scope **§14.3**.
 
@@ -672,6 +672,7 @@ for s in 0..7:
 
 | Date | Change |
 |------|--------|
+| 2026-05-25 | **Phase 2 integration:** `_goal_belief_*` + per-body `GoalSourceMemoryStore` wired in `ai_driver.gd`; `notify_food_consumption_outcome` / jeopardy-clear salient writes; `goal_belief_memory.gd` helper. Phase 1 movement foundations closed. |
 | 2026-05-23 | **§5.4 / §8.2:** re-awareness zone = **CREATURE_MOVEMENT_V2 §E.1** hybrid radius + forward cone (default not cone-only). |
 | 2026-05-20 | **Tier B closure:** §2.1.1 nearest-eligible consult; §10 defaults (`locale_prior_pull_w_norm` **3.0**, `locale_prior_ewma_alpha` **0.15**, `locale_prior_write_blend` **0.35**, `weight_believed_goal_pull` **6.4**, `salient_write_max_per_sec` **100**); §14.1 sector-arc **`align`**; §14.2 write blend; §14.4 failed-forage deferred; §7.4 Godot 3D ray future. |
 | 2026-05-20 | **Tier A closure:** phase-1 scope box; **§2.1.2** `avoid_hostiles` compositor; **§5.5** `_goal_belief` implementation; **§10** defaults + tuning; **§14** multi-row + **`pole_facet_tag`**; **§14.4** outcome/hooks; AH-7 reversal; mid-band eat write; shelter write deferred. |

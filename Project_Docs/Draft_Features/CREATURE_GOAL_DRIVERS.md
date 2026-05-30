@@ -764,6 +764,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Date | Change |
 |------|--------|
+| 2026-05-25 | **Phase 2:** salient emitter + locale priors integrated at runtime (`ai_driver` → `goal_source_memory`); Phase 1 contracts unchanged (trait Tier-2 stub, tactic classifiers optional). |
 | 2026-05-23 | **§2 / §6:** live **`SeekCandidate`** / threat ingest cross-link **CREATURE_MOVEMENT_V2 §E.1** (hybrid radius + forward cone awareness). |
 | 2026-05-20 | **Tier A:** starvation exception **§3**; **§4.1** `avoid_hostiles` compositor + shelter stub writes; **§5.1.1** `open_forage`, **`pole_facet_tag`** on row; **§5.1.5** escape reversal (AH-7a–c). |
 | 2026-05-19 | **§3.3.1 / §5.1.2–§5.1.4:** trait Tier-2 **stub** + **`trait_tier2_mapper.gd`** urgency channels; replay keys in **`default_creature_motor_params()`**; **`external_urgency`** bitmask + linear boost; phase-1 **`current_fit`** classifier rules; Action 3 disagree **dormant**. |

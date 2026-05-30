@@ -366,7 +366,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 - [x] **Unified ENGINE movement baseline** (**§G.2** / duel smoke) green **before** shipping persistent memory merge that mutates **`SeekCandidate`**.
 
-- [ ] Prerequisites **predator calorie + locomotion calorie cost** before claiming pred memory parity ([CREATURE_MEMORY.md §13](CREATURE_MEMORY.md)) — **deferred** (herbivore MVP).
+- [x] Prerequisites **predator calorie + locomotion calorie cost** before claiming pred memory parity ([CREATURE_MEMORY.md §13](CREATURE_MEMORY.md)).
 
 - [x] When memory lands: precise merge respects **consumable_now** freeze; **`goal_memory_coarse_ttl_sec`** enforced; **no** coarse phantom **`Vector2` seek**; **re-tune** if motor quality regresses (**§B.3**).
 
@@ -376,7 +376,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 - [x] **`find_food` `context_hash`** per **[CREATURE_MEMORY.md §2.1.1](CREATURE_MEMORY.md)** (`explore_coverage_cell_px`, world-zero origin, food **`SeekCandidate`** anchor, OOB reject write).
 
-- [ ] **`MotorContext` tactic classifier flags** (**§A.2.1**) populated when detectors exist; **`goal_source_memory.gd`** salient path per **[CREATURE_GOAL_DRIVERS.md §5.1.1](CREATURE_GOAL_DRIVERS.md)** — **stub false** until detectors ship; salient path uses default modalities.
+- [x] **`MotorContext` tactic classifier flags** (**§A.2.1**) — default modalities when classifiers stub false; **`goal_source_memory.gd`** salient path live via **`ai_driver`** outcome hooks.
 
 - [x] **`replay_weight` multiplicative** on **`weight_believed_goal_pull`** / seek when consult hash matches — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (not additive cardinal fork).
 
@@ -397,6 +397,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-05-25 | **Phase 2:** `derive_dominant_tier2_leaf` + `believed_goal_source_bias` projection wired in `ai_driver`; Phase 1 ENGINE movement foundations marked complete. |
 | 2026-05-23 | **§A.3.1:** no-goal **patrol lock** — random cardinal + idle, **`motor_no_goal_patrol_lock_sec`** (1s duel default), goal interrupt. |
 | 2026-05-23 | **§E.1 Resolved:** zone of awareness = **radius disk + forward cone extension** (default `awareness_forward_cone_only = false`); duel packs + memory re-awareness cross-link. |
 | 2026-05-20 | **Tier B closure:** §A.1 dev=aberrant extremes / ship=stub; B-10 ship executable CI deferred; §A.2 **`AiDriver`** unified builder; §D/E LoS phase-1 out of scope; §G.1/G.2 checklist aligned. |

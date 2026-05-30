@@ -25,6 +25,7 @@ var current_velocity: Vector2 = Vector2.ZERO
 var last_move_direction: Vector2 = Vector2.RIGHT
 var _food_intake_policy: Resource
 var _wall_slide_pick: RefCounted
+var _wall_slide_away_hint: Vector2 = Vector2.ZERO
 
 enum ControlMode {
   HUMAN,
@@ -101,8 +102,20 @@ func _refresh_calorie_burn_params() -> void:
     _calorie_cost_per_px_moved = float(cm.get("calorie_cost_per_px_moved", _calorie_cost_per_px_moved))
 
 
-func add_calories_from_food(amount: int) -> void:
+func add_calories_from_food(amount: int, food_anchor: Vector2 = Vector2.ZERO) -> void:
   current_calories = _CreatureVitalsMath.add_food_clamped(current_calories, amount, caloric_needs)
+  if food_anchor == Vector2.ZERO:
+    return
+  var ad := get_node_or_null("/root/AiDriver")
+  if ad == null or not ad.has_method(&"notify_food_consumption_outcome"):
+    return
+  var cneed_f := maxf(1.0, float(caloric_needs))
+  var seek_ceil := 0.80
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_creature_motor_params"):
+    seek_ceil = float(gc.get_creature_motor_params().get("seek_priority_food_ceiling", seek_ceil))
+  var insufficient := current_calories / cneed_f < seek_ceil
+  ad.call(&"notify_food_consumption_outcome", self, food_anchor, insufficient)
 
 
 func was_defeated_by_starvation() -> bool:
@@ -197,6 +210,8 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   var n := normal_v as Vector2
   if n.length_squared() < 1e-12:
     return inc
+  if _wall_slide_away_hint.length_squared() > 1e-12:
+    return _wall_slide_pick.pick_tangent_away_from(inc, n, _wall_slide_away_hint)
   return _wall_slide_pick.pick_tangent_closer(inc, n)
 
 
@@ -277,3 +292,12 @@ func set_control_mode(mode: ControlMode) -> void:
 
 func set_creature_move_intent(dir: Vector2) -> void:
   creature_move_intent = dir.normalized() if dir.length() > 0.0 else Vector2.ZERO
+
+
+## Biases [method _engine_heading_with_wall_slide] during flee/jeopardy so tangents slide away from the threat, not toward it.
+func set_wall_slide_away_hint(dir: Vector2) -> void:
+  _wall_slide_away_hint = dir.normalized() if dir.length_squared() > 1e-12 else Vector2.ZERO
+
+
+func clear_wall_slide_away_hint() -> void:
+  _wall_slide_away_hint = Vector2.ZERO

@@ -1,6 +1,8 @@
 ## Holds a random 8-way direction or idle intent while no motor goal is active ([Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1).
 extends Object
 
+const _MotorOctScr := preload("res://creature/motor/motor_oct_directions.gd")
+
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 
 

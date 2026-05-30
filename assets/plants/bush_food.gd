@@ -2,7 +2,6 @@ extends Node2D
 ## Shared calorie pool, regrowth, sprite swap, and player-only burst pickup for food shrubs (hunger POC).
 ## Params: [member texture_not_ready] / [member texture_ready] per archetype in each scene; child CalorieArea uses ENVIRONMENT_MODEL_PLAN §6 masks.
 ## Solid blockers: [member CalorieArea] pickup shape should extend past the static collision circle, or [method CharacterBody2D.move_and_slide] leaves the player flush outside and [signal Area2D.body_entered] never fires. [method _try_proximity_pickup_for_players] mirrors that rule using footprint clearance so tall capsules can eat when blocked adjacent to the bush circle.
-const _Cardinal := preload("res://creature/motor/cardinal_avoidance.gd")
 ## **Food-source memory (stationary):** ENGINE belief should key on this node's [code]get_instance_id()[/code], store [code]global_position[/code] while in awareness, and refresh [method is_pickup_ready_for_motor] only when the bush is seen again. Position is fixed in world space — unlike predator prey, no velocity field is required.
 
 signal calories_changed
@@ -82,7 +81,7 @@ func _try_proximity_pickup_for_players() -> void:
       continue
     var body := n as Node2D
     var he := _creature_half_extents(body)
-    var clr := _Cardinal.minimum_footprint_point_clearance(body.global_position, he, [bush_pt])
+    var clr := _footprint_point_clearance(body.global_position, he, bush_pt)
     if clr <= pickup_r:
       _try_grant_pickup(body)
       return
@@ -110,6 +109,17 @@ func _creature_half_extents(body: Node2D) -> Vector2:
   return Vector2.ZERO
 
 
+## Surface separation from a capsule footprint ([param center], [param half]) to a world point (motor AABB math).
+func _footprint_point_clearance(center: Vector2, half: Vector2, pt: Vector2) -> float:
+  if half.x <= 0.0 or half.y <= 0.0:
+    return center.distance_to(pt)
+  var closest := Vector2(
+    clampf(pt.x, center.x - half.x, center.x + half.x),
+    clampf(pt.y, center.y - half.y, center.y + half.y),
+  )
+  return closest.distance_to(pt)
+
+
 ## Grants a full burst when [param body] is in group [code]player[/code] and the bush pool is ready.
 func _try_grant_pickup(body: Node2D) -> void:
   if not body.is_in_group(&"player"):
@@ -121,10 +131,7 @@ func _try_grant_pickup(body: Node2D) -> void:
   if not body.has_method(&"add_calories_from_food"):
     return
   var grant: int = maxi(0, max_calories)
-  body.call(&"add_calories_from_food", grant)
-  var ad := get_node_or_null("/root/AiDriver")
-  if ad != null and ad.has_method(&"notify_food_consumption_outcome"):
-    ad.call(&"notify_food_consumption_outcome", body, self, false)
+  body.call(&"add_calories_from_food", grant, global_position)
   current_calories = 0.0
   _player_visit_locked = true
   _refresh_sprite()
