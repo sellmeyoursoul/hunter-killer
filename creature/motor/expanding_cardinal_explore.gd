@@ -1,5 +1,5 @@
 extends RefCounted
-## Preload namespace: [member Explore.pick_seek_direction], [member Explore.pick_cardinal], [member Explore.locate]. Used by [code]AiDriver[/code] (carnivore + herbivore food search) and [code]CardinalAvoidance[/code] hints.
+## Preload namespace: [member Explore.pick_cardinal], [member Explore.locate]. Used by [code]AiDriver[/code] (carnivore + herbivore food search) and [code]CardinalAvoidance[/code] hints.
 ##
 ## Pattern: ordering N → NE → … → NW ([code]eight_way_directions.gd[/code]). Dwell **n** physics ticks per leg; after **eight** legs, **n ← 2n**.
 

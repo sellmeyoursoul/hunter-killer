@@ -15,7 +15,7 @@ var _carnivore_score_override: int = -1
 
 
 func _ai_driver() -> Node:
-  return get_node("/root/AiDriver")
+  return get_node_or_null("/root/AiDriver")
 
 
 func show_message(text):
@@ -57,7 +57,8 @@ func set_carnivore_score_display(prey_calories: int) -> void:
 
 
 func _on_start_button_pressed():
-  if _ai_driver().is_human_start_suppressed():
+  var ad := _ai_driver()
+  if ad != null and ad.is_human_start_suppressed():
     return
   $StartButton.hide()
   start_game.emit()

@@ -1344,7 +1344,7 @@ func _motor_direction_phase_offset(body_id: int, stuck_n: int = 0) -> int:
 func _predator_hunt_stuck_rotate_intent(body_id: int, _stuck_n: int, motor_p: Dictionary) -> Vector2:
   var rot_ticks := maxi(4, int(motor_p.get("predator_hunt_stuck_rotate_ticks", 10)))
   var phase_seed := body_id ^ _duel_motor_round_salt
-  var hint := _ExploreScr.Explore.pick_seek_direction(rot_ticks, _physics_ticks, phase_seed)
+  var hint := _ExploreScr.Explore.pick_cardinal(rot_ticks, _physics_ticks, phase_seed)
   if hint.length_squared() > 1e-12:
     return hint
   return Vector2.LEFT if bool(phase_seed & 1) else Vector2.RIGHT
@@ -4075,7 +4075,7 @@ func _build_motor_context(
       var patrol_ex := int(motor_p.get("carnivore_explore_rotate_physics_ticks", 36))
       var patrol_seed := body.get_instance_id() ^ _duel_motor_round_salt
       if expand_hint == Vector2.ZERO:
-        expand_hint = _ExploreScr.Explore.pick_seek_direction(patrol_ex, _physics_ticks, patrol_seed)
+        expand_hint = _ExploreScr.Explore.pick_cardinal(patrol_ex, _physics_ticks, patrol_seed)
       if use_explore_curve and not prey_engaged:
         var edge_band_patrol := float(motor_p.get("predator_chase_edge_band_px", 110.0))
         var patrol_edge_margin := _footprint_edge_margin(pos, he_xy, Vector2.ZERO, ss)
@@ -4149,7 +4149,7 @@ func _build_motor_context(
   if herbivore_needs_explore and not herbivore_flee_active:
     var base_ex := int(motor_p.get("expanding_explore_base_physics_ticks", 36))
     var phase_seed := body.get_instance_id() ^ _duel_motor_round_salt
-    expand_hint = _ExploreScr.Explore.pick_seek_direction(
+    expand_hint = _ExploreScr.Explore.pick_cardinal(
       base_ex, _physics_ticks, phase_seed
     )
     if expand_hint.length_squared() > 1e-12:
@@ -4615,7 +4615,7 @@ func _physics_process(_delta: float) -> void:
             ctx, motor_p, pred_pos, he_nav, body_id, stuck_n, nav_toward_dir, false
           ):
             var base_ex := int(motor_p.get("expanding_explore_base_physics_ticks", 36))
-            var hint := _ExploreScr.Explore.pick_seek_direction(
+            var hint := _ExploreScr.Explore.pick_cardinal(
               base_ex, _physics_ticks, body_id ^ _duel_motor_round_salt
             )
             ctx["expanding_explore_hint"] = hint
@@ -4636,7 +4636,7 @@ func _physics_process(_delta: float) -> void:
             ctx, motor_p, pred_pos, he_nav, body_id, stuck_n, nav_toward_dir, true
           ):
             var base_ex_p := int(motor_p.get("expanding_explore_base_physics_ticks", 36))
-            ctx["expanding_explore_hint"] = _ExploreScr.Explore.pick_seek_direction(
+            ctx["expanding_explore_hint"] = _ExploreScr.Explore.pick_cardinal(
               base_ex_p, _physics_ticks, body_id ^ _duel_motor_round_salt
             )
           ctx["motor_stuck_allow_expand_hint"] = true
@@ -5092,11 +5092,18 @@ func _physics_process(_delta: float) -> void:
           or memory_chase_override
           or edge_chase_override
           or open_hunt_close_override
-          or playfield_corner_override
-          or corner_wedge
+          or (is_prey_body and playfield_corner_override)
+          or (is_prey_body and corner_wedge)
+          or (is_pred and playfield_corner_override)
+          or (is_pred and bool(ctx.get("creature_nav_slip_active", false)))
           or (seek_oct_active and seek_lock_sec > 0.0 and is_prey_body)
         ):
-          hold_apply = 1
+          if is_prey_body and (
+            corner_wedge or playfield_corner_override or bool(ctx.get("creature_nav_slip_active", false))
+          ):
+            hold_apply = maxi(8, int(motor_p.get("herbivore_wedge_intent_hold_ticks", 12)))
+          else:
+            hold_apply = 1
         elif bool(ctx.get("herbivore_flee_panic", false)):
           if stuck_n >= maxi(1, int(motor_p.get("motor_stuck_escape_ticks", 8))):
             hold_apply = 1
@@ -5117,6 +5124,18 @@ func _physics_process(_delta: float) -> void:
             if threat_hint != Vector2.ZERO:
               away_hint = pred_pos - threat_hint
           _apply_creature_wall_slide_away_hint(subj, away_hint)
+        elif (
+          corner_wedge
+          or playfield_corner_override
+          or bool(ctx.get("creature_nav_slip_active", false))
+        ):
+          var slide_hint := intent
+          if slide_hint.length_squared() < 1e-12:
+            var bmin := bounds_min_nav
+            var bmax := bounds_max_nav
+            if _playfield_bounds_valid(bmin, bmax):
+              slide_hint = (bmin + bmax) * 0.5 - pred_pos
+          _apply_creature_wall_slide_away_hint(subj, slide_hint)
         else:
           _clear_creature_wall_slide_away_hint(subj)
       elif is_pred:

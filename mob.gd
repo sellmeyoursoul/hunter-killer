@@ -137,7 +137,15 @@ func _footprint_half_for_clamp() -> Vector2:
 
 
 func _clamp_to_playfield() -> void:
-  global_position = _PlayfieldClamp.clamp_position(global_position, _footprint_half_for_clamp(), screen_size)
+  var half := _footprint_half_for_clamp()
+  var before := global_position
+  global_position = _PlayfieldClamp.clamp_position(global_position, half, screen_size)
+  var corr := global_position - before
+  if corr.length_squared() > 1e-8:
+    if absf(corr.x) > 0.001:
+      linear_velocity.x = 0.0
+    if absf(corr.y) > 0.001:
+      linear_velocity.y = 0.0
 
 
 func _apply_calorie_burn_and_starvation(delta: float) -> void:
@@ -203,9 +211,12 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
     return heading
   var inc := heading.normalized()
   var space := get_world_2d().direct_space_state
-  if space == null:
-    return inc
   var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  var half := _footprint_half_for_clamp()
+  if space == null or _wall_slide_pick == null:
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc, global_position, half, screen_size, lookahead, _wall_slide_pick
+    )
   var origin := global_position
   var target := origin + inc * lookahead
   var query := PhysicsRayQueryParameters2D.create(origin, target)
@@ -213,16 +224,26 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   query.exclude = [get_rid()]
   var hit: Dictionary = space.intersect_ray(query)
   if hit.is_empty():
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc, global_position, half, screen_size, lookahead, _wall_slide_pick
+    )
   var normal_v: Variant = hit.get("normal", Vector2.ZERO)
   if typeof(normal_v) != TYPE_VECTOR2:
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc, global_position, half, screen_size, lookahead, _wall_slide_pick
+    )
   var n := normal_v as Vector2
   if n.length_squared() < 1e-12:
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc, global_position, half, screen_size, lookahead, _wall_slide_pick
+    )
   if _wall_slide_toward_hint.length_squared() > 1e-12:
-    return _wall_slide_pick.pick_tangent_toward(inc, n, _wall_slide_toward_hint)
-  return _wall_slide_pick.pick_tangent_closer(inc, n)
+    inc = _wall_slide_pick.pick_tangent_toward(inc, n, _wall_slide_toward_hint)
+  else:
+    inc = _wall_slide_pick.pick_tangent_closer(inc, n)
+  return _PlayfieldClamp.slide_heading_along_edge(
+    inc, global_position, half, screen_size, lookahead, _wall_slide_pick
+  )
 
 
 ## Biases wall tangents during obstructed prey chase so the fox flanks toward the rabbit, not along the bush forever.

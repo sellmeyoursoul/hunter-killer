@@ -1728,6 +1728,131 @@ func _test_predator_chase_motor_ctx() -> void:
   )
 
 
+func _test_predator_prey_memory_chase() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator prey memory chase test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "predator_prey_memory_sec": 10.0,
+    "predator_prey_memory_forget_radius_px": 2800.0,
+    "predator_memory_chase_lock_ticks": 24,
+    "motor_patrol_min_step_clearance_px": 4.0,
+    "weight_seek_prey": 22.0,
+    "weight_pursuit_dist": 0.55,
+    "weight_pursuit_closing": 1.35,
+    "weight_pursuit_dist_sq": 48.0,
+  }
+  var prey_pos := Vector2(400.0, 200.0)
+  var pred_pos := Vector2(200.0, 200.0)
+  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
+  _assert(mob_scene != null, "mob.tscn loads for predator memory chase")
+  var predator: RigidBody2D = mob_scene.instantiate() as RigidBody2D
+  root.add_child(predator)
+  predator.global_position = pred_pos
+  var prey_pts := [prey_pos]
+  var pursuit := [
+    {"position": prey_pos, "velocity": Vector2(50.0, 0.0), "cost_scale": 1.0},
+  ]
+  driver.call("_predator_prey_memory_touch", predator, prey_pts, pursuit)
+  var sample: Dictionary = driver.call(
+    "_predator_prey_memory_sample", predator, motor_p, pred_pos
+  )
+  _assert(bool(sample.get("active", false)), "memory sample active after touch")
+  _assert(
+    (sample.get("position", Vector2.ZERO) as Vector2).is_equal_approx(prey_pos),
+    "memory recalls last prey position",
+  )
+  _assert(
+    float(sample.get("strength", 0.0)) >= 0.4,
+    "memory strength stays in motor cost_scale band",
+  )
+  var inactive := {
+    "active": false,
+    "position": Vector2.ZERO,
+    "velocity": Vector2.ZERO,
+    "strength": 0.0,
+  }
+  var prey_live: Array = []
+  var pursuit_live: Array = []
+  driver.call("_predator_inject_memory_chase_targets", inactive, prey_live, pursuit_live)
+  _assert(prey_live.is_empty(), "inactive memory does not inject prey targets")
+  driver.call("_predator_inject_memory_chase_targets", sample, prey_live, pursuit_live)
+  _assert(
+    prey_live.size() == 1 and (prey_live[0] as Vector2).is_equal_approx(prey_pos),
+    "inject fills prey_seek_targets from memory",
+  )
+  _assert(pursuit_live.size() == 1, "inject adds pursuit target from memory velocity")
+  var he := Vector2(18.0, 44.0)
+  driver.set("_physics_ticks", 10)
+  var chase_intent: Vector2 = driver.call(
+    "_predator_latched_memory_chase_intent",
+    predator.get_instance_id(),
+    pred_pos,
+    prey_pos,
+    he,
+    [],
+    Vector2.ZERO,
+    Vector2(1000.0, 600.0),
+    motor_p,
+  )
+  _assert(
+    chase_intent.is_equal_approx(Vector2.RIGHT),
+    "latched memory chase snaps toward remembered prey on +X",
+  )
+  var mem_ctx := {
+    "creature_position": pred_pos,
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(1000.0, 600.0),
+    "mobs": [],
+    "creature_facing": Vector2.RIGHT,
+    "food_seek_targets": [],
+    "prey_seek_targets": prey_live.duplicate(),
+    "weight_seek_prey": 22.0,
+    "weight_seek_ready_food": 0.0,
+    "pursuit_targets": pursuit_live.duplicate(),
+    "weight_pursuit_dist": 0.55,
+    "weight_pursuit_closing": 1.35,
+    "weight_pursuit_dist_sq": 48.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_explore_trail_repulsion": 0.0,
+    "exploration_blend_multiplier": 0.0,
+    "explore_trail_centers": [],
+  }
+  var mem_intent: Vector2 = _Motor.pick_best_move_intent(mem_ctx)
+  _assert(
+    mem_intent.is_equal_approx(Vector2.RIGHT),
+    "motor chase toward memory-injected prey without live awareness",
+  )
+  var bid := predator.get_instance_id()
+  var mem_by_id: Dictionary = driver.get("_predator_prey_memory_by_id")
+  var rec: Dictionary = mem_by_id[bid]
+  rec["last_seen_ms"] = Time.get_ticks_msec() - 20000
+  mem_by_id[bid] = rec
+  driver.set("_predator_prey_memory_by_id", mem_by_id)
+  var stale: Dictionary = driver.call(
+    "_predator_prey_memory_sample", predator, motor_p, pred_pos
+  )
+  _assert(not bool(stale.get("active", false)), "memory expires after TTL")
+  driver.call("_predator_prey_memory_touch", predator, prey_pts, pursuit)
+  predator.global_position = prey_pos + Vector2(5000.0, 0.0)
+  var forgotten: Dictionary = driver.call(
+    "_predator_prey_memory_sample",
+    predator,
+    motor_p,
+    predator.global_position,
+  )
+  _assert(not bool(forgotten.get("active", false)), "memory cleared past forget radius")
+  root.remove_child(predator)
+  predator.free()
+  root.remove_child(driver)
+  driver.free()
+
+
 func _test_no_goal_plateau_random() -> void:
   var center := Vector2(500.0, 500.0)
   var base_ctx := {
@@ -2077,6 +2202,15 @@ func _test_playfield_clamp() -> void:
   var clamped := _PlayfieldClamp.clamp_position(Vector2(-5.0, 50.0), half, screen)
   _assert(clamped.x >= half.x and clamped.y >= half.y, "playfield clamp min edges")
   _assert(clamped.x <= screen.x - half.x, "playfield clamp max x")
+  var slide_pick := _SlidePickScr.new()
+  var hug_pos := Vector2(half.x + 4.0, 50.0)
+  var slid: Vector2 = _PlayfieldClamp.slide_heading_along_edge(
+    Vector2.LEFT, hug_pos, half, screen, 48.0, slide_pick
+  )
+  _assert(
+    slid.length_squared() > 1e-12 and slid.x > -0.05,
+    "playfield edge slide redirects heading away from left bound",
+  )
 
 
 func _test_footprint_geometry() -> void:

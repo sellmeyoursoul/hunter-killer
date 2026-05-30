@@ -185,7 +185,15 @@ func _sample_movement_speed_multiplier() -> float:
 
 
 func _clamp_to_playfield() -> void:
-  position = _PlayfieldClamp.clamp_position(position, _footprint_half_for_clamp(), screen_size)
+  var half := _footprint_half_for_clamp()
+  var before := position
+  position = _PlayfieldClamp.clamp_position(position, half, screen_size)
+  var corr := position - before
+  if corr.length_squared() > 1e-8:
+    if absf(corr.x) > 0.001:
+      velocity.x = 0.0
+    if absf(corr.y) > 0.001:
+      velocity.y = 0.0
 
 
 func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
@@ -194,7 +202,15 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   var inc := heading.normalized()
   var space := get_world_2d().direct_space_state
   if space == null or _wall_slide_pick == null:
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc,
+      position,
+      _footprint_half_for_clamp(),
+      screen_size,
+      maxf(obstacle_lookahead_px, 48.0),
+      _wall_slide_pick,
+      _wall_slide_away_hint,
+    )
   var lookahead := maxf(obstacle_lookahead_px, 48.0)
   var origin := global_position
   var target := origin + inc * lookahead
@@ -203,16 +219,50 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   query.exclude = [get_rid()]
   var ray_hit: Dictionary = space.intersect_ray(query)
   if ray_hit.is_empty():
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc,
+      position,
+      _footprint_half_for_clamp(),
+      screen_size,
+      lookahead,
+      _wall_slide_pick,
+      _wall_slide_away_hint,
+    )
   var normal_v: Variant = ray_hit.get("normal", Vector2.ZERO)
   if typeof(normal_v) != TYPE_VECTOR2:
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc,
+      position,
+      _footprint_half_for_clamp(),
+      screen_size,
+      lookahead,
+      _wall_slide_pick,
+      _wall_slide_away_hint,
+    )
   var n := normal_v as Vector2
   if n.length_squared() < 1e-12:
-    return inc
+    return _PlayfieldClamp.slide_heading_along_edge(
+      inc,
+      position,
+      _footprint_half_for_clamp(),
+      screen_size,
+      lookahead,
+      _wall_slide_pick,
+      _wall_slide_away_hint,
+    )
   if _wall_slide_away_hint.length_squared() > 1e-12:
-    return _wall_slide_pick.pick_tangent_away_from(inc, n, _wall_slide_away_hint)
-  return _wall_slide_pick.pick_tangent_closer(inc, n)
+    inc = _wall_slide_pick.pick_tangent_away_from(inc, n, _wall_slide_away_hint)
+  else:
+    inc = _wall_slide_pick.pick_tangent_closer(inc, n)
+  return _PlayfieldClamp.slide_heading_along_edge(
+    inc,
+    position,
+    _footprint_half_for_clamp(),
+    screen_size,
+    lookahead,
+    _wall_slide_pick,
+    _wall_slide_away_hint,
+  )
 
 
 func _physics_process(delta: float) -> void:

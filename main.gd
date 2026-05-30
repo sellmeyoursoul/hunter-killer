@@ -18,8 +18,9 @@ var _round_ended: bool = false
 var _duel_carnivore: RigidBody2D = null
 
 
+## Returns the AiDriver autoload, or null if the singleton failed to load (usually ai_driver.gd compile errors).
 func _ai_driver() -> Node:
-  return get_node("/root/AiDriver")
+  return get_node_or_null("/root/AiDriver")
 
 
 ## Ends the round once; logs winner/cause for manual playtest log, then generic game over UI.
@@ -40,8 +41,10 @@ func game_over() -> void:
   $HUD.show_game_over()
   $Music.stop()
   $DeathSound.play()
-  _ai_driver().set_duel_round_active(false)
-  _ai_driver().notify_main_game_over()
+  var ad := _ai_driver()
+  if ad != null:
+    ad.set_duel_round_active(false)
+    ad.notify_main_game_over()
 
 
 ## Writes structured round outcome to OLog (copy into [CREATURE_GOALS_PLAYTEST_LOG.md](Project_Docs/Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)).
@@ -78,19 +81,22 @@ func new_game() -> void:
   $Player.start(herb_pos)
   _spawn_duel_carnivore(carn_pos)
   _reset_food_plants()
-  _ai_driver().clear_creature_registry()
-  _ai_driver().register_creature($Player)
-  if _duel_carnivore != null:
-    _ai_driver().register_creature(_duel_carnivore)
-  _ai_driver().sync_duel_control_modes()
-  _ai_driver().set_duel_round_active(true)
-  _ai_driver().set_primary_creature($Player)
+  var ad := _ai_driver()
+  if ad != null:
+    ad.clear_creature_registry()
+    ad.register_creature($Player)
+    if _duel_carnivore != null:
+      ad.register_creature(_duel_carnivore)
+    ad.sync_duel_control_modes()
+    ad.set_duel_round_active(true)
+    ad.set_primary_creature($Player)
   $StartTimer.start()
   $HUD.reset_vitals_display()
   $HUD.update_score(score)
   $HUD.show_message("Get Ready")
   $Music.play()
-  _ai_driver().notify_main_new_game()
+  if ad != null:
+    ad.notify_main_new_game()
 
 
 func _ready() -> void:
@@ -101,12 +107,24 @@ func _ready() -> void:
     false,
     "Main",
   )
-  _ai_driver().attach_main(self)
   $HUD.ai_player_game.connect(_on_hud_ai_player_game)
   $HUD.end_ai_game.connect(_on_hud_end_ai_game)
-  _ai_driver().ai_session_state_changed.connect(_on_ai_session_state_changed)
-  $HUD.set_ai_session_state(_ai_driver().get_state())
   _ensure_food_plants()
+  call_deferred("_attach_ai_driver")
+
+
+## Wires Main to the AiDriver autoload after autoloads finish [code]_ready[/code] (avoids null singleton on line 104).
+func _attach_ai_driver() -> void:
+  var ad := _ai_driver()
+  if ad == null or not ad.has_method(&"attach_main"):
+    push_error(
+      "Main: AiDriver autoload missing or script did not load. "
+      + "Fix errors in res://AI_int_lib/ai_driver.gd and reload the project."
+    )
+    return
+  ad.attach_main(self)
+  ad.ai_session_state_changed.connect(_on_ai_session_state_changed)
+  $HUD.set_ai_session_state(ad.get_state())
 
 
 ## Creates spawn markers if the scene still uses legacy [code]StartPosition[/code] only.
@@ -280,13 +298,14 @@ func _on_hud_ai_player_game() -> void:
     "data": {},
   })
   $HUD.show_message("Starting CPU player…")
-  var ok: bool = _ai_driver().begin_engine_player_round()
+  var ad := _ai_driver()
+  var ok: bool = ad.begin_engine_player_round() if ad != null else false
   $HUD/AIPlayerButton.disabled = false
   _AgentNdjson.write({
     "runId": "cpu-arm",
     "hypothesisId": "H4",
     "location": "main.gd:_on_hud_ai_player_game_after_begin",
-    "data": {"cpu_begin_ok": ok, "driver_state": _ai_driver().get_state()},
+    "data": {"cpu_begin_ok": ok, "driver_state": ad.get_state() if ad != null else -1},
   })
   $HUD.dismiss_message()
   if not ok:
@@ -297,8 +316,9 @@ func _on_hud_ai_player_game() -> void:
 
 
 func _on_hud_end_ai_game() -> void:
-  if _ai_driver().get_state() == 1:
-    _ai_driver().cancel_armed_session()
+  var ad := _ai_driver()
+  if ad != null and ad.get_state() == 1:
+    ad.cancel_armed_session()
     return
   end_round("end_ai", "none")
 
