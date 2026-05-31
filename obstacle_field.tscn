@@ -33,6 +33,18 @@ size = Vector2(75, 55)
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_rj"]
 size = Vector2(55, 45)
 
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_top_edge"]
+size = Vector2(2040, 60)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_bottom_edge"]
+size = Vector2(2040, 60)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_left_edge"]
+size = Vector2(60, 1140)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_right_edge"]
+size = Vector2(60, 1140)
+
 [node name="ObstacleField" type="Node2D" groups=["obstacles_root"]]
 script = ExtResource("2_obroot")
 
@@ -133,5 +145,45 @@ position = Vector2(320, 520)
 shape = SubResource("RectangleShape2D_rj")
 
 [node name="Sprite2D" type="Sprite2D" parent="RockJ"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
+[node name="RockTopEdge" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(960, -30)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockTopEdge"]
+shape = SubResource("RectangleShape2D_top_edge")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockTopEdge"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
+[node name="RockBottomEdge" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(960, 1110)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockBottomEdge"]
+shape = SubResource("RectangleShape2D_bottom_edge")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockBottomEdge"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
+[node name="RockLeftEdge" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(-30, 540)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockLeftEdge"]
+shape = SubResource("RectangleShape2D_left_edge")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockLeftEdge"]
+z_index = 0
+texture = ExtResource("1_rocks_tex")
+
+[node name="RockRightEdge" type="StaticBody2D" parent="." groups=["obstacles"]]
+position = Vector2(1950, 540)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="RockRightEdge"]
+shape = SubResource("RectangleShape2D_right_edge")
+
+[node name="Sprite2D" type="Sprite2D" parent="RockRightEdge"]
 z_index = 0
 texture = ExtResource("1_rocks_tex")

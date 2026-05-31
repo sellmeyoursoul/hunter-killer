@@ -64,6 +64,13 @@ static func creature_motor_spine() -> Dictionary:
     "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
     "weight_seek_backtrack": 14.0,
+    ## Remembered pinch approach: block 180° retry while other 8-way steps clear ([code]blocked_approach_memory.gd[/code]).
+    "blocked_approach_memory_ticks": 45,
+    "blocked_approach_backtrack_dot": 0.55,
+    "weight_blocked_approach_backtrack": 48.0,
+    "weight_blocked_approach_sector": 18.0,
+    ## Forage pinch: physics ticks stalled (or zero-intent turn) before forced escape intent.
+    "herbivore_pinch_escape_stuck_ticks": 1,
     "food_seek_imminent_mob_radius_px": 100.0,
     "jeopardy_forced_turn_ticks": 5,
     "weight_avoid_unready_food": 5.5,
@@ -78,9 +85,11 @@ static func creature_motor_spine() -> Dictionary:
     "expanding_explore_base_physics_ticks": 36,
     ## Active seek + patrol stay-still: physics ticks per 8-way heading while sweeping awareness ([code]seek_stationary_look.gd[/code]).
     "seek_stationary_look_segment_physics_ticks": 9,
+    ## Active seek heading change: physics ticks per intermediate heading on shortest arc turn ([code]seek_direction_turn.gd[/code]); [code]0[/code] reuses [code]seek_stationary_look_segment_physics_ticks[/code].
+    "seek_direction_turn_segment_physics_ticks": 0,
     ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
     "weight_expanding_explore_hint": 0.12,
-    ## Active food/prey seek: eight headings (N..NW) and wall-clock lock per pick ([code]seek_direction_commit.gd[/code]).
+    ## Active goal seek (food/prey): eight headings (N..NW) and wall-clock lock per pick ([code]seek_direction_commit.gd[/code]).
     "motor_seek_direction_lock_sec": 1.0,
     ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
     "weight_seek_prey": 22.0,
@@ -190,6 +199,13 @@ static func creature_motor_profile_ship() -> Dictionary:
     "weight_seek_ready_food": 16.0,
     "weight_seek_prey": 22.0,
     "weight_seek_backtrack": 14.0,
+    ## Remembered pinch approach: block 180° retry while other 8-way steps clear ([code]blocked_approach_memory.gd[/code]).
+    "blocked_approach_memory_ticks": 45,
+    "blocked_approach_backtrack_dot": 0.55,
+    "weight_blocked_approach_backtrack": 48.0,
+    "weight_blocked_approach_sector": 18.0,
+    ## Forage pinch: physics ticks stalled (or zero-intent turn) before forced escape intent.
+    "herbivore_pinch_escape_stuck_ticks": 1,
     "motor_intent_cost_chaos": 0.0,
     "weight_explore_turn_bias": 0.14,
     "weight_explore_idle_penalty": 10.5,

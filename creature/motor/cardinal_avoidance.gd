@@ -7,6 +7,7 @@ extends Object
 const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
+const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector2] = [
@@ -208,6 +209,89 @@ static func seek_backtrack_step_cost(direction: Vector2, last_move: Vector2, wei
   if weight <= 1e-8 or direction.length_squared() < 1e-12 or last_move.length_squared() < 1e-12:
     return 0.0
   return weight * maxf(0.0, -direction.normalized().dot(last_move.normalized()))
+
+
+## Additive penalty when [param step_dir] re-enters a remembered blocked approach heading.
+static func blocked_approach_step_cost(
+  step_dir: Vector2, approach_dir: Vector2, weight: float, min_dot: float
+) -> float:
+  if weight <= 1e-8 or not _BlockedApproach.is_backtrack_step(step_dir, approach_dir, min_dot):
+    return 0.0
+  return weight
+
+
+## True when [param d] fails seek wall / blocked-cardinal filters for this tick.
+static func intent_candidate_blocked_by_geometry(
+  d: Vector2,
+  creature_pos: Vector2,
+  footprint_half: Vector2,
+  step_len: float,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  block_min_clr: float,
+  filter_seek_wall_hits: bool,
+  filter_blocked_cardinals: bool,
+) -> bool:
+  if d.length_squared() < 1e-14:
+    return false
+  if (
+    filter_seek_wall_hits
+    and step_blocked_into_wall(
+      creature_pos,
+      footprint_half,
+      d,
+      step_len,
+      static_obs,
+      bounds_min,
+      bounds_max,
+      block_min_clr,
+    )
+  ):
+    return true
+  return (
+    filter_blocked_cardinals
+    and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
+  )
+
+
+## True when at least one non-idle candidate is viable and not a backtrack of [param approach_dir].
+static func has_non_backtrack_alternative(
+  order: Array,
+  approach_dir: Vector2,
+  backtrack_dot: float,
+  creature_pos: Vector2,
+  footprint_half: Vector2,
+  step_len: float,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  block_min_clr: float,
+  filter_seek_wall_hits: bool,
+  filter_blocked_cardinals: bool,
+) -> bool:
+  if approach_dir.length_squared() < 1e-12:
+    return false
+  for d in order:
+    if typeof(d) != TYPE_VECTOR2 or (d as Vector2).length_squared() < 1e-14:
+      continue
+    var dir := d as Vector2
+    if intent_candidate_blocked_by_geometry(
+      dir,
+      creature_pos,
+      footprint_half,
+      step_len,
+      static_obs,
+      bounds_min,
+      bounds_max,
+      block_min_clr,
+      filter_seek_wall_hits,
+      filter_blocked_cardinals,
+    ):
+      continue
+    if not _BlockedApproach.is_backtrack_step(dir, approach_dir, backtrack_dot):
+      return true
+  return false
 
 
 ## First direction in [param order] that also appears in [param tied_dirs] (deterministic plateau tie-break).
@@ -604,34 +688,60 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var last_move_v: Vector2 = facing_v
   if typeof(last_move_raw) == TYPE_VECTOR2 and (last_move_raw as Vector2).length_squared() > 1e-12:
     last_move_v = (last_move_raw as Vector2).normalized()
+  var blocked_approach_raw: Variant = ctx.get("blocked_approach_direction", Vector2.ZERO)
+  var blocked_approach_v := Vector2.ZERO
+  if typeof(blocked_approach_raw) == TYPE_VECTOR2:
+    blocked_approach_v = blocked_approach_raw as Vector2
+  var filter_blocked_approach := bool(ctx.get("motor_filter_blocked_approach", false))
+  var backtrack_dot := clampf(float(ctx.get("blocked_approach_backtrack_dot", 0.55)), 0.0, 1.0)
+  var w_blocked_backtrack := float(ctx.get("weight_blocked_approach_backtrack", 0.0))
+  if filter_blocked_approach and blocked_approach_v.length_squared() > 1e-12:
+    w_seek_backtrack = maxf(w_seek_backtrack, w_blocked_backtrack)
+    last_move_v = blocked_approach_v.normalized()
   var step_len := speed * lookahead
 
   var order := evaluation_order_from_ctx(ctx)
+  var skip_backtrack := (
+    filter_blocked_approach
+    and blocked_approach_v.length_squared() > 1e-12
+    and has_non_backtrack_alternative(
+      order,
+      blocked_approach_v,
+      backtrack_dot,
+      creature_pos,
+      footprint_half,
+      step_len,
+      static_obs,
+      bounds_min,
+      bounds_max,
+      block_min_clr,
+      filter_seek_wall_hits,
+      filter_blocked_cardinals,
+    )
+  )
   var best_d := Vector2.ZERO
   var best_cost := INF
   var scored: Array = []
   for d in order:
     if d.length_squared() > 1e-14:
-      if (
-        filter_seek_wall_hits
-        and step_blocked_into_wall(
-          creature_pos,
-          footprint_half,
-          d,
-          step_len,
-          static_obs,
-          bounds_min,
-          bounds_max,
-          block_min_clr,
-        )
+      if intent_candidate_blocked_by_geometry(
+        d,
+        creature_pos,
+        footprint_half,
+        step_len,
+        static_obs,
+        bounds_min,
+        bounds_max,
+        block_min_clr,
+        filter_seek_wall_hits,
+        filter_blocked_cardinals,
       ):
         continue
-    if (
-      filter_blocked_cardinals
-      and d.length_squared() > 1e-14
-      and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
-    ):
-      continue
+      if (
+        skip_backtrack
+        and _BlockedApproach.is_backtrack_step(d, blocked_approach_v, backtrack_dot)
+      ):
+        continue
     var step := d.normalized() * step_len if d.length_squared() > 1e-14 else Vector2.ZERO
     var predicted := creature_pos + step
     var cost := cost_at_prediction(
@@ -701,7 +811,15 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
     cost += believed_goal_step_cost(d, ctx)
-    if w_seek_backtrack > 1e-8 and filter_seek_wall_hits and d.length_squared() > 1e-14:
+    if w_blocked_backtrack > 1e-8 and filter_blocked_approach and d.length_squared() > 1e-14:
+      cost += blocked_approach_step_cost(
+        d, blocked_approach_v, w_blocked_backtrack, backtrack_dot
+      )
+    if (
+      w_seek_backtrack > 1e-8
+      and d.length_squared() > 1e-14
+      and (filter_seek_wall_hits or filter_blocked_approach or has_active_goal)
+    ):
       cost += seek_backtrack_step_cost(d, last_move_v, w_seek_backtrack)
     if chaos_amp > 1e-10 and d.length_squared() > 1e-14:
       var dir_rng := RandomNumberGenerator.new()
@@ -808,6 +926,13 @@ static func believed_goal_step_cost(d: Vector2, ctx: Dictionary) -> float:
       -sw
       * _GoalMem.align_step_with_sector(d, s)
       * w_sector
+    )
+  var blocked_sector := int(ctx.get("blocked_approach_sector", -1))
+  var w_blocked_sector := float(ctx.get("weight_blocked_approach_sector", 0.0))
+  if blocked_sector >= 0 and w_blocked_sector > 1e-8 and d.length_squared() > 1e-12:
+    cost += (
+      w_blocked_sector
+      * _GoalMem.align_step_with_sector(d, blocked_sector)
     )
   return cost
 

@@ -37,6 +37,8 @@ const _MobScr := preload("res://mob.gd")
 const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _GeomScr := preload("res://creature/motor/motor_obstacle_geometry.gd")
 const _SeekDirCommitScr := preload("res://creature/motor/seek_direction_commit.gd")
+const _SeekDirTurnScr := preload("res://creature/motor/seek_direction_turn.gd")
+const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorOct := preload("res://creature/motor/motor_oct_directions.gd")
 const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
 
@@ -78,9 +80,14 @@ func _run_all() -> void:
   _test_playfield_corner_escape()
   _test_world_corner_static_wedge_escape()
   _test_playfield_open_corner_escape()
+  _test_playfield_boundary_edge_rocks()
+  _test_ne_corner_food_seek_egress()
   _test_predator_cover_pin_flank()
   _test_herbivore_flee_cover()
   _test_herbivore_flee_obstacle_slip()
+  _test_herbivore_flee_bush_rock_pinch()
+  _test_herbivore_flee_diagonal_rock_pinch()
+  _test_herbivore_flee_w_shrub_n_rock_pinch()
   _test_expanding_cardinal_explore()
   _test_predator_chase_motor_ctx()
   _test_predator_prey_memory_chase()
@@ -92,10 +99,14 @@ func _run_all() -> void:
   _test_scripted_intent_hold()
   _test_seek_oct_directions()
   _test_seek_direction_commit()
+  _test_seek_direction_turn()
   _test_no_goal_patrol_lock()
   _test_seek_stationary_look()
   _test_seek_diagonal_intent()
   _test_seek_wall_filter_and_backtrack()
+  _test_blocked_approach_memory()
+  _test_herbivore_food_seek_pinch_escape_backtrack()
+  _test_herbivore_pinch_stall_zero_intent()
   _test_bush_proximity_pickup_adjacent()
   _test_herbivore_forage_plateau_release()
   _test_herbivore_food_awareness_latch()
@@ -1488,6 +1499,162 @@ func _test_playfield_open_corner_escape() -> void:
   )
 
 
+## Inner playable rect implied by wide/tall boundary bar AABBs in [code]obstacle_field.tscn[/code].
+func _playfield_inner_rect_from_boundary_aabbs(aabbs: Array) -> Rect2:
+  var inner := Vector2(-INF, -INF)
+  var outer := Vector2(INF, INF)
+  for ob in aabbs:
+    if typeof(ob) != TYPE_DICTIONARY:
+      continue
+    var op: Vector2 = ob.get("position", Vector2.ZERO)
+    var he: Vector2 = ob.get("half_extents", Vector2.ZERO)
+    if maxf(he.x, he.y) < 200.0:
+      continue
+    var mn := op - he
+    var mx := op + he
+    if he.x > he.y * 3.0:
+      if op.y < 400.0:
+        inner.y = maxf(inner.y, mx.y)
+      elif op.y > 400.0:
+        outer.y = minf(outer.y, mn.y)
+    elif he.y > he.x * 3.0:
+      if op.x < 400.0:
+        inner.x = maxf(inner.x, mx.x)
+      elif op.x > 400.0:
+        outer.x = minf(outer.x, mn.x)
+  if inner.x == -INF or outer.x == INF:
+    return Rect2()
+  return Rect2(inner, outer - inner)
+
+
+func _collect_obstacle_field_aabbs() -> Array:
+  var packed := load("res://obstacle_field.tscn") as PackedScene
+  if packed == null:
+    return []
+  var field := packed.instantiate() as Node
+  root.add_child(field)
+  var geom := _GeomScr.collect_obstacle_group_statics(field)
+  field.queue_free()
+  return geom.get("aabbs", []) as Array
+
+
+func _test_playfield_boundary_edge_rocks() -> void:
+  var aabbs := _collect_obstacle_field_aabbs()
+  _assert(not aabbs.is_empty(), "obstacle field yields boundary AABBs")
+  var inner := _playfield_inner_rect_from_boundary_aabbs(aabbs)
+  _assert(is_equal_approx(inner.position.x, 0.0), "edge rocks inner left aligns with playfield")
+  _assert(is_equal_approx(inner.position.y, 0.0), "edge rocks inner top aligns with playfield")
+  _assert(is_equal_approx(inner.end.x, 1920.0), "edge rocks inner right aligns with playfield")
+  _assert(is_equal_approx(inner.end.y, 1080.0), "edge rocks inner bottom aligns with playfield")
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip boundary edge rock escape test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1920.0, 1080.0)
+  var he := Vector2(13.5, 30.5)
+  var ne_pos := Vector2(bounds_max.x - he.x - 8.0, he.y + 6.0)
+  var probe_px := float(rabbit_m.get("herbivore_obstacle_probe_px", 200.0))
+  var clr := _Motor.footprint_static_clearance(ne_pos, he, aabbs)
+  _assert(
+    clr < probe_px,
+    "NE playfield pinch sees boundary rocks within herbivore obstacle probe",
+  )
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var esc: Vector2 = d.call(
+    "_herbivore_latched_corner_escape_intent",
+    91,
+    ne_pos,
+    he,
+    aabbs,
+    Vector2.ZERO,
+    bounds_max,
+    rabbit_m,
+    Vector2(200.0, 400.0),
+  )
+  _assert(
+    esc.length_squared() > 1e-12
+    and not bool(d.call("_cardinal_step_blocked", ne_pos, he, esc, aabbs, block_clr))
+    and (esc.y > 0.35 or esc.x < -0.35),
+    "NE boundary wedge escape picks stable south or west opening",
+  )
+
+
+func _test_ne_corner_food_seek_egress() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip NE corner food-seek egress test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1920.0, 1080.0)
+  var he := Vector2(13.5, 30.5)
+  var ne_pos := Vector2(bounds_max.x - he.x - 8.0, he.y + 6.0)
+  var aabbs := _collect_obstacle_field_aabbs()
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var food_east := ne_pos + Vector2(240.0, 0.0)
+  var esc_food: Vector2 = d.call(
+    "_pick_playfield_interior_escape_cardinal",
+    ne_pos,
+    he,
+    aabbs,
+    91,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+    food_east,
+  )
+  _assert(
+    esc_food.length_squared() > 1e-12
+    and not bool(d.call("_cardinal_step_blocked", ne_pos, he, esc_food, aabbs, block_clr))
+    and (esc_food.y > 0.35 or esc_food.x < -0.35),
+    "NE corner food east still egresses south or west",
+  )
+  var unstick: Vector2 = d.call(
+    "_playfield_corner_unstick_intent",
+    ne_pos,
+    he,
+    aabbs,
+    Vector2.ZERO,
+    bounds_max,
+    91,
+    0,
+    rabbit_m,
+    Vector2.ZERO,
+  )
+  _assert(
+    unstick.length_squared() > 1e-12 and (unstick.y > 0.35 or unstick.x < -0.35),
+    "NE corner idle intent still unsticks toward interior",
+  )
+  var latched_bad := {"dir": Vector2.RIGHT, "until_tick": 999999}
+  d.set("_herbivore_corner_escape_lock_by_body", {91: latched_bad})
+  d.set("_physics_ticks", 0)
+  var latched_esc: Vector2 = d.call(
+    "_herbivore_latched_corner_escape_intent",
+    91,
+    ne_pos,
+    he,
+    aabbs,
+    Vector2.ZERO,
+    bounds_max,
+    rabbit_m,
+    food_east,
+  )
+  _assert(
+    latched_esc.length_squared() > 1e-12
+    and not latched_esc.is_equal_approx(Vector2.RIGHT)
+    and (latched_esc.y > 0.35 or latched_esc.x < -0.35),
+    "NE corner drops stale east latch and re-picks interior egress",
+  )
+
+
 func _test_predator_cover_pin_flank() -> void:
   var AD := load("res://AI_int_lib/ai_driver.gd") as Script
   if AD == null or not AD.can_instantiate():
@@ -1618,6 +1785,248 @@ func _test_herbivore_flee_obstacle_slip() -> void:
     slip_ok
     and float(shaped.get("weight_expanding_explore_hint", 0.0)) > 10.0,
     "flee-direction slip shaping arms expand hint before contact",
+  )
+
+
+func _test_herbivore_flee_bush_rock_pinch() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip herbivore bush-rock flee pinch test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var prey_he := Vector2(13.5, 30.5)
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var bush := {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)}
+  var rock := {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)}
+  var pinch_obs := [bush, rock]
+  var prey_pos := Vector2(440.0, 300.0)
+  var threat_pos := Vector2(580.0, 300.0)
+  var cover_samples := PackedVector2Array([Vector2(500.0, 300.0)])
+  var flee_a: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    prey_pos,
+    threat_pos,
+    bounds_max,
+    prey_he,
+    42,
+    rabbit_m,
+    pinch_obs,
+    cover_samples,
+  )
+  var flee_b: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    prey_pos,
+    threat_pos,
+    bounds_max,
+    prey_he,
+    42,
+    rabbit_m,
+    pinch_obs,
+    cover_samples,
+  )
+  _assert(
+    flee_a.length_squared() > 1e-12
+    and flee_a.is_equal_approx(flee_b)
+    and not bool(d.call("_cardinal_step_blocked", prey_pos, prey_he, flee_a, pinch_obs, block_clr)),
+    "bush-rock pinch flee heading is stable and traversable",
+  )
+  _assert(
+    flee_a.dot(Vector2.RIGHT) < 0.85 and flee_a.dot(Vector2.LEFT) < 0.85 and absf(flee_a.y) > 0.35,
+    "bush-rock pinch flee breaks out vertically or diagonally instead of shuttling on cardinals",
+  )
+  var nudge_a: Vector2 = d.call(
+    "_herbivore_flee_obstacle_nudge_intent",
+    flee_a,
+    prey_pos,
+    prey_he,
+    pinch_obs,
+    threat_pos,
+    42,
+    rabbit_m,
+  )
+  var nudge_b: Vector2 = d.call(
+    "_herbivore_flee_obstacle_nudge_intent",
+    flee_a,
+    prey_pos,
+    prey_he,
+    pinch_obs,
+    threat_pos,
+    42,
+    rabbit_m,
+  )
+  _assert(
+    nudge_a.length_squared() > 1e-12
+    and nudge_a.is_equal_approx(nudge_b)
+    and nudge_a.dot(Vector2.RIGHT) < 0.85
+    and nudge_a.dot(Vector2.LEFT) < 0.85
+    and absf(nudge_a.y) > 0.35,
+    "bush-rock pinch flee nudge stays latched on non-horizontal escape",
+  )
+
+
+func _test_herbivore_flee_diagonal_rock_pinch() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip herbivore diagonal-rock flee pinch test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var prey_he := Vector2(13.5, 30.5)
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var rock_ne := {"position": Vector2(470.0, 260.0), "half_extents": Vector2(55.0, 55.0)}
+  var rock_sw := {"position": Vector2(360.0, 370.0), "half_extents": Vector2(55.0, 55.0)}
+  var pinch_obs := [rock_ne, rock_sw]
+  var prey_pos := Vector2(420.0, 315.0)
+  var threat_pos := Vector2(580.0, 315.0)
+  var flee_a: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    prey_pos,
+    threat_pos,
+    bounds_max,
+    prey_he,
+    42,
+    rabbit_m,
+    pinch_obs,
+  )
+  var flee_b: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    prey_pos,
+    threat_pos,
+    bounds_max,
+    prey_he,
+    42,
+    rabbit_m,
+    pinch_obs,
+  )
+  _assert(
+    flee_a.length_squared() > 1e-12
+    and flee_a.is_equal_approx(flee_b)
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        prey_pos,
+        prey_he,
+        flee_a,
+        pinch_obs,
+        block_clr,
+      )
+    ),
+    "diagonal rock pinch flee heading is stable and does not tighten the wedge",
+  )
+  _assert(
+    flee_a.dot(Vector2.LEFT) < 0.92 and absf(flee_a.y) > 0.35,
+    "diagonal rock pinch flee breaks out vertically instead of shuttling west into rocks",
+  )
+  var nudge_a: Vector2 = d.call(
+    "_herbivore_flee_obstacle_nudge_intent",
+    flee_a,
+    prey_pos,
+    prey_he,
+    pinch_obs,
+    threat_pos,
+    42,
+    rabbit_m,
+  )
+  _assert(
+    nudge_a.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        prey_pos,
+        prey_he,
+        nudge_a,
+        pinch_obs,
+        block_clr,
+      )
+    ),
+    "diagonal rock pinch flee nudge avoids wedge-tightening steps",
+  )
+
+
+func _test_herbivore_flee_w_shrub_n_rock_pinch() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip W-shrub N-rock flee pinch test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var bounds_max := Vector2(1000.0, 600.0)
+  var prey_he := Vector2(13.5, 30.5)
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var shrub_w := {"position": Vector2(360.0, 310.0), "half_extents": Vector2(42.0, 42.0)}
+  var shrub_sw := {"position": Vector2(370.0, 360.0), "half_extents": Vector2(42.0, 42.0)}
+  var rock_n := {"position": Vector2(420.0, 230.0), "half_extents": Vector2(55.0, 55.0)}
+  var rock_ne := {"position": Vector2(490.0, 250.0), "half_extents": Vector2(55.0, 55.0)}
+  var pinch_obs := [shrub_w, shrub_sw, rock_n, rock_ne]
+  var prey_pos := Vector2(430.0, 310.0)
+  var threat_pos := Vector2(600.0, 310.0)
+  var flee_a: Vector2 = d.call(
+    "_herbivore_bounded_flee_intent",
+    prey_pos,
+    threat_pos,
+    bounds_max,
+    prey_he,
+    42,
+    rabbit_m,
+    pinch_obs,
+  )
+  _assert(
+    flee_a.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        prey_pos,
+        prey_he,
+        flee_a,
+        pinch_obs,
+        block_clr,
+      )
+    ),
+    "W-shrub N-rock pinch flee picks a traversable heading",
+  )
+  _assert(
+    flee_a.dot(Vector2.LEFT) < 0.92 and flee_a.dot(Vector2(1.0, 0.0)) < 0.85,
+    "W-shrub N-rock pinch flee does not keep pushing west or east into threat",
+  )
+  var locked_w: Vector2 = d.call(
+    "_snap_seek_direction",
+    prey_pos - threat_pos,
+  )
+  var nudged: Vector2 = d.call(
+    "_herbivore_flee_obstacle_nudge_intent",
+    locked_w,
+    prey_pos,
+    prey_he,
+    pinch_obs,
+    threat_pos,
+    42,
+    rabbit_m,
+  )
+  _assert(
+    nudged.length_squared() > 1e-12
+    and not bool(
+      d.call(
+        "_cardinal_step_blocked_for_escape",
+        prey_pos,
+        prey_he,
+        nudged,
+        pinch_obs,
+        block_clr,
+      )
+    ),
+    "W-shrub N-rock flee nudge escapes blocked west snap",
   )
 
 
@@ -2632,11 +3041,54 @@ func _test_seek_direction_commit() -> void:
   var second: Vector2 = fh.call(east, st, 1.0, true) as Vector2
   _assert(second.is_equal_approx(ne), "seek commit holds heading for one second")
   st["locked_until_ms"] = Time.get_ticks_msec() - 1
-  var third: Vector2 = fh.call(east, st, 1.0, true) as Vector2
+  var third: Vector2 = fh.call(east, st, 1.0, true, Vector2.RIGHT, 0, 0) as Vector2
   _assert(third.is_equal_approx(east), "seek commit picks new heading after lock expires")
   Callable(_SeekDirCommitScr, &"reset_state").call(st)
   var idle: Vector2 = fh.call(Vector2.ZERO, st, 1.0, true) as Vector2
   _assert(idle.is_equal_approx(Vector2.ZERO), "seek commit obeys idle immediately")
+  Callable(_SeekDirCommitScr, &"reset_state").call(st)
+  st.clear()
+  var north := Vector2.UP
+  var south := Vector2.DOWN
+  var turn_start: Vector2 = fh.call(south, st, 1.0, true, north, 3, 100) as Vector2
+  _assert(turn_start.is_equal_approx(Vector2.ZERO), "seek commit idles while turning to new heading")
+  _assert(
+    Callable(_SeekDirCommitScr, &"turn_in_progress").call(st),
+    "seek commit marks turn in progress",
+  )
+  var turn_face: Vector2 = Callable(_SeekDirCommitScr, &"turn_facing").call(st, north) as Vector2
+  _assert(
+    turn_face.is_equal_approx(Vector2(0.7071067811865475, -0.7071067811865475)),
+    "seek commit shortest arc from N turns through NE first",
+  )
+  var mid_turn: Vector2 = fh.call(south, st, 1.0, true, north, 3, 101) as Vector2
+  _assert(mid_turn.is_equal_approx(Vector2.ZERO), "seek commit stays idle mid-turn")
+  var turn_done: Vector2 = fh.call(south, st, 1.0, true, north, 3, 112) as Vector2
+  _assert(turn_done.is_equal_approx(south), "seek commit locks new heading after turn completes")
+  _assert(
+    not Callable(_SeekDirCommitScr, &"turn_in_progress").call(st),
+    "seek commit clears turn state after completion",
+  )
+
+
+func _test_seek_direction_turn() -> void:
+  var steps_fn := Callable(_SeekDirTurnScr, &"turn_steps_between")
+  var pick_fn := Callable(_SeekDirTurnScr, &"pick_turn_facing")
+  _assert(steps_fn.call(Vector2.UP, Vector2.UP) == 0, "turn steps zero when same sector")
+  _assert(steps_fn.call(Vector2.UP, Vector2.DOWN) == 4, "N to S is four steps either arc")
+  _assert(steps_fn.call(Vector2.UP, Vector2.RIGHT) == 2, "N to E is two steps")
+  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
+  var first: Dictionary = pick_fn.call(Vector2.UP, Vector2.RIGHT, 4, 0)
+  _assert(first["facing"].is_equal_approx(ne), "turn dwell starts at first arc heading NE")
+  _assert(not bool(first.get("complete", true)), "turn not complete on first segment")
+  var second: Dictionary = pick_fn.call(Vector2.UP, Vector2.RIGHT, 4, 4)
+  _assert(second["facing"].is_equal_approx(Vector2.RIGHT), "turn completes on E after two segments")
+  _assert(bool(second.get("complete", false)), "turn marked complete at destination")
+  var ccw_pick: Dictionary = pick_fn.call(Vector2.RIGHT, Vector2.UP, 2, 0)
+  _assert(
+    ccw_pick["facing"].is_equal_approx(Vector2(0.7071067811865475, -0.7071067811865475)),
+    "E to N shortest arc turns through NE",
+  )
 
 
 func _test_no_goal_patrol_lock() -> void:
@@ -2728,6 +3180,151 @@ func _test_seek_diagonal_intent() -> void:
   var d_flee: Vector2 = _Motor.pick_best_move_intent(flee_ctx)
   _assert(d_flee.length_squared() > 1e-12, "threat repulsion uses 8-way candidate set")
   _assert(d_flee.dot(Vector2.RIGHT) < 0.5, "flee intent moves away from threat ahead")
+
+
+func _test_herbivore_pinch_stall_zero_intent() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip herbivore pinch stall test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var body := CharacterBody2D.new()
+  body.add_to_group("prey")
+  body.global_position = Vector2(440.0, 300.0)
+  var motor_p := _Merge.creature_motor_spine()
+  var he := Vector2(13.5, 30.5)
+  var bush := {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)}
+  var rock := {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)}
+  var obs := [bush, rock]
+  d.set("_motor_stuck_last_pos", {body.get_instance_id(): Vector2(440.0, 300.0)})
+  var stuck: int = d.call(
+    "_motor_stuck_track_mob",
+    body,
+    Vector2.ZERO,
+    motor_p,
+    Vector2.ZERO,
+    obs,
+    he,
+  )
+  _assert(stuck >= 1, "pinched prey counts as stalled even when move intent is zero (seek turn)")
+  body.queue_free()
+  d.queue_free()
+
+
+func _test_blocked_approach_memory() -> void:
+  var infer := Callable(_BlockedApproachScr, &"infer_approach_dir")
+  var from_trail: Vector2 = infer.call(
+    Vector2(200.0, 200.0),
+    Vector2(200.0, 200.0),
+    Vector2.ZERO,
+    [Vector2(100.0, 200.0)],
+    Vector2.ZERO,
+  ) as Vector2
+  _assert(
+    from_trail.is_equal_approx(Vector2.RIGHT),
+    "blocked approach infers entry heading from explore trail",
+  )
+  var st: Dictionary = {}
+  Callable(_BlockedApproachScr, &"record").call(st, Vector2.UP, 10, 20)
+  _assert(
+    (Callable(_BlockedApproachScr, &"active_dir").call(st, 15) as Vector2).is_equal_approx(Vector2.UP),
+    "blocked approach memory stays active within TTL",
+  )
+  _assert(
+    (Callable(_BlockedApproachScr, &"active_dir").call(st, 31) as Vector2).length_squared() < 1e-12,
+    "blocked approach memory expires after TTL",
+  )
+  var he := Vector2(13.5, 30.5)
+  var pinch_ctx := {
+    "creature_position": Vector2(440.0, 300.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(1000.0, 1000.0),
+    "mobs": [],
+    "static_obstacles": [
+      {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)},
+      {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)},
+    ],
+    "creature_half_extents": he,
+    "creature_facing": Vector2.RIGHT,
+    "creature_last_move_direction": Vector2.RIGHT,
+    "food_seek_targets": [Vector2(750.0, 300.0)],
+    "weight_seek_ready_food": 16.0,
+    "motor_has_active_goal": true,
+    "motor_seek_filter_wall_hits": true,
+    "motor_filter_blocked_approach": true,
+    "blocked_approach_direction": Vector2.RIGHT,
+    "blocked_approach_backtrack_dot": 0.55,
+    "weight_blocked_approach_backtrack": 48.0,
+    "weight_seek_backtrack": 14.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "weight_expanding_explore_hint": 0.0,
+    "motor_intent_cost_chaos": 0.0,
+    "motor_tie_cost_epsilon": 0.45,
+    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_pick_tick": 0,
+    "motor_chaos_seed": 1,
+    "shuffle_tie_break": false,
+  }
+  var d_pinch: Vector2 = _Motor.pick_best_move_intent(pinch_ctx)
+  _assert(
+    not d_pinch.is_equal_approx(Vector2.LEFT) and not d_pinch.is_equal_approx(Vector2.RIGHT),
+    "pinch memory skips backtrack toward remembered approach when lateral opens exist",
+  )
+  pinch_ctx["motor_filter_blocked_approach"] = false
+  pinch_ctx.erase("blocked_approach_direction")
+  var d_free: Vector2 = _Motor.pick_best_move_intent(pinch_ctx)
+  _assert(d_free.length_squared() > 1e-12, "pinch pick still chooses a direction without memory gate")
+
+
+func _test_herbivore_food_seek_pinch_escape_backtrack() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  if AD == null or not AD.can_instantiate():
+    push_warning("skip food-seek pinch backtrack escape test — AiDriver script did not compile")
+    return
+  var d: Node = AD.new() as Node
+  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var he := Vector2(13.5, 30.5)
+  var bounds_max := Vector2(1920.0, 1080.0)
+  var prey_pos := Vector2(440.0, 300.0)
+  var obs := [
+    {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)},
+    {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)},
+  ]
+  var food_north := Vector2(440.0, 80.0)
+  var body_id := 8801
+  d.set("_blocked_approach_by_body", {
+    body_id: {"dir": Vector2.UP, "sector": 0, "until_tick": 999999},
+  })
+  d.set("_physics_ticks", 0)
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var esc: Vector2 = d.call(
+    "_herbivore_pinch_escape_intent",
+    body_id,
+    prey_pos,
+    he,
+    obs,
+    2,
+    rabbit_m,
+    Vector2.ZERO,
+    bounds_max,
+    food_north - prey_pos,
+  )
+  _assert(
+    esc.length_squared() > 1e-12
+    and not bool(d.call("_cardinal_step_blocked_for_escape", prey_pos, he, esc, obs, block_clr)),
+    "food-seek pinch escape picks a traversable heading",
+  )
+  _assert(
+    esc.dot(Vector2.DOWN) > 0.55,
+    "food-seek pinch escape backs out south despite blocked-approach memory",
+  )
+  d.queue_free()
 
 
 func _test_seek_wall_filter_and_backtrack() -> void:

@@ -158,6 +158,7 @@ func _read_move_intent() -> Vector2:
 
 
 func _footprint_half_for_clamp() -> Vector2:
+  # Kept for potential future use, but not currently needed
   var cs := get_node_or_null("CollisionShape2D") as CollisionShape2D
   if cs != null and cs.shape is CapsuleShape2D:
     var cap := cs.shape as CapsuleShape2D
@@ -184,16 +185,7 @@ func _sample_movement_speed_multiplier() -> float:
   return env.movement_speed_multiplier(creature_size)
 
 
-func _clamp_to_playfield() -> void:
-  var half := _footprint_half_for_clamp()
-  var before := position
-  position = _PlayfieldClamp.clamp_position(position, half, screen_size)
-  var corr := position - before
-  if corr.length_squared() > 1e-8:
-    if absf(corr.x) > 0.001:
-      velocity.x = 0.0
-    if absf(corr.y) > 0.001:
-      velocity.y = 0.0
+
 
 
 func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
@@ -201,17 +193,18 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
     return heading
   var inc := heading.normalized()
   var space := get_world_2d().direct_space_state
+  var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  var half := _footprint_half_for_clamp()
   if space == null or _wall_slide_pick == null:
     return _PlayfieldClamp.slide_heading_along_edge(
       inc,
       position,
-      _footprint_half_for_clamp(),
+      half,
       screen_size,
-      maxf(obstacle_lookahead_px, 48.0),
+      lookahead,
       _wall_slide_pick,
       _wall_slide_away_hint,
     )
-  var lookahead := maxf(obstacle_lookahead_px, 48.0)
   var origin := global_position
   var target := origin + inc * lookahead
   var query := PhysicsRayQueryParameters2D.create(origin, target)
@@ -222,7 +215,7 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
     return _PlayfieldClamp.slide_heading_along_edge(
       inc,
       position,
-      _footprint_half_for_clamp(),
+      half,
       screen_size,
       lookahead,
       _wall_slide_pick,
@@ -233,7 +226,7 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
     return _PlayfieldClamp.slide_heading_along_edge(
       inc,
       position,
-      _footprint_half_for_clamp(),
+      half,
       screen_size,
       lookahead,
       _wall_slide_pick,
@@ -244,7 +237,7 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
     return _PlayfieldClamp.slide_heading_along_edge(
       inc,
       position,
-      _footprint_half_for_clamp(),
+      half,
       screen_size,
       lookahead,
       _wall_slide_pick,
@@ -257,12 +250,16 @@ func _engine_heading_with_wall_slide(heading: Vector2) -> Vector2:
   return _PlayfieldClamp.slide_heading_along_edge(
     inc,
     position,
-    _footprint_half_for_clamp(),
+    half,
     screen_size,
     lookahead,
     _wall_slide_pick,
     _wall_slide_away_hint,
   )
+
+
+func _clamp_to_playfield() -> void:
+  pass
 
 
 func _physics_process(delta: float) -> void:
@@ -276,14 +273,14 @@ func _physics_process(delta: float) -> void:
   _clamp_to_playfield()
 
   current_velocity = velocity
+  if intent.length_squared() > 1e-8 and current_velocity.length_squared() < 1e-6:
+    current_velocity = Vector2.ZERO
   _apply_calorie_drain_and_starvation(delta)
   if current_velocity.length() > 0.0:
     $AnimatedSprite2D.play()
+    last_move_direction = current_velocity.normalized()
   else:
     $AnimatedSprite2D.stop()
-
-  if current_velocity.length() > 1.0:
-    last_move_direction = current_velocity.normalized()
 
   if current_velocity.x != 0.0:
     $AnimatedSprite2D.animation = "walk"

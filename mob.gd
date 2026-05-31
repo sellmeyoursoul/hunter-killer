@@ -137,15 +137,8 @@ func _footprint_half_for_clamp() -> Vector2:
 
 
 func _clamp_to_playfield() -> void:
-  var half := _footprint_half_for_clamp()
-  var before := global_position
-  global_position = _PlayfieldClamp.clamp_position(global_position, half, screen_size)
-  var corr := global_position - before
-  if corr.length_squared() > 1e-8:
-    if absf(corr.x) > 0.001:
-      linear_velocity.x = 0.0
-    if absf(corr.y) > 0.001:
-      linear_velocity.y = 0.0
+  # Clamping is now handled by physical rock boundaries (physics engine handles boundaries)
+  pass
 
 
 func _apply_calorie_burn_and_starvation(delta: float) -> void:
