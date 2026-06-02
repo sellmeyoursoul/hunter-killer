@@ -74,6 +74,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 | File | Notes |
 |------|-------|
+| [Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md](Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) | **Stat pool → mechanics map:** `stat_*` / `curr_point_*` / `max_point_*` from [CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md); disambiguation vs `current_fit`, `creature_size`, awareness keys. |
 | [Definitive_Features/CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md) | **2D creature movement inventory:** cardinal motor pipeline, config keys, AiDriver tools, carnivore vs herbivore forks (refactor anchor). |
 | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Env catalog; **§6** = **2D layer/mask** (`project.godot`); **§7** acceptance checklist. |
 
