@@ -56,6 +56,15 @@ const _POLE_SIGN: Dictionary = {
   &"individual": 1,
 }
 
+const _POLE_AXIS_ORDER: Array[StringName] = [
+  &"explorer_builder",
+  &"change_stability",
+  &"compassion_self_interest",
+  &"community_individual",
+]
+
+const _RANK_WEIGHTS: Array[float] = [1.0, 0.2, 0.2]
+
 var _rows: Dictionary = {}
 var _writes_this_sec: int = 0
 var _write_sec_bucket: int = -1
@@ -272,6 +281,121 @@ static func rank_modality_tags(
   return out
 
 
+static func raw_axis_for_pole(traits: Dictionary, pole_tag: StringName) -> float:
+  if pole_tag == &"" or pole_tag not in _POLE_AXIS:
+    return 0.0
+  var axis: StringName = _POLE_AXIS[pole_tag]
+  var pole_sign_val := float(_POLE_SIGN.get(pole_tag, 0))
+  var scalar := float(traits.get(axis, 0.0))
+  return (scalar / 100.0) * pole_sign_val
+
+
+## Signed Slot A raw (−100…+100) for one pole facet ([CREATURE_GOAL_DRIVERS.md §5.1](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)).
+static func slot_a_raw_for_pole(traits: Dictionary, pole_tag: StringName) -> float:
+  var raw := raw_axis_for_pole(traits, pole_tag)
+  var unsigned := clampf(abs(raw) * 100.0, 0.0, 100.0)
+  if unsigned < 1e-8:
+    return 0.0
+  return signf(raw) * unsigned
+
+
+## Top-3 pole blend across episode pole tags (write-time / tests).
+static func pole_blend_from_tags(traits: Dictionary, pole_tags: Array) -> float:
+  var scored: Array = []
+  var best_per_axis: Dictionary = {}
+  for raw in pole_tags:
+    var p := StringName(str(raw).strip_edges())
+    if p == &"" or p not in _POLE_AXIS:
+      continue
+    var axis: StringName = _POLE_AXIS[p]
+    var strength := absf(raw_axis_for_pole(traits, p))
+    if best_per_axis.has(axis) and strength <= float(best_per_axis[axis]["strength"]):
+      continue
+    best_per_axis[axis] = {"tag": p, "strength": strength}
+  for axis in _POLE_AXIS_ORDER:
+    if not best_per_axis.has(axis):
+      continue
+    scored.append(best_per_axis[axis])
+  scored.sort_custom(func(a, b): return float(a["strength"]) > float(b["strength"]))
+  var blend := 0.0
+  for i in mini(3, scored.size()):
+    var tag: StringName = scored[i]["tag"]
+    blend += _RANK_WEIGHTS[i] * raw_axis_for_pole(traits, tag)
+  return blend
+
+
+static func bell_cap(slot_b_base: float, motor_p: Dictionary) -> float:
+  var k := float(motor_p.get("replay_bell_k", 1.4))
+  var b_norm := clampf(slot_b_base / 100.0, 0.0, 1.0)
+  return (1.0 - exp(-k * b_norm)) * 75.0
+
+
+static func urgency_boost(
+  external_urgency: float, slot_b_base: float, motor_p: Dictionary
+) -> float:
+  var min_b := float(motor_p.get("replay_urgency_slot_b_min", 90.0))
+  if slot_b_base < min_b:
+    return 0.0
+  var slope := float(motor_p.get("urgency_boost_linear_slope", 25.0))
+  return slope * clampf(external_urgency, 0.0, 1.0)
+
+
+static func cap_final(
+  slot_b_base: float, external_urgency: float, motor_p: Dictionary
+) -> float:
+  return minf(
+    100.0,
+    bell_cap(slot_b_base, motor_p) + urgency_boost(external_urgency, slot_b_base, motor_p),
+  )
+
+
+static func effective_slot_a(
+  slot_a_raw: float, slot_b_base: float, external_urgency: float, motor_p: Dictionary
+) -> float:
+  if absf(slot_a_raw) < 1e-8:
+    return 0.0
+  var cap_f := cap_final(slot_b_base, external_urgency, motor_p)
+  return signf(slot_a_raw) * minf(absf(slot_a_raw), cap_f)
+
+
+static func _jeopardy_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> float:
+  if bool(motor_ctx.get("tactic_jeopardy_egress", false)):
+    return 1.0
+  if bool(motor_ctx.get("herbivore_flee_active", false)):
+    return 1.0
+  var imminent: Array = motor_ctx.get("imminent_mob_points", []) as Array
+  if imminent.is_empty():
+    return 0.0
+  var pos_v: Variant = motor_ctx.get("creature_position", null)
+  if typeof(pos_v) != TYPE_VECTOR2:
+    return 1.0
+  var pos := pos_v as Vector2
+  var r := float(motor_p.get("food_seek_imminent_mob_radius_px", 100.0))
+  for mp in imminent:
+    if typeof(mp) == TYPE_VECTOR2 and pos.distance_to(mp as Vector2) <= r:
+      return 1.0
+  return 0.0
+
+
+static func _hunger_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> float:
+  var cr := float(motor_ctx.get("calorie_ratio", 1.0))
+  var ceil_seek := float(motor_p.get("seek_priority_food_ceiling", 0.80))
+  if cr >= ceil_seek:
+    return 0.0
+  if ceil_seek <= 1e-6:
+    return 1.0
+  return clampf((ceil_seek - cr) / ceil_seek, 0.0, 1.0)
+
+
+## Bitmask contributors → [code]max[/code] aggregate ([CREATURE_GOAL_DRIVERS.md §5.1.3](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)).
+static func compute_external_urgency(motor_ctx: Dictionary, motor_p: Dictionary) -> float:
+  return clampf(
+    maxf(_jeopardy_subscore(motor_ctx, motor_p), _hunger_subscore(motor_ctx, motor_p)),
+    0.0,
+    1.0,
+  )
+
+
 static func current_fit_for_modality(
   modality: StringName, motor_ctx: Dictionary, creature_pos: Vector2, hotspot_r: float
 ) -> float:
@@ -341,11 +465,18 @@ func try_salient_write(
   effective_goal_kinds: Array,
   effective_modality_allowlist: Array,
   _traits: Dictionary = {},
+  goal_kind_catalog: Dictionary = {},
 ) -> bool:
   if not _rate_limit_ok(motor_p):
     return false
   if not _GkReg.validate_goal_kind(goal_kind, effective_goal_kinds):
     push_error("goal_source_memory: reject write — unknown GoalKind %s" % str(goal_kind))
+    return false
+  if (
+    typeof(goal_kind_catalog) == TYPE_DICTIONARY
+    and not goal_kind_catalog.is_empty()
+    and not _GkReg.salient_writes_enabled(goal_kind, goal_kind_catalog)
+  ):
     return false
   var tier: StringName = outcome.get("tier", TIER_NEUTRAL)
   if tier == TIER_NEUTRAL:
@@ -483,7 +614,7 @@ func consult_replay_weight(
   if consult_hash < 0:
     return 1.0
   var best_strength := 0.0
-  var best_rank := 0.0
+  var best_bundle: Dictionary = {}
   var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
   for key in _rows.keys():
     var row: Dictionary = _rows[key]
@@ -497,35 +628,46 @@ func consult_replay_weight(
     row["last_used_time"] = Time.get_ticks_msec() / 1000.0
     _rows[key] = row
     var stored := float(row.get("stored_strength", 0.0))
-    var rank := _replay_rank_score(row, motor_p, motor_ctx, creature_pos, traits, hotspot_r)
-    if rank > best_rank or (is_equal_approx(rank, best_rank) and stored > best_strength):
-      best_rank = rank
+    var bundle := _replay_rank_bundle(row, motor_p, motor_ctx, creature_pos, traits, hotspot_r)
+    var rank := float(bundle.get("replay_rank_score", 0.0))
+    if rank > float(best_bundle.get("replay_rank_score", -1.0)) or (
+      is_equal_approx(rank, float(best_bundle.get("replay_rank_score", -1.0)))
+      and stored > best_strength
+    ):
+      best_bundle = bundle
       best_strength = stored
-  if best_strength <= 1e-8 and best_rank <= 1e-8:
+  if best_strength <= 1e-8 and float(best_bundle.get("replay_rank_score", 0.0)) <= 1e-8:
     return 1.0
-  var slot_b := clampf(best_rank, 0.0, 100.0)
-  var effective_a := _trait_affinity_scalar(traits)
-  var replay_delta := effective_a * (slot_b / 100.0)
+  var slot_b := float(best_bundle.get("slot_b_base", 0.0))
+  var confidence := float(best_bundle.get("confidence", 1.0))
+  var pole: StringName = best_bundle.get("pole_facet_tag", &"explorer") as StringName
+  var slot_a_raw := slot_a_raw_for_pole(traits, pole)
+  var ext := compute_external_urgency(motor_ctx, motor_p)
+  var effective_a := effective_slot_a(slot_a_raw, slot_b, ext, motor_p)
+  var replay_delta := effective_a * (slot_b / 100.0) * confidence
   return best_strength * (1.0 + replay_delta / 100.0)
 
 
-func _modality_allowed(mod: StringName, _motor_ctx: Dictionary) -> bool:
-  return mod != &""
+func _modality_allowed(mod: StringName, motor_ctx: Dictionary) -> bool:
+  if mod == &"":
+    return false
+  var allow: Variant = motor_ctx.get("effective_modality_allowlist", null)
+  if typeof(allow) != TYPE_ARRAY:
+    return true
+  for a in allow as Array:
+    if a == mod:
+      return true
+  return false
 
 
-func _trait_affinity_scalar(traits: Dictionary) -> float:
-  var eb := float(traits.get("explorer_builder", 0.0)) / 100.0
-  return clampf(eb * 0.5, -1.0, 1.0)
-
-
-func _replay_rank_score(
+func _replay_rank_bundle(
   row: Dictionary,
   motor_p: Dictionary,
   motor_ctx: Dictionary,
   creature_pos: Vector2,
   traits: Dictionary,
   hotspot_r: float,
-) -> float:
+) -> Dictionary:
   var modality: StringName = row.get("modality_tag", &"open_forage")
   var fit := current_fit_for_modality(modality, motor_ctx, creature_pos, hotspot_r)
   var stored := float(row.get("stored_strength", 0.0))
@@ -553,7 +695,28 @@ func _replay_rank_score(
   var novelty_score := (1.0 - evidence) * (1.0 - mixed_penalty) + streak_bonus
   var proven_score := evidence * (0.5 + 0.5 * success_rate)
   var trait_rank_bias := lerpf(novelty_score, proven_score, t)
-  return slot_b * confidence * trait_rank_bias
+  var pole: StringName = row.get("pole_facet_tag", &"explorer")
+  return {
+    "slot_b_base": slot_b,
+    "confidence": confidence,
+    "replay_rank_score": slot_b * confidence * trait_rank_bias,
+    "pole_facet_tag": pole,
+  }
+
+
+func _replay_rank_score(
+  row: Dictionary,
+  motor_p: Dictionary,
+  motor_ctx: Dictionary,
+  creature_pos: Vector2,
+  traits: Dictionary,
+  hotspot_r: float,
+) -> float:
+  return float(
+    _replay_rank_bundle(row, motor_p, motor_ctx, creature_pos, traits, hotspot_r).get(
+      "replay_rank_score", 0.0
+    )
+  )
 
 
 static func project_believed_goal_bias(

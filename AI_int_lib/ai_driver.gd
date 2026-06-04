@@ -34,12 +34,17 @@ const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 const _GeomScr := preload("res://creature/motor/motor_obstacle_geometry.gd")
 const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
+const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _Tier2Dom := preload("res://creature/motor/tier2_dominance.gd")
 const _TraitTier2 := preload("res://creature/motor/trait_tier2_mapper.gd")
 const _TacticScr := preload("res://creature/motor/motor_tactic_classifier.gd")
+const _SeekCandScr := preload("res://creature/motor/seek_candidate.gd")
+const _GoalSeekScr := preload("res://creature/motor/goal_seek.gd")
+const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
+const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -225,8 +230,6 @@ var _herbivore_food_latch_by_body: Dictionary = {}
 var _herbivore_prev_intent_by_body: Dictionary = {}
 ## Latched playfield-corner egress for prey (runs even during food seek).
 var _herbivore_corner_escape_lock_by_body: Dictionary = {}
-## Last seen prey pose per carnivore instance id when rabbit/player leaves awareness cone (duel search).
-var _predator_prey_memory_by_id: Dictionary = {}
 ## True after carnivore has had prey inside live awareness this round (gates memory chase).
 var _predator_prey_ever_seen_by_id: Dictionary = {}
 
@@ -399,7 +402,6 @@ func _motor_reset_scripted_auxiliary_states() -> void:
   _seek_direction_commit_state_by_body.clear()
   _no_goal_patrol_lock_state_by_body.clear()
   _jeopardy_forced_turn_state_by_body.clear()
-  _predator_prey_memory_by_id.clear()
   _predator_prey_ever_seen_by_id.clear()
   _herbivore_flee_latch_by_body.clear()
   _herbivore_flee_lock_by_body.clear()
@@ -590,55 +592,52 @@ func _predator_prey_cone_extra(motor_p: Dictionary) -> float:
 ## - predator: Carnivore body ([RigidBody2D] mob).
 ## Returns:
 ## - Array of [code]Vector2[/code]; empty when awareness disabled or scene missing.
-func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
-  if predator == null or _main == null:
-    return []
-  var motor_p := _creature_motor_params_for_body(predator)
-  var awareness_r := float(motor_p.get("awareness_radius", 0.0))
-  if awareness_r <= 0.0:
-    return []
-  var creature_pos := predator.global_position
+## Footprint half-extents for motor awareness / gating ([code]creature_motor[/code] or capsule shape).
+func _footprint_half_extents_for_body(body: PhysicsBody2D, motor_p: Dictionary) -> Vector2:
   var he_xy := Vector2(
     maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
     maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
   )
-  var cs_shape := predator.get_node_or_null("CollisionShape2D") as CollisionShape2D
+  if body == null:
+    return he_xy
+  var cs_shape := body.get_node_or_null("CollisionShape2D") as CollisionShape2D
   if cs_shape != null and cs_shape.shape is CapsuleShape2D:
     var cap := cs_shape.shape as CapsuleShape2D
     he_xy = Vector2(
       maxf(0.0, cap.radius),
       maxf(0.0, cap.radius + cap.height * 0.5),
     )
-  var cone_extra := _predator_prey_cone_extra(motor_p)
-  var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
-  var cone_cos := cos(deg_to_rad(half_deg))
-  var facing := Vector2.RIGHT
-  var fd: Variant = predator.get("last_move_direction")
+  return he_xy
+
+
+## Last move direction for awareness cone, or [code]Vector2.RIGHT[/code].
+func _facing_for_body(body: PhysicsBody2D) -> Vector2:
+  if body == null:
+    return Vector2.RIGHT
+  var fd: Variant = body.get("last_move_direction")
   if typeof(fd) == TYPE_VECTOR2:
     var fv := fd as Vector2
     if fv.length() > 1e-4:
-      facing = fv.normalized()
-  var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
-  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
-  var out: Array = []
-  for n in _main.get_tree().get_nodes_in_group(&"prey"):
-    if not (n is Node2D):
-      continue
-    var prey_node := n as Node
-    if prey_node == predator:
-      continue
-    var prey_pos := (n as Node2D).global_position
-    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, prey_pos)
-    if omni:
-      if gd <= awareness_r:
-        out.append(prey_pos)
-    else:
-      var eff := _effective_awareness_reach_for_driver(
-        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
-      )
-      if gd <= eff:
-        out.append(prey_pos)
-  return out
+      return fv.normalized()
+  return Vector2.RIGHT
+
+
+func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
+  if predator == null or _main == null:
+    return []
+  var motor_p := _creature_motor_params_for_body(predator)
+  var he_xy := _footprint_half_extents_for_body(predator, motor_p)
+  var facing := _facing_for_body(predator)
+  var policy := _MotorTargetBuilder.food_intake_policy_for_body(predator)
+  return _MotorTargetBuilder.collect_prey_positions(
+    _main.get_tree(),
+    predator,
+    policy,
+    motor_p,
+    predator.global_position,
+    he_xy,
+    facing,
+  )
 
 
 ## Test/helper: prey positions under explicit motor params and facing (mirrors [_prey_positions_for_predator_motor] gating).
@@ -650,76 +649,18 @@ func _collect_prey_positions(
 ) -> Array:
   if predator == null or _main == null:
     return []
-  var awareness_r := float(motor_p.get("awareness_radius", 0.0))
-  if awareness_r <= 0.0:
-    return []
-  var cone_extra := _predator_prey_cone_extra(motor_p)
-  var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
-  var cone_cos := cos(deg_to_rad(half_deg))
-  var facing := Vector2.RIGHT
-  var fd: Variant = predator.get("last_move_direction")
-  if typeof(fd) == TYPE_VECTOR2:
-    var fv := fd as Vector2
-    if fv.length() > 1e-4:
-      facing = fv.normalized()
-  var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
-  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
-  var out: Array = []
-  for n in _main.get_tree().get_nodes_in_group(&"prey"):
-    if not (n is Node2D):
-      continue
-    if (n as Node) == predator:
-      continue
-    var prey_pos := (n as Node2D).global_position
-    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, prey_pos)
-    if omni:
-      if gd <= awareness_r:
-        out.append(prey_pos)
-    else:
-      var eff := _effective_awareness_reach_for_driver(
-        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
-      )
-      if gd <= eff:
-        out.append(prey_pos)
-  return out
+  var policy := _MotorTargetBuilder.food_intake_policy_for_body(predator)
+  return _MotorTargetBuilder.collect_prey_positions(
+    _main.get_tree(),
+    predator,
+    policy,
+    motor_p,
+    creature_pos,
+    he_xy,
+    _facing_for_body(predator),
+  )
 
 
-## Records last prey position/velocity when [param prey_pts] is non-empty (predator instance id key).
-func _predator_prey_memory_touch(
-  predator: PhysicsBody2D, prey_pts: Array, pursuit_targets: Array
-) -> void:
-  if predator == null or prey_pts.is_empty():
-    return
-  _predator_prey_ever_seen_by_id[predator.get_instance_id()] = true
-  var pred_pos := predator.global_position
-  var best_pos := pred_pos
-  var best_d_sq := INF
-  for pq in prey_pts:
-    if typeof(pq) != TYPE_VECTOR2:
-      continue
-    var p := pq as Vector2
-    var d_sq := pred_pos.distance_squared_to(p)
-    if d_sq < best_d_sq:
-      best_d_sq = d_sq
-      best_pos = p
-  var best_vel := Vector2.ZERO
-  for item in pursuit_targets:
-    if typeof(item) != TYPE_DICTIONARY:
-      continue
-    var ppos: Vector2 = item.get("position", Vector2.ZERO)
-    if ppos.distance_squared_to(best_pos) < 64.0:
-      var pvel: Variant = item.get("velocity", Vector2.ZERO)
-      if typeof(pvel) == TYPE_VECTOR2:
-        best_vel = pvel as Vector2
-      break
-  _predator_prey_memory_by_id[predator.get_instance_id()] = {
-    "position": best_pos,
-    "velocity": best_vel,
-    "last_seen_ms": Time.get_ticks_msec(),
-  }
-
-
-## Fills [param prey_pts_live] and [param pursuit_targets] from [param predator_memory] after prey leaves live awareness.
 ## True when the footprint sits inside the playfield corner / edge band.
 func _creature_playfield_corner_hugging(
   creature_pos: Vector2,
@@ -865,57 +806,11 @@ func _creature_playfield_corner_wedge_active(
 
 
 func _predator_inject_memory_chase_targets(
-  predator_memory: Dictionary, prey_pts_live: Array, pursuit_targets: Array
+  predator_memory: Dictionary, prey_pts_live: Array, pursuit_targets: Array, motor_p: Dictionary
 ) -> void:
-  if not bool(predator_memory.get("active", false)):
-    return
-  var mp: Vector2 = predator_memory.get("position", Vector2.ZERO)
-  if mp == Vector2.ZERO:
-    return
-  prey_pts_live.clear()
-  prey_pts_live.append(mp)
-  if pursuit_targets.is_empty():
-    var mem_scale := clampf(float(predator_memory.get("strength", 1.0)), 0.4, 1.0)
-    pursuit_targets.append({
-      "position": mp,
-      "velocity": predator_memory.get("velocity", Vector2.ZERO),
-      "cost_scale": mem_scale,
-    })
-
-
-## Returns stale prey snapshot for search when live [param prey_pts] is empty but memory TTL/radius still valid.
-func _predator_prey_memory_sample(
-  predator: PhysicsBody2D, motor_p: Dictionary, creature_pos: Vector2
-) -> Dictionary:
-  var inactive := {
-    "active": false,
-    "position": Vector2.ZERO,
-    "velocity": Vector2.ZERO,
-    "strength": 0.0,
-  }
-  if predator == null:
-    return inactive
-  var bid := predator.get_instance_id()
-  if not _predator_prey_memory_by_id.has(bid):
-    return inactive
-  var rec: Dictionary = _predator_prey_memory_by_id[bid]
-  var ttl_ms := int(float(motor_p.get("predator_prey_memory_sec", 10.0)) * 1000.0)
-  var forget_r := float(motor_p.get("predator_prey_memory_forget_radius_px", 2800.0))
-  var age_ms := Time.get_ticks_msec() - int(rec.get("last_seen_ms", 0))
-  if age_ms > ttl_ms:
-    _predator_prey_memory_by_id.erase(bid)
-    return inactive
-  var mem_pos: Vector2 = rec.get("position", Vector2.ZERO)
-  if creature_pos.distance_to(mem_pos) > forget_r:
-    _predator_prey_memory_by_id.erase(bid)
-    return inactive
-  var strength := clampf(1.0 - float(age_ms) / float(maxi(1, ttl_ms)), 0.4, 1.0)
-  return {
-    "active": true,
-    "position": mem_pos,
-    "velocity": rec.get("velocity", Vector2.ZERO),
-    "strength": strength,
-  }
+  _GoalBeliefScr.inject_moving_memory_chase(
+    predator_memory, prey_pts_live, pursuit_targets, motor_p
+  )
 
 
 ## Stable chase heading toward [param memory_pos] after prey leaves the awareness cone.
@@ -1296,7 +1191,10 @@ func _rescan_and_patch_goal_ctx(
     typeof(cneed) == TYPE_FLOAT or typeof(cneed) == TYPE_INT
   ):
     cr = clampf(float(ccal) / maxf(1.0, float(cneed)), 0.0, 1.0)
-  if body.is_in_group(&"prey"):
+  var policy := _MotorTargetBuilder.food_intake_policy_for_body(body)
+  var has_plants := not (policy.get("plant_groups") as Array).is_empty()
+  var has_prey := not (policy.get("prey_groups") as Array).is_empty()
+  if has_plants:
     var food_split: Dictionary = _motor_food_plants_in_awareness_by_readiness(
       motor_p, pos, he, facing
     )
@@ -1316,7 +1214,7 @@ func _rescan_and_patch_goal_ctx(
     ctx["exploration_blend_multiplier"] = 0.0
     ctx["weight_explore_idle_penalty"] = 0.0
     return true
-  if body.is_in_group(&"mobs") and not body.is_in_group(&"prey"):
+  if has_prey:
     if cr >= 0.998:
       return false
     var prey_pts: Array = _prey_positions_for_predator_motor(body)
@@ -2690,47 +2588,13 @@ func _herbivore_predator_threat_sample(
   he_xy: Vector2,
   facing: Vector2,
 ) -> Dictionary:
-  var inactive := {
-    "in_awareness": false,
-    "gate_dist": INF,
-    "world_pos": Vector2.ZERO,
-  }
   if _main == null or prey_body == null:
-    return inactive
-  var awareness_r := float(motor_p.get("awareness_radius", 0.0))
-  if awareness_r <= 0.0:
-    return inactive
-  var cone_extra := float(motor_p.get("awareness_cone_extra", 0.0))
-  var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
-  var cone_cos := cos(deg_to_rad(half_deg))
-  var omni := bool(motor_p.get("herbivore_threat_awareness_omni", false))
-  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
-  var best_dist := INF
-  var best_pos := Vector2.ZERO
-  for n in _main.get_tree().get_nodes_in_group(&"mobs"):
-    if not (n is RigidBody2D):
-      continue
-    var rb := n as RigidBody2D
-    if rb == prey_body:
-      continue
-    var mp := rb.global_position
-    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, mp)
-    var in_zone := false
-    if omni:
-      in_zone = gd <= awareness_r
-    else:
-      var eff := _effective_awareness_reach_for_driver(
-        creature_pos, mp, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
-      )
-      in_zone = gd <= eff
-    if not in_zone:
-      continue
-    if gd < best_dist:
-      best_dist = gd
-      best_pos = mp
-  if best_dist >= INF:
-    return inactive
-  return {"in_awareness": true, "gate_dist": best_dist, "world_pos": best_pos}
+    return _ThreatSampleScr.to_legacy_herbivore_dict(_ThreatSampleScr.inactive())
+  var threats: Array = _MotorTargetBuilder.collect_hostile_threat_samples(
+    _main.get_tree(), prey_body, motor_p, creature_pos, he_xy, facing
+  )
+  var best := _MotorTargetBuilder.nearest_hostile_threat_sample(threats)
+  return _ThreatSampleScr.to_legacy_herbivore_dict(best)
 
 
 ## True when prey footprint clearance to static solids is within herbivore obstacle probe range.
@@ -3636,40 +3500,12 @@ func _filter_obstacle_geom_for_forage(
 func _pursuit_targets_for_predator(
   predator: PhysicsBody2D, motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2, facing: Vector2
 ) -> Array:
-  var arr: Array = []
   if predator == null or _main == null:
-    return arr
-  var awareness_r := float(motor_p.get("awareness_radius", 0.0))
-  if awareness_r <= 0.0:
-    return arr
-  var cone_extra := _predator_prey_cone_extra(motor_p)
-  var half_deg := float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
-  var cone_cos := cos(deg_to_rad(half_deg))
-  var omni := bool(motor_p.get("predator_prey_awareness_omni", false))
-  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
-  for n in _main.get_tree().get_nodes_in_group(&"prey"):
-    if not (n is Node2D):
-      continue
-    if (n as Node) == predator:
-      continue
-    var prey_pos := (n as Node2D).global_position
-    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, prey_pos)
-    if omni:
-      if gd > awareness_r:
-        continue
-    else:
-      var eff := _effective_awareness_reach_for_driver(
-        creature_pos, prey_pos, awareness_r, cone_extra, cone_cos, facing, forward_cone_only
-      )
-      if gd > eff:
-        continue
-    var vel := Vector2.ZERO
-    if n is CharacterBody2D:
-      vel = (n as CharacterBody2D).velocity
-    elif n is RigidBody2D:
-      vel = (n as RigidBody2D).linear_velocity
-    arr.append({"position": prey_pos, "velocity": vel, "cost_scale": 1.0})
-  return arr
+    return []
+  var policy := _MotorTargetBuilder.food_intake_policy_for_body(predator)
+  return _MotorTargetBuilder.collect_pursuit_targets(
+    _main.get_tree(), predator, policy, motor_p, creature_pos, he_xy, facing
+  )
 
 
 ## Builds [param mobs] array for [code]CardinalAvoidance[/code]: live entries, unreachable live with memory scale (only if that mob was previously inside effective awareness this round), despawned ghosts (same observed rule).
@@ -3826,6 +3662,7 @@ func _goal_memory_meta_for_body(body: PhysicsBody2D) -> Dictionary:
   var meta := {
     "pack_root": pack_root,
     "effective_goal_kinds": _GkReg.effective_goal_kinds_for_pack(pack_root),
+    "goal_kind_catalog": _GkReg.goal_kind_catalog_for_pack(pack_root),
     "effective_modality_allowlist": _GoalMem.effective_modality_allowlist_for_pack(pack_root),
     "traits": traits,
   }
@@ -3865,10 +3702,11 @@ func _goal_belief_merge_into_motor_context(
   body_id: int,
   live_ids: Dictionary,
   now_ms: int,
+  allow_moving_prey_memory: bool = true,
 ) -> Dictionary:
   var beliefs := _goal_belief_for_body(body_id)
   ctx = _GoalBeliefScr.merge_into_motor_context(
-    beliefs, ctx, creature_pos, motor_p, live_ids, now_ms
+    beliefs, ctx, creature_pos, motor_p, live_ids, now_ms, allow_moving_prey_memory
   )
   _goal_belief_by_body[body_id] = beliefs
   return ctx
@@ -3918,8 +3756,12 @@ func notify_food_consumption_outcome(
     food_anchor,
   )
   motor_ctx["environment_grid"] = env_grid
+  motor_ctx["calorie_ratio"] = cr
+  var goal_kind := _GkReg.resolve_goal_kind_at_outcome(dom, {}, meta["goal_kind_catalog"])
+  if goal_kind == &"":
+    return
   store.try_salient_write(
-    _GkReg.GK_FIND_FOOD,
+    goal_kind,
     dom,
     food_anchor,
     motor_p,
@@ -3929,23 +3771,26 @@ func notify_food_consumption_outcome(
     meta["effective_goal_kinds"],
     meta["effective_modality_allowlist"],
     meta["traits"],
+    meta["goal_kind_catalog"],
   )
   store.clear_salient_continuation()
 
 
 func _body_has_acute_threat(body: PhysicsBody2D, motor_p: Dictionary) -> bool:
-  if not body.is_in_group(&"prey"):
+  if body == null or _main == null:
     return false
-  var he := Vector2(
-    maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
-    maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
-  )
-  var facing := Vector2.RIGHT
-  var fd: Variant = body.get("last_move_direction")
-  if typeof(fd) == TYPE_VECTOR2 and (fd as Vector2).length_squared() > 1e-8:
-    facing = (fd as Vector2).normalized()
+  var mode := _MotorTargetBuilder.feeding_mode_for_body(body)
+  if (
+    mode != _CreatureDefinition.FeedingMode.HERBIVORE
+    and mode != _CreatureDefinition.FeedingMode.OMNIVORE
+  ):
+    return false
   var threat := _herbivore_predator_threat_sample(
-    body, motor_p, body.global_position, he, facing
+    body,
+    motor_p,
+    body.global_position,
+    _footprint_half_extents_for_body(body, motor_p),
+    _facing_for_body(body),
   )
   return bool(threat.get("in_awareness", false))
 
@@ -3967,8 +3812,11 @@ func _on_jeopardy_cleared(body: PhysicsBody2D, motor_p: Dictionary, motor_ctx: D
   var tier := _GoalMem.TIER_SUCCESS
   if bool(rev.get("near_death", false)):
     tier = _GoalMem.TIER_NEAR_DEATH
+  var goal_kind := _GkReg.resolve_goal_kind_at_outcome(dom, {}, meta["goal_kind_catalog"])
+  if goal_kind == &"":
+    return
   store.try_salient_write(
-    _GkReg.GK_AVOID_HOSTILES,
+    goal_kind,
     dom,
     body.global_position,
     motor_p,
@@ -3978,6 +3826,7 @@ func _on_jeopardy_cleared(body: PhysicsBody2D, motor_p: Dictionary, motor_ctx: D
     meta["effective_goal_kinds"],
     meta["effective_modality_allowlist"],
     meta["traits"],
+    meta["goal_kind_catalog"],
   )
   store.clear_salient_continuation()
 
@@ -4031,7 +3880,7 @@ func _apply_believed_goal_bias_to_ctx(
   dom_leaf: StringName,
   tactic_ctx: Dictionary = {},
 ) -> void:
-  if not body.is_in_group(&"prey"):
+  if not bool(ctx.get("supports_plant_belief", body.is_in_group(&"prey"))):
     return
   if bool(ctx.get("herbivore_flee_panic", false)):
     return
@@ -4041,9 +3890,10 @@ func _apply_believed_goal_bias_to_ctx(
   var meta := _goal_memory_meta_for_body(body)
   var pos: Vector2 = ctx["creature_position"]
   var env_grid: Variant = ctx.get("environment_grid", null)
-  var food_anchor := _GoalMem.nearest_eligible_food_anchor(
-    ctx.get("food_seek_targets", []) as Array, pos
-  )
+  var anchor_targets: Array = ctx.get("goal_seek_targets", []) as Array
+  if anchor_targets.is_empty():
+    anchor_targets = ctx.get("food_seek_targets", []) as Array
+  var food_anchor := _GoalMem.nearest_eligible_food_anchor(anchor_targets, pos)
   var sector_in: Array = []
   var bias_existing: Variant = ctx.get("believed_goal_source_bias", {})
   if typeof(bias_existing) == TYPE_DICTIONARY:
@@ -4053,7 +3903,12 @@ func _apply_believed_goal_bias_to_ctx(
     "tactic_jeopardy_egress": bool(ctx.get("tactic_jeopardy_egress", false)),
   }
   motor_ctx_tactic["environment_grid"] = ctx.get("environment_grid", null)
-  var dom_gk := _GkReg.tier2_to_default_goal_kind(dom_leaf)
+  motor_ctx_tactic["calorie_ratio"] = float(ctx.get("calorie_ratio", 1.0))
+  motor_ctx_tactic["effective_modality_allowlist"] = meta["effective_modality_allowlist"]
+  motor_ctx_tactic["imminent_mob_points"] = ctx.get("imminent_mob_points", [])
+  motor_ctx_tactic["creature_position"] = pos
+  motor_ctx_tactic["herbivore_flee_active"] = bool(ctx.get("herbivore_flee_active", false))
+  var dom_gk := _GkReg.resolve_goal_kind_at_outcome(dom_leaf, {}, meta["goal_kind_catalog"])
   if dom_gk == &"":
     dom_gk = _GkReg.GK_FIND_FOOD
   var bias: Dictionary = _GoalMem.project_believed_goal_bias(
@@ -4073,8 +3928,11 @@ func _apply_believed_goal_bias_to_ctx(
   ctx["weight_believed_goal_pull"] = w_pull
   if float(bias.get("pull_mag", 0.0)) <= 1e-6:
     var esc_mul := _GoalMem.escalate_seek_multiplier(store, pos, motor_p, dom_leaf, 0.0)
-    if esc_mul > 1.0 and float(ctx.get("weight_seek_ready_food", 0.0)) > 0.0:
-      ctx["weight_seek_ready_food"] = float(ctx["weight_seek_ready_food"]) * esc_mul
+    if esc_mul > 1.0 and float(ctx.get("weight_seek_goal", ctx.get("weight_seek_ready_food", 0.0))) > 0.0:
+      var w_esc := float(ctx.get("weight_seek_goal", ctx.get("weight_seek_ready_food", 0.0)))
+      w_esc *= esc_mul
+      ctx["weight_seek_goal"] = w_esc
+      ctx["weight_seek_ready_food"] = w_esc
       var preserve_floor := float(motor_p.get("preserve_bias_food_floor", 0.90))
       var blend := float(motor_p.get("believed_goal_escalate_preserve_blend", 0.55))
       var ccal: Variant = body.get("current_calories")
@@ -4085,9 +3943,14 @@ func _apply_believed_goal_bias_to_ctx(
       ):
         cr = clampf(float(ccal) / maxf(1.0, float(cneed)), 0.0, 1.0)
       if cr >= preserve_floor:
-        ctx["weight_seek_ready_food"] *= lerpf(1.0, blend, 0.35)
-  elif float(ctx.get("weight_seek_ready_food", 0.0)) > 0.0 and replay_w > 1.0:
-    ctx["weight_seek_ready_food"] = float(ctx["weight_seek_ready_food"]) * replay_w
+        var w_pb := float(ctx.get("weight_seek_goal", ctx.get("weight_seek_ready_food", 0.0)))
+        w_pb *= lerpf(1.0, blend, 0.35)
+        ctx["weight_seek_goal"] = w_pb
+        ctx["weight_seek_ready_food"] = w_pb
+  elif float(ctx.get("weight_seek_goal", ctx.get("weight_seek_ready_food", 0.0))) > 0.0 and replay_w > 1.0:
+    var w_rep := float(ctx.get("weight_seek_goal", ctx.get("weight_seek_ready_food", 0.0))) * replay_w
+    ctx["weight_seek_goal"] = w_rep
+    ctx["weight_seek_ready_food"] = w_rep
 
 
 ## In-awareness [code]food_plants[/code] split by each node's [code]is_pickup_ready_for_motor[/code] (same cone/radius as mob motor gating).
@@ -4103,34 +3966,14 @@ func _apply_believed_goal_bias_to_ctx(
 func _motor_food_plants_in_awareness_by_readiness(
   motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2, facing_v: Vector2
 ) -> Dictionary:
-  var ready_positions: Array = []
-  var unready_positions: Array = []
   if _main == null:
-    return {"ready": ready_positions, "unready": unready_positions}
-  var awareness_r: float = float(motor_p.get("awareness_radius", 0.0))
-  if awareness_r <= 0.0:
-    return {"ready": ready_positions, "unready": unready_positions}
-  var cone_extra: float = float(motor_p.get("awareness_cone_extra", 0.0))
-  var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
-  var cone_cos: float = cos(deg_to_rad(half_deg))
-  var forward_cone_only := bool(motor_p.get("awareness_forward_cone_only", false))
-  for n in _main.get_tree().get_nodes_in_group(&"food_plants"):
-    if not n.has_method(&"is_pickup_ready_for_motor"):
-      continue
-    var fp: Vector2 = n.global_position
-    var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, fp)
-    var eff := _effective_awareness_reach_for_driver(
-      creature_pos, fp, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
-    )
-    if gd > eff:
-      continue
-    var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
-    var entry := {"pos": fp, "instance_id": n.get_instance_id()}
-    if typeof(ready_v) == TYPE_BOOL and bool(ready_v):
-      ready_positions.append(entry)
-    else:
-      unready_positions.append(entry)
-  return {"ready": ready_positions, "unready": unready_positions}
+    return {"ready": [], "unready": []}
+  var policy := _DietRegistry.default_food_intake_policy(
+    _CreatureDefinition.FeedingMode.HERBIVORE
+  )
+  return _MotorTargetBuilder.scan_food_plants_in_awareness(
+    _main.get_tree(), policy, motor_p, creature_pos, he_xy, facing_v
+  )
 
 
 ## Live mob centers for food-seek survival gating (ungated; all [code]mobs[/code] group [code]RigidBody2D[/code] except optional self-exclusion).
@@ -4229,43 +4072,85 @@ func _build_motor_context(
   if _main != null and _main.has_method("get_environment_grid"):
     env_grid = _main.call("get_environment_grid")
 
-  var food_split: Dictionary = _motor_food_plants_in_awareness_by_readiness(
-    motor_p, pos, he_xy, facing_display
-  )
+  var motor_targets: Dictionary = {}
+  if _main != null:
+    motor_targets = _MotorTargetBuilder.build_motor_target_lists(
+      _main.get_tree(), body, motor_p, pos, he_xy, facing_display
+    )
+  var food_split: Dictionary = motor_targets.get("food_split", {"ready": [], "unready": []})
+  var supports_plant_belief := bool(motor_targets.get("supports_plant_belief", false))
+  var supports_prey_hunt := bool(motor_targets.get("supports_prey_hunt", false))
+  var seek_candidates: Array = motor_targets.get("seek_candidates", []) as Array
+  var threat_samples: Array = motor_targets.get("threat_samples", []) as Array
+  var prey_entries: Array = motor_targets.get("prey_entries", []) as Array
   var body_id_mem := body.get_instance_id()
   var now_ms_mem := Time.get_ticks_msec()
-  if body.is_in_group(&"prey"):
+  var beliefs_synced := false
+  if supports_plant_belief:
     _goal_belief_sync_from_scene(body_id_mem, food_split)
+    beliefs_synced = true
+  if supports_prey_hunt and not prey_entries.is_empty():
+    var beliefs_prey := _goal_belief_for_body(body_id_mem)
+    _goal_belief_by_body[body_id_mem] = _GoalBeliefScr.sync_from_prey_entries(
+      beliefs_prey, prey_entries, now_ms_mem
+    )
+    beliefs_synced = true
+    _predator_prey_ever_seen_by_id[body_id_mem] = true
+  if not threat_samples.is_empty():
+    var beliefs_thr := _goal_belief_for_body(body_id_mem)
+    _goal_belief_by_body[body_id_mem] = _GoalBeliefScr.sync_from_threat_samples(
+      beliefs_thr, threat_samples, now_ms_mem
+    )
+    beliefs_synced = true
+  if beliefs_synced:
     _goal_belief_maintain(pos, now_ms_mem, motor_p, body_id_mem)
-  var live_food_ids := _GoalBeliefScr.live_food_instance_ids(food_split)
+  var live_target_ids := _GoalBeliefScr.live_target_instance_ids(
+    food_split, prey_entries, threat_samples
+  )
+  var live_food_ids := live_target_ids
   var plant_ready_targets: Array = _GoalBeliefScr.food_positions_from_entries(
     food_split["ready"] as Array
   )
   var food_targets: Array = plant_ready_targets.duplicate()
   var herbivore_food_latched := false
-  if body.is_in_group(&"prey"):
+  if supports_plant_belief:
     herbivore_food_latched = _herbivore_food_latch_merge(
       body_id_mem, plant_ready_targets, food_targets, motor_p
     )
-  var is_predator_body := body.is_in_group(&"mobs") and not body.is_in_group(&"prey")
-  var prey_pts: Array = []
-  if is_predator_body:
-    prey_pts = _prey_positions_for_predator_motor(body)
-  var pursuit_targets: Array = []
-  if is_predator_body:
-    pursuit_targets = _pursuit_targets_for_predator(body, motor_p, pos, he_xy, facing_display)
+  var is_predator_body := supports_prey_hunt
+  var prey_pts: Array = motor_targets.get("prey_positions", []) as Array
+  var pursuit_targets: Array = motor_targets.get("pursuit_targets", []) as Array
   if is_predator_body and not prey_pts.is_empty():
     var bid_eng := body.get_instance_id()
     var latch_ticks := maxi(8, int(motor_p.get("predator_prey_engagement_latch_ticks", 36)))
     _predator_prey_engagement_until_tick_by_id[bid_eng] = _physics_ticks + latch_ticks
   var prey_visible_in_awareness := is_predator_body and not prey_pts.is_empty()
   var prey_pts_live: Array = prey_pts.duplicate()
-  var predator_memory := (
-    _predator_prey_memory_sample(body, motor_p, pos) if is_predator_body
-    else {"active": false, "position": Vector2.ZERO, "velocity": Vector2.ZERO, "strength": 0.0}
-  )
+  var predator_memory := {
+    "active": false,
+    "position": Vector2.ZERO,
+    "velocity": Vector2.ZERO,
+    "strength": 0.0,
+  }
   if is_predator_body:
-    _predator_prey_memory_touch(body, prey_pts_live, pursuit_targets)
+    predator_memory = _GoalBeliefScr.sample_best_moving(
+      _goal_belief_for_body(body_id_mem),
+      pos,
+      motor_p,
+      _GkReg.GK_FIND_FOOD,
+      live_target_ids,
+      now_ms_mem,
+    )
+  var herbivore_threat: Dictionary = motor_targets.get(
+    "primary_hostile_threat",
+    {"in_awareness": false, "gate_dist": INF, "world_pos": Vector2.ZERO},
+  ) as Dictionary
+  var threat_memory_blocks_prey := (
+    bool(herbivore_threat.get("in_awareness", false))
+    or _GoalBeliefScr.has_remembered_avoid_threat(
+      _goal_belief_for_body(body_id_mem), pos, motor_p, live_target_ids, now_ms_mem
+    )
+  )
   var prey_ever_seen := (
     is_predator_body
     and bool(_predator_prey_ever_seen_by_id.get(body.get_instance_id(), false))
@@ -4299,8 +4184,10 @@ func _build_motor_context(
     and bool(predator_memory.get("active", false))
     and prey_pts_live.is_empty()
   )
-  if predator_lost_visual:
-    _predator_inject_memory_chase_targets(predator_memory, prey_pts_live, pursuit_targets)
+  if predator_lost_visual and not threat_memory_blocks_prey:
+    _predator_inject_memory_chase_targets(
+      predator_memory, prey_pts_live, pursuit_targets, motor_p
+    )
   var w_seek_prey := 0.0
   if predator_hunt_motivated and not prey_pts_live.is_empty() and w_seek_prey_base > 0.0:
     var urg_p := clampf(1.0 - cr, 0.0, 1.0)
@@ -4326,14 +4213,9 @@ func _build_motor_context(
   if body.is_in_group(&"prey") and cr < 0.998:
     urg_curve3 *= maxf(0.12, _Tier2Dom.preserve_find_food_seek_scale(cr, motor_p))
   var nearest_adv_dist := INF
-  var herbivore_threat: Dictionary = {}
-  if body.is_in_group(&"prey"):
-    herbivore_threat = _herbivore_predator_threat_sample(
-      body, motor_p, pos, he_xy, facing_display
-    )
-    if bool(herbivore_threat.get("in_awareness", false)):
-      nearest_adv_dist = float(herbivore_threat.get("gate_dist", INF))
-  elif body.is_in_group(&"mobs") and not body.is_in_group(&"prey") and predator_hunt_motivated:
+  if bool(herbivore_threat.get("in_awareness", false)):
+    nearest_adv_dist = float(herbivore_threat.get("gate_dist", INF))
+  elif is_predator_body and predator_hunt_motivated:
     for pq in prey_pts_live:
       if typeof(pq) == TYPE_VECTOR2:
         nearest_adv_dist = minf(nearest_adv_dist, pos.distance_to(pq as Vector2))
@@ -4647,9 +4529,9 @@ func _build_motor_context(
     herbivore_threat.get("in_awareness", false)
   )
   var dom_leaf := _Tier2Dom.derive_dominant_tier2_leaf(cr, acute_threat_dom, 0.0, motor_p)
-  var traits_for_motor: Dictionary = {}
-  if body.is_in_group(&"prey"):
-    traits_for_motor = (_goal_memory_meta_for_body(body) as Dictionary).get("traits", {}) as Dictionary
+  var traits_for_motor: Dictionary = (
+    (_goal_memory_meta_for_body(body) as Dictionary).get("traits", {}) as Dictionary
+  )
   var tactic_ctx := _TacticScr.build_motor_ctx_tactics(
     pos,
     he_xy,
@@ -4679,13 +4561,17 @@ func _build_motor_context(
   }
   var w_believed_pull := 0.0
   var threat_response: Dictionary = {}
+  var goal_seek_targets: Array = []
+  var w_seek_goal := 0.0
+  var goal_seek_from_prey_bias := false
   if (
-    body.is_in_group(&"prey")
+    supports_plant_belief
     and not herbivore_flee_active
     and dom_leaf != _Tier2Dom.LEAF_AVOID_HOSTILES
   ):
     var ctx_pre := {
       "creature_position": pos,
+      "supports_plant_belief": supports_plant_belief,
       "food_seek_targets": food_targets,
       "unready_food_avoid_targets": unready_food_targets,
       "weight_seek_ready_food": w_seek,
@@ -4700,12 +4586,30 @@ func _build_motor_context(
     }
     ctx_pre.merge(tactic_ctx, true)
     ctx_pre = _goal_belief_merge_into_motor_context(
-      ctx_pre, pos, motor_p, body_id_mem, live_food_ids, now_ms_mem
+      ctx_pre,
+      pos,
+      motor_p,
+      body_id_mem,
+      live_food_ids,
+      now_ms_mem,
+      not threat_memory_blocks_prey,
     )
     food_targets = ctx_pre["food_seek_targets"] as Array
     unready_food_targets = ctx_pre["unready_food_avoid_targets"] as Array
     w_seek = float(ctx_pre.get("weight_seek_ready_food", w_seek))
+    var pre_cands: Array = _SeekCandScr.build_from_motor_ingress(
+      food_targets, unready_food_targets, []
+    )
+    var pre_goal: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
+      dom_leaf, pre_cands, w_seek, 0.0
+    )
+    ctx_pre["goal_seek_targets"] = pre_goal["goal_seek_targets"]
+    ctx_pre["weight_seek_goal"] = pre_goal["weight_seek_goal"]
     _apply_believed_goal_bias_to_ctx(ctx_pre, body, motor_p, dom_leaf, tactic_ctx)
+    goal_seek_targets = ctx_pre.get("goal_seek_targets", []) as Array
+    w_seek_goal = float(ctx_pre.get("weight_seek_goal", 0.0))
+    w_seek = float(ctx_pre.get("weight_seek_ready_food", w_seek))
+    goal_seek_from_prey_bias = true
     believed_bias = ctx_pre.get("believed_goal_source_bias", {}) as Dictionary
     w_believed_pull = float(ctx_pre.get("weight_believed_goal_pull", 0.0))
     var hotspot_c: Variant = believed_bias.get("hotspot_centroid", Vector2.ZERO)
@@ -4724,12 +4628,27 @@ func _build_motor_context(
         hotspot_c as Vector2,
       )
       tactic_ctx["environment_grid"] = env_grid
-  if body.is_in_group(&"prey") and (
+  if supports_plant_belief and (
     herbivore_flee_active or dom_leaf == _Tier2Dom.LEAF_AVOID_HOSTILES
   ):
     threat_response = _goal_source_store_for_body(body).consult_threat_response(
       pos, motor_p, tactic_ctx, traits_for_motor
     )
+
+  if not goal_seek_from_prey_bias:
+    seek_candidates = _SeekCandScr.build_from_motor_ingress(
+      food_targets,
+      unready_food_targets,
+      prey_pts_live if (is_predator_body and predator_hunt_motivated) else [],
+    )
+    var goal_seek_pack: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
+      dom_leaf,
+      seek_candidates,
+      w_seek,
+      w_seek_prey if (is_predator_body and predator_hunt_motivated) else 0.0,
+    )
+    goal_seek_targets = goal_seek_pack["goal_seek_targets"] as Array
+    w_seek_goal = float(goal_seek_pack["weight_seek_goal"])
 
   return {
     "creature_position": pos,
@@ -4774,6 +4693,9 @@ func _build_motor_context(
     "weight_interior_env_solid": float(motor_p.get("weight_interior_env_solid", 8000.0)),
     "weight_interior_env_slow": float(motor_p.get("weight_interior_env_slow", 4.0)),
     "food_seek_targets": food_targets,
+    "goal_seek_targets": goal_seek_targets,
+    "seek_candidates": seek_candidates,
+    "weight_seek_goal": w_seek_goal,
     "weight_seek_ready_food": w_seek,
     "imminent_mob_points": imminent_pts,
     "food_seek_imminent_mob_radius_px": imminent_r_applied,
@@ -4809,6 +4731,13 @@ func _build_motor_context(
     "motor_filter_blocked_cardinals": filter_blocked_cardinals,
     "motor_seek_oct_directions": true,
     "dominant_tier2_leaf": dom_leaf,
+    "calorie_ratio": cr,
+    "feeding_mode": motor_targets.get(
+      "feeding_mode", _MotorTargetBuilder.feeding_mode_for_body(body)
+    ),
+    "threat_samples": threat_samples,
+    "supports_plant_belief": supports_plant_belief,
+    "supports_prey_hunt": supports_prey_hunt,
     "tactic_classifier_active": bool(tactic_ctx.get("tactic_classifier_active", false)),
     "tactic_jeopardy_egress": bool(tactic_ctx.get("tactic_jeopardy_egress", false)),
     "tactic_in_squeeze": bool(tactic_ctx.get("tactic_in_squeeze", false)),

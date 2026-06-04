@@ -130,7 +130,7 @@ These appear in the same [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MOD
 | `speed` | **Live** — `creature_speed` in motor lookahead | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §4 |
 | `size` / `creature_size` | **Live** — squeeze, shrub slowdown, motor `creature_size` | [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md), [ENVIRONMENT_MODEL_PLAN.md](./ENVIRONMENT_MODEL_PLAN.md) |
 | `weight` | **Reserved** — env `crush_weight` future | [ENVIRONMENT_MODEL_PLAN.md](./ENVIRONMENT_MODEL_PLAN.md) §4 |
-| Motivation traits (−100…+100) | **Partial** — Tier-2 / replay modulation; not stat pools | [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) |
+| Motivation traits (−100…+100) | **Partial** — Slot A/B replay; Tier-2 urgency stub | [CREATURE_TRAIT_USAGE.md](./CREATURE_TRAIT_USAGE.md), [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) |
 
 ---
 

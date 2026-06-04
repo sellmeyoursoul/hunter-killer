@@ -462,6 +462,33 @@ static func food_seek_cost_at_prediction(
   return weight * best_d
 
 
+## Unified goal seek linear pull ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); same math as [method food_seek_cost_at_prediction].
+static func goal_seek_cost_at_prediction(
+  predicted: Vector2,
+  half: Vector2,
+  goal_targets: Array,
+  weight: float,
+  imminent_mob_points: Array,
+  imminent_mob_radius: float,
+) -> float:
+  return food_seek_cost_at_prediction(
+    predicted, half, goal_targets, weight, imminent_mob_points, imminent_mob_radius
+  )
+
+
+## Returns [param weight] or [code]0[/code] when any imminent mob is within [param imminent_mob_radius] of the creature's **current** footprint (survival over foraging for the whole tick).
+static func effective_goal_seek_weight(
+  weight: float,
+  creature_center: Vector2,
+  half: Vector2,
+  imminent_mob_points: Array,
+  imminent_mob_radius: float,
+) -> float:
+  return effective_food_seek_weight(
+    weight, creature_center, half, imminent_mob_points, imminent_mob_radius
+  )
+
+
 ## Returns [param weight] or [code]0[/code] when any imminent mob is within [param imminent_mob_radius] of the creature's **current** footprint (survival over foraging for the whole tick).
 static func effective_food_seek_weight(
   weight: float,
@@ -626,9 +653,14 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
     "weight_slow": float(ctx.get("weight_interior_env_slow", 4.0)),
   }
   var env_grid: Variant = ctx.get("environment_grid", null)
+  var goal_seek_targets: Array = ctx.get("goal_seek_targets", []) as Array
   var food_targets: Array = ctx.get("food_seek_targets", []) as Array
+  if goal_seek_targets.is_empty():
+    goal_seek_targets = food_targets
   var prey_seek_targets: Array = ctx.get("prey_seek_targets", []) as Array
-  var w_seek_food_raw: float = float(ctx.get("weight_seek_ready_food", 0.0))
+  var w_seek_goal_raw: float = float(ctx.get("weight_seek_goal", -1.0))
+  if w_seek_goal_raw < 0.0:
+    w_seek_goal_raw = float(ctx.get("weight_seek_ready_food", 0.0))
   var w_seek_prey_raw: float = float(ctx.get("weight_seek_prey", 0.0))
   var imminent_pts: Array = ctx.get("imminent_mob_points", []) as Array
   var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius_px", 0.0))
@@ -642,8 +674,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var expand_hint_raw: Variant = ctx.get("expanding_explore_hint", Vector2.ZERO)
   var explore_mult: float = float(ctx.get("exploration_blend_multiplier", 1.0))
   var allow_explore := explore_mult > 1e-6 and not mob_threat_high
-  var w_seek_food := effective_food_seek_weight(
-    w_seek_food_raw, creature_pos, footprint_half, imminent_pts, imminent_r
+  var w_seek_goal := effective_goal_seek_weight(
+    w_seek_goal_raw, creature_pos, footprint_half, imminent_pts, imminent_r
   )
   var pursuit_targets: Array = ctx.get("pursuit_targets", []) as Array
   var w_p_dist: float = float(ctx.get("weight_pursuit_dist", 0.0))
@@ -669,7 +701,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
   var pick_tick := int(ctx.get("motor_pick_tick", 0))
 
   var goal_in_sight := (
-    not food_targets.is_empty()
+    not goal_seek_targets.is_empty()
     or not prey_seek_targets.is_empty()
     or not pursuit_targets.is_empty()
   )
@@ -768,8 +800,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector2:
       env_grid,
       sz_env,
       interior_p,
-      food_targets,
-      w_seek_food,
+      goal_seek_targets,
+      w_seek_goal,
       imminent_pts,
       imminent_r,
       unready_food,
@@ -1188,23 +1220,19 @@ static func cost_at_prediction(
     mob_threat_high,
     interior_env_params,
   )
-  total += food_seek_cost_at_prediction(
+  var goal_targets: Array = food_targets
+  var w_goal_seek := weight_seek_ready_food
+  if weight_seek_prey > weight_seek_ready_food and not prey_seek_targets.is_empty():
+    goal_targets = prey_seek_targets
+    w_goal_seek = weight_seek_prey
+  total += goal_seek_cost_at_prediction(
     predicted,
     half,
-    food_targets,
-    weight_seek_ready_food,
+    goal_targets,
+    w_goal_seek,
     imminent_mob_points,
     imminent_mob_radius,
   )
-  if weight_seek_prey > 0.0 and not prey_seek_targets.is_empty():
-    total += food_seek_cost_at_prediction(
-      predicted,
-      half,
-      prey_seek_targets,
-      weight_seek_prey,
-      imminent_mob_points,
-      imminent_mob_radius,
-    )
   total += unready_food_avoid_cost_at_prediction(
     predicted, half, unready_food_targets, weight_avoid_unready_food, eps
   )

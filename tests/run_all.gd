@@ -41,6 +41,11 @@ const _SeekDirTurnScr := preload("res://creature/motor/seek_direction_turn.gd")
 const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorOct := preload("res://creature/motor/motor_oct_directions.gd")
 const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
+const _GoalSeekScr := preload("res://creature/motor/goal_seek.gd")
+const _SeekCandScr := preload("res://creature/motor/seek_candidate.gd")
+const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
+const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
+const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 
 var _failures: int = 0
 
@@ -64,11 +69,16 @@ func _run_all() -> void:
   _test_creature_motor_v2_profiles()
   _test_creature_pack_motor_overlays()
   _test_goal_source_memory()
+  _test_goal_kind_phase_c_replay()
+  _test_goal_belief_anticipated_calories_stub()
+  _test_creature_trait_usage_wiring()
   _test_motor_motivation_wiring()
   _test_locale_prior_escalate_seek()
   _test_escape_reversal_suppression()
   _test_goal_belief_coarse_ttl()
   _test_goal_belief_merge_skips_live_awareness()
+  _test_goal_seek_resolve_and_cost()
+  _test_motor_target_builder_feeding_mode()
   _test_load_merged_config_repo_fallback()
   _test_hunter_killer_debug_project_settings()
   _test_tokens()
@@ -91,6 +101,7 @@ func _run_all() -> void:
   _test_expanding_cardinal_explore()
   _test_predator_chase_motor_ctx()
   _test_predator_prey_memory_chase()
+  _test_goal_belief_moving_prey_ghost()
   _test_no_goal_plateau_random()
   _test_food_seek_motor()
   _test_explore_idle_when_no_pickup()
@@ -490,6 +501,155 @@ func _test_goal_source_memory() -> void:
   _assert(not _GkReg.validate_goal_kind(&"bogus", kinds), "validate_goal_kind rejects unknown")
 
 
+func _test_goal_kind_phase_c_replay() -> void:
+  var motor_p := _Merge.creature_motor_spine()
+  var catalog := _GkReg.goal_kind_catalog_for_pack("")
+  _assert(
+    _GkReg.resolve_goal_kind_at_outcome(&"avoid_hostiles", {}, catalog) == _GkReg.GK_AVOID_HOSTILES,
+    "avoid_hostiles resolves to avoid_hostiles wire id",
+  )
+  _assert(
+    _GkReg.resolve_goal_kind_at_outcome(&"preserve_calories", {}, catalog) == &"",
+    "preserve has no salient GoalKind",
+  )
+  _assert(
+    _GkReg.parent_tier2_for_goal_kind(_GkReg.GK_SHELTER, catalog) == &"avoid_hostiles",
+    "shelter parent_tier2 is avoid_hostiles",
+  )
+  _assert(
+    not _GkReg.salient_writes_enabled(_GkReg.GK_FIND_MATE, catalog),
+    "find_mate salient_writes disabled phase-1",
+  )
+  var traits_explorer := {"explorer_builder": -80.0, "change_stability": 0.0}
+  var slot_a := _GoalMem.slot_a_raw_for_pole(traits_explorer, &"explorer")
+  _assert(slot_a > 50.0, "negative explorer_builder aligns with explorer pole")
+  var low_cap := _GoalMem.effective_slot_a(slot_a, 20.0, 0.0, motor_p)
+  var high_cap := _GoalMem.effective_slot_a(slot_a, 95.0, 1.0, motor_p)
+  _assert(absf(high_cap) > absf(low_cap), "urgency+slot_b raise effective Slot A cap")
+  _assert(
+    is_equal_approx(_GoalMem.compute_external_urgency({"tactic_jeopardy_egress": true}, motor_p), 1.0),
+    "jeopardy egress sets external_urgency 1",
+  )
+  var hunger_ctx := {"calorie_ratio": 0.5}
+  _assert(
+    _GoalMem.compute_external_urgency(hunger_ctx, motor_p) > 0.2,
+    "hunger band contributes external_urgency",
+  )
+  var grid := _EnvGrid.new()
+  grid.cell_width = 8
+  grid.cell_height = 8
+  grid.cell_size_px = 52.0
+  grid.cell_kind_ids = PackedInt32Array()
+  grid.cell_kind_ids.resize(64)
+  var anchor := Vector2(120.0, 80.0)
+  var store := _GoalMem.new()
+  var kinds := _GkReg.effective_goal_kinds_for_pack("")
+  var mods := _GoalMem.effective_modality_allowlist_for_pack("")
+  var motor_ctx := {
+    "tactic_classifier_active": false,
+    "calorie_ratio": 0.5,
+    "effective_modality_allowlist": mods,
+  }
+  _assert(
+    store.try_salient_write(
+      _GkReg.GK_FIND_FOOD,
+      &"find_food",
+      anchor,
+      motor_p,
+      grid,
+      motor_ctx,
+      {"tier": _GoalMem.TIER_SUCCESS, "pole_facet_tags": [&"explorer"]},
+      kinds,
+      mods,
+      traits_explorer,
+      catalog,
+    ),
+    "salient write with catalog",
+  )
+  var hash := _GoalMem.context_hash_for_find_food(_GkReg.GK_FIND_FOOD, anchor, motor_p, grid)
+  var replay_neutral := store.consult_replay_weight(
+    _GkReg.GK_FIND_FOOD, hash, motor_p, motor_ctx, Vector2(100.0, 70.0), {}
+  )
+  var replay_w := store.consult_replay_weight(
+    _GkReg.GK_FIND_FOOD, hash, motor_p, motor_ctx, Vector2(100.0, 70.0), traits_explorer
+  )
+  _assert(replay_w > replay_neutral, "explorer traits raise replay_weight vs neutral traits")
+  _assert(
+    not store.try_salient_write(
+      _GkReg.GK_FIND_MATE,
+      &"find_mate",
+      anchor,
+      motor_p,
+      grid,
+      motor_ctx,
+      {"tier": _GoalMem.TIER_SUCCESS},
+      kinds,
+      mods,
+      {},
+      catalog,
+    ),
+    "find_mate write blocked by salient_writes",
+  )
+  var pack_catalog := {
+    &"nest_defense": {
+      "parent_tier2": &"avoid_hostiles",
+      "salient_writes": true,
+      "context_overlay": &"nest_fingerprint",
+    },
+  }
+  _assert(
+    _GkReg.resolve_goal_kind_at_outcome(
+      &"avoid_hostiles", {"goal_kind_hint": &"nest_defense"}, pack_catalog
+    )
+    == &"nest_defense",
+    "pack hint resolves when parent matches",
+  )
+  _assert(
+    motor_p.has("urgency_boost_linear_slope") and motor_p.has("replay_urgency_slot_b_min"),
+    "creature_motor spine has external_urgency keys",
+  )
+
+
+func _test_goal_belief_anticipated_calories_stub() -> void:
+  var beliefs: Dictionary = {}
+  var split := {
+    "ready": [{"pos": Vector2(10.0, 0.0), "instance_id": 42, "anticipated_calories": 3.5}],
+    "unready": [],
+  }
+  beliefs = _GoalBeliefScr.sync_from_scene(beliefs, split, 1000)
+  _assert(beliefs.has(42), "belief row keyed by instance_id")
+  _assert(
+    is_equal_approx(float((beliefs[42] as Dictionary).get("anticipated_calories", 0.0)), 3.5),
+    "anticipated_calories stored on belief entry",
+  )
+  var skip := _GoalBeliefScr.sync_from_scene(
+    beliefs, {"ready": [{"pos": Vector2(1.0, 1.0)}], "unready": []}, 2000
+  )
+  _assert(not skip.has(0), "entries without instance_id are skipped")
+
+
+func _test_creature_trait_usage_wiring() -> void:
+  var rabbit_def: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
+  _assert(rabbit_def != null, "rabbit archetype for trait usage")
+  var traits_explorer := {"explorer_builder": -80.0, "change_stability": 0.0}
+  _assert(
+    _GoalMem.slot_a_raw_for_pole(traits_explorer, &"explorer") > 50.0,
+    "negative explorer_builder aligns with explorer pole (Slot A)",
+  )
+  var traits_neutral := {
+    "explorer_builder": float(rabbit_def.get("explorer_builder")),
+    "change_stability": float(rabbit_def.get("change_stability")),
+    "compassion_self_interest": float(rabbit_def.get("compassion_self_interest")),
+    "community_individual": float(rabbit_def.get("community_individual")),
+  }
+  _assert(
+    is_equal_approx(_GoalMem.slot_a_raw_for_pole(traits_neutral, &"explorer"), 0.0),
+    "neutral archetype traits yield zero explorer pole pull",
+  )
+  var spine := _Merge.creature_motor_spine()
+  _assert(spine.has("urgency_boost_linear_slope"), "trait replay motor keys present")
+
+
 func _test_motor_motivation_wiring() -> void:
   var spine := _Merge.creature_motor_spine()
   _assert(
@@ -638,6 +798,72 @@ func _test_escape_reversal_suppression() -> void:
   _assert(suppress, "AH-7 suppresses avoid write after reversal re-threat")
   body.queue_free()
   ad.queue_free()
+
+
+func _test_motor_target_builder_feeding_mode() -> void:
+  var herb_policy := _DietRegistry.default_food_intake_policy(
+    _CreatureDefinition.FeedingMode.HERBIVORE
+  )
+  var carn_policy := _DietRegistry.default_food_intake_policy(
+    _CreatureDefinition.FeedingMode.CARNIVORE
+  )
+  _assert((herb_policy.get("plant_groups") as Array).size() > 0, "herbivore plant groups")
+  _assert((carn_policy.get("prey_groups") as Array).size() > 0, "carnivore prey groups")
+  _assert((carn_policy.get("plant_groups") as Array).is_empty(), "carnivore no plant groups")
+  var legacy := _ThreatSampleScr.to_legacy_herbivore_dict(
+    _ThreatSampleScr.make(Vector2(10.0, 20.0), 5.0, true)
+  )
+  _assert(bool(legacy.get("in_awareness", false)), "threat legacy in_awareness")
+  _assert(
+    is_equal_approx(float(legacy.get("gate_dist", 0.0)), 5.0),
+    "threat legacy gate_dist",
+  )
+
+
+func _test_goal_seek_resolve_and_cost() -> void:
+  var food_pos := Vector2(100.0, 50.0)
+  var prey_pos := Vector2(200.0, 80.0)
+  var cands: Array = _SeekCandScr.build_from_motor_ingress([food_pos], [], [prey_pos])
+  var pack_food: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
+    _Tier2Dom.LEAF_FIND_FOOD, cands, 12.0, 0.0
+  )
+  _assert(
+    (pack_food["goal_seek_targets"] as Array).size() == 1,
+    "find_food herbivore channel picks plant",
+  )
+  _assert(
+    is_equal_approx(float(pack_food["weight_seek_goal"]), 12.0),
+    "find_food weight_seek_goal",
+  )
+  var pack_prey: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
+    _Tier2Dom.LEAF_FIND_FOOD, cands, 4.0, 20.0
+  )
+  _assert(
+    (pack_prey["goal_seek_targets"] as Array).size() == 1,
+    "find_food prey channel picks prey when w_seek_prey active",
+  )
+  _assert(
+    is_equal_approx(float(pack_prey["weight_seek_goal"]), 20.0),
+    "prey weight_seek_goal",
+  )
+  var pack_preserve: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
+    _Tier2Dom.LEAF_PRESERVE, cands, 12.0, 20.0
+  )
+  _assert(
+    (pack_preserve["goal_seek_targets"] as Array).is_empty(),
+    "preserve clears goal_seek_targets",
+  )
+  var c1: float = float(
+    Callable(_Motor, &"food_seek_cost_at_prediction").call(
+      Vector2.ZERO, Vector2.ZERO, [food_pos], 3.0, [], 0.0
+    )
+  )
+  var c2: float = float(
+    Callable(_Motor, &"goal_seek_cost_at_prediction").call(
+      Vector2.ZERO, Vector2.ZERO, [food_pos], 3.0, [], 0.0
+    )
+  )
+  _assert(is_equal_approx(c1, c2), "goal_seek_cost aliases food_seek_cost")
 
 
 func _test_goal_belief_coarse_ttl() -> void:
@@ -2144,8 +2370,10 @@ func _test_predator_prey_memory_chase() -> void:
   var driver: Node = _AiDriverScr.new()
   root.add_child(driver)
   var motor_p := {
-    "predator_prey_memory_sec": 10.0,
-    "predator_prey_memory_forget_radius_px": 2800.0,
+    "goal_memory_mover_ttl_sec": 10.0,
+    "goal_memory_forget_radius_px": 2800.0,
+    "goal_memory_precise_radius_px": 5000.0,
+    "goal_memory_ghost_horizon_sec": 0.4,
     "predator_memory_chase_lock_ticks": 24,
     "motor_patrol_min_step_clearance_px": 4.0,
     "weight_seek_prey": 22.0,
@@ -2155,18 +2383,23 @@ func _test_predator_prey_memory_chase() -> void:
   }
   var prey_pos := Vector2(400.0, 200.0)
   var pred_pos := Vector2(200.0, 200.0)
+  var prey_iid := 424242
   var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
   _assert(mob_scene != null, "mob.tscn loads for predator memory chase")
   var predator: RigidBody2D = mob_scene.instantiate() as RigidBody2D
   root.add_child(predator)
   predator.global_position = pred_pos
-  var prey_pts := [prey_pos]
-  var pursuit := [
-    {"position": prey_pos, "velocity": Vector2(50.0, 0.0), "cost_scale": 1.0},
-  ]
-  driver.call("_predator_prey_memory_touch", predator, prey_pts, pursuit)
-  var sample: Dictionary = driver.call(
-    "_predator_prey_memory_sample", predator, motor_p, pred_pos
+  var pred_bid := predator.get_instance_id()
+  var now_ms := Time.get_ticks_msec()
+  var beliefs: Dictionary = {}
+  beliefs = _GoalBeliefScr.sync_from_prey_entries(
+    beliefs,
+    [{"instance_id": prey_iid, "pos": prey_pos, "velocity": Vector2(50.0, 0.0)}],
+    now_ms,
+  )
+  driver.set("_goal_belief_by_body", {pred_bid: beliefs})
+  var sample: Dictionary = _GoalBeliefScr.sample_best_moving(
+    beliefs, pred_pos, motor_p, _GkReg.GK_FIND_FOOD, {}, now_ms
   )
   _assert(bool(sample.get("active", false)), "memory sample active after touch")
   _assert(
@@ -2185,14 +2418,18 @@ func _test_predator_prey_memory_chase() -> void:
   }
   var prey_live: Array = []
   var pursuit_live: Array = []
-  driver.call("_predator_inject_memory_chase_targets", inactive, prey_live, pursuit_live)
+  driver.call(
+    "_predator_inject_memory_chase_targets", inactive, prey_live, pursuit_live, motor_p
+  )
   _assert(prey_live.is_empty(), "inactive memory does not inject prey targets")
-  driver.call("_predator_inject_memory_chase_targets", sample, prey_live, pursuit_live)
+  driver.call(
+    "_predator_inject_memory_chase_targets", sample, prey_live, pursuit_live, motor_p
+  )
   _assert(
     prey_live.size() == 1 and (prey_live[0] as Vector2).is_equal_approx(prey_pos),
     "inject fills prey_seek_targets from memory",
   )
-  _assert(pursuit_live.size() == 1, "inject adds pursuit target from memory velocity")
+  _assert(pursuit_live.size() == 2, "inject adds centroid + ghost-intercept pursuit hints")
   var he := Vector2(18.0, 44.0)
   driver.set("_physics_ticks", 10)
   var chase_intent: Vector2 = driver.call(
@@ -2237,29 +2474,81 @@ func _test_predator_prey_memory_chase() -> void:
     mem_intent.is_equal_approx(Vector2.RIGHT),
     "motor chase toward memory-injected prey without live awareness",
   )
-  var bid := predator.get_instance_id()
-  var mem_by_id: Dictionary = driver.get("_predator_prey_memory_by_id")
-  var rec: Dictionary = mem_by_id[bid]
-  rec["last_seen_ms"] = Time.get_ticks_msec() - 20000
-  mem_by_id[bid] = rec
-  driver.set("_predator_prey_memory_by_id", mem_by_id)
-  var stale: Dictionary = driver.call(
-    "_predator_prey_memory_sample", predator, motor_p, pred_pos
+  beliefs[prey_iid]["last_observed_ms"] = now_ms - 20000
+  driver.set("_goal_belief_by_body", {pred_bid: beliefs})
+  var stale: Dictionary = _GoalBeliefScr.sample_best_moving(
+    beliefs, pred_pos, motor_p, _GkReg.GK_FIND_FOOD, {}, Time.get_ticks_msec()
   )
   _assert(not bool(stale.get("active", false)), "memory expires after TTL")
-  driver.call("_predator_prey_memory_touch", predator, prey_pts, pursuit)
+  beliefs = _GoalBeliefScr.sync_from_prey_entries(
+    beliefs,
+    [{"instance_id": prey_iid, "pos": prey_pos, "velocity": Vector2(50.0, 0.0)}],
+    Time.get_ticks_msec(),
+  )
+  driver.set("_goal_belief_by_body", {pred_bid: beliefs})
   predator.global_position = prey_pos + Vector2(5000.0, 0.0)
-  var forgotten: Dictionary = driver.call(
-    "_predator_prey_memory_sample",
-    predator,
-    motor_p,
+  var forgotten: Dictionary = _GoalBeliefScr.sample_best_moving(
+    beliefs,
     predator.global_position,
+    motor_p,
+    _GkReg.GK_FIND_FOOD,
+    {},
+    Time.get_ticks_msec(),
   )
   _assert(not bool(forgotten.get("active", false)), "memory cleared past forget radius")
   root.remove_child(predator)
   predator.free()
   root.remove_child(driver)
   driver.free()
+
+
+func _test_goal_belief_moving_prey_ghost() -> void:
+  var motor_p := {
+    "goal_memory_mover_ttl_sec": 10.0,
+    "goal_memory_precise_radius_px": 5000.0,
+    "goal_memory_ghost_horizon_sec": 0.5,
+  }
+  var prey_pos := Vector2(300.0, 100.0)
+  var vel := Vector2(80.0, 0.0)
+  var now_ms := Time.get_ticks_msec()
+  var beliefs: Dictionary = {}
+  beliefs = _GoalBeliefScr.sync_from_prey_entries(
+    beliefs,
+    [{"instance_id": 77, "pos": prey_pos, "velocity": vel}],
+    now_ms,
+  )
+  var prey_live: Array = []
+  var pursuit_live: Array = []
+  var sample: Dictionary = _GoalBeliefScr.sample_best_moving(
+    beliefs, Vector2.ZERO, motor_p, _GkReg.GK_FIND_FOOD, {}, now_ms
+  )
+  _GoalBeliefScr.inject_moving_memory_chase(sample, prey_live, pursuit_live, motor_p)
+  _assert(prey_live.size() == 1, "ghost inject adds centroid prey point")
+  _assert(pursuit_live.size() == 2, "ghost inject adds centroid + intercept pursuit hints")
+  var intercept: Vector2 = pursuit_live[1].get("position", Vector2.ZERO)
+  _assert(
+    intercept.is_equal_approx(prey_pos + vel * 0.5),
+    "light-C intercept uses goal_memory_ghost_horizon_sec",
+  )
+  var beliefs_avoid: Dictionary = _GoalBeliefScr.sync_from_threat_samples(
+    {},
+    [
+      {
+        "world_pos": Vector2(50.0, 0.0),
+        "gate_dist": 10.0,
+        "in_awareness": true,
+        "velocity": Vector2(-20.0, 0.0),
+        "instance_id": 88,
+      },
+    ],
+    now_ms,
+  )
+  _assert(
+    _GoalBeliefScr.has_remembered_avoid_threat(
+      beliefs_avoid, Vector2.ZERO, motor_p, {}, now_ms
+    ),
+    "remembered avoid_hostiles blocks prey memory path",
+  )
 
 
 func _test_no_goal_plateau_random() -> void:

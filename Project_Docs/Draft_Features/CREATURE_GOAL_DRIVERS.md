@@ -4,7 +4,7 @@
 >
 > **Tier:** Draft (tier II) — promote when stable alongside sibling drafts.
 >
-> **Read order:** **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)** (field catalog, motivational priorities) → **this file** (drivers) → **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** (pipeline, `SeekCandidate`, phasing) → **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** (storage, `goal_*` / `believed_goal_*` identifiers, **§14** backends).
+> **Read order:** **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)** (field catalog, motivational priorities) → **this file** (drivers) → **[CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md)** (tier III — **where code** reads traits) → **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** (pipeline, `SeekCandidate`, phasing) → **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** (storage, `goal_*` / `believed_goal_*` identifiers, **§14** backends).
 >
 > **Naming:** Distinct from archived **[Completed_Features/CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md)** (tier A snapshot).
 
@@ -56,6 +56,7 @@ Tier 1 — Don’t die
 
 **Cross-links**
 
+- **Trait → code map (tier III):** [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) — what is live vs deferred in GDScript.
 - **`CreatureDefinition` trait fields** (-100/+100 sliders) — catalog table **Motivation traits (NPC / creature behavior drivers)** in [CREATURE_MODEL_PLAN.md §4 — Technical design — Field catalog](CREATURE_MODEL_PLAN.md#field-catalog-from-world-vision-typos-in-source-corrected).
 - **Goal rank** (survival → reproduction → trait-driven tactics) plus **sharing vs hoarding** language for **`compassion_self_interest`** — [CREATURE_MODEL_PLAN.md — Goals and motivational priorities (design)](CREATURE_MODEL_PLAN.md#goals-and-motivational-priorities-design).
 - **Believed / remembered resources** — pooling and compassion dynamics — [CREATURE_MEMORY.md](CREATURE_MEMORY.md).
@@ -256,7 +257,7 @@ After **Tier-2 dominance** passes ([CREATURE_MEMORY.md §14 — Write gates](CRE
 
 #### Implementation hooks (code PR — not in this doc)
 
-- **`goal_kind.gd`** (or `creature/memory/goal_kind_registry.gd`): core table, pack merge, **`tier2_to_default_goal_kind`**, **`resolve_goal_kind_at_outcome`** (shelter disambiguation).
+- **[`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd):** core table, pack merge, **`tier2_to_default_goal_kind`**, **`resolve_goal_kind_at_outcome`** (shelter disambiguation).
 - Per-instance **`effective_goal_kinds`** on motor/memory façade at spawn.
 - **`context_hash_for_find_food(...)`** — **[CREATURE_MEMORY.md §2.1.1](CREATURE_MEMORY.md)** (`explore_coverage_cell_px`, origin world zero, food **`SeekCandidate`** anchor, OOB → reject write, **`hash([goal_kind, cell_x, cell_y])`**).
 
@@ -305,7 +306,7 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 
 #### 5.1.1 Salient episode emitter (phase-1 resolved)
 
-**Owner:** [`goal_source_memory.gd`](../../creature/memory/goal_source_memory.gd) (new) — **canonical** path for salient writes, **`LocalePriorMap`** updates, tag inference, and validation. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** invokes it **only after** [MEMORY §14 write gates](CREATURE_MEMORY.md) pass; passes **`MotorContext`**, outcome, **`GoalKind`**, food-anchor **`Vector2`**, merged **`creature_motor`**, and per-instance allowlists. **Cardinal / motor code** may set **`MotorContext`** tactic flags — **must not** write locale priors directly.
+**Owner:** [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — **canonical** path for salient writes, **`LocalePriorMap`** updates, tag inference, and validation. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** invokes it **only after** [MEMORY §14 write gates](CREATURE_MEMORY.md) pass; passes **`MotorContext`**, outcome, **`GoalKind`**, food-anchor **`Vector2`**, merged **`creature_motor`**, and per-instance allowlists. **Cardinal / motor code** may set **`MotorContext`** tactic flags — **must not** write locale priors directly.
 
 **Pipeline:**
 

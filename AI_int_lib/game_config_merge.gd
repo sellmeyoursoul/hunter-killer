@@ -63,6 +63,8 @@ static func creature_motor_spine() -> Dictionary:
     ## Predator (mob) gain on successful prey contact; clamped at that mob's [code]caloric_needs[/code] in [code]mob.gd[/code].
     "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
+    ## Unified goal seek ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); pack may override; falls back to [code]weight_seek_ready_food[/code] when absent.
+    "weight_seek_goal": 16.0,
     "weight_seek_backtrack": 14.0,
     ## Remembered pinch approach: block 180° retry while other 8-way steps clear ([code]blocked_approach_memory.gd[/code]).
     "blocked_approach_memory_ticks": 45,
@@ -166,8 +168,12 @@ static func creature_motor_spine() -> Dictionary:
     "replay_w_store": 0.6,
     "replay_n_sat": 10.0,
     "replay_n_min": 3.0,
+    "urgency_boost_linear_slope": 25.0,
+    "replay_urgency_slot_b_min": 90.0,
     "goal_memory_precise_radius_px": 1000.0,
     "goal_memory_moving_last_known_radius_px": 50.0,
+    "goal_memory_mover_ttl_sec": 10.0,
+    "goal_memory_ghost_horizon_sec": 0.4,
     "goal_memory_forget_radius_px": 2400.0,
     "goal_memory_ttl_sec": 45.0,
     "goal_memory_coarse_ttl_sec": 15.0,

@@ -30,7 +30,7 @@ enum FeedingMode {
 @export var collision_capsule_radius: float = 0.35
 @export var collision_capsule_height: float = 1.2
 
-## Motivation traits (-100..100); reserved for future utility weighting ([CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)).
+## Motivation traits (-100..100). Live: locale-prior replay (Slot A/B) via [CREATURE_TRAIT_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_TRAIT_USAGE.md); semantics [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) §3.
 @export_range(-100, 100) var explorer_builder: int = 0
 @export_range(-100, 100) var change_stability: int = 0
 @export_range(-100, 100) var compassion_self_interest: int = 0

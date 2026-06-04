@@ -140,13 +140,15 @@ Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`
 
 **Target (§A.2):** one **`SeekCandidate[]`** ingress and **`goal_seek_cost`** — not parallel **`food_seek_targets`** / **`pursuit_targets`** forks. **Code today** still uses **`food_seek_*`** keys in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) / [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd).
 
-**Phase-1 locale priors:** Ship **`believed_goal_source_bias`** (**[CREATURE_MEMORY.md §14.1](CREATURE_MEMORY.md)**) **without** full **`SeekCandidate`** migration. **Rename/wrapper** (`goal_seek_cost` aliasing `food_seek_cost`) may land in the memory PR; **full** §A.2 list unification stays on Foundations checklist (**§G.2**).
+**Phase A target builder (shipped):** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) — **`build_motor_target_lists()`** emits **`seek_candidates`**, **`threat_samples`**, **`food_split`**, **`prey_positions`**, **`pursuit_targets`** from **`feeding_mode`** + [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) (`DietRegistry`), not **`prey` / `mobs` group forks**. Typed hostile ingress: [`threat_sample.gd`](../../creature/motor/threat_sample.gd). **`_goal_belief_*`** runs when **`supports_plant_belief`** (plant groups on policy).
 
-| Layer | Phase 1 | Later (§A.2) |
-|-------|---------|----------------|
-| Instance targets | `food_seek_targets` + `weight_seek_ready_food` | `goal_seek_targets` filtered by **derived** dominant Tier-2 (**§A.2.3**) |
+**Phase-B goal seek (shipped):** **`goal_seek_targets`** + **`weight_seek_goal`** on **`MotorContext`**, filtered by **derived** dominant Tier-2 via [`goal_seek.gd`](../../creature/motor/goal_seek.gd) + [`seek_candidate.gd`](../../creature/motor/seek_candidate.gd). Cardinal linear pull uses **`goal_seek_cost_at_prediction`** (alias of legacy food seek cost). Legacy **`food_seek_targets`** / **`weight_seek_ready_food`** remain for belief merge and pack compat.
+
+| Layer | Phase A/B (current) | Later |
+|-------|---------------------|-------|
+| Instance targets | **`goal_seek_targets`** + **`weight_seek_goal`**; legacy food keys mirrored | Drop parallel **`prey_seek_targets`** linear pull when pursuit-only path suffices |
 | Habitual patches | **`believed_goal_source_bias`** vector + sector costs | Same — **never** merged into seek target list |
-| `replay_weight` | Multiplicative on pull + seek when hash matches | Same on **`weight_seek_goal`** |
+| `replay_weight` | Multiplicative on **`weight_believed_goal_pull`** + **`weight_seek_goal`** | — |
 
 ### A.3 Motivation tree (framework)
 
@@ -190,7 +192,7 @@ Implementation slots: **`believed_goal_source_bias`** populated by **`goal_sourc
 
 ### A.4 Motivation traits (`CreatureDefinition`)
 
-**Canonical:** polarity table, UI convention, trait application order, survival-plan narrative, Tier subtree scaling, OUT OF V2 scope — **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**.
+**Canonical:** polarity table, UI convention, trait application order, survival-plan narrative, Tier subtree scaling — **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**. **Code map (tier III):** **[CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md)** — spawn read path, Slot A/B live vs stub urgency.
 
 **Code:** read `@export_range(-100, 100)` scalars from [`creature_definition.gd`](../../creature/definition/creature_definition.gd); apply per **GOAL_DRIVERS §3** when blending Tier-2 weights and **`believed_goal_*`** replay (**§A.3.1**).
 
@@ -348,7 +350,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 - [x] **`GameConfig` / instantiation:** motor dict resolved **per creature instance** via **§A.1** (**`default_creature_motor_params()`** ∪ pack overlay — **no** global `creature_motor` layer): **`CreatureDefinition.asset_pack_root`** → **`pack_resources.json`** `creature_motor` keys overlay profile-backed defaults; duel `mob`, duel `player`, resolver smoke scenes, etc. behave the same mechanically; **only the pack pointer on the spawned definition** differs.
 
-- [x] **`AiDriver`**: no predator/prey branching for **building `SeekCandidate[]` vs `ThreatSample[]`** — **one `AiDriver` method** from `CreatureDefinition` + perception (**§A.2** unified builder; **not** a separate `MotorTargetPolicy` class).
+- [x] **`AiDriver`**: **`motor_target_builder.build_motor_target_lists()`** from **`feeding_mode`** + policy (**§A.2**); legacy **`_prey_positions_for_predator_motor`** / **`_motor_food_plants_*`** delegate to builder.
 
 - [x] **`CardinalAvoidance`**: single scoring path — optional **subtract** chase pull as one term parameterized by targets, not separate `pursuit_targets` fork unless profiling demands it internally only.
 

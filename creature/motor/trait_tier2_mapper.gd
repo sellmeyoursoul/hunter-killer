@@ -3,6 +3,7 @@
 extends Object
 
 const _Tier2Dom := preload("res://creature/motor/tier2_dominance.gd")
+const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 
 
 class Tier2UrgencyChannels:
@@ -46,6 +47,13 @@ static func base_urgency_channels_from_dominant(
   else:
     c.urgency_preserve_calories = 1.0
   return c
+
+
+## Pack / core [code]GoalKind[/code] → owning Tier-2 leaf ([CREATURE_GOAL_DRIVERS.md §4.1](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)).
+static func dominant_tier2_for_goal_kind(
+  goal_kind: StringName, goal_kind_catalog: Dictionary
+) -> StringName:
+  return _GkReg.parent_tier2_for_goal_kind(goal_kind, goal_kind_catalog)
 
 
 ## Phase-1 stub: returns [param base] unchanged.

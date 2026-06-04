@@ -54,6 +54,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
+| [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | **2D→3D migration umbrella:** playfield, physics layers, motor adapter, env/plants; defers creature stack to [CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md). |
 | [Draft_Features/CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md) | **3D creature stack:** [CreatureDefinition](res://creature/definition/creature_definition.gd), capabilities, templates, AI intent bridge. |
 | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
 | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Canonical:** motivation tree Tier-1/2, **`CreatureDefinition`** traits (−100…+100), goal-kind rollup, habitual **`believed_goal_*`** modulation + strategy-class **`<<Question>>`** Actions **1–3**. Consumed by [CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) + [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
@@ -75,6 +76,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md](Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) | **Stat pool → mechanics map:** `stat_*` / `curr_point_*` / `max_point_*` from [CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md); disambiguation vs `current_fit`, `creature_size`, awareness keys. |
+| [Definitive_Features/CREATURE_TRAIT_USAGE.md](Definitive_Features/CREATURE_TRAIT_USAGE.md) | **Motivation trait → code map:** four `CreatureDefinition` axes (−100…+100), Slot A/B replay live paths, Tier-2 urgency stub; semantics in [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3–§5. |
 | [Definitive_Features/CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md) | **2D creature movement inventory:** cardinal motor pipeline, config keys, AiDriver tools, carnivore vs herbivore forks (refactor anchor). |
 | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Env catalog; **§6** = **2D layer/mask** (`project.godot`); **§7** acceptance checklist. |
 
