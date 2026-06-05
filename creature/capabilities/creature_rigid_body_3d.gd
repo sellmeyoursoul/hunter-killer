@@ -10,8 +10,8 @@ const _PlayerScr := preload("res://player.gd")
 ## Scales central force; tune per mass in scene.
 @export var move_force_scale: float = 120.0
 
-var creature_move_intent: Vector2 = Vector2.ZERO
-var last_move_direction: Vector2 = Vector2.RIGHT
+var creature_move_intent: Vector3 = Vector3.ZERO
+var last_move_direction: Vector3 = _MotorPlane.HORIZONTAL_RIGHT
 var control_mode: int = 0
 var screen_size: Vector2 = Vector2.ZERO
 
@@ -26,15 +26,17 @@ func set_control_mode(mode: int) -> void:
   control_mode = mode
 
 
-## AiDriver motor contract: [code]Vector2(x, y)[/code] maps to ground [code]Vector3(x, 0, z)[/code].
-func set_creature_move_intent(dir: Vector2) -> void:
-  creature_move_intent = dir.normalized() if dir.length() > 0.0 else Vector2.ZERO
-  set_horizontal_move_intent_for_tick(_MotorPlane.to_horizontal_vec3(creature_move_intent))
+## AiDriver motor contract: [code]Vector3(x, 0, z)[/code] or legacy [code]Vector2(x, z)[/code].
+func set_creature_move_intent(dir: Variant) -> void:
+  var h := _MotorPlane.read_dir(dir, _MotorPlane.HORIZONTAL_ZERO)
+  creature_move_intent = h if h.length_squared() > 1e-12 else Vector3.ZERO
+  set_horizontal_move_intent_for_tick(creature_move_intent)
 
 
-func apply_duel_spawn_facing(facing: Vector2) -> void:
-  if facing.length_squared() > 1e-12:
-    last_move_direction = facing.normalized()
+func apply_duel_spawn_facing(facing: Variant) -> void:
+  var h := _MotorPlane.read_dir(facing, _MotorPlane.HORIZONTAL_ZERO)
+  if h.length_squared() > 1e-12:
+    last_move_direction = h
 
 func _resolve_definition() -> Variant:
   var local_def: Variant = get("definition")

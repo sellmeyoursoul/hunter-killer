@@ -37,7 +37,7 @@ class Explore:
     return {"cycle_index": 0, "segment_index": 0, "segment_ticks": maxi(1, base_ticks)}
 
 
-  static func pick_cardinal(base_ticks: int, effective_tick: int, phase_seed: int) -> Vector2:
+  static func pick_cardinal(base_ticks: int, effective_tick: int, phase_seed: int) -> Vector3:
     var loc: Dictionary = locate(base_ticks, effective_tick)
     var n_legs := leg_count()
     var ps := (phase_seed % n_legs + n_legs) % n_legs

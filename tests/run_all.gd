@@ -150,6 +150,8 @@ func _run_all() -> void:
   _test_m1_game_config_use_2d_default()
   _test_m1_main_3d_scenes_exist()
   _test_m1_3d_physics_layers()
+  _test_m2_vector3_motor_context()
+  _test_m2_awareness_debug_overlay_3d()
   _test_playfield_bounds_3d_from_floor()
   _test_motor_obstacle_geometry_3d()
   _test_playfield_clamp()
@@ -341,11 +343,11 @@ func _test_creature_motor_v2_profiles() -> void:
     "acute threat avoid hostiles",
   )
   var bias_empty: Dictionary = _GoalMem.project_believed_goal_bias(
-    Vector2.ZERO, &"find_food", spine, null
+    Vector3.ZERO, &"find_food", spine, null
   )
   _assert(bias_empty.get("pull_mag", -1.0) == 0.0, "believed pull_mag zero without store")
   _assert(
-    _BelievedSector.align_step_with_sector(Vector2(0.0, -1.0), 0) > 0.9,
+    _BelievedSector.align_step_with_sector(Vector3(0.0, 0.0, -1.0), 0) > 0.9,
     "sector arc N for up step",
   )
 
@@ -456,9 +458,9 @@ func _test_goal_source_memory() -> void:
   grid.cell_size_px = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(32 * 32)
-  var anchor := Vector2(120.0, 80.0)
+  var anchor := Vector3(120.0, 0.0, 80.0)
   var bad_hash := _GoalMem.context_hash_for_find_food(
-    _GkReg.GK_FIND_FOOD, Vector2(99999.0, 99999.0), motor_p, grid
+    _GkReg.GK_FIND_FOOD, Vector3(99999.0, 0.0, 99999.0), motor_p, grid
   )
   _assert(bad_hash < 0, "OOB anchor rejects context_hash")
   var good_hash := _GoalMem.context_hash_for_find_food(
@@ -483,7 +485,7 @@ func _test_goal_source_memory() -> void:
   )
   _assert(ok, "salient write succeeds in-bounds")
   var bias: Dictionary = _GoalMem.project_believed_goal_bias(
-    Vector2(100.0, 70.0),
+    Vector3(100.0, 0.0, 70.0),
     _GkReg.GK_FIND_FOOD,
     motor_p,
     store,
@@ -553,7 +555,7 @@ func _test_goal_kind_phase_c_replay() -> void:
   grid.cell_size_px = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(64)
-  var anchor := Vector2(120.0, 80.0)
+  var anchor := Vector3(120.0, 0.0, 80.0)
   var store := _GoalMem.new()
   var kinds := _GkReg.effective_goal_kinds_for_pack("")
   var mods := _GoalMem.effective_modality_allowlist_for_pack("")
@@ -580,10 +582,10 @@ func _test_goal_kind_phase_c_replay() -> void:
   )
   var context_hash := _GoalMem.context_hash_for_find_food(_GkReg.GK_FIND_FOOD, anchor, motor_p, grid)
   var replay_neutral := store.consult_replay_weight(
-    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector2(100.0, 70.0), {}
+    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector3(100.0, 0.0, 70.0), {}
   )
   var replay_w := store.consult_replay_weight(
-    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector2(100.0, 70.0), traits_explorer
+    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector3(100.0, 0.0, 70.0), traits_explorer
   )
   _assert(replay_w > replay_neutral, "explorer traits raise replay_weight vs neutral traits")
   _assert(
@@ -625,7 +627,7 @@ func _test_goal_kind_phase_c_replay() -> void:
 func _test_goal_belief_anticipated_calories_stub() -> void:
   var beliefs: Dictionary = {}
   var split := {
-    "ready": [{"pos": Vector2(10.0, 0.0), "instance_id": 42, "anticipated_calories": 3.5}],
+    "ready": [{"pos": Vector3(10.0, 0.0,  0.0), "instance_id": 42, "anticipated_calories": 3.5}],
     "unready": [],
   }
   beliefs = _GoalBeliefScr.sync_from_scene(beliefs, split, 1000)
@@ -635,7 +637,7 @@ func _test_goal_belief_anticipated_calories_stub() -> void:
     "anticipated_calories stored on belief entry",
   )
   var skip := _GoalBeliefScr.sync_from_scene(
-    beliefs, {"ready": [{"pos": Vector2(1.0, 1.0)}], "unready": []}, 2000
+    beliefs, {"ready": [{"pos": Vector3(1.0, 0.0,  1.0)}], "unready": []}, 2000
   )
   _assert(not skip.has(0), "entries without instance_id are skipped")
 
@@ -684,19 +686,19 @@ func _test_motor_motivation_wiring() -> void:
     is_equal_approx(out.urgency_find_food, base.urgency_find_food),
     "trait tier2 stub leaves find_food urgency",
   )
-  var static_obs := [{"position": Vector2(120.0, 120.0), "half_extents": Vector2(20.0, 20.0)}]
+  var static_obs := [{"position": Vector3(120.0, 0.0,  120.0), "half_extents": Vector2(20.0, 20.0)}]
   var tactics := _TacticScr.build_motor_ctx_tactics(
-    Vector2(100.0, 120.0),
+    Vector3(100.0, 0.0, 120.0),
     Vector2(8.0, 8.0),
     1.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     spine,
     static_obs,
     null,
     {"in_awareness": true, "gate_dist": 250.0},
     false,
     [],
-    Vector2.ZERO,
+    Vector3.ZERO,
   )
   _assert(bool(tactics.get("tactic_in_squeeze", false)), "tight static clearance sets squeeze")
   _assert(bool(tactics.get("tactic_hide_viable", false)), "alert band sets hide_viable")
@@ -715,7 +717,7 @@ func _test_motor_motivation_wiring() -> void:
   store.try_salient_write(
     _GkReg.GK_AVOID_HOSTILES,
     &"avoid_hostiles",
-    Vector2(200.0, 200.0),
+    Vector3(200.0, 0.0, 200.0),
     spine,
     grid,
     flee_ctx,
@@ -725,7 +727,7 @@ func _test_motor_motivation_wiring() -> void:
     {},
   )
   var threat: Dictionary = store.consult_threat_response(
-    Vector2(200.0, 200.0), spine, flee_ctx, {}
+    Vector3(200.0, 0.0, 200.0), spine, flee_ctx, {}
   )
   _assert(
     threat.get("preferred_modality", &"") == &"flee_retreat",
@@ -741,7 +743,7 @@ func _test_motor_motivation_wiring() -> void:
     store.try_salient_write(
       _GkReg.GK_FIND_FOOD,
       &"find_food",
-      Vector2(120.0, 80.0),
+      Vector3(120.0, 0.0, 80.0),
       spine,
       grid,
       squeeze_ctx,
@@ -770,7 +772,7 @@ func _test_locale_prior_escalate_seek() -> void:
   grid.cell_size_px = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(64)
-  var anchor := Vector2(400.0, 400.0)
+  var anchor := Vector3(400.0, 0.0, 400.0)
   store.try_salient_write(
     _GkReg.GK_FIND_FOOD,
     &"find_food",
@@ -783,7 +785,7 @@ func _test_locale_prior_escalate_seek() -> void:
     _GoalMem.effective_modality_allowlist_for_pack(""),
     {},
   )
-  var creature_pos := Vector2.ZERO
+  var creature_pos := Vector3.ZERO
   var mul := _GoalMem.escalate_seek_multiplier(
     store, creature_pos, motor_p, _GkReg.GK_FIND_FOOD, 0.0
   )
@@ -823,7 +825,7 @@ func _test_motor_target_builder_feeding_mode() -> void:
   _assert((carn_policy.get("prey_groups") as Array).size() > 0, "carnivore prey groups")
   _assert((carn_policy.get("plant_groups") as Array).is_empty(), "carnivore no plant groups")
   var legacy := _ThreatSampleScr.to_legacy_herbivore_dict(
-    _ThreatSampleScr.make(Vector2(10.0, 20.0), 5.0, true)
+    _ThreatSampleScr.make(Vector3(10.0, 0.0, 20.0), 5.0, true)
   )
   _assert(bool(legacy.get("in_awareness", false)), "threat legacy in_awareness")
   _assert(
@@ -833,8 +835,8 @@ func _test_motor_target_builder_feeding_mode() -> void:
 
 
 func _test_goal_seek_resolve_and_cost() -> void:
-  var food_pos := Vector2(100.0, 50.0)
-  var prey_pos := Vector2(200.0, 80.0)
+  var food_pos := Vector3(100.0, 0.0, 50.0)
+  var prey_pos := Vector3(200.0, 0.0, 80.0)
   var cands: Array = _SeekCandScr.build_from_motor_ingress([food_pos], [], [prey_pos])
   var pack_food: Dictionary = _GoalSeekScr.resolve_for_dominant_leaf(
     _Tier2Dom.LEAF_FIND_FOOD, cands, 12.0, 0.0
@@ -867,12 +869,12 @@ func _test_goal_seek_resolve_and_cost() -> void:
   )
   var c1: float = float(
     Callable(_Motor, &"food_seek_cost_at_prediction").call(
-      Vector2.ZERO, Vector2.ZERO, [food_pos], 3.0, [], 0.0
+      Vector3.ZERO, Vector3.ZERO, [food_pos], 3.0, [], 0.0
     )
   )
   var c2: float = float(
     Callable(_Motor, &"goal_seek_cost_at_prediction").call(
-      Vector2.ZERO, Vector2.ZERO, [food_pos], 3.0, [], 0.0
+      Vector3.ZERO, Vector3.ZERO, [food_pos], 3.0, [], 0.0
     )
   )
   _assert(is_equal_approx(c1, c2), "goal_seek_cost aliases food_seek_cost")
@@ -893,7 +895,7 @@ func _test_goal_belief_coarse_ttl() -> void:
         "instance_id": iid,
         "goal_kind": _GkReg.GK_FIND_FOOD,
         "tier": &"COARSE",
-        "last_world_pos": Vector2(800.0, 800.0),
+        "last_world_pos": Vector3(800.0, 0.0,  800.0),
         "last_observed_ms": now_ms - 5000,
         "coarse_entered_ms": now_ms - 20000,
         "consumable_now": true,
@@ -920,7 +922,7 @@ func _test_goal_belief_merge_skips_live_awareness() -> void:
         "instance_id": LIVE_IID,
         "goal_kind": _GkReg.GK_FIND_FOOD,
         "tier": &"PRECISE",
-        "last_world_pos": Vector2(100.0, 100.0),
+        "last_world_pos": Vector3(100.0, 0.0,  100.0),
         "last_observed_ms": 0,
         "coarse_entered_ms": 0,
         "consumable_now": true,
@@ -930,8 +932,8 @@ func _test_goal_belief_merge_skips_live_awareness() -> void:
     },
   })
   var ctx := {
-    "creature_position": Vector2.ZERO,
-    "food_seek_targets": [Vector2(50.0, 50.0)],
+    "creature_position": Vector3.ZERO,
+    "food_seek_targets": [Vector3(50.0, 0.0, 50.0)],
     "unready_food_avoid_targets": [],
     "weight_seek_ready_food": 10.0,
     "believed_goal_source_bias": {
@@ -951,7 +953,7 @@ func _test_goal_belief_merge_skips_live_awareness() -> void:
   var merged: Array = out.get("food_seek_targets", []) as Array
   _assert(merged.size() == 1, "live food target unchanged when belief instance still in awareness")
   _assert(
-    not merged.has(Vector2(100.0, 100.0)),
+    not merged.has(Vector3(100.0, 0.0, 100.0)),
     "remembered precise belief skipped when instance_id still in live awareness",
   )
   ad.queue_free()
@@ -1024,7 +1026,7 @@ func _test_perception_snippet() -> void:
 
 func _test_cardinal_avoidance() -> void:
   var base_ctx := {
-    "creature_position": Vector2(100.0, 200.0),
+    "creature_position": Vector3(100.0, 0.0,  200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -1040,16 +1042,16 @@ func _test_cardinal_avoidance() -> void:
     "weight_edge": 0.0,
   }
   var idle := _Motor.pick_best_move_intent(base_ctx)
-  _assert(idle.is_equal_approx(Vector2(0.0, -1.0)), "no mobs tie picks UP first")
+  _assert(idle.is_equal_approx(Vector3(0.0, 0.0, -1.0)), "no mobs tie picks UP first")
 
   var flee := base_ctx.duplicate(true)
-  flee["creature_position"] = Vector2(100.0, 0.0)
-  flee["mobs"] = [{"position": Vector2(200.0, 0.0), "velocity": Vector2(-150.0, 0.0)}]
+  flee["creature_position"] = Vector3(100.0, 0.0, 0.0)
+  flee["mobs"] = [{"position": Vector3(200.0, 0.0,  0.0), "velocity": Vector3(-150.0, 0.0,  0.0)}]
   var leftish := _Motor.pick_best_move_intent(flee)
-  _assert(leftish.is_equal_approx(Vector2(-1.0, 0.0)), "mob east favors moving west")
+  _assert(leftish.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "mob east favors moving west")
 
   var oob_pen := _Motor.cost_at_prediction(
-    Vector2(-10.0, 200.0),
+    Vector3(-10.0, 0.0, 200.0),
     [],
     Vector2.ZERO,
     Vector2(480.0, 720.0),
@@ -1061,12 +1063,12 @@ func _test_cardinal_avoidance() -> void:
   )
   _assert(oob_pen >= 1e6, "OOB prediction gets huge cost")
 
-  var q := _Motor.closest_point_on_aabb(Vector2(100.0, 100.0), Vector2(10.0, 10.0), Vector2(200.0, 100.0))
-  _assert(q.is_equal_approx(Vector2(110.0, 100.0)), "nearest AABB point clamps to east face")
+  var q := _Motor.closest_point_on_aabb(Vector3(100.0, 0.0, 100.0), Vector2(10.0, 10.0), Vector3(200.0, 0.0, 100.0))
+  _assert(q.is_equal_approx(Vector3(110.0, 0.0, 100.0)), "nearest AABB point clamps to east face")
 
   var c_point := _Motor.cost_at_prediction(
-    Vector2(100.0, 100.0),
-    [{"position": Vector2(100.0, 130.0), "velocity": Vector2.ZERO}],
+    Vector3(100.0, 0.0, 100.0),
+    [{"position": Vector3(100.0, 0.0,  130.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(480.0, 720.0),
     1.0,
@@ -1076,8 +1078,8 @@ func _test_cardinal_avoidance() -> void:
     Vector2.ZERO
   )
   var c_foot := _Motor.cost_at_prediction(
-    Vector2(100.0, 100.0),
-    [{"position": Vector2(100.0, 130.0), "velocity": Vector2.ZERO}],
+    Vector3(100.0, 0.0, 100.0),
+    [{"position": Vector3(100.0, 0.0,  130.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(480.0, 720.0),
     1.0,
@@ -1089,10 +1091,10 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_foot > c_point, "nonzero footprint clears mob at center more aggressively than point model")
 
   var threat := base_ctx.duplicate(true)
-  threat["creature_position"] = Vector2(200.0, 200.0)
-  threat["mobs"] = [{"position": Vector2(200.0, 200.0), "velocity": Vector2.ZERO}]
+  threat["creature_position"] = Vector3(200.0, 0.0, 200.0)
+  threat["mobs"] = [{"position": Vector3(200.0, 0.0,  200.0), "velocity": Vector3.ZERO}]
   var c_idle := _Motor.cost_at_prediction(
-    Vector2(200.0, 200.0),
+    Vector3(200.0, 0.0, 200.0),
     threat["mobs"],
     Vector2.ZERO,
     Vector2(480.0, 720.0),
@@ -1103,7 +1105,7 @@ func _test_cardinal_avoidance() -> void:
     Vector2(20.0, 20.0)
   )
   var c_step := _Motor.cost_at_prediction(
-    Vector2(200.0, 200.0) + Vector2(0.0, -1.0) * 400.0 * 0.15,
+    Vector3(200.0, 0.0, 200.0) + Vector3(0.0, 0.0, -1.0) * 400.0 * 0.15,
     threat["mobs"],
     Vector2.ZERO,
     Vector2(480.0, 720.0),
@@ -1116,10 +1118,10 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_step < c_idle, "mob overlap favors moving off center vs standing still (affirmative dodge cost)")
 
   var pair := [
-    {"position": Vector2(170.0, 200.0), "velocity": Vector2.ZERO},
-    {"position": Vector2(230.0, 200.0), "velocity": Vector2.ZERO},
+    {"position": Vector3(170.0, 0.0,  200.0), "velocity": Vector3.ZERO},
+    {"position": Vector3(230.0, 0.0,  200.0), "velocity": Vector3.ZERO},
   ]
-  var mid := Vector2(200.0, 200.0)
+  var mid := Vector3(200.0, 0.0, 200.0)
   var c_pair_lin := _Motor.cost_at_prediction(
     mid, pair, Vector2.ZERO, Vector2(480.0, 720.0), 0.45, 1.05, 1e7, 12.0, Vector2.ZERO, 0.0, 0.0
   )
@@ -1129,26 +1131,26 @@ func _test_cardinal_avoidance() -> void:
   _assert(c_pair_sq > c_pair_lin + 0.05, "weight_dist_sq adds crowding penalty between two mobs")
 
   var corner := base_ctx.duplicate(true)
-  corner["creature_position"] = Vector2(2.0, 360.0)
+  corner["creature_position"] = Vector3(2.0, 0.0, 360.0)
   corner["mobs"] = []
   var away_from_oob := _Motor.pick_best_move_intent(corner)
-  _assert(not away_from_oob.is_equal_approx(Vector2(-1.0, 0.0)), "near left wall avoids stepping OOB")
+  _assert(not away_from_oob.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "near left wall avoids stepping OOB")
 
   # Callable: static exists on script; analyzer sometimes misses it on preload() type (see _test_perception_snippet).
   var o_det: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
-    {"creature_position": Vector2.ONE, "deterministic_tie_order": true, "shuffle_tie_break": true}
+    {"creature_position": Vector3(1.0, 0.0, 1.0), "deterministic_tie_order": true, "shuffle_tie_break": true}
   ) as Array
-  _assert((o_det[0] as Vector2).is_equal_approx(Vector2(0.0, -1.0)), "deterministic tie order starts UP")
+  _assert((o_det[0] as Vector3).is_equal_approx(Vector3(0.0, 0.0, -1.0)), "deterministic tie order starts UP")
   var o_a: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
-    {"creature_position": Vector2(3.0, 4.0), "tie_shuffle_seed": 7, "shuffle_tie_break": true}
+    {"creature_position": Vector3(3.0, 0.0,  4.0), "tie_shuffle_seed": 7, "shuffle_tie_break": true}
   ) as Array
   var o_b: Array = Callable(_Motor, &"evaluation_order_from_ctx").call(
-    {"creature_position": Vector2(3.0, 4.0), "tie_shuffle_seed": 999, "shuffle_tie_break": true}
+    {"creature_position": Vector3(3.0, 0.0,  4.0), "tie_shuffle_seed": 999, "shuffle_tie_break": true}
   ) as Array
-  _assert((o_a[4] as Vector2).is_equal_approx(Vector2.ZERO) and (o_b[4] as Vector2).is_equal_approx(Vector2.ZERO), "ZERO always last in shuffled order")
+  _assert((o_a[4] as Vector3).is_equal_approx(Vector3.ZERO) and (o_b[4] as Vector3).is_equal_approx(Vector3.ZERO), "ZERO always last in shuffled order")
   var perm_diff := false
   for i in range(4):
-    if not (o_a[i] as Vector2).is_equal_approx(o_b[i] as Vector2):
+    if not (o_a[i] as Vector3).is_equal_approx(o_b[i] as Vector3):
       perm_diff = true
   _assert(perm_diff, "different tie_shuffle_seed permutes cardinals")
 
@@ -1156,12 +1158,12 @@ func _test_cardinal_avoidance() -> void:
   chaos_ctx["motor_intent_cost_chaos"] = 80.0
   chaos_ctx["motor_chaos_seed"] = 12345
   chaos_ctx["shuffle_tie_break"] = false
-  var ch_pick: Vector2 = _Motor.pick_best_move_intent(chaos_ctx)
+  var ch_pick: Vector3 = _Motor.pick_best_move_intent(chaos_ctx)
   var ch_len := ch_pick.length()
   _assert(ch_len < 1e-4 or absf(ch_len - 1.0) < 1e-4, "motor cost chaos yields idle or unit direction only")
 
   var left_open := {
-    "creature_position": Vector2(20.0, 360.0),
+    "creature_position": Vector3(20.0, 0.0,  360.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -1177,10 +1179,10 @@ func _test_cardinal_avoidance() -> void:
     "weight_edge": 0.0,
   }
   var inward := _Motor.pick_best_move_intent(left_open)
-  _assert(inward.is_equal_approx(Vector2.RIGHT), "interior posture pulls toward playfield center from left edge")
+  _assert(inward.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "interior posture pulls toward playfield center from left edge")
 
   var wall_hug := {
-    "creature_position": Vector2(24.0, 360.0),
+    "creature_position": Vector3(24.0, 0.0,  360.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -1196,11 +1198,11 @@ func _test_cardinal_avoidance() -> void:
     "weight_edge": 2.6,
   }
   var off_edge := _Motor.pick_best_move_intent(wall_hug)
-  _assert(off_edge.is_equal_approx(Vector2.RIGHT), "edge clearance pulls away from boundary without interior term")
+  _assert(off_edge.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "edge clearance pulls away from boundary without interior term")
 
   ## Awareness gating: mobs beyond radius contribute no incremental mob cost.
-  var ctr := Vector2(400.0, 400.0)
-  var pred := Vector2(400.0, 400.0)
+  var ctr := Vector3(400.0, 0.0, 400.0)
+  var pred := Vector3(400.0, 0.0, 400.0)
   var c_no_mob: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
     [],
@@ -1218,13 +1220,13 @@ func _test_cardinal_avoidance() -> void:
     500.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
   var c_far_mob: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(400.0, 400.0 + 4000.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(400.0, 0.0,  400.0 + 4000.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1239,7 +1241,7 @@ func _test_cardinal_avoidance() -> void:
     500.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
@@ -1249,7 +1251,7 @@ func _test_cardinal_avoidance() -> void:
   var cos45 := cos(deg_to_rad(45.0))
   var c_behind: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(-200.0, 400.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(-200.0, 0.0,  400.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1264,13 +1266,13 @@ func _test_cardinal_avoidance() -> void:
     100.0,
     500.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
   var c_ahead: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(1000.0, 400.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(1000.0, 0.0,  400.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1285,7 +1287,7 @@ func _test_cardinal_avoidance() -> void:
     100.0,
     500.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
@@ -1294,7 +1296,7 @@ func _test_cardinal_avoidance() -> void:
   ## awareness_radius <= 0: no finite distance gate (HK perception plan).
   var c_far_open: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(400.0, 800.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(400.0, 0.0,  800.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1309,14 +1311,14 @@ func _test_cardinal_avoidance() -> void:
     0.0,
     0.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
   _assert(c_far_open > c_no_mob + 0.001, "nonpositive awareness_radius still applies mob repulsion from far mobs")
   var c_far_neg: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(400.0, 800.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(400.0, 0.0,  800.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1331,7 +1333,7 @@ func _test_cardinal_avoidance() -> void:
     -10.0,
     500.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
@@ -1340,7 +1342,7 @@ func _test_cardinal_avoidance() -> void:
   ## awareness_cone_extra <= 0: forward sector does not extend reach beyond base radius.
   var c_cone_off: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(520.0, 400.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(520.0, 0.0,  400.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1355,13 +1357,13 @@ func _test_cardinal_avoidance() -> void:
     100.0,
     0.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
   var c_cone_on: float = CardinalAvoidance.cost_at_prediction_aware(
     pred,
-    [{"position": Vector2(520.0, 400.0), "velocity": Vector2.ZERO}],
+    [{"position": Vector3(520.0, 0.0,  400.0), "velocity": Vector3.ZERO}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1376,7 +1378,7 @@ func _test_cardinal_avoidance() -> void:
     100.0,
     400.0,
     cos45,
-    Vector2(1.0, 0.0),
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
   )
@@ -1386,10 +1388,10 @@ func _test_cardinal_avoidance() -> void:
   ## Half-angle 180°: forward sector covers full circle; behind mob still gets base+extra reach.
   var cos180 := cos(deg_to_rad(180.0))
   var r_behind := Callable(_Motor, &"effective_awareness_reach").call(
-    ctr, Vector2(-200.0, 400.0), 100.0, 500.0, cos180, Vector2(1.0, 0.0)
+    ctr, Vector3(-200.0, 0.0, 400.0), 100.0, 500.0, cos180, Vector3(1.0, 0.0, 0.0)
   ) as float
   var r_narrow := Callable(_Motor, &"effective_awareness_reach").call(
-    ctr, Vector2(-200.0, 400.0), 100.0, 500.0, cos45, Vector2(1.0, 0.0)
+    ctr, Vector3(-200.0, 0.0, 400.0), 100.0, 500.0, cos45, Vector3(1.0, 0.0, 0.0)
   ) as float
   _assert(is_equal_approx(r_behind, 600.0), "180° half-angle extends cone extra behind creature")
   _assert(is_equal_approx(r_narrow, 100.0), "45° half-angle does not extend extra behind creature")
@@ -1397,7 +1399,7 @@ func _test_cardinal_avoidance() -> void:
   ## Per-entry cost_scale scales mob contribution.
   var c_full := _Motor.cost_at_prediction(
     pred,
-    [{"position": Vector2(400.0, 460.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}],
+    [{"position": Vector3(400.0, 0.0,  460.0), "velocity": Vector3.ZERO, "cost_scale": 1.0}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1408,7 +1410,7 @@ func _test_cardinal_avoidance() -> void:
   )
   var c_half := _Motor.cost_at_prediction(
     pred,
-    [{"position": Vector2(400.0, 460.0), "velocity": Vector2.ZERO, "cost_scale": 0.5}],
+    [{"position": Vector3(400.0, 0.0,  460.0), "velocity": Vector3.ZERO, "cost_scale": 0.5}],
     Vector2.ZERO,
     Vector2(2000.0, 2000.0),
     1.0,
@@ -1420,7 +1422,7 @@ func _test_cardinal_avoidance() -> void:
   _assert(is_equal_approx(c_full, c_half * 2.0), "cost_scale halves mob cost contribution")
 
   ## Static obstacles add repulsion via weight_obstacle.
-  var obs := [{"position": Vector2(400.0, 500.0), "half_extents": Vector2(40.0, 40.0)}]
+  var obs := [{"position": Vector3(400.0, 0.0,  500.0), "half_extents": Vector2(40.0, 40.0)}]
   var c_plain := _Motor.cost_at_prediction(
     pred, [], Vector2.ZERO, Vector2(2000.0, 2000.0), 1.0, 0.0, 1e7, 12.0, Vector2.ZERO
   )
@@ -1437,19 +1439,19 @@ func _test_cardinal_avoidance() -> void:
     0.0,
     0.0,
     0.0,
-    Vector2.ZERO,
+    ctr,
     0.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     obs,
     2.5,
   )
   _assert(c_block > c_plain + 0.001, "obstacle adds inverse-distance cost near prediction")
 
   ## Pursuit samples subtract mob-style cost (inverse distance toward prey).
-  var pred_c := Vector2(400.0, 300.0)
-  var pt: Array = [{"position": Vector2(430.0, 300.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}]
+  var pred_c := Vector3(400.0, 0.0, 300.0)
+  var pt: Array = [{"position": Vector3(430.0, 0.0,  300.0), "velocity": Vector3.ZERO, "cost_scale": 1.0}]
   var c_np: float = CardinalAvoidance.cost_at_prediction_aware(
     pred_c,
     [],
@@ -1467,7 +1469,7 @@ func _test_cardinal_avoidance() -> void:
     5000.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
     false,
@@ -1498,7 +1500,7 @@ func _test_cardinal_avoidance() -> void:
     5000.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
     false,
@@ -1515,9 +1517,9 @@ func _test_cardinal_avoidance() -> void:
     6.0,
     1.0,
     40.0,
-    PackedVector2Array(),
-    Vector2.ZERO,
-    Vector2.ZERO,
+    PackedVector3Array(),
+    Vector3.ZERO,
+    Vector3.ZERO,
     0.0,
     0.0,
   )
@@ -1525,21 +1527,21 @@ func _test_cardinal_avoidance() -> void:
 
 
 func _test_obstacle_strategy_shield_pin() -> void:
-  var pts := PackedVector2Array([Vector2(410.0, 300.0)])
+  var pts := PackedVector3Array([Vector3(410.0, 0.0, 300.0)])
   var shield := _ObstacleStrat.strategic_obstacle_cost(
-    Vector2(400.0, 300.0), Vector2(600.0, 300.0), Vector2.ZERO, pts, 40.0, 0.0, 6.0
+    Vector3(400.0, 0.0, 300.0), Vector3(600.0, 0.0, 300.0), Vector3.ZERO, pts, 40.0, 0.0, 6.0
   )
   _assert(shield < 0.0, "prey shield term rewards obstacle between self and threat")
   var pin := _ObstacleStrat.strategic_obstacle_cost(
-    Vector2(200.0, 300.0), Vector2.ZERO, Vector2(350.0, 300.0), pts, 0.0, 35.0, 6.0
+    Vector3(200.0, 0.0, 300.0), Vector3.ZERO, Vector3(350.0, 0.0, 300.0), pts, 0.0, 35.0, 6.0
   )
   _assert(pin < 0.0, "predator pin term rewards obstacles along prey vector")
-  var offset_obs := [{"position": Vector2(318.0, 350.0), "half_extents": Vector2(50.0, 50.0)}]
+  var offset_obs := [{"position": Vector3(318.0, 0.0,  350.0), "half_extents": Vector2(50.0, 50.0)}]
   _assert(
     _GeomScr.chase_segment_blocked_by_aabbs(
-      Vector2(300.0, 180.0),
+      Vector3(300.0, 0.0, 180.0),
       Vector2(18.0, 44.0),
-      Vector2(300.0, 520.0),
+      Vector3(300.0, 0.0, 520.0),
       Vector2(13.5, 30.5),
       offset_obs,
       4.0,
@@ -1795,7 +1797,7 @@ func _test_playfield_boundary_edge_rocks() -> void:
   )
   var bounds_max := Vector2(1920.0, 1080.0)
   var he := Vector2(13.5, 30.5)
-  var ne_pos := Vector2(bounds_max.x - he.x - 8.0, he.y + 6.0)
+  var ne_pos := Vector3(bounds_max.x - he.x - 8.0, 0.0, he.y + 6.0)
   var probe_px := float(rabbit_m.get("herbivore_obstacle_probe_px", 200.0))
   var clr := _Motor.footprint_static_clearance(ne_pos, he, aabbs)
   _assert(
@@ -2283,44 +2285,44 @@ func _test_expanding_cardinal_explore() -> void:
   var L288: Dictionary = X.locate(36, 288)
   _assert(int(L288["cycle_index"]) == 1 and int(L288["segment_index"]) == 0, "expanding explore cycle 1 start")
   _assert(int(L288["segment_ticks"]) == 72, "expanding explore doubled dwell after eighth rotation")
-  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
-  var c0: Vector2 = X.pick_cardinal(36, 0, 0)
-  var c1: Vector2 = X.pick_cardinal(36, 0, 1)
-  _assert(c0.is_equal_approx(Vector2(0.0, -1.0)) and c1.is_equal_approx(ne), "phase_seed rotates 8-way ordering")
+  var ne := Vector3(0.7071067811865475, 0.0, -0.7071067811865475)
+  var c0: Vector3 = X.pick_cardinal(36, 0, 0)
+  var c1: Vector3 = X.pick_cardinal(36, 0, 1)
+  _assert(c0.is_equal_approx(Vector3(0.0, 0.0, -1.0)) and c1.is_equal_approx(ne), "phase_seed rotates 8-way ordering")
   var expand_ctx := {
-    "creature_position": Vector2(200.0, 200.0),
+    "creature_position": Vector3(200.0, 0.0, 200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(800.0, 800.0),
     "mobs": [],
-    "creature_facing": Vector2.RIGHT,
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
     "food_seek_targets": [],
     "weight_seek_ready_food": 0.0,
     "weight_explore_idle_penalty": 10.0,
     "weight_explore_turn_bias": 0.0,
     "exploration_blend_multiplier": 1.0,
-    "expanding_explore_hint": Vector2.UP,
+    "expanding_explore_hint": Vector3(0.0, 0.0, -1.0),
     "weight_expanding_explore_hint": 2.2,
     "motor_stuck_allow_expand_hint": true,
   }
-  var intent_up: Vector2 = _Motor.pick_best_move_intent(expand_ctx)
-  _assert(intent_up.is_equal_approx(Vector2.UP), "expand hint aligned UP beats idle when hint weight high")
+  var intent_up: Vector3 = _Motor.pick_best_move_intent(expand_ctx)
+  _assert(intent_up.is_equal_approx(Vector3(0.0, 0.0, -1.0)), "expand hint aligned UP beats idle when hint weight high")
 
 
 func _test_predator_chase_motor_ctx() -> void:
-  var prey_pos := Vector2(300.0, 200.0)
+  var prey_pos := Vector3(300.0, 0.0, 200.0)
   var pursuit := [
-    {"position": prey_pos, "velocity": Vector2(-40.0, 0.0), "cost_scale": 1.0},
+    {"position": prey_pos, "velocity": Vector3(-40.0, 0.0, 0.0), "cost_scale": 1.0},
   ]
   var ctx := {
-    "creature_position": Vector2(200.0, 200.0),
+    "creature_position": Vector3(200.0, 0.0, 200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(800.0, 800.0),
     "mobs": [],
-    "creature_facing": Vector2.RIGHT,
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
     "food_seek_targets": [],
     "prey_seek_targets": [prey_pos],
     "weight_seek_prey": 22.0,
@@ -2335,11 +2337,11 @@ func _test_predator_chase_motor_ctx() -> void:
     "exploration_blend_multiplier": 0.0,
     "explore_trail_centers": [],
   }
-  var intent: Vector2 = _Motor.pick_best_move_intent(ctx)
-  _assert(intent.is_equal_approx(Vector2.RIGHT), "predator chase picks +X toward prey without explore idle")
+  var intent: Vector3 = _Motor.pick_best_move_intent(ctx)
+  _assert(intent.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "predator chase picks +X toward prey without explore idle")
 
-  var corner_prey := Vector2(976.0, 300.0)
-  var pred_approach := Vector2(820.0, 300.0)
+  var corner_prey := Vector3(976.0, 0.0, 300.0)
+  var pred_approach := Vector3(820.0, 0.0, 300.0)
   var fox_he := Vector2(18.0, 44.0)
   var hunt_corner_ctx := ctx.duplicate(true)
   hunt_corner_ctx["creature_position"] = pred_approach
@@ -2350,25 +2352,25 @@ func _test_predator_chase_motor_ctx() -> void:
   hunt_corner_ctx["weight_interior"] = 0.0
   hunt_corner_ctx["motor_has_active_goal"] = true
   hunt_corner_ctx["motor_seek_filter_wall_hits"] = false
-  var close_intent: Vector2 = _Motor.pick_best_move_intent(hunt_corner_ctx)
+  var close_intent: Vector3 = _Motor.pick_best_move_intent(hunt_corner_ctx)
   _assert(
-    close_intent.dot(Vector2.RIGHT) > 0.85,
+    close_intent.dot(Vector3(1.0, 0.0, 0.0)) > 0.85,
     "predator closes on edge-pinned prey when explore edge repulsion is off",
   )
   var legacy_corner_ctx := hunt_corner_ctx.duplicate(true)
   legacy_corner_ctx["weight_edge"] = 0.48
   legacy_corner_ctx["weight_interior"] = 0.65
   legacy_corner_ctx["motor_seek_filter_wall_hits"] = true
-  var legacy_intent: Vector2 = _Motor.pick_best_move_intent(legacy_corner_ctx)
+  var legacy_intent: Vector3 = _Motor.pick_best_move_intent(legacy_corner_ctx)
   _assert(
-    legacy_intent.dot(Vector2.RIGHT) < close_intent.dot(Vector2.RIGHT),
+    legacy_intent.dot(Vector3(1.0, 0.0, 0.0)) < close_intent.dot(Vector3(1.0, 0.0, 0.0)),
     "legacy edge repulsion and seek wall filter weaken corner closing",
   )
   var atop_prey_ctx := ctx.duplicate(true)
   atop_prey_ctx["creature_position"] = prey_pos
   atop_prey_ctx["weight_explore_idle_penalty"] = 0.0
   atop_prey_ctx["exploration_blend_multiplier"] = 0.0
-  var atop_intent: Vector2 = _Motor.pick_best_move_intent(atop_prey_ctx)
+  var atop_intent: Vector3 = _Motor.pick_best_move_intent(atop_prey_ctx)
   _assert(
     atop_intent.length_squared() > 1e-12,
     "predator hunt never picks idle even when co-located with prey",
@@ -2393,14 +2395,14 @@ func _test_predator_prey_memory_chase() -> void:
     "weight_pursuit_closing": 1.35,
     "weight_pursuit_dist_sq": 48.0,
   }
-  var prey_pos := Vector2(400.0, 200.0)
-  var pred_pos := Vector2(200.0, 200.0)
+  var prey_pos := Vector3(400.0, 0.0, 200.0)
+  var pred_pos := Vector3(200.0, 0.0, 200.0)
   var prey_iid := 424242
   var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
   _assert(mob_scene != null, "mob.tscn loads for predator memory chase")
   var predator: RigidBody2D = mob_scene.instantiate() as RigidBody2D
   root.add_child(predator)
-  predator.global_position = pred_pos
+  predator.global_position = _MotorPlane.to_vec2(pred_pos)
   var pred_bid := predator.get_instance_id()
   var now_ms := Time.get_ticks_msec()
   var beliefs: Dictionary = {}
@@ -2415,7 +2417,7 @@ func _test_predator_prey_memory_chase() -> void:
   )
   _assert(bool(sample.get("active", false)), "memory sample active after touch")
   _assert(
-    (sample.get("position", Vector2.ZERO) as Vector2).is_equal_approx(prey_pos),
+    (sample.get("position", Vector3.ZERO) as Vector3).is_equal_approx(prey_pos),
     "memory recalls last prey position",
   )
   _assert(
@@ -2438,13 +2440,13 @@ func _test_predator_prey_memory_chase() -> void:
     "_predator_inject_memory_chase_targets", sample, prey_live, pursuit_live, motor_p
   )
   _assert(
-    prey_live.size() == 1 and (prey_live[0] as Vector2).is_equal_approx(prey_pos),
+    prey_live.size() == 1 and (prey_live[0] as Vector3).is_equal_approx(prey_pos),
     "inject fills prey_seek_targets from memory",
   )
   _assert(pursuit_live.size() == 2, "inject adds centroid + ghost-intercept pursuit hints")
   var he := Vector2(18.0, 44.0)
   driver.set("_physics_ticks", 10)
-  var chase_intent: Vector2 = driver.call(
+  var chase_intent: Vector3 = driver.call(
     "_predator_latched_memory_chase_intent",
     predator.get_instance_id(),
     pred_pos,
@@ -2456,7 +2458,7 @@ func _test_predator_prey_memory_chase() -> void:
     motor_p,
   )
   _assert(
-    chase_intent.is_equal_approx(Vector2.RIGHT),
+    chase_intent.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "latched memory chase snaps toward remembered prey on +X",
   )
   var mem_ctx := {
@@ -2466,7 +2468,7 @@ func _test_predator_prey_memory_chase() -> void:
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(1000.0, 600.0),
     "mobs": [],
-    "creature_facing": Vector2.RIGHT,
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
     "food_seek_targets": [],
     "prey_seek_targets": prey_live.duplicate(),
     "weight_seek_prey": 22.0,
@@ -2481,9 +2483,9 @@ func _test_predator_prey_memory_chase() -> void:
     "exploration_blend_multiplier": 0.0,
     "explore_trail_centers": [],
   }
-  var mem_intent: Vector2 = _Motor.pick_best_move_intent(mem_ctx)
+  var mem_intent: Vector3 = _Motor.pick_best_move_intent(mem_ctx)
   _assert(
-    mem_intent.is_equal_approx(Vector2.RIGHT),
+    mem_intent.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "motor chase toward memory-injected prey without live awareness",
   )
   beliefs[prey_iid]["last_observed_ms"] = now_ms - 20000
@@ -2498,10 +2500,10 @@ func _test_predator_prey_memory_chase() -> void:
     Time.get_ticks_msec(),
   )
   driver.set("_goal_belief_by_body", {pred_bid: beliefs})
-  predator.global_position = prey_pos + Vector2(5000.0, 0.0)
+  predator.global_position = _MotorPlane.to_vec2(prey_pos) + Vector2(5000.0, 0.0)
   var forgotten: Dictionary = _GoalBeliefScr.sample_best_moving(
     beliefs,
-    predator.global_position,
+    _MotorPlane.to_horizontal_vec3(predator.global_position),
     motor_p,
     _GkReg.GK_FIND_FOOD,
     {},
@@ -2520,8 +2522,8 @@ func _test_goal_belief_moving_prey_ghost() -> void:
     "goal_memory_precise_radius_px": 5000.0,
     "goal_memory_ghost_horizon_sec": 0.5,
   }
-  var prey_pos := Vector2(300.0, 100.0)
-  var vel := Vector2(80.0, 0.0)
+  var prey_pos := Vector3(300.0, 0.0, 100.0)
+  var vel := Vector3(80.0, 0.0, 0.0)
   var now_ms := Time.get_ticks_msec()
   var beliefs: Dictionary = {}
   beliefs = _GoalBeliefScr.sync_from_prey_entries(
@@ -2532,12 +2534,12 @@ func _test_goal_belief_moving_prey_ghost() -> void:
   var prey_live: Array = []
   var pursuit_live: Array = []
   var sample: Dictionary = _GoalBeliefScr.sample_best_moving(
-    beliefs, Vector2.ZERO, motor_p, _GkReg.GK_FIND_FOOD, {}, now_ms
+    beliefs, Vector3.ZERO, motor_p, _GkReg.GK_FIND_FOOD, {}, now_ms
   )
   _GoalBeliefScr.inject_moving_memory_chase(sample, prey_live, pursuit_live, motor_p)
   _assert(prey_live.size() == 1, "ghost inject adds centroid prey point")
   _assert(pursuit_live.size() == 2, "ghost inject adds centroid + intercept pursuit hints")
-  var intercept: Vector2 = pursuit_live[1].get("position", Vector2.ZERO)
+  var intercept: Vector3 = pursuit_live[1].get("position", Vector3.ZERO)
   _assert(
     intercept.is_equal_approx(prey_pos + vel * 0.5),
     "light-C intercept uses goal_memory_ghost_horizon_sec",
@@ -2546,10 +2548,10 @@ func _test_goal_belief_moving_prey_ghost() -> void:
     {},
     [
       {
-        "world_pos": Vector2(50.0, 0.0),
+        "world_pos": Vector3(50.0, 0.0, 0.0),
         "gate_dist": 10.0,
         "in_awareness": true,
-        "velocity": Vector2(-20.0, 0.0),
+        "velocity": Vector3(-20.0, 0.0, 0.0),
         "instance_id": 88,
       },
     ],
@@ -2557,14 +2559,14 @@ func _test_goal_belief_moving_prey_ghost() -> void:
   )
   _assert(
     _GoalBeliefScr.has_remembered_avoid_threat(
-      beliefs_avoid, Vector2.ZERO, motor_p, {}, now_ms
+      beliefs_avoid, Vector3.ZERO, motor_p, {}, now_ms
     ),
     "remembered avoid_hostiles blocks prey memory path",
   )
 
 
 func _test_no_goal_plateau_random() -> void:
-  var center := Vector2(500.0, 500.0)
+  var center := Vector3(500.0, 0.0, 500.0)
   var base_ctx := {
     "creature_position": center,
     "creature_speed": 400.0,
@@ -2574,7 +2576,7 @@ func _test_no_goal_plateau_random() -> void:
     "mobs": [],
     "static_obstacles": [],
     "creature_half_extents": Vector2(13.5, 30.5),
-    "creature_facing": Vector2.RIGHT,
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
     "food_seek_targets": [],
     "prey_seek_targets": [],
     "pursuit_targets": [],
@@ -2591,82 +2593,82 @@ func _test_no_goal_plateau_random() -> void:
     "motor_chaos_seed": 90210,
     "shuffle_tie_break": false,
   }
-  var d_a: Vector2 = _Motor.pick_best_move_intent(base_ctx)
-  var d_b: Vector2 = _Motor.pick_best_move_intent(base_ctx)
+  var d_a: Vector3 = _Motor.pick_best_move_intent(base_ctx)
+  var d_b: Vector3 = _Motor.pick_best_move_intent(base_ctx)
   _assert(d_a.is_equal_approx(d_b), "no-goal plateau tie uses deterministic eval order")
-  _assert(d_a.is_equal_approx(Vector2.UP), "no-goal plateau tie picks first eval-order direction (N)")
+  _assert(d_a.is_equal_approx(Vector3(0.0, 0.0, -1.0)), "no-goal plateau tie picks first eval-order direction (N)")
   var blocked_ctx := base_ctx.duplicate(true)
   blocked_ctx["static_obstacles"] = [
-    {"position": Vector2(560.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
+    {"position": Vector3(560.0, 0.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
   ]
-  var d_blocked: Vector2 = _Motor.pick_best_move_intent(blocked_ctx)
+  var d_blocked: Vector3 = _Motor.pick_best_move_intent(blocked_ctx)
   _assert(
-    not d_blocked.is_equal_approx(Vector2.RIGHT),
+    not d_blocked.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "motor cost picker skips blocked cardinals on plateau ties",
   )
   var seek_ctx := base_ctx.duplicate(true)
-  seek_ctx["food_seek_targets"] = [Vector2(600.0, 500.0)]
+  seek_ctx["food_seek_targets"] = [Vector3(600.0, 0.0, 500.0)]
   seek_ctx["weight_seek_ready_food"] = 16.0
   seek_ctx["motor_has_active_goal"] = true
   seek_ctx["static_obstacles"] = [
-    {"position": Vector2(560.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
+    {"position": Vector3(560.0, 0.0, 500.0), "half_extents": Vector2(24.0, 40.0)},
   ]
-  var d_seek: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
+  var d_seek: Vector3 = _Motor.pick_best_move_intent(seek_ctx)
   _assert(
-    d_seek.is_equal_approx(Vector2.RIGHT),
+    d_seek.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "active goal seek keeps blocked-filter off so motor can step toward targets",
   )
 
 
 func _test_food_seek_motor() -> void:
-  var food := [Vector2(400.0, 200.0)]
+  var food := [Vector3(400.0, 0.0, 200.0)]
   var c_left := float(
     Callable(_Motor, &"food_seek_cost_at_prediction").call(
-      Vector2(200.0, 200.0), Vector2.ZERO, food, 1.0, [], 0.0
+      Vector3(200.0, 0.0, 200.0), Vector3.ZERO, food, 1.0, [], 0.0
     )
   )
   var c_right := float(
     Callable(_Motor, &"food_seek_cost_at_prediction").call(
-      Vector2(300.0, 200.0), Vector2.ZERO, food, 1.0, [], 0.0
+      Vector3(300.0, 0.0, 200.0), Vector3.ZERO, food, 1.0, [], 0.0
     )
   )
   _assert(c_right < c_left, "food seek cost decreases when prediction moves toward target")
-  var mob_near := [Vector2(205.0, 200.0)]
+  var mob_near := [Vector3(205.0, 0.0, 200.0)]
   var gated := float(
     Callable(_Motor, &"food_seek_cost_at_prediction").call(
-      Vector2(250.0, 200.0), Vector2.ZERO, food, 50.0, mob_near, 60.0
+      Vector3(250.0, 0.0, 200.0), Vector3.ZERO, food, 50.0, mob_near, 60.0
     )
   )
   var free := float(
     Callable(_Motor, &"food_seek_cost_at_prediction").call(
-      Vector2(250.0, 200.0), Vector2.ZERO, food, 50.0, [], 0.0
+      Vector3(250.0, 0.0, 200.0), Vector3.ZERO, food, 50.0, [], 0.0
     )
   )
   _assert(gated < 1e-6 and free > 1000.0, "imminent mob radius suppresses food pull at predicted pose")
   var w_suppressed := float(
     Callable(_Motor, &"effective_food_seek_weight").call(
-      50.0, Vector2(240.0, 200.0), Vector2.ZERO, mob_near, 100.0
+      50.0, Vector3(240.0, 0.0, 200.0), Vector3.ZERO, mob_near, 100.0
     )
   )
   var w_active := float(
     Callable(_Motor, &"effective_food_seek_weight").call(
-      50.0, Vector2(100.0, 200.0), Vector2.ZERO, mob_near, 100.0
+      50.0, Vector3(100.0, 0.0, 200.0), Vector3.ZERO, mob_near, 100.0
     )
   )
   _assert(w_suppressed < 1e-6 and w_active > 40.0, "imminent mob radius zeros food weight at current pose")
   var c_far_un := float(
     Callable(_Motor, &"unready_food_avoid_cost_at_prediction").call(
-      Vector2(0.0, 0.0), Vector2.ZERO, [Vector2(200.0, 0.0)], 10.0, 8.0
+      Vector3.ZERO, Vector3.ZERO, [Vector3(200.0, 0.0, 0.0)], 10.0, 8.0
     )
   )
   var c_near_un := float(
     Callable(_Motor, &"unready_food_avoid_cost_at_prediction").call(
-      Vector2(150.0, 0.0), Vector2.ZERO, [Vector2(200.0, 0.0)], 10.0, 8.0
+      Vector3(150.0, 0.0, 0.0), Vector3.ZERO, [Vector3(200.0, 0.0, 0.0)], 10.0, 8.0
     )
   )
   _assert(c_near_un > c_far_un, "unready bush inverse-distance cost rises when prediction hugs the bush")
   var seek_ctx := {
-    "creature_position": Vector2(200.0, 200.0),
+    "creature_position": Vector3(200.0, 0.0, 200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -2686,15 +2688,15 @@ func _test_food_seek_motor() -> void:
     "food_seek_imminent_mob_radius_px": 0.0,
   }
   var toward := _Motor.pick_best_move_intent(seek_ctx)
-  _assert(toward.is_equal_approx(Vector2.RIGHT), "food seek steers toward in-range ready bush when mob costs off")
-  var mob_pos := Vector2(300.0, 200.0)
+  _assert(toward.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "food seek steers toward in-range ready bush when mob costs off")
+  var mob_pos := Vector3(300.0, 0.0, 200.0)
   var flee_ctx := {
-    "creature_position": Vector2(240.0, 200.0),
+    "creature_position": Vector3(240.0, 0.0, 200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(480.0, 720.0),
-    "mobs": [{"position": mob_pos, "velocity": Vector2.ZERO}],
+    "mobs": [{"position": mob_pos, "velocity": Vector3.ZERO}],
     "weight_dist": 0.45,
     "weight_closing": 0.0,
     "weight_dist_sq": 55.0,
@@ -2709,12 +2711,12 @@ func _test_food_seek_motor() -> void:
     "food_seek_imminent_mob_radius_px": 100.0,
   }
   var flee := _Motor.pick_best_move_intent(flee_ctx)
-  _assert(flee.is_equal_approx(Vector2.LEFT), "mob within imminent radius beats food seek")
+  _assert(flee.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "mob within imminent radius beats food seek")
 
 
 func _test_explore_idle_when_no_pickup() -> void:
   var roam := {
-    "creature_position": Vector2(240.0, 360.0),
+    "creature_position": Vector3(240.0, 0.0, 360.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -2738,23 +2740,23 @@ func _test_explore_idle_when_no_pickup() -> void:
     "weight_explore_turn_bias": 0.0,
   }
   var intent := _Motor.pick_best_move_intent(roam)
-  _assert(not intent.is_equal_approx(Vector2.ZERO), "explore idle penalty avoids standstill without pickup targets")
+  _assert(not intent.is_equal_approx(Vector3.ZERO), "explore idle penalty avoids standstill without pickup targets")
 
 
 func _test_explore_trail_repulsion_motor() -> void:
   var c_far := float(
     Callable(_Motor, &"exploration_trail_repulsion_cost").call(
-      Vector2(300.0, 360.0), Vector2.ZERO, [Vector2(190.0, 360.0)], 10.0, 8.0
+      Vector3(300.0, 0.0, 360.0), Vector2.ZERO, [Vector3(190.0, 0.0, 360.0)], 10.0, 8.0
     )
   )
   var c_near := float(
     Callable(_Motor, &"exploration_trail_repulsion_cost").call(
-      Vector2(180.0, 360.0), Vector2.ZERO, [Vector2(190.0, 360.0)], 10.0, 8.0
+      Vector3(180.0, 0.0, 360.0), Vector2.ZERO, [Vector3(190.0, 0.0, 360.0)], 10.0, 8.0
     )
   )
   _assert(c_near > c_far, "trail repulsion rises when prediction approaches a prior cell center")
   var trail_ctx := {
-    "creature_position": Vector2(240.0, 360.0),
+    "creature_position": Vector3(240.0, 0.0, 360.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -2776,11 +2778,11 @@ func _test_explore_trail_repulsion_motor() -> void:
     "weight_avoid_unready_food": 0.0,
     "weight_explore_idle_penalty": 0.0,
     "weight_explore_turn_bias": 0.0,
-    "explore_trail_centers": [Vector2(190.0, 360.0)],
+    "explore_trail_centers": [Vector3(190.0, 0.0, 360.0)],
     "weight_explore_trail_repulsion": 40.0,
   }
   var away := _Motor.pick_best_move_intent(trail_ctx)
-  _assert(away.is_equal_approx(Vector2.RIGHT), "trail repulsion steers away from visited cell when symmetric otherwise")
+  _assert(away.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "trail repulsion steers away from visited cell when symmetric otherwise")
 
 
 func _test_wall_slide_pick() -> void:
@@ -2925,25 +2927,25 @@ func _test_playfield_clamp() -> void:
 
 func _test_footprint_geometry() -> void:
   var he := Vector2(10.0, 20.0)
-  var center := Vector2(100.0, 100.0)
+  var center := Vector3(100.0, 0.0, 100.0)
   var clr: float = Callable(_Motor, &"minimum_footprint_point_clearance").call(
-    center, he, [Vector2(130.0, 100.0)]
+    center, he, [Vector3(130.0, 0.0, 100.0)]
   )
   _assert(is_equal_approx(clr, 20.0), "footprint point clearance uses AABB edge distance")
-  var cp: Vector2 = Callable(_Motor, &"closest_point_on_aabb").call(center, he, Vector2(50.0, 50.0))
-  _assert(cp.is_equal_approx(Vector2(90.0, 80.0)), "closest point on footprint AABB")
+  var cp: Vector3 = Callable(_Motor, &"closest_point_on_aabb").call(center, he, Vector3(50.0, 0.0, 50.0))
+  _assert(cp.is_equal_approx(Vector3(90.0, 0.0, 80.0)), "closest point on footprint AABB")
 
 
 func _test_carnivore_pursuit_intent() -> void:
   var ctx := {
-    "creature_position": Vector2.ZERO,
-    "prey_targets": [Vector2(100.0, 0.0)],
+    "creature_position": Vector3.ZERO,
+    "prey_targets": [Vector3(100.0, 0.0, 0.0)],
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(500.0, 500.0),
     "creature_half_extents": Vector2(10.0, 10.0),
   }
-  var intent: Vector2 = _CarnivorePursuit.pick_pursuit_intent(ctx)
-  _assert(intent.is_equal_approx(Vector2.RIGHT), "pursuit intent toward prey on +X")
+  var intent: Vector3 = _CarnivorePursuit.pick_pursuit_intent(ctx)
+  _assert(intent.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "pursuit intent toward prey on +X")
 
 
 func _test_creature_diet_on_2d_bodies() -> void:
@@ -2992,6 +2994,10 @@ func _test_creature_3d_template_scenes_load() -> void:
   _assert(root_h.get_script() == _CreatureRoot3D, "herbivore root uses CreatureRoot3D script")
   _assert(root_ck.get_script() == _CreatureRoot3D, "carnivore kinematic root uses CreatureRoot3D script")
   _assert(root_cr.get_script() == _CreatureRoot3D, "carnivore rigid root uses CreatureRoot3D script")
+  var body_h := root_h.get_node_or_null("Body")
+  _assert(body_h != null and body_h.get_node_or_null("AwarenessDebugOverlay") != null, "herbivore Body has 3D awareness overlay")
+  var body_ck := root_ck.get_node_or_null("Body")
+  _assert(body_ck != null and body_ck.get_node_or_null("AwarenessDebugOverlay") != null, "carnivore Body has 3D awareness overlay")
   root_h.queue_free()
   root_ck.queue_free()
   root_cr.queue_free()
@@ -3011,7 +3017,7 @@ func _test_motor_plane_xz_adapter() -> void:
   body.position = Vector3(11.0, 2.0, -4.0)
   root.add_child(body)
   var mp := _MotorPlane.body_motor_position(body)
-  _assert(is_equal_approx(mp.x, 11.0) and is_equal_approx(mp.y, -4.0), "body motor position from Node3D")
+  _assert(is_equal_approx(mp.x, 11.0) and is_equal_approx(mp.z, -4.0), "body motor position from Node3D")
   body.queue_free()
 
 
@@ -3019,11 +3025,11 @@ func _test_creature_kinematic_motor_intent_adapter() -> void:
   var body := CharacterBody3D.new()
   body.set_script(_KinematicBody3DScr)
   root.add_child(body)
-  body.call("set_creature_move_intent", Vector2(0.0, 1.0))
+  body.call("set_creature_move_intent", Vector3(0.0, 0.0, 1.0))
   var stored: Variant = body.get("creature_move_intent")
-  _assert(typeof(stored) == TYPE_VECTOR2, "kinematic stores Vector2 intent")
-  var sv := stored as Vector2
-  _assert(sv.is_equal_approx(Vector2(0.0, 1.0)), "kinematic intent normalized")
+  _assert(typeof(stored) == TYPE_VECTOR3, "kinematic stores Vector3 intent")
+  var sv := stored as Vector3
+  _assert(sv.is_equal_approx(Vector3(0.0, 0.0, 1.0)), "kinematic intent normalized")
   body.queue_free()
 
 
@@ -3078,6 +3084,34 @@ func _test_m1_3d_physics_layers() -> void:
   )
 
 
+func _test_m2_vector3_motor_context() -> void:
+  var ctx := {
+    "creature_position": Vector3(10.0, 0.0, 12.0),
+    "creature_speed": 5.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(40.0, 40.0),
+    "mobs": [],
+    "creature_half_extents": Vector2(0.35, 0.6),
+    "static_obstacles": [],
+  }
+  var intent: Vector3 = _Motor.pick_best_move_intent(ctx)
+  _assert(typeof(intent) == TYPE_VECTOR3, "M2 motor pick returns Vector3")
+  var cand := _SeekCandScr.make(Vector3(5.0, 0.0, 8.0), &"find_food")
+  _assert((cand["pos"] as Vector3).is_equal_approx(Vector3(5.0, 0.0, 8.0)), "SeekCandidate pos is Vector3")
+  var thr := _ThreatSampleScr.make(Vector3(1.0, 0.0, 2.0), 3.0, true, Vector3(0.5, 0.0, 0.0))
+  _assert((thr["world_pos"] as Vector3).x == 1.0, "ThreatSample world_pos is Vector3")
+
+
+func _test_m2_awareness_debug_overlay_3d() -> void:
+  _assert(ResourceLoader.exists("res://creature/awareness_debug_overlay_3d.gd"), "3D awareness overlay script exists")
+  var overlay := Node3D.new()
+  overlay.set_script(load("res://creature/awareness_debug_overlay_3d.gd"))
+  root.add_child(overlay)
+  _assert(overlay.has_method(&"_overlay_enabled"), "3D awareness overlay loads")
+  overlay.queue_free()
+
+
 func _test_playfield_bounds_3d_from_floor() -> void:
   var pf := Node3D.new()
   root.add_child(pf)
@@ -3110,7 +3144,7 @@ func _test_motor_obstacle_geometry_3d() -> void:
   sb.add_child(cs)
   root.add_child(sb)
   var aabbs: Array = []
-  var samples := PackedVector2Array()
+  var samples := PackedVector3Array()
   _GeomScr.append_static_body_shapes_3d(sb, aabbs, samples)
   _assert(aabbs.size() == 1, "3d obstacle emits one AABB")
   _assert(samples.size() >= 8, "3d obstacle emits rim samples")
@@ -3205,7 +3239,7 @@ func _test_cardinal_interior_env_grid() -> void:
   grid.cell_kind_ids = ids
   var step := 400.0 * 0.15
   var c_left := _Motor.cost_at_prediction(
-    Vector2(250.0 - step, 50.0),
+    Vector3(250.0 - step, 0.0, 50.0),
     [],
     Vector2.ZERO,
     Vector2(800.0, 800.0),
@@ -3217,11 +3251,11 @@ func _test_cardinal_interior_env_grid() -> void:
     0.0,
     0.0,
     0.0,
-    Vector2.ZERO,
+    Vector3.ZERO,
     0.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
     false,
@@ -3230,7 +3264,7 @@ func _test_cardinal_interior_env_grid() -> void:
     {"active": true, "weight_solid": 5000.0, "weight_slow": 10.0},
   )
   var c_right := _Motor.cost_at_prediction(
-    Vector2(250.0 + step, 50.0),
+    Vector3(250.0 + step, 0.0, 50.0),
     [],
     Vector2.ZERO,
     Vector2(800.0, 800.0),
@@ -3242,11 +3276,11 @@ func _test_cardinal_interior_env_grid() -> void:
     0.0,
     0.0,
     0.0,
-    Vector2.ZERO,
+    Vector3.ZERO,
     0.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
     false,
@@ -3257,7 +3291,7 @@ func _test_cardinal_interior_env_grid() -> void:
   _assert(c_right > c_left + 500.0, "impassible baked cell east of pose adds much larger cost than open cell west")
 
   var c_wall := _Motor.cost_at_prediction(
-    Vector2(350.0, 50.0),
+    Vector3(350.0, 0.0, 50.0),
     [],
     Vector2.ZERO,
     Vector2(800.0, 800.0),
@@ -3269,11 +3303,11 @@ func _test_cardinal_interior_env_grid() -> void:
     0.0,
     0.0,
     0.0,
-    Vector2.ZERO,
+    Vector3.ZERO,
     0.0,
     0.0,
     -2.0,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
     [],
     0.0,
     false,
@@ -3310,19 +3344,19 @@ func _test_mob_avoidance_acceptance() -> void:
 
 
 func _test_jeopardy_forced_turn() -> void:
-  var mob_pos := Vector2(300.0, 200.0)
-  var mobs := [{"position": mob_pos, "velocity": Vector2.ZERO}]
+  var mob_pos := Vector3(300.0, 0.0, 200.0)
+  var mobs := [{"position": mob_pos, "velocity": Vector3.ZERO}]
   var cone_cos := cos(deg_to_rad(45.0))
   var threat := Callable(_JeopardyTurnScr, &"primary_threat_in_forward_cone").call(
-    Vector2(240.0, 200.0), Vector2.ZERO, Vector2.RIGHT, mobs, 100.0, cone_cos
+    Vector3(240.0, 0.0, 200.0), Vector2.ZERO, Vector3(1.0, 0.0, 0.0), mobs, 100.0, cone_cos
   ) as Dictionary
   _assert(bool(threat.get("found", false)), "forward-cone mob inside imminent radius is a threat")
   var state: Dictionary = {}
   var tick_base := {
-    "incumbent": Vector2.RIGHT,
-    "creature_position": Vector2(240.0, 200.0),
+    "incumbent": Vector3(1.0, 0.0, 0.0),
+    "creature_position": Vector3(240.0, 0.0,  200.0),
     "creature_half_extents": Vector2.ZERO,
-    "creature_facing": Vector2.RIGHT,
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
     "mobs": mobs,
     "imminent_radius_px": 100.0,
     "cone_cos_threshold": cone_cos,
@@ -3331,15 +3365,15 @@ func _test_jeopardy_forced_turn() -> void:
   var eval1: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick_base, state)
   _assert(not bool(eval1.get("should_force", true)), "first straight tick does not force turn")
   var tick2 := tick_base.duplicate(true)
-  tick2["creature_position"] = Vector2(250.0, 200.0)
+  tick2["creature_position"] = Vector3(250.0, 0.0, 200.0)
   var eval2: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick2, state)
   _assert(not bool(eval2.get("should_force", true)), "second closing tick not yet at threshold")
   var tick3 := tick_base.duplicate(true)
-  tick3["creature_position"] = Vector2(260.0, 200.0)
+  tick3["creature_position"] = Vector3(260.0, 0.0, 200.0)
   var eval3: Dictionary = Callable(_JeopardyTurnScr, &"evaluate_jeopardy_tick").call(tick3, state)
   _assert(bool(eval3.get("should_force", false)), "second consecutive closing straight tick forces turn")
   var flee_ctx := {
-    "creature_position": Vector2(260.0, 200.0),
+    "creature_position": Vector3(260.0, 0.0,  200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -3360,12 +3394,12 @@ func _test_jeopardy_forced_turn() -> void:
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
   }
-  var flee := Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
-    flee_ctx, Vector2.RIGHT, mob_pos
-  ) as Vector2
-  _assert(flee.is_equal_approx(Vector2.LEFT), "forced turn flees mob when mob repulsion dominates")
+  var flee: Vector3 = Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
+    flee_ctx, Vector3(1.0, 0.0, 0.0), mob_pos
+  ) as Vector3
+  _assert(flee.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "forced turn flees mob when mob repulsion dominates")
   var turn_ctx := {
-    "creature_position": Vector2(260.0, 200.0),
+    "creature_position": Vector3(260.0, 0.0,  200.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -3386,41 +3420,41 @@ func _test_jeopardy_forced_turn() -> void:
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
   }
-  var forced := Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
-    turn_ctx, Vector2.RIGHT, mob_pos
-  ) as Vector2
+  var forced: Vector3 = Callable(_JeopardyTurnScr, &"pick_forced_turn").call(
+    turn_ctx, Vector3(1.0, 0.0, 0.0), mob_pos
+  ) as Vector3
   _assert(forced.length_squared() > 1e-12, "forced turn picks a unit direction")
-  _assert(not forced.is_equal_approx(Vector2.RIGHT), "forced turn avoids continuing straight into threat")
+  _assert(not forced.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "forced turn avoids continuing straight into threat")
 
 
 func _test_scripted_intent_hold() -> void:
   var fh := Callable(IntentHoldScr, &"filtered_intent")
   var st: Dictionary = {}
-  var incumbent := Vector2(0.0, 1.0)
-  var challenger := Vector2(0.0, -1.0)
+  var incumbent := Vector3(0.0, 0.0, 1.0)
+  var challenger := Vector3(0.0, 0.0, -1.0)
   for _i in range(4):
     _assert(
-      (fh.call(challenger, incumbent, 5, st) as Vector2).is_equal_approx(incumbent),
+      (fh.call(challenger, incumbent, 5, st) as Vector3).is_equal_approx(incumbent),
       "intent hold ignores single-tick challenger"
     )
-  var switched: Vector2 = fh.call(challenger, incumbent, 5, st) as Vector2
+  var switched: Vector3 = fh.call(challenger, incumbent, 5, st) as Vector3
   _assert(switched.is_equal_approx(challenger), "intent hold adopts after streak")
 
   Callable(IntentHoldScr, &"reset_state").call(st)
-  var right := Vector2(1.0, 0.0)
-  _assert((fh.call(right, incumbent, 5, st) as Vector2).is_equal_approx(incumbent), "new challenger resets streak frame 1")
-  var left := Vector2(-1.0, 0.0)
-  _assert((fh.call(left, incumbent, 5, st) as Vector2).is_equal_approx(incumbent), "challenger swap restarts accumulation")
+  var right := Vector3(1.0, 0.0, 0.0)
+  _assert((fh.call(right, incumbent, 5, st) as Vector3).is_equal_approx(incumbent), "new challenger resets streak frame 1")
+  var left := Vector3(-1.0, 0.0, 0.0)
+  _assert((fh.call(left, incumbent, 5, st) as Vector3).is_equal_approx(incumbent), "challenger swap restarts accumulation")
 
   Callable(IntentHoldScr, &"reset_state").call(st)
-  var cold: Vector2 = fh.call(right, Vector2.ZERO, 3, st) as Vector2
+  var cold: Vector3 = fh.call(right, Vector3.ZERO, 3, st) as Vector3
   _assert(cold.is_equal_approx(right), "idle incumbent skips hold")
 
 
 func _test_seek_oct_directions() -> void:
-  var food := Vector2(200.0, -200.0)
+  var food := Vector3(200.0, 0.0, -200.0)
   var seek_ctx := {
-    "creature_position": Vector2.ZERO,
+    "creature_position": Vector3.ZERO,
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -3440,15 +3474,15 @@ func _test_seek_oct_directions() -> void:
     "weight_explore_turn_bias": 0.0,
     "motor_intent_cost_chaos": 0.0,
   }
-  var intent: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
-  var ne := Vector2(1.0, -1.0).normalized()
+  var intent: Vector3 = _Motor.pick_best_move_intent(seek_ctx)
+  var ne := Vector3(1.0, 0.0, -1.0).normalized()
   _assert(intent.dot(ne) > 0.95, "seek oct picks NE toward diagonal food target")
   seek_ctx["food_seek_targets"] = []
   seek_ctx["weight_seek_ready_food"] = 0.0
   seek_ctx["weight_explore_idle_penalty"] = 12.0
   seek_ctx["weight_expanding_explore_hint"] = 2.0
   seek_ctx["expanding_explore_hint"] = ne
-  var explore: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
+  var explore: Vector3 = _Motor.pick_best_move_intent(seek_ctx)
   _assert(
     explore.length_squared() > 1e-12 and explore.dot(ne) > 0.55,
     "no-goal motor still evaluates eight-way headings toward explore hint",
@@ -3459,36 +3493,36 @@ func _test_seek_oct_directions() -> void:
 func _test_seek_direction_commit() -> void:
   var fh := Callable(_SeekDirCommitScr, &"filtered_seek_intent")
   var st: Dictionary = {}
-  var ne := Vector2(1.0, -1.0).normalized()
-  var east := Vector2.RIGHT
-  var first: Vector2 = fh.call(ne, st, 1.0, true) as Vector2
+  var ne := Vector3(1.0, 0.0, -1.0).normalized()
+  var east := Vector3(1.0, 0.0, 0.0)
+  var first: Vector3 = fh.call(ne, st, 1.0, true) as Vector3
   _assert(first.is_equal_approx(ne), "seek commit adopts first heading")
-  var second: Vector2 = fh.call(east, st, 1.0, true) as Vector2
+  var second: Vector3 = fh.call(east, st, 1.0, true) as Vector3
   _assert(second.is_equal_approx(ne), "seek commit holds heading for one second")
   st["locked_until_ms"] = Time.get_ticks_msec() - 1
-  var third: Vector2 = fh.call(east, st, 1.0, true, Vector2.RIGHT, 0, 0) as Vector2
+  var third: Vector3 = fh.call(east, st, 1.0, true, Vector3(1.0, 0.0, 0.0), 0, 0) as Vector3
   _assert(third.is_equal_approx(east), "seek commit picks new heading after lock expires")
   Callable(_SeekDirCommitScr, &"reset_state").call(st)
-  var idle: Vector2 = fh.call(Vector2.ZERO, st, 1.0, true) as Vector2
-  _assert(idle.is_equal_approx(Vector2.ZERO), "seek commit obeys idle immediately")
+  var idle: Vector3 = fh.call(Vector3.ZERO, st, 1.0, true) as Vector3
+  _assert(idle.is_equal_approx(Vector3.ZERO), "seek commit obeys idle immediately")
   Callable(_SeekDirCommitScr, &"reset_state").call(st)
   st.clear()
-  var north := Vector2.UP
-  var south := Vector2.DOWN
-  var turn_start: Vector2 = fh.call(south, st, 1.0, true, north, 3, 100) as Vector2
-  _assert(turn_start.is_equal_approx(Vector2.ZERO), "seek commit idles while turning to new heading")
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  var turn_start: Vector3 = fh.call(south, st, 1.0, true, north, 3, 100) as Vector3
+  _assert(turn_start.is_equal_approx(Vector3.ZERO), "seek commit idles while turning to new heading")
   _assert(
     Callable(_SeekDirCommitScr, &"turn_in_progress").call(st),
     "seek commit marks turn in progress",
   )
-  var turn_face: Vector2 = Callable(_SeekDirCommitScr, &"turn_facing").call(st, north) as Vector2
+  var turn_face: Vector3 = Callable(_SeekDirCommitScr, &"turn_facing").call(st, north) as Vector3
   _assert(
-    turn_face.is_equal_approx(Vector2(0.7071067811865475, -0.7071067811865475)),
+    turn_face.is_equal_approx(Vector3(0.7071067811865475, 0.0, -0.7071067811865475)),
     "seek commit shortest arc from N turns through NE first",
   )
-  var mid_turn: Vector2 = fh.call(south, st, 1.0, true, north, 3, 101) as Vector2
-  _assert(mid_turn.is_equal_approx(Vector2.ZERO), "seek commit stays idle mid-turn")
-  var turn_done: Vector2 = fh.call(south, st, 1.0, true, north, 3, 112) as Vector2
+  var mid_turn: Vector3 = fh.call(south, st, 1.0, true, north, 3, 101) as Vector3
+  _assert(mid_turn.is_equal_approx(Vector3.ZERO), "seek commit stays idle mid-turn")
+  var turn_done: Vector3 = fh.call(south, st, 1.0, true, north, 3, 112) as Vector3
   _assert(turn_done.is_equal_approx(south), "seek commit locks new heading after turn completes")
   _assert(
     not Callable(_SeekDirCommitScr, &"turn_in_progress").call(st),
@@ -3499,19 +3533,19 @@ func _test_seek_direction_commit() -> void:
 func _test_seek_direction_turn() -> void:
   var steps_fn := Callable(_SeekDirTurnScr, &"turn_steps_between")
   var pick_fn := Callable(_SeekDirTurnScr, &"pick_turn_facing")
-  _assert(steps_fn.call(Vector2.UP, Vector2.UP) == 0, "turn steps zero when same sector")
-  _assert(steps_fn.call(Vector2.UP, Vector2.DOWN) == 4, "N to S is four steps either arc")
-  _assert(steps_fn.call(Vector2.UP, Vector2.RIGHT) == 2, "N to E is two steps")
-  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
-  var first: Dictionary = pick_fn.call(Vector2.UP, Vector2.RIGHT, 4, 0)
+  _assert(steps_fn.call(Vector3(0.0, 0.0, -1.0), Vector3(0.0, 0.0, -1.0)) == 0, "turn steps zero when same sector")
+  _assert(steps_fn.call(Vector3(0.0, 0.0, -1.0), Vector3(0.0, 0.0, 1.0)) == 4, "N to S is four steps either arc")
+  _assert(steps_fn.call(Vector3(0.0, 0.0, -1.0), Vector3(1.0, 0.0, 0.0)) == 2, "N to E is two steps")
+  var ne := Vector3(0.7071067811865475, 0.0, -0.7071067811865475)
+  var first: Dictionary = pick_fn.call(Vector3(0.0, 0.0, -1.0), Vector3(1.0, 0.0, 0.0), 4, 0)
   _assert(first["facing"].is_equal_approx(ne), "turn dwell starts at first arc heading NE")
   _assert(not bool(first.get("complete", true)), "turn not complete on first segment")
-  var second: Dictionary = pick_fn.call(Vector2.UP, Vector2.RIGHT, 4, 4)
-  _assert(second["facing"].is_equal_approx(Vector2.RIGHT), "turn completes on E after two segments")
+  var second: Dictionary = pick_fn.call(Vector3(0.0, 0.0, -1.0), Vector3(1.0, 0.0, 0.0), 4, 4)
+  _assert(second["facing"].is_equal_approx(Vector3(1.0, 0.0, 0.0)), "turn completes on E after two segments")
   _assert(bool(second.get("complete", false)), "turn marked complete at destination")
-  var ccw_pick: Dictionary = pick_fn.call(Vector2.RIGHT, Vector2.UP, 2, 0)
+  var ccw_pick: Dictionary = pick_fn.call(Vector3(1.0, 0.0, 0.0), Vector3(0.0, 0.0, -1.0), 2, 0)
   _assert(
-    ccw_pick["facing"].is_equal_approx(Vector2(0.7071067811865475, -0.7071067811865475)),
+    ccw_pick["facing"].is_equal_approx(Vector3(0.7071067811865475, 0.0, -0.7071067811865475)),
     "E to N shortest arc turns through NE",
   )
 
@@ -3521,34 +3555,34 @@ func _test_no_goal_patrol_lock() -> void:
   var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
   var st: Dictionary = {}
   reset.call(st)
-  var first: Vector2 = pick.call(st, 1.0, 90210) as Vector2
-  var second: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  var first: Vector3 = pick.call(st, 1.0, 90210) as Vector3
+  var second: Vector3 = pick.call(st, 1.0, 90210) as Vector3
   _assert(first.is_equal_approx(second), "patrol lock holds intent within lock window")
   st["locked_until_ms"] = Time.get_ticks_msec() - 1
-  var _third: Vector2 = pick.call(st, 1.0, 90210) as Vector2
+  var _third: Vector3 = pick.call(st, 1.0, 90210) as Vector3
   _assert(int(st.get("reroll_count", 0)) >= 2, "expired patrol lock increments reroll count")
   reset.call(st)
   _NoGoalPatrolLockScr.reset_state(st)
   var saw_idle := false
   for i in 64:
     reset.call(st)
-    var intent: Vector2 = pick.call(st, 0.01, 1000 ^ i) as Vector2
-    if intent.is_equal_approx(Vector2.ZERO):
+    var intent: Vector3 = pick.call(st, 0.01, 1000 ^ i) as Vector3
+    if intent.is_equal_approx(Vector3.ZERO):
       saw_idle = true
       break
   _assert(saw_idle, "patrol lock pick set includes stay-still")
   reset.call(st)
-  st["locked_intent"] = Vector2.RIGHT
+  st["locked_intent"] = Vector3(1.0, 0.0, 0.0)
   st["locked_until_ms"] = Time.get_ticks_msec() + 5000
   reset.call(st)
   _assert(not st.has("locked_intent"), "reset_state clears patrol lock on goal interrupt path")
-  var block_right := func(dir: Vector2) -> bool:
-    return dir.is_equal_approx(Vector2.RIGHT)
+  var block_right := func(dir: Vector3) -> bool:
+    return dir.is_equal_approx(Vector3(1.0, 0.0, 0.0))
   for i in 32:
     reset.call(st)
-    var blocked_pick: Vector2 = pick.call(st, 0.01, 9000 ^ i, block_right) as Vector2
+    var blocked_pick: Vector3 = pick.call(st, 0.01, 9000 ^ i, block_right) as Vector3
     _assert(
-      not blocked_pick.is_equal_approx(Vector2.RIGHT),
+      not blocked_pick.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
       "patrol lock skips blocked cardinal directions",
     )
 
@@ -3559,20 +3593,20 @@ func _test_seek_stationary_look() -> void:
   var phase_seed := 7
   var seen: Dictionary = {}
   for tick in 24:
-    var f: Vector2 = pick.call(seg, tick, phase_seed) as Vector2
+    var f: Vector3 = pick.call(seg, tick, phase_seed) as Vector3
     seen[f] = true
   _assert(seen.size() >= 6, "stationary look sweeps multiple 8-way headings over one cycle")
-  var a: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
-  var b: Vector2 = pick.call(seg, 0, phase_seed) as Vector2
+  var a: Vector3 = pick.call(seg, 0, phase_seed) as Vector3
+  var b: Vector3 = pick.call(seg, 0, phase_seed) as Vector3
   _assert(a.is_equal_approx(b), "stationary look is deterministic for tick + seed")
-  var c: Vector2 = pick.call(seg, seg, phase_seed) as Vector2
+  var c: Vector3 = pick.call(seg, seg, phase_seed) as Vector3
   _assert(not a.is_equal_approx(c), "stationary look advances facing across segment boundary")
 
 
 func _test_seek_diagonal_intent() -> void:
-  var ne := Vector2(0.7071067811865475, -0.7071067811865475)
+  var ne := Vector3(0.7071067811865475, 0.0, -0.7071067811865475)
   var seek_ctx := {
-    "creature_position": Vector2(500.0, 500.0),
+    "creature_position": Vector3(500.0, 0.0,  500.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -3580,8 +3614,8 @@ func _test_seek_diagonal_intent() -> void:
     "mobs": [],
     "static_obstacles": [],
     "creature_half_extents": Vector2(13.5, 30.5),
-    "creature_facing": Vector2.RIGHT,
-    "food_seek_targets": [Vector2(620.0, 380.0)],
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
+    "food_seek_targets": [Vector3(620.0, 0.0, 380.0)],
     "weight_seek_ready_food": 16.0,
     "motor_has_active_goal": true,
     "weight_explore_idle_penalty": 0.0,
@@ -3594,17 +3628,17 @@ func _test_seek_diagonal_intent() -> void:
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
   }
-  var d_seek: Vector2 = _Motor.pick_best_move_intent(seek_ctx)
+  var d_seek: Vector3 = _Motor.pick_best_move_intent(seek_ctx)
   _assert(d_seek.is_equal_approx(ne), "motor picks diagonal toward intercardinal food target")
   var flee_ctx := seek_ctx.duplicate(true)
   flee_ctx["food_seek_targets"] = []
   flee_ctx["weight_seek_ready_food"] = 0.0
-  flee_ctx["mobs"] = [{"position": Vector2(520.0, 500.0), "velocity": Vector2.ZERO, "cost_scale": 1.0}]
+  flee_ctx["mobs"] = [{"position": Vector3(520.0, 0.0,  500.0), "velocity": Vector3.ZERO, "cost_scale": 1.0}]
   flee_ctx["weight_dist"] = 2.0
   flee_ctx["weight_closing"] = 1.0
-  var d_flee: Vector2 = _Motor.pick_best_move_intent(flee_ctx)
+  var d_flee: Vector3 = _Motor.pick_best_move_intent(flee_ctx)
   _assert(d_flee.length_squared() > 1e-12, "threat repulsion uses 8-way candidate set")
-  _assert(d_flee.dot(Vector2.RIGHT) < 0.5, "flee intent moves away from threat ahead")
+  _assert(d_flee.dot(Vector3(1.0, 0.0, 0.0)) < 0.5, "flee intent moves away from threat ahead")
 
 
 func _test_herbivore_pinch_stall_zero_intent() -> void:
@@ -3638,48 +3672,48 @@ func _test_herbivore_pinch_stall_zero_intent() -> void:
 
 func _test_blocked_approach_memory() -> void:
   var infer := Callable(_BlockedApproachScr, &"infer_approach_dir")
-  var from_trail: Vector2 = infer.call(
-    Vector2(200.0, 200.0),
-    Vector2(200.0, 200.0),
-    Vector2.ZERO,
-    [Vector2(100.0, 200.0)],
-    Vector2.ZERO,
-  ) as Vector2
+  var from_trail: Vector3 = infer.call(
+    Vector3(200.0, 0.0, 200.0),
+    Vector3(200.0, 0.0, 200.0),
+    Vector3.ZERO,
+    [Vector3(100.0, 0.0, 200.0)],
+    Vector3.ZERO,
+  ) as Vector3
   _assert(
-    from_trail.is_equal_approx(Vector2.RIGHT),
+    from_trail.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "blocked approach infers entry heading from explore trail",
   )
   var st: Dictionary = {}
-  Callable(_BlockedApproachScr, &"record").call(st, Vector2.UP, 10, 20)
+  Callable(_BlockedApproachScr, &"record").call(st, Vector3(0.0, 0.0, -1.0), 10, 20)
   _assert(
-    (Callable(_BlockedApproachScr, &"active_dir").call(st, 15) as Vector2).is_equal_approx(Vector2.UP),
+    (Callable(_BlockedApproachScr, &"active_dir").call(st, 15) as Vector3).is_equal_approx(Vector3(0.0, 0.0, -1.0)),
     "blocked approach memory stays active within TTL",
   )
   _assert(
-    (Callable(_BlockedApproachScr, &"active_dir").call(st, 31) as Vector2).length_squared() < 1e-12,
+    (Callable(_BlockedApproachScr, &"active_dir").call(st, 31) as Vector3).length_squared() < 1e-12,
     "blocked approach memory expires after TTL",
   )
   var he := Vector2(13.5, 30.5)
   var pinch_ctx := {
-    "creature_position": Vector2(440.0, 300.0),
+    "creature_position": Vector3(440.0, 0.0, 300.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
     "bounds_max": Vector2(1000.0, 1000.0),
     "mobs": [],
     "static_obstacles": [
-      {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)},
-      {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)},
+      {"position": Vector3(500.0, 0.0, 300.0), "half_extents": Vector2(42.0, 42.0)},
+      {"position": Vector3(380.0, 0.0, 300.0), "half_extents": Vector2(55.0, 55.0)},
     ],
     "creature_half_extents": he,
-    "creature_facing": Vector2.RIGHT,
-    "creature_last_move_direction": Vector2.RIGHT,
-    "food_seek_targets": [Vector2(750.0, 300.0)],
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
+    "creature_last_move_direction": Vector3(1.0, 0.0, 0.0),
+    "food_seek_targets": [Vector3(750.0, 0.0, 300.0)],
     "weight_seek_ready_food": 16.0,
     "motor_has_active_goal": true,
     "motor_seek_filter_wall_hits": true,
     "motor_filter_blocked_approach": true,
-    "blocked_approach_direction": Vector2.RIGHT,
+    "blocked_approach_direction": Vector3(1.0, 0.0, 0.0),
     "blocked_approach_backtrack_dot": 0.55,
     "weight_blocked_approach_backtrack": 48.0,
     "weight_seek_backtrack": 14.0,
@@ -3693,14 +3727,14 @@ func _test_blocked_approach_memory() -> void:
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
   }
-  var d_pinch: Vector2 = _Motor.pick_best_move_intent(pinch_ctx)
+  var d_pinch: Vector3 = _Motor.pick_best_move_intent(pinch_ctx)
   _assert(
-    not d_pinch.is_equal_approx(Vector2.LEFT) and not d_pinch.is_equal_approx(Vector2.RIGHT),
+    not d_pinch.is_equal_approx(Vector3(-1.0, 0.0, 0.0)) and not d_pinch.is_equal_approx(Vector3(1.0, 0.0, 0.0)),
     "pinch memory skips backtrack toward remembered approach when lateral opens exist",
   )
   pinch_ctx["motor_filter_blocked_approach"] = false
   pinch_ctx.erase("blocked_approach_direction")
-  var d_free: Vector2 = _Motor.pick_best_move_intent(pinch_ctx)
+  var d_free: Vector3 = _Motor.pick_best_move_intent(pinch_ctx)
   _assert(d_free.length_squared() > 1e-12, "pinch pick still chooses a direction without memory gate")
 
 
@@ -3754,31 +3788,31 @@ func _test_herbivore_food_seek_pinch_escape_backtrack() -> void:
 
 func _test_seek_wall_filter_and_backtrack() -> void:
   var he := Vector2(13.5, 30.5)
-  var obs := [{"position": Vector2(548.0, 500.0), "half_extents": Vector2(24.0, 40.0)}]
+  var obs := [{"position": Vector3(548.0, 0.0,  500.0), "half_extents": Vector2(24.0, 40.0)}]
   _assert(
     Callable(_Motor, &"step_blocked_into_wall").call(
-      Vector2(500.0, 500.0), he, Vector2.RIGHT, 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
+      Vector3(500.0, 0.0, 500.0), he, Vector3(1.0, 0.0, 0.0), 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
     ),
     "seek wall filter rejects step into static obstacle",
   )
   _assert(
     not bool(
       Callable(_Motor, &"step_blocked_into_wall").call(
-        Vector2(500.0, 500.0), he, Vector2.UP, 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
+        Vector3(500.0, 0.0, 500.0), he, Vector3(0.0, 0.0, -1.0), 60.0, obs, Vector2.ZERO, Vector2(1000.0, 1000.0), 4.0
       )
     ),
     "seek wall filter allows parallel slide along obstacle",
   )
   var back := float(
-    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector2.DOWN, Vector2.UP, 10.0)
+    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector3(0.0, 0.0, 1.0), Vector3(0.0, 0.0, -1.0), 10.0)
   )
   _assert(back > 5.0, "seek backtrack penalizes reversing last move")
   var forward := float(
-    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector2.UP, Vector2.UP, 10.0)
+    Callable(_Motor, &"seek_backtrack_step_cost").call(Vector3(0.0, 0.0, -1.0), Vector3(0.0, 0.0, -1.0), 10.0)
   )
   _assert(forward < 1e-6, "seek backtrack does not penalize continuing direction")
   var wall_seek_ctx := {
-    "creature_position": Vector2(500.0, 500.0),
+    "creature_position": Vector3(500.0, 0.0,  500.0),
     "creature_speed": 400.0,
     "lookahead_sec": 0.15,
     "bounds_min": Vector2.ZERO,
@@ -3786,9 +3820,9 @@ func _test_seek_wall_filter_and_backtrack() -> void:
     "mobs": [],
     "static_obstacles": obs,
     "creature_half_extents": he,
-    "creature_facing": Vector2.RIGHT,
-    "creature_last_move_direction": Vector2.RIGHT,
-    "food_seek_targets": [Vector2(750.0, 500.0)],
+    "creature_facing": Vector3(1.0, 0.0, 0.0),
+    "creature_last_move_direction": Vector3(1.0, 0.0, 0.0),
+    "food_seek_targets": [Vector3(750.0, 0.0, 500.0)],
     "weight_seek_ready_food": 16.0,
     "motor_has_active_goal": true,
     "motor_seek_filter_wall_hits": true,
@@ -3803,9 +3837,9 @@ func _test_seek_wall_filter_and_backtrack() -> void:
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
   }
-  var d_wall: Vector2 = _Motor.pick_best_move_intent(wall_seek_ctx)
-  _assert(not d_wall.is_equal_approx(Vector2.RIGHT), "seek skips into-wall direction toward food")
-  _assert(not d_wall.is_equal_approx(Vector2.LEFT), "seek backtrack penalty avoids immediate reversal")
+  var d_wall: Vector3 = _Motor.pick_best_move_intent(wall_seek_ctx)
+  _assert(not d_wall.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "seek skips into-wall direction toward food")
+  _assert(not d_wall.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "seek backtrack penalty avoids immediate reversal")
 
 
 func _test_bush_proximity_pickup_adjacent() -> void:
@@ -4671,15 +4705,33 @@ func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
 
 func _test_forward_cone_only_awareness() -> void:
   var reach_disk := _Motor.effective_awareness_reach(
-    Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, false
+    Vector3.ZERO,
+    Vector3(-100.0, 0.0, 0.0),
+    500.0,
+    0.0,
+    cos(deg_to_rad(45.0)),
+    Vector3(1.0, 0.0, 0.0),
+    false,
   )
   _assert(is_equal_approx(reach_disk, 500.0), "hybrid disk reach applies behind creature")
   var reach_ahead := _Motor.effective_awareness_reach(
-    Vector2.ZERO, Vector2(100.0, 0.0), 500.0, 200.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, false
+    Vector3.ZERO,
+    Vector3(100.0, 0.0, 0.0),
+    500.0,
+    200.0,
+    cos(deg_to_rad(45.0)),
+    Vector3(1.0, 0.0, 0.0),
+    false,
   )
   _assert(is_equal_approx(reach_ahead, 700.0), "hybrid forward cone adds cone_extra to base radius")
   var reach_cone := _Motor.effective_awareness_reach(
-    Vector2.ZERO, Vector2(-100.0, 0.0), 500.0, 0.0, cos(deg_to_rad(45.0)), Vector2.RIGHT, true
+    Vector3.ZERO,
+    Vector3(-100.0, 0.0, 0.0),
+    500.0,
+    0.0,
+    cos(deg_to_rad(45.0)),
+    Vector3(1.0, 0.0, 0.0),
+    true,
   )
   _assert(is_equal_approx(reach_cone, 0.0), "forward_cone_only zeroes reach behind creature")
   var ad_script: Script = _ai_driver_script()

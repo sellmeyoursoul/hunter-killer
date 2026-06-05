@@ -1,6 +1,8 @@
 ## Picks sliding direction along a 2D wall so the deviation from incoming motion is minimized (prefer larger dot with [param incoming_unit] among ±wall tangent).
 extends RefCounted
 
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
 
 ## Incoming should be normalized; normal from [method PhysicsDirectSpaceState2D.intersect_ray] (typically points from surface outward toward ray origin — tangents lie in the perpendicular span).
 func pick_tangent_closer(incoming_unit: Vector2, wall_normal_unit: Vector2) -> Vector2:
@@ -73,3 +75,30 @@ func pick_tangent_toward(
       best_score = score
       best = c
   return best
+
+
+## Vector3/XZ variant of [method pick_tangent_closer].
+func pick_tangent_closer_v3(incoming_unit: Vector3, wall_normal_unit: Vector3) -> Vector3:
+  var inc2 := Vector2(incoming_unit.x, incoming_unit.z)
+  var n2 := Vector2(wall_normal_unit.x, wall_normal_unit.z)
+  return _MotorPlane.to_horizontal_vec3(pick_tangent_closer(inc2, n2))
+
+
+## Vector3/XZ variant of [method pick_tangent_away_from].
+func pick_tangent_away_from_v3(
+  incoming_unit: Vector3, wall_normal_unit: Vector3, away_unit: Vector3
+) -> Vector3:
+  var inc2 := Vector2(incoming_unit.x, incoming_unit.z)
+  var n2 := Vector2(wall_normal_unit.x, wall_normal_unit.z)
+  var away2 := Vector2(away_unit.x, away_unit.z)
+  return _MotorPlane.to_horizontal_vec3(pick_tangent_away_from(inc2, n2, away2))
+
+
+## Vector3/XZ variant of [method pick_tangent_toward].
+func pick_tangent_toward_v3(
+  incoming_unit: Vector3, wall_normal_unit: Vector3, toward_unit: Vector3
+) -> Vector3:
+  var inc2 := Vector2(incoming_unit.x, incoming_unit.z)
+  var n2 := Vector2(wall_normal_unit.x, wall_normal_unit.z)
+  var toward2 := Vector2(toward_unit.x, toward_unit.z)
+  return _MotorPlane.to_horizontal_vec3(pick_tangent_toward(inc2, n2, toward2))

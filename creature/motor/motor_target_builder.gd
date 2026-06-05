@@ -12,18 +12,37 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 
-static func _spatial_motor_position(n: Node) -> Vector2:
-  if n is Node2D:
-    return (n as Node2D).global_position
-  if n is Node3D:
-    return _MotorPlane.from_vec3((n as Node3D).global_position)
-  return Vector2.ZERO
+static func _as_grid(v: Vector3) -> Vector2:
+  return Vector2(v.x, v.z)
 
 
-static func _spatial_motor_velocity(n: Node) -> Vector2:
+static func _read_dir_v3(v: Variant, fallback: Vector3 = Vector3(1.0, 0.0, 0.0)) -> Vector3:
+  var d: Variant = Callable(_MotorPlane, &"read_dir").call(v, fallback)
+  if typeof(d) == TYPE_VECTOR3:
+    return d as Vector3
+  if typeof(d) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(d as Vector2)
+  return fallback
+
+
+static func _spatial_motor_position(n: Node) -> Vector3:
+  if n is Node:
+    var p: Variant = _MotorPlane.body_motor_position(n)
+    if typeof(p) == TYPE_VECTOR3:
+      return p as Vector3
+    if typeof(p) == TYPE_VECTOR2:
+      return _MotorPlane.to_horizontal_vec3(p as Vector2)
+  return Vector3.ZERO
+
+
+static func _spatial_motor_velocity(n: Node) -> Vector3:
   if _MotorPlane.is_motor_physics_body(n):
-    return _MotorPlane.body_motor_velocity(n as Node)
-  return Vector2.ZERO
+    var v: Variant = _MotorPlane.body_motor_velocity(n as Node)
+    if typeof(v) == TYPE_VECTOR3:
+      return v as Vector3
+    if typeof(v) == TYPE_VECTOR2:
+      return _MotorPlane.to_horizontal_vec3(v as Vector2)
+  return Vector3.ZERO
 
 
 static func feeding_mode_for_body(body: Node) -> int:
@@ -52,11 +71,11 @@ static func _policy_groups(policy: Resource, key: String) -> Array:
 
 
 static func _in_awareness_zone(
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  target_pos: Vector2,
+  target_pos: Vector3,
   motor_p: Dictionary,
-  facing: Vector2,
+  facing: Vector3,
   use_prey_cone: bool,
 ) -> bool:
   var awareness_r := float(motor_p.get("awareness_radius", 0.0))
@@ -73,6 +92,7 @@ static func _in_awareness_zone(
     omni = bool(motor_p.get("predator_prey_awareness_omni", false))
   elif bool(motor_p.get("herbivore_threat_awareness_omni", false)):
     omni = true
+  var facing_v3 := _read_dir_v3(facing)
   var gd := _Motor.awareness_gate_distance(creature_pos, he_xy, target_pos)
   if omni:
     return gd <= awareness_r
@@ -82,7 +102,7 @@ static func _in_awareness_zone(
     awareness_r,
     cone_extra,
     cone_cos,
-    facing,
+    facing_v3,
     forward_cone_only,
   )
   return gd <= eff
@@ -100,9 +120,9 @@ static func scan_food_plants_in_awareness(
   tree: SceneTree,
   policy: Resource,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Dictionary:
   var ready_positions: Array = []
   var unready_positions: Array = []
@@ -116,7 +136,7 @@ static func scan_food_plants_in_awareness(
     for n in tree.get_nodes_in_group(g):
       if not n.has_method(&"is_pickup_ready_for_motor"):
         continue
-      var fp: Vector2 = _spatial_motor_position(n)
+      var fp: Vector3 = _spatial_motor_position(n)
       if not _in_awareness_zone(creature_pos, he_xy, fp, motor_p, facing, false):
         continue
       var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
@@ -137,9 +157,9 @@ static func collect_prey_entries(
   body: Node,
   policy: Resource,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Array:
   var out: Array = []
   if tree == null or body == null:
@@ -167,23 +187,23 @@ static func collect_prey_entries(
   return out
 
 
-## Prey [code]Vector2[/code] positions under awareness (policy [code]prey_groups[/code]).
+## Prey [code]Vector3[/code] positions under awareness (policy [code]prey_groups[/code]).
 static func collect_prey_positions(
   tree: SceneTree,
   body: Node,
   policy: Resource,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Array:
   var out: Array = []
   for e in collect_prey_entries(tree, body, policy, motor_p, creature_pos, he_xy, facing):
     if typeof(e) != TYPE_DICTIONARY:
       continue
     var p: Variant = (e as Dictionary).get("pos", null)
-    if typeof(p) == TYPE_VECTOR2:
-      out.append(p as Vector2)
+    if typeof(p) == TYPE_VECTOR3:
+      out.append(p as Vector3)
   return out
 
 
@@ -193,9 +213,9 @@ static func collect_pursuit_targets(
   body: Node,
   policy: Resource,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Array:
   var arr: Array = []
   if tree == null or body == null:
@@ -228,9 +248,9 @@ static func collect_hostile_threat_samples(
   tree: SceneTree,
   body: Node,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Array:
   var out: Array = []
   if tree == null or body == null:
@@ -250,7 +270,9 @@ static func collect_hostile_threat_samples(
     var gd := _Motor.awareness_gate_distance(creature_pos, he_xy, mp)
     var vel := _spatial_motor_velocity(rb)
     out.append(
-      _Threat.make(mp, gd, true, vel, rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB)
+      Callable(_Threat, &"make").call(
+        mp, gd, true, vel, rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB
+      )
     )
   return out
 
@@ -276,9 +298,9 @@ static func build_motor_target_lists(
   tree: SceneTree,
   body: Node,
   motor_p: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   he_xy: Vector2,
-  facing: Vector2,
+  facing: Vector3,
 ) -> Dictionary:
   var policy := food_intake_policy_for_body(body)
   var feeding_mode := feeding_mode_for_body(body)
@@ -311,11 +333,11 @@ static func build_motor_target_lists(
       continue
     var ent: Dictionary = e as Dictionary
     var pp: Variant = ent.get("pos", null)
-    if typeof(pp) != TYPE_VECTOR2:
+    if typeof(pp) != TYPE_VECTOR3:
       continue
     seek_candidates.append(
-      _SeekCand.make(
-        pp as Vector2,
+      Callable(_SeekCand, &"make").call(
+        pp as Vector3,
         _GkReg.GK_FIND_FOOD,
         true,
         true,

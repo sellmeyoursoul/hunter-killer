@@ -3,6 +3,7 @@
 extends Object
 
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const DIRECTION_COUNT: int = 8
 
@@ -14,7 +15,7 @@ const DIRECTION_COUNT: int = 8
 ## - phase_seed: Per-body salt so creatures do not sync sweep phases.
 ## Returns:
 ## - One of [member _EightWay.DIRECTIONS] (sector order +Y = N).
-static func pick_facing(segment_ticks: int, hold_elapsed_ticks: int, phase_seed: int) -> Vector2:
+static func pick_facing(segment_ticks: int, hold_elapsed_ticks: int, phase_seed: int) -> Vector3:
   var seg := maxi(1, segment_ticks)
   var elapsed := maxi(0, hold_elapsed_ticks)
   var cycle_len := DIRECTION_COUNT * seg

@@ -1,7 +1,7 @@
 extends CharacterBody3D
 ## Kinematic 3D creature: **horizontal move intent** uses **X and Z only**; Y is ignored for steering.
 ## **Gravity and jump** are owned here so [code]AiDriver[/code] can stay thin (2D-style direction promoted to XZ).
-## Motor bridge: [method set_creature_move_intent] accepts [code]Vector2[/code] motor-plane intent ([CREATURE_3D_ARCHITECTURE.md §4](../../Project_Docs/Draft_Features/CREATURE_3D_ARCHITECTURE.md)).
+## Motor bridge: [method set_creature_move_intent] accepts [code]Vector3[/code] or legacy [code]Vector2[/code] motor-plane intent.
 
 signal hit
 
@@ -10,15 +10,18 @@ const _CreatureDefinition := preload("res://creature/definition/creature_definit
 const _DefScript := _CreatureDefinition
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
+const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _PlayerScr := preload("res://player.gd")
 
 @export var definition: Variant
 @export var is_hostile: bool = false
+@export var obstacle_lookahead_px: float = 96.0
 
-var creature_move_intent: Vector2 = Vector2.ZERO
-var last_move_direction: Vector2 = Vector2.RIGHT
+var creature_move_intent: Vector3 = Vector3.ZERO
+var last_move_direction: Vector3 = _MotorPlane.HORIZONTAL_RIGHT
 var control_mode: int = 0
 var speed: float = 5.0
 var screen_size: Vector2 = Vector2.ZERO
@@ -31,6 +34,8 @@ var _starvation_fired: bool = false
 var _calorie_baseline_drain_per_sec: float = 1.0
 var _calorie_cost_per_px_moved: float = 0.002
 var _defeat_hidden: bool = false
+var _wall_slide_pick: RefCounted
+var _wall_slide_away_hint: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
@@ -40,6 +45,7 @@ func _ready() -> void:
   _refresh_calorie_burn_params()
   _apply_physics_layers()
   _connect_mob_hitbox()
+  _wall_slide_pick = _SlidePickScr.new()
 
 
 func _resolve_definition() -> Variant:
@@ -135,15 +141,26 @@ func set_control_mode(mode: int) -> void:
   control_mode = mode
 
 
-## AiDriver motor contract: [code]Vector2(x, y)[/code] maps to ground [code]Vector3(x, 0, z)[/code].
-func set_creature_move_intent(dir: Vector2) -> void:
-  creature_move_intent = dir.normalized() if dir.length() > 0.0 else Vector2.ZERO
+## AiDriver motor contract: [code]Vector3(x, 0, z)[/code] or legacy [code]Vector2(x, z)[/code] on the horizontal plane.
+func set_creature_move_intent(dir: Variant) -> void:
+  var h := _MotorPlane.read_dir(dir, _MotorPlane.HORIZONTAL_ZERO)
+  creature_move_intent = h if h.length_squared() > 1e-12 else Vector3.ZERO
 
 
 ## Sets initial duel facing from [method AiDriver._randomize_duel_spawn_facing].
-func apply_duel_spawn_facing(facing: Vector2) -> void:
-  if facing.length_squared() > 1e-12:
-    last_move_direction = facing.normalized()
+func apply_duel_spawn_facing(facing: Variant) -> void:
+  var h := _MotorPlane.read_dir(facing, _MotorPlane.HORIZONTAL_ZERO)
+  if h.length_squared() > 1e-12:
+    last_move_direction = h
+
+
+## Biases [method _engine_heading_with_wall_slide] during flee/jeopardy (away from threat).
+func set_wall_slide_away_hint(dir: Variant) -> void:
+  _wall_slide_away_hint = _MotorPlane.read_dir(dir, _MotorPlane.HORIZONTAL_ZERO)
+
+
+func clear_wall_slide_away_hint() -> void:
+  _wall_slide_away_hint = Vector3.ZERO
 
 
 func was_defeated_by_starvation() -> bool:
@@ -250,7 +267,111 @@ func _on_mob_hitbox_body_entered(body: Node3D) -> void:
   hit.emit()
 
 
-func _read_move_intent() -> Vector2:
+func _footprint_half_for_clamp() -> Vector2:
+  var gc := get_node_or_null("/root/GameConfig")
+  var motor_p: Dictionary = {}
+  if gc != null and gc.has_method(&"get_creature_motor_params"):
+    motor_p = gc.get_creature_motor_params()
+  return _MotorPlane.footprint_half_extents(self, motor_p)
+
+
+## Port of [method Player._engine_heading_with_wall_slide] for 3D physics + playfield edges.
+func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
+  if heading.length_squared() < 1e-8:
+    return heading
+  var inc := Vector3(heading.x, 0.0, heading.z).normalized()
+  var half := _footprint_half_for_clamp()
+  var pos2 := _MotorPlane.from_vec3(global_position)
+  var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  if _wall_slide_pick == null:
+    return _MotorPlane.to_horizontal_vec3(
+      _PlayfieldClamp.slide_heading_along_edge(
+        _MotorPlane.from_vec3(inc),
+        pos2,
+        half,
+        screen_size,
+        lookahead,
+        _wall_slide_pick,
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
+  var space := get_world_3d().direct_space_state
+  if space == null:
+    return _MotorPlane.to_horizontal_vec3(
+      _PlayfieldClamp.slide_heading_along_edge(
+        _MotorPlane.from_vec3(inc),
+        pos2,
+        half,
+        screen_size,
+        lookahead,
+        _wall_slide_pick,
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
+  var origin := global_position
+  var target := origin + inc * lookahead
+  var query := PhysicsRayQueryParameters3D.create(origin, target)
+  query.collision_mask = collision_mask
+  query.exclude = [get_rid()]
+  var ray_hit: Dictionary = space.intersect_ray(query)
+  if ray_hit.is_empty():
+    return _MotorPlane.to_horizontal_vec3(
+      _PlayfieldClamp.slide_heading_along_edge(
+        _MotorPlane.from_vec3(inc),
+        pos2,
+        half,
+        screen_size,
+        lookahead,
+        _wall_slide_pick,
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
+  var normal_v: Variant = ray_hit.get("normal", Vector3.ZERO)
+  if typeof(normal_v) != TYPE_VECTOR3:
+    return _MotorPlane.to_horizontal_vec3(
+      _PlayfieldClamp.slide_heading_along_edge(
+        _MotorPlane.from_vec3(inc),
+        pos2,
+        half,
+        screen_size,
+        lookahead,
+        _wall_slide_pick,
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
+  var n_raw := normal_v as Vector3
+  var n := Vector3(n_raw.x, 0.0, n_raw.z)
+  if n.length_squared() < 1e-12:
+    return _MotorPlane.to_horizontal_vec3(
+      _PlayfieldClamp.slide_heading_along_edge(
+        _MotorPlane.from_vec3(inc),
+        pos2,
+        half,
+        screen_size,
+        lookahead,
+        _wall_slide_pick,
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
+  n = n.normalized()
+  if _wall_slide_away_hint.length_squared() > 1e-12:
+    inc = _wall_slide_pick.pick_tangent_away_from_v3(inc, n, _wall_slide_away_hint)
+  else:
+    inc = _wall_slide_pick.pick_tangent_closer_v3(inc, n)
+  return _MotorPlane.to_horizontal_vec3(
+    _PlayfieldClamp.slide_heading_along_edge(
+      _MotorPlane.from_vec3(inc),
+      pos2,
+      half,
+      screen_size,
+      lookahead,
+      _wall_slide_pick,
+      _MotorPlane.from_vec3(_wall_slide_away_hint),
+    )
+  )
+
+
+func _read_move_intent() -> Vector3:
   if control_mode == _PlayerScr.engine_control_as_int() or control_mode == _PlayerScr.ai_control_as_int():
     return creature_move_intent
   var input := Vector2(
@@ -258,13 +379,13 @@ func _read_move_intent() -> Vector2:
     Input.get_action_strength("move_down") - Input.get_action_strength("move_up"),
   )
   if input.length_squared() < 1e-8:
-    return Vector2.ZERO
+    return Vector3.ZERO
   var cam := get_viewport().get_camera_3d()
   if cam == null:
-    return input.normalized()
-  var basis := cam.global_transform.basis
-  var forward := Vector3(-basis.z.x, 0.0, -basis.z.z)
-  var right := Vector3(basis.x.x, 0.0, basis.x.z)
+    return _MotorPlane.to_horizontal_vec3(input.normalized())
+  var cam_basis := cam.global_transform.basis
+  var forward := Vector3(-cam_basis.z.x, 0.0, -cam_basis.z.z)
+  var right := Vector3(cam_basis.x.x, 0.0, cam_basis.x.z)
   if forward.length_squared() < 1e-8:
     forward = Vector3(0.0, 0.0, -1.0)
   else:
@@ -274,7 +395,7 @@ func _read_move_intent() -> Vector2:
   else:
     right = right.normalized()
   var world_dir := right * input.x + forward * input.y
-  return Vector2(world_dir.x, world_dir.z).normalized()
+  return Vector3(world_dir.x, 0.0, world_dir.z).normalized()
 
 
 ## Params:
@@ -312,8 +433,10 @@ func _physics_process(delta: float) -> void:
   if _defeat_hidden:
     return
   var intent := _read_move_intent()
-  apply_horizontal_move_intent(_MotorPlane.to_horizontal_vec3(intent), delta)
-  var hvel := Vector2(velocity.x, velocity.z)
+  if control_mode == _PlayerScr.engine_control_as_int() or control_mode == _PlayerScr.ai_control_as_int():
+    intent = _engine_heading_with_wall_slide(intent)
+  apply_horizontal_move_intent(intent, delta)
+  var hvel := Vector3(velocity.x, 0.0, velocity.z)
   if hvel.length_squared() > 1e-8:
     last_move_direction = hvel.normalized()
   _sync_calories_from_vitals()

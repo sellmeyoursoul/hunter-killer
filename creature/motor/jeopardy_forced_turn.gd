@@ -3,21 +3,44 @@ extends Object
 
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const _INTENT_EPS_SQ := 25e-8
 const _COST_TIE_EPS := 1e-4
 const _STRAIGHT_DOT_EPS := 0.995
 
 
+static func _as_grid(v: Vector3) -> Vector2:
+  return Vector2(v.x, v.z)
+
+
+static func _read_pos_v3(v: Variant) -> Vector3:
+  var p: Variant = Callable(_MotorPlane, &"read_pos").call(v)
+  if typeof(p) == TYPE_VECTOR3:
+    return p as Vector3
+  if typeof(p) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(p as Vector2)
+  return Vector3.ZERO
+
+
+static func _read_dir_v3(v: Variant, fallback: Vector3 = Vector3(1.0, 0.0, 0.0)) -> Vector3:
+  var d: Variant = Callable(_MotorPlane, &"read_dir").call(v, fallback)
+  if typeof(d) == TYPE_VECTOR3:
+    return d as Vector3
+  if typeof(d) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(d as Vector2)
+  return fallback
+
+
 static func reset_state(io_state: Dictionary) -> void:
   io_state.clear()
 
 
-static func _intent_match(a: Vector2, b: Vector2) -> bool:
+static func _intent_match(a: Vector3, b: Vector3) -> bool:
   return (a - b).length_squared() <= _INTENT_EPS_SQ
 
 
-static func _is_straight_continuation(candidate: Vector2, straight: Vector2) -> bool:
+static func _is_straight_continuation(candidate: Vector3, straight: Vector3) -> bool:
   if candidate.length_squared() < 1e-12 or straight.length_squared() < 1e-12:
     return false
   return candidate.normalized().dot(straight.normalized()) >= _STRAIGHT_DOT_EPS
@@ -25,27 +48,27 @@ static func _is_straight_continuation(candidate: Vector2, straight: Vector2) -> 
 
 ## Closest mob in the forward cone within [param imminent_radius_px] (footprint clearance).
 static func primary_threat_in_forward_cone(
-  creature_center: Vector2,
+  creature_center: Vector3,
   half: Vector2,
-  facing: Vector2,
+  facing: Vector3,
   mobs: Array,
   imminent_radius_px: float,
   cone_cos_threshold: float,
 ) -> Dictionary:
-  var out := {"found": false, "clearance": INF, "mob_pos": Vector2.ZERO}
+  var out := {"found": false, "clearance": INF, "mob_pos": Vector3.ZERO}
   if imminent_radius_px <= 0.0 or mobs.is_empty():
     return out
   var f := facing
   if f.length_squared() < 1e-8:
-    f = Vector2.RIGHT
+    f = Vector3(1.0, 0.0, 0.0)
   else:
     f = f.normalized()
   var best_clear := INF
-  var best_pos := Vector2.ZERO
+  var best_pos := Vector3.ZERO
   for item in mobs:
     if typeof(item) != TYPE_DICTIONARY:
       continue
-    var mob_pos: Vector2 = item.get("position", Vector2.ZERO)
+    var mob_pos: Vector3 = _read_pos_v3(item.get("position", Vector3.ZERO))
     var clearance := _Motor.awareness_gate_distance(creature_center, half, mob_pos)
     if clearance >= imminent_radius_px:
       continue
@@ -70,11 +93,14 @@ static func primary_threat_in_forward_cone(
 ## - io_state: Driver-owned dict ([code]last_incumbent[/code], [code]last_clearance[/code], [code]jeopardy_streak[/code]).
 ## - tick: [code]incumbent[/code], [code]creature_position[/code], [code]creature_half_extents[/code], [code]creature_facing[/code], [code]mobs[/code], [code]imminent_radius_px[/code], [code]cone_cos_threshold[/code], [code]required_ticks[/code].
 static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Dictionary:
-  var result := {"should_force": false, "threat_mob_pos": Vector2.ZERO}
-  var incumbent: Vector2 = tick.get("incumbent", Vector2.ZERO)
-  var pos: Vector2 = tick["creature_position"]
+  var result := {"should_force": false, "threat_mob_pos": Vector3.ZERO}
+  var incumbent: Vector3 = _read_dir_v3(tick.get("incumbent", Vector3.ZERO), Vector3.ZERO)
+  var pos: Vector3 = _read_pos_v3(tick.get("creature_position", Vector3.ZERO))
   var half: Vector2 = tick.get("creature_half_extents", Vector2.ZERO)
-  var facing: Vector2 = tick.get("creature_facing", Vector2.RIGHT)
+  var facing: Vector3 = _read_dir_v3(
+    tick.get("creature_facing", Vector3(1.0, 0.0, 0.0)),
+    Vector3(1.0, 0.0, 0.0),
+  )
   var mobs: Array = tick.get("mobs", []) as Array
   var imminent_r: float = float(tick.get("imminent_radius_px", 0.0))
   var cone_cos: float = float(tick.get("cone_cos_threshold", -2.0))
@@ -97,7 +123,7 @@ static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Di
     return result
 
   var last_inc: Variant = io_state.get("last_incumbent", null)
-  var straight := typeof(last_inc) == TYPE_VECTOR2 and _intent_match(incumbent, last_inc as Vector2)
+  var straight := typeof(last_inc) == TYPE_VECTOR3 and _intent_match(incumbent, last_inc as Vector3)
   var last_clear: float = float(io_state["last_clearance"])
   var closing := straight and clearance < last_clear - 0.05
 
@@ -115,7 +141,7 @@ static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Di
 
   if int(io_state.get("jeopardy_streak", 0)) >= required:
     result["should_force"] = true
-    result["threat_mob_pos"] = threat["mob_pos"] as Vector2
+    result["threat_mob_pos"] = threat["mob_pos"] as Vector3
     io_state["jeopardy_streak"] = 0
     io_state.erase("last_incumbent")
     io_state.erase("last_clearance")
@@ -123,14 +149,16 @@ static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Di
 
 
 ## Picks an 8-way turn (never [param straight_incumbent] or idle) using motor costs, then widest angle vs [param threat_mob_pos].
-static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threat_mob_pos: Vector2) -> Vector2:
+static func pick_forced_turn(
+  ctx: Dictionary, straight_incumbent: Vector3, threat_mob_pos: Vector3
+) -> Vector3:
   var straight := straight_incumbent
   if straight.length_squared() > _INTENT_EPS_SQ:
     straight = straight.normalized()
   else:
-    straight = Vector2.RIGHT
+    straight = Vector3(1.0, 0.0, 0.0)
 
-  var creature_pos: Vector2 = ctx["creature_position"]
+  var creature_pos: Vector3 = _read_pos_v3(ctx.get("creature_position", Vector3.ZERO))
   var speed: float = float(ctx.get("creature_speed", 400.0))
   var lookahead: float = float(ctx.get("lookahead_sec", 0.15))
   var bounds_min: Vector2 = ctx.get("bounds_min", Vector2.ZERO)
@@ -149,7 +177,7 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var awareness_r: float = float(ctx.get("awareness_radius", 0.0))
   var cone_extra: float = float(ctx.get("awareness_cone_extra", 0.0))
   var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
-  var facing_v: Vector2 = ctx.get("creature_facing", Vector2.RIGHT)
+  var facing_v: Vector3 = _read_dir_v3(ctx.get("creature_facing", Vector3(1.0, 0.0, 0.0)))
   var sz_env: float = float(ctx.get("creature_size", 0.0))
   var near_thr: float = float(ctx.get("interior_env_near_mob_px", 70.0))
   var d_sq := _Motor.nearest_mob_dist_sq(creature_pos, footprint_half, mobs)
@@ -170,14 +198,14 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var unready_food: Array = ctx.get("unready_food_avoid_targets", []) as Array
   var w_avoid_unready: float = float(ctx.get("weight_avoid_unready_food", 0.0))
 
-  var candidates: Array[Vector2] = []
+  var candidates: Array[Vector3] = []
   for d in _EightWay.DIRECTIONS:
     if _is_straight_continuation(d, straight):
       continue
     candidates.append(d)
 
   if candidates.is_empty():
-    return Vector2(-straight.y, straight.x)
+    return Vector3(-straight.z, 0.0, straight.x)
 
   var best_cost := INF
   var scored: Array = []
@@ -218,11 +246,11 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
     if cost < best_cost:
       best_cost = cost
 
-  var ties: Array[Vector2] = []
+  var ties: Array[Vector3] = []
   for entry in scored:
     var e: Dictionary = entry
     if float(e["cost"]) <= best_cost + _COST_TIE_EPS:
-      ties.append(e["dir"] as Vector2)
+      ties.append(e["dir"] as Vector3)
 
   if ties.size() == 1:
     return ties[0]
@@ -235,7 +263,7 @@ static func pick_forced_turn(ctx: Dictionary, straight_incumbent: Vector2, threa
   var best_sep := -1.0
   var best_d := ties[0]
   for d in ties:
-    var sep := absf(d.x * u.y - d.y * u.x)
+    var sep := absf(d.x * u.z - d.z * u.x)
     if sep > best_sep + 1e-8:
       best_sep = sep
       best_d = d

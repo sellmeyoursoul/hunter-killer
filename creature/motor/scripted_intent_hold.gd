@@ -3,7 +3,7 @@ extends Object
 
 
 ## Approximate equality for normalized cardinal or zero intents.
-static func _intent_match(a: Vector2, b: Vector2, eps_sq: float = 25e-8) -> bool:
+static func _intent_match(a: Vector3, b: Vector3, eps_sq: float = 25e-8) -> bool:
   return (a - b).length_squared() <= eps_sq
 
 
@@ -16,11 +16,11 @@ static func _intent_match(a: Vector2, b: Vector2, eps_sq: float = 25e-8) -> bool
 ## Returns:
 ## - Intent vector to pass to `set_creature_move_intent` this tick (normally same as incumbent until hold satisfied).
 static func filtered_intent(
-  computed_normalized: Vector2,
-  incumbent_normalized: Vector2,
+  computed_normalized: Vector3,
+  incumbent_normalized: Vector3,
   hold_physics_ticks: int,
   io_state: Dictionary
-) -> Vector2:
+) -> Vector3:
   var hold := maxi(1, hold_physics_ticks)
   ## Cold start / idle incumbent: obey motor immediately without waiting on a streak (feels responsive at round start).
   if incumbent_normalized.length_squared() <= 25e-8:
@@ -31,7 +31,7 @@ static func filtered_intent(
     return computed_normalized
 
   var ch: Variant = io_state.get("challenger", null)
-  if typeof(ch) != TYPE_VECTOR2 or not _intent_match(computed_normalized, ch as Vector2):
+  if typeof(ch) != TYPE_VECTOR3 or not _intent_match(computed_normalized, ch as Vector3):
     io_state["challenger"] = computed_normalized
     io_state["frames"] = 1
   else:

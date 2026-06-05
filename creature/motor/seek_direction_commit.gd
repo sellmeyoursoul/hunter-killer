@@ -3,6 +3,7 @@
 extends Object
 
 const _TurnScr := preload("res://creature/motor/seek_direction_turn.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 
 ## Holds [param computed_normalized] for [param lock_sec] after each new non-idle pick while [param seek_active].
@@ -15,26 +16,26 @@ const _TurnScr := preload("res://creature/motor/seek_direction_turn.gd")
 ## - turn_segment_ticks: Physics ticks per intermediate heading; [code]0[/code] skips turn sweep.
 ## - physics_tick: Monotonic physics tick for turn elapsed time.
 ## Returns:
-## - Intent to apply this tick ([code]Vector2.ZERO[/code] while turning; locked direction until expiry).
+## - Intent to apply this tick ([code]Vector3.ZERO[/code] while turning; locked direction until expiry).
 static func filtered_seek_intent(
-  computed_normalized: Vector2,
+  computed_normalized: Vector3,
   io_state: Dictionary,
   lock_sec: float,
   seek_active: bool,
-  current_facing: Vector2 = Vector2.RIGHT,
+  current_facing: Vector3 = Vector3(1.0, 0.0, 0.0),
   turn_segment_ticks: int = 0,
   physics_tick: int = 0,
-) -> Vector2:
+) -> Vector3:
   if not seek_active or lock_sec <= 0.0:
     io_state.clear()
     return computed_normalized
   if computed_normalized.length_squared() <= 25e-8:
     io_state.clear()
-    return Vector2.ZERO
+    return Vector3.ZERO
   var turn_target_v: Variant = io_state.get("turn_target", null)
-  if typeof(turn_target_v) == TYPE_VECTOR2:
-    var to_d := turn_target_v as Vector2
-    var from_d: Vector2 = io_state.get("turn_from", current_facing) as Vector2
+  if typeof(turn_target_v) == TYPE_VECTOR3:
+    var to_d := turn_target_v as Vector3
+    var from_d: Vector3 = io_state.get("turn_from", current_facing) as Vector3
     var elapsed := maxi(0, physics_tick - int(io_state.get("turn_started_tick", physics_tick)))
     var turn_pick: Dictionary = Callable(_TurnScr, &"pick_turn_facing").call(
       from_d, to_d, turn_segment_ticks, elapsed
@@ -43,12 +44,12 @@ static func filtered_seek_intent(
     if bool(turn_pick.get("complete", false)):
       _clear_turn_keys(io_state)
       return _lock_new_intent(io_state, to_d, lock_sec)
-    return Vector2.ZERO
+    return Vector3.ZERO
   var now_ms := Time.get_ticks_msec()
   var locked_until := int(io_state.get("locked_until_ms", -1))
   var locked_v: Variant = io_state.get("locked_intent", null)
-  if typeof(locked_v) == TYPE_VECTOR2 and locked_until > now_ms:
-    return locked_v as Vector2
+  if typeof(locked_v) == TYPE_VECTOR3 and locked_until > now_ms:
+    return locked_v as Vector3
   var new_dir := computed_normalized
   if (
     turn_segment_ticks > 0
@@ -62,20 +63,22 @@ static func filtered_seek_intent(
       current_facing, new_dir, turn_segment_ticks, 0
     )
     io_state["turn_facing"] = first_pick["facing"]
-    return Vector2.ZERO
+    return Vector3.ZERO
   return _lock_new_intent(io_state, new_dir, lock_sec)
 
 
 ## True when an arc turn is in progress ([code]turn_target[/code] set).
 static func turn_in_progress(io_state: Dictionary) -> bool:
-  return typeof(io_state.get("turn_target", null)) == TYPE_VECTOR2
+  return typeof(io_state.get("turn_target", null)) == TYPE_VECTOR3
 
 
 ## Current sweep facing during an in-progress turn; [param fallback] when idle.
-static func turn_facing(io_state: Dictionary, fallback: Vector2 = Vector2.RIGHT) -> Vector2:
+static func turn_facing(
+  io_state: Dictionary, fallback: Vector3 = Vector3(1.0, 0.0, 0.0)
+) -> Vector3:
   var tf: Variant = io_state.get("turn_facing", null)
-  if typeof(tf) == TYPE_VECTOR2:
-    return tf as Vector2
+  if typeof(tf) == TYPE_VECTOR3:
+    return tf as Vector3
   return fallback
 
 
@@ -84,7 +87,7 @@ static func reset_state(io_state: Dictionary) -> void:
   io_state.clear()
 
 
-static func _lock_new_intent(io_state: Dictionary, intent: Vector2, lock_sec: float) -> Vector2:
+static func _lock_new_intent(io_state: Dictionary, intent: Vector3, lock_sec: float) -> Vector3:
   var lock_ms := int(maxf(0.0, lock_sec) * 1000.0)
   io_state["locked_intent"] = intent
   io_state["locked_until_ms"] = Time.get_ticks_msec() + lock_ms

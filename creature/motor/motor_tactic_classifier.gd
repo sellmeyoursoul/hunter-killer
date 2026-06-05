@@ -4,21 +4,31 @@ extends Object
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvCell := preload("res://environment/environment_cell_data.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
+
+static func _read_pos_v3(v: Variant) -> Vector3:
+  var p: Variant = Callable(_MotorPlane, &"read_pos").call(v)
+  if typeof(p) == TYPE_VECTOR3:
+    return p as Vector3
+  if typeof(p) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(p as Vector2)
+  return Vector3.ZERO
 
 
 ## Returns tactic-classifier subset for salient writes and [code]current_fit[/code] ([CREATURE_GOAL_DRIVERS.md §5.1.1](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)).
 static func build_motor_ctx_tactics(
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   creature_half: Vector2,
   creature_size: float,
-  _creature_facing: Vector2,
+  _creature_facing: Vector3,
   motor_p: Dictionary,
   static_obstacles: Array,
   environment_grid: Variant,
   herbivore_threat: Dictionary,
   herbivore_flee_active: bool,
   mobs_arr: Array,
-  nearest_hotspot_centroid: Vector2 = Vector2.ZERO,
+  nearest_hotspot_centroid: Vector3 = Vector3.ZERO,
 ) -> Dictionary:
   var tactic_jeopardy_egress := herbivore_flee_active
   var tactic_in_squeeze := _detect_in_squeeze(
@@ -57,7 +67,7 @@ static func build_motor_ctx_tactics(
 
 
 static func _detect_in_squeeze(
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   creature_half: Vector2,
   creature_size: float,
   static_obstacles: Array,
@@ -66,13 +76,17 @@ static func _detect_in_squeeze(
 ) -> bool:
   var clr_thr := float(motor_p.get("tactic_squeeze_clearance_px", 28.0))
   if not static_obstacles.is_empty() and clr_thr > 0.0:
-    var clr := _Motor.footprint_static_clearance(creature_pos, creature_half, static_obstacles)
+    var clr := _Motor.footprint_static_clearance(
+      creature_pos,
+      creature_half,
+      static_obstacles,
+    )
     if clr < clr_thr:
       return true
   if creature_size > 0.0 and environment_grid != null and environment_grid is _EnvGrid:
     var grid := environment_grid as EnvironmentGridBaked
     if grid.is_valid_shape():
-      var cell_r := grid.sample_cell_data_at_world(creature_pos)
+      var cell_r := grid.sample_cell_data_at_world(Vector2(creature_pos.x, creature_pos.z))
       if cell_r != null and cell_r is _EnvCell:
         var env := cell_r as EnvironmentCellData
         if env.can_enter(creature_size):
@@ -104,11 +118,11 @@ static func _detect_hide_viable(
 
 
 static func _detect_return_home_payoff(
-  creature_pos: Vector2,
-  hotspot_centroid: Vector2,
+  creature_pos: Vector3,
+  hotspot_centroid: Vector3,
   motor_p: Dictionary,
 ) -> bool:
-  if hotspot_centroid == Vector2.ZERO:
+  if hotspot_centroid == Vector3.ZERO:
     return false
   var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
   if hotspot_r <= 1e-4:
@@ -117,7 +131,7 @@ static func _detect_return_home_payoff(
   return dist <= hotspot_r * 1.25
 
 
-static func _count_conspecifics_near(creature_pos: Vector2, mobs_arr: Array, motor_p: Dictionary) -> int:
+static func _count_conspecifics_near(creature_pos: Vector3, mobs_arr: Array, motor_p: Dictionary) -> int:
   var radius := float(motor_p.get("tactic_conspecific_aid_radius_px", 120.0))
   if radius <= 1e-4:
     return 0
@@ -125,8 +139,8 @@ static func _count_conspecifics_near(creature_pos: Vector2, mobs_arr: Array, mot
   for entry in mobs_arr:
     if typeof(entry) != TYPE_DICTIONARY:
       continue
-    var pos: Vector2 = (entry as Dictionary).get("position", Vector2.ZERO)
-    if pos == Vector2.ZERO:
+    var pos: Vector3 = _read_pos_v3((entry as Dictionary).get("position", Vector3.ZERO))
+    if pos == Vector3.ZERO:
       continue
     if creature_pos.distance_to(pos) <= radius:
       count += 1
