@@ -1,6 +1,8 @@
 ## Builds static obstacle AABBs (repulsion channel) and outline sample points (strategic shield/pin channel).
 ## Rock field uses group [code]obstacles[/code]; **shrub footprints** ([code]food_plants[/code] subtree [StaticBody2D]) merge in separately so predators avoid bushes without putting shrubs on the global obstacle group ([code]bush_food.gd[/code] grazing vs repulsion tuning in [method AiDriver._filter_obstacle_geom_for_foraging_prey]).
+## 3D bodies project collision onto the motor XZ plane ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
 extends Object
+class_name MotorObstacleGeometry
 
 
 ## Transforms all corners of [param local_rect] into world space via [param xf].
@@ -102,16 +104,86 @@ static func append_static_body_shapes(
       _append_collision_shape_geom(child as CollisionShape2D, out_aabbs, sample_points)
 
 
-## Nodes in group [code]obstacles[/code] ([StaticBody2D] roots as in obstacle_field scenes).
+## Accumulates [CollisionShape3D] children on a [StaticBody3D], projected to motor XZ.
+static func append_static_body_shapes_3d(
+  sb: StaticBody3D, out_aabbs: Array, sample_points: PackedVector2Array
+) -> void:
+  for child in sb.get_children():
+    if child is CollisionShape3D:
+      _append_collision_shape_geom_3d(child as CollisionShape3D, out_aabbs, sample_points)
+
+
+## Appends one 3D collision shape projected onto the motor plane.
+static func _append_collision_shape_geom_3d(
+  cs: CollisionShape3D, out_aabbs: Array, sample_points: PackedVector2Array
+) -> void:
+  var sh: Shape3D = cs.shape
+  if sh == null:
+    return
+  var xf := cs.global_transform
+  var corners := PackedVector2Array()
+  if sh is BoxShape3D:
+    corners = _box_corners_motor_plane(xf, (sh as BoxShape3D).size)
+  elif sh is SphereShape3D:
+    corners = _sphere_rim_motor_plane(xf, (sh as SphereShape3D).radius)
+  elif sh is CapsuleShape3D:
+    var cap := sh as CapsuleShape3D
+    corners = _capsule_rim_motor_plane(xf, cap.radius, cap.height)
+  elif sh is CylinderShape3D:
+    var cyl := sh as CylinderShape3D
+    corners = _cylinder_rim_motor_plane(xf, cyl.radius, cyl.height)
+  if corners.size() >= 3:
+    out_aabbs.append(_aabb_from_corners(corners))
+    for i in range(corners.size()):
+      sample_points.append(corners[i])
+
+
+static func _box_corners_motor_plane(xf: Transform3D, size: Vector3) -> PackedVector2Array:
+  var half := size * 0.5
+  var out := PackedVector2Array()
+  for lx in [-half.x, half.x]:
+    for lz in [-half.z, half.z]:
+      out.append(MotorPlane.from_vec3(xf * Vector3(lx, 0.0, lz)))
+  return out
+
+
+static func _sphere_rim_motor_plane(xf: Transform3D, radius: float) -> PackedVector2Array:
+  var r := maxf(radius, 0.01)
+  var out := PackedVector2Array()
+  for k in range(16):
+    var ang := TAU * float(k) / 16.0
+    var local := Vector3(cos(ang) * r, 0.0, sin(ang) * r)
+    out.append(MotorPlane.from_vec3(xf * local))
+  return out
+
+
+static func _capsule_rim_motor_plane(xf: Transform3D, radius: float, height: float) -> PackedVector2Array:
+  var r := maxf(radius, 0.01)
+  var half_h := maxf(height * 0.5, 0.0)
+  var out := PackedVector2Array()
+  for ly in [-half_h, half_h]:
+    for k in range(8):
+      var ang := TAU * float(k) / 8.0
+      var local := Vector3(cos(ang) * r, ly, sin(ang) * r)
+      out.append(MotorPlane.from_vec3(xf * local))
+  return out
+
+
+static func _cylinder_rim_motor_plane(xf: Transform3D, radius: float, height: float) -> PackedVector2Array:
+  return _capsule_rim_motor_plane(xf, radius, height)
+
+
+## Nodes in group [code]obstacles[/code] ([StaticBody2D] / [StaticBody3D] roots).
 static func collect_obstacle_group_statics(main: Node) -> Dictionary:
   var aabbs: Array = []
   var sample_points := PackedVector2Array()
   if main == null:
     return {"aabbs": aabbs, "sample_points": sample_points}
   for n in main.get_tree().get_nodes_in_group(&"obstacles"):
-    if not n is StaticBody2D:
-      continue
-    append_static_body_shapes(n as StaticBody2D, aabbs, sample_points)
+    if n is StaticBody2D:
+      append_static_body_shapes(n as StaticBody2D, aabbs, sample_points)
+    elif n is StaticBody3D:
+      append_static_body_shapes_3d(n as StaticBody3D, aabbs, sample_points)
   return {"aabbs": aabbs, "sample_points": sample_points}
 
 
@@ -125,6 +197,8 @@ static func collect_plant_blocker_statics(main: Node) -> Dictionary:
     for ch in bush.get_children():
       if ch is StaticBody2D:
         append_static_body_shapes(ch as StaticBody2D, aabbs, sample_points)
+      elif ch is StaticBody3D:
+        append_static_body_shapes_3d(ch as StaticBody3D, aabbs, sample_points)
   return {"aabbs": aabbs, "sample_points": sample_points}
 
 

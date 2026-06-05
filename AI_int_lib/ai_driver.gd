@@ -45,6 +45,7 @@ const _SeekCandScr := preload("res://creature/motor/seek_candidate.gd")
 const _GoalSeekScr := preload("res://creature/motor/goal_seek.gd")
 const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -127,12 +128,12 @@ static func _dbg46_emit(run_id: String, hypothesis_id: String, location: String,
 
 var _state: State = State.IDLE
 var _main: Node = null
-## Body used for snapshots and ENGINE motor context ([code]Player[/code] herbivore or duel [code]RigidBody2D[/code] carnivore when routed here).
-var _creature: PhysicsBody2D = null
+## Body used for snapshots and ENGINE motor context ([code]Player[/code] herbivore or duel carnivore when routed here).
+var _creature: Node = null
 ## CREATURE_GOALS duel bodies Main registers each round ([method register_creature]); scripted ENGINE motor iterates this list.
 var _registered_creatures: Array = []
 ## Herbivore focal node for LLM snapshot sampling ([method _build_snapshot_blob]); when null, falls back to [member _creature].
-var _primary_creature: PhysicsBody2D = null
+var _primary_creature: Node = null
 ## True during an active duel round ([method Main.new_game] ΓÇª [method Main.game_over]); used by awareness debug overlay gating.
 var _duel_round_active: bool = false
 ## Per-round salt for motor tie-break / cost chaos (set in [_begin_playing_for_creature_goals_duel]).
@@ -245,6 +246,12 @@ static var _debug_arm_invoke_seq: int = 0
 ## Example:
 ## - Use instead of raw [code]get_viewport_rect()[/code] during spawn ordering where [code]prepare_duel_spawn[/code] ran before [method Node.add_child].
 func _viewport_playfield_size_px(preferred: Node) -> Vector2:
+  if _main != null and _main.has_method(&"get_motor_playfield_size"):
+    var mps: Variant = _main.call(&"get_motor_playfield_size")
+    if typeof(mps) == TYPE_VECTOR2:
+      var mv := mps as Vector2
+      if mv.x > 0.0 and mv.y > 0.0:
+        return mv
   if preferred is CanvasItem:
     var ci := preferred as CanvasItem
     if ci.is_inside_tree():
@@ -275,11 +282,11 @@ func _live_creature_motor_params() -> Dictionary:
 ## - body: Duel [code]Player[/code] or [code]Mob[/code] with optional [code]definition[/code] resource.
 ## Returns:
 ## - Merged [code]creature_motor[/code] dict for cardinal motor and awareness on that body.
-func _creature_motor_params_for_body(body: PhysicsBody2D) -> Dictionary:
+func _creature_motor_params_for_body(body: Node) -> Dictionary:
   var base := _live_creature_motor_params()
   if body == null:
     return base
-  var def_v: Variant = body.get("definition")
+  var def_v: Variant = _MotorPlane.definition_for_body(body)
   if def_v == null or not (def_v is Resource):
     return base
   var def_res := def_v as Resource
@@ -305,8 +312,8 @@ func _creature_motor_params_for_body(body: PhysicsBody2D) -> Dictionary:
 
 
 ## Applies [code]creature_motor.speed[/code] and optional [code]obstacle_lookahead_px[/code] from pack overlay.
-func _apply_creature_speed_from_pack(body: PhysicsBody2D) -> void:
-  if body == null:
+func _apply_creature_speed_from_pack(body: Node) -> void:
+  if body == null or body is PhysicsBody3D:
     return
   var motor_p := _creature_motor_params_for_body(body)
   if motor_p.has("speed"):
@@ -348,13 +355,14 @@ func _explore_trail_reset() -> void:
 ## Params:
 ## - body: Playable creature whose path is tracked (keyed by instance id).
 ## - motor_p: Merged [code]creature_motor[/code].
-func _explore_trail_record(body: PhysicsBody2D, motor_p: Dictionary) -> void:
+func _explore_trail_record(body: Node, motor_p: Dictionary) -> void:
   if body == null:
     return
   var bid := body.get_instance_id()
   var cell_px := maxf(16.0, float(motor_p.get("explore_coverage_cell_px", 52.0)))
-  var ix := int(floorf(body.global_position.x / cell_px))
-  var iy := int(floorf(body.global_position.y / cell_px))
+  var mp := _MotorPlane.body_motor_position(body)
+  var ix := int(floorf(mp.x / cell_px))
+  var iy := int(floorf(mp.y / cell_px))
   var c := Vector2i(ix, iy)
   if not _explore_trail_last_cell_by_body.has(bid):
     _explore_trail_last_cell_by_body[bid] = Vector2i(2147483647, 2147483647)
@@ -455,7 +463,9 @@ func _ready() -> void:
 ## - Call once from Main._ready().
 func attach_main(main_node: Node) -> void:
   _main = main_node
-  _creature = _main.get_node_or_null("Player") as PhysicsBody2D
+  _creature = _main.get_node_or_null("Player") as Node
+  if _creature == null and _main.has_method(&"get_herbivore_motor_body"):
+    _creature = _main.call(&"get_herbivore_motor_body") as Node
   _motor_reset_scripted_auxiliary_states()
   _mob_hist.clear()
   _mob_ids_ever_observed.clear()
@@ -468,15 +478,15 @@ func clear_creature_registry() -> void:
   _registered_creatures.clear()
 
 
-## Registers a playable [PhysicsBody2D] for scripted ENGINE motor iteration ([method sync_duel_control_modes]). Ignores null and duplicate instance ids.
+## Registers a playable physics body for scripted ENGINE motor iteration ([method sync_duel_control_modes]). Ignores null and duplicate instance ids.
 ## Params:
-## - node: Main [code]Player[/code] ([CharacterBody2D]) or duel carnivore ([RigidBody2D]).
+## - node: Main [code]Player[/code] ([CharacterBody2D]), duel carnivore ([RigidBody2D]), or 3D template [code]Body[/code] ([CharacterBody3D]).
 func register_creature(node: Node) -> void:
   if node == null or not is_instance_valid(node):
     return
-  if not (node is PhysicsBody2D):
+  if not _MotorPlane.is_motor_physics_body(node):
     return
-  var pb := node as PhysicsBody2D
+  var pb := node as Node
   _apply_creature_speed_from_pack(pb)
   var id := pb.get_instance_id()
   for x in _registered_creatures:
@@ -489,8 +499,8 @@ func register_creature(node: Node) -> void:
 ## Params:
 ## - node: Main [code]Player[/code] expected for CREATURE_GOALS duel.
 func set_primary_creature(node: Node) -> void:
-  if node != null and node is PhysicsBody2D:
-    _primary_creature = node as PhysicsBody2D
+  if node != null and _MotorPlane.is_motor_physics_body(node):
+    _primary_creature = node as Node
 
 
 ## Applies ENGINE control + zero intent on every registered creature (duel bootstrap after [method register_creature]).
@@ -505,7 +515,7 @@ func sync_duel_control_modes() -> void:
     if nn.has_method(&"set_creature_move_intent"):
       nn.call(&"set_creature_move_intent", Vector2.ZERO)
     if nn is PhysicsBody2D:
-      _apply_creature_speed_from_pack(nn as PhysicsBody2D)
+      _apply_creature_speed_from_pack(nn as Node)
 
 
 func set_duel_round_active(active: bool) -> void:
@@ -525,8 +535,8 @@ func _scripted_motor_subjects() -> Array:
     return fb
   var out: Array = []
   for n in _registered_creatures:
-    if n is PhysicsBody2D and is_instance_valid(n):
-      out.append(n as PhysicsBody2D)
+    if _MotorPlane.is_motor_physics_body(n) and is_instance_valid(n):
+      out.append(n as Node)
   return out
 
 
@@ -537,9 +547,9 @@ func _clear_registered_creature_move_intents() -> void:
   if _creature != null:
     stack.append(_creature)
   for n in stack:
-    if not (n is PhysicsBody2D) or not is_instance_valid(n):
+    if not _MotorPlane.is_motor_physics_body(n) or not is_instance_valid(n):
       continue
-    var pb := n as PhysicsBody2D
+    var pb := n as Node
     var id := pb.get_instance_id()
     if seen.has(id):
       continue
@@ -593,21 +603,8 @@ func _predator_prey_cone_extra(motor_p: Dictionary) -> float:
 ## Returns:
 ## - Array of [code]Vector2[/code]; empty when awareness disabled or scene missing.
 ## Footprint half-extents for motor awareness / gating ([code]creature_motor[/code] or capsule shape).
-func _footprint_half_extents_for_body(body: PhysicsBody2D, motor_p: Dictionary) -> Vector2:
-  var he_xy := Vector2(
-    maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
-    maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
-  )
-  if body == null:
-    return he_xy
-  var cs_shape := body.get_node_or_null("CollisionShape2D") as CollisionShape2D
-  if cs_shape != null and cs_shape.shape is CapsuleShape2D:
-    var cap := cs_shape.shape as CapsuleShape2D
-    he_xy = Vector2(
-      maxf(0.0, cap.radius),
-      maxf(0.0, cap.radius + cap.height * 0.5),
-    )
-  return he_xy
+func _footprint_half_extents_for_body(body: Node, motor_p: Dictionary) -> Vector2:
+  return _MotorPlane.footprint_half_extents(body, motor_p)
 
 
 ## Last move direction for awareness cone, or [code]Vector2.RIGHT[/code].
@@ -622,7 +619,7 @@ func _facing_for_body(body: PhysicsBody2D) -> Vector2:
   return Vector2.RIGHT
 
 
-func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
+func _prey_positions_for_predator_motor(predator: Node) -> Array:
   if predator == null or _main == null:
     return []
   var motor_p := _creature_motor_params_for_body(predator)
@@ -634,7 +631,7 @@ func _prey_positions_for_predator_motor(predator: PhysicsBody2D) -> Array:
     predator,
     policy,
     motor_p,
-    predator.global_position,
+    _MotorPlane.body_motor_position(predator),
     he_xy,
     facing,
   )
@@ -1769,12 +1766,6 @@ func _blocked_approach_memory_update(
     not static_obs.is_empty()
     and _creature_geometry_pinched(pos, he, static_obs, approach_px)
   )
-  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
-  var incumbent_blocked := (
-    incumbent.length_squared() > 1e-12
-    and not static_obs.is_empty()
-    and _cardinal_step_blocked(pos, he, incumbent, static_obs, min_clr)
-  )
   if not pinched:
     return
   var last_move := Vector2.ZERO
@@ -2410,9 +2401,9 @@ func _begin_playing_for_creature_goals_duel() -> void:
 ## Assigns a per-round random 8-way facing to each registered duel creature.
 func _randomize_duel_spawn_facing() -> void:
   for n in _registered_creatures:
-    if not (n is PhysicsBody2D) or not is_instance_valid(n):
+    if not _MotorPlane.is_motor_physics_body(n) or not is_instance_valid(n):
       continue
-    var body := n as PhysicsBody2D
+    var body := n as Node
     var slot := (body.get_instance_id() ^ _duel_motor_round_salt) & 7
     var facing: Vector2 = _EightWayDirScr.DIRECTIONS[slot]
     if body.has_method(&"apply_duel_spawn_facing"):
@@ -2953,12 +2944,13 @@ func _record_mob_history_if_playing() -> void:
     return
   var snap: Dictionary = {}
   for n in _main.get_tree().get_nodes_in_group("mobs"):
-    if n is RigidBody2D:
-      var rb := n as RigidBody2D
-      snap[rb.get_instance_id()] = {
-        "position": rb.global_position,
-        "velocity": rb.linear_velocity,
-      }
+    if not _MotorPlane.is_motor_physics_body(n):
+      continue
+    var rb := n as Node
+    snap[rb.get_instance_id()] = {
+      "position": _MotorPlane.body_motor_position(rb),
+      "velocity": _MotorPlane.body_motor_velocity(rb),
+    }
   _mob_hist.append(snap)
   while _mob_hist.size() > max_t:
     _mob_hist.pop_front()
@@ -3517,7 +3509,7 @@ func _pursuit_targets_for_predator(
 ## Returns:
 ## - Array of [code]{ "position", "velocity", "cost_scale", "_motor_debug_source?" }[/code] dicts. [code]_motor_debug_source[/code] is overlay-only; motor ignores it.
 func _motor_mobs_array(
-  motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2, motor_subject: PhysicsBody2D = null
+  motor_p: Dictionary, creature_pos: Vector2, he_xy: Vector2, motor_subject: Node = null
 ) -> Array:
   var out: Array = []
   if _main == null:
@@ -3550,42 +3542,43 @@ func _motor_mobs_array(
   var live_ids: Dictionary = {}
 
   for n in _main.get_tree().get_nodes_in_group("mobs"):
-    if n is RigidBody2D:
-      var rb := n as RigidBody2D
-      if motor_subject != null and rb == motor_subject:
-        continue
-      var id := rb.get_instance_id()
-      live_ids[id] = true
-      var p := rb.global_position
-      var v := rb.linear_velocity
-      var gated := false
-      if awareness_r > 0.0:
-        var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, p)
-        if prey_omni_threat:
-          gated = gd > awareness_r
-        else:
-          var eff := _effective_awareness_reach_for_driver(
-            creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
-          )
-          gated = gd > eff
-      if not gated:
-        _mob_ids_ever_observed[id] = true
-      if gated:
-        if mem_ticks > 0 and mem_w > 0.0 and _mob_ids_ever_observed.has(id):
-          var pred := p + v * horizon
-          out.append({
-            "position": pred,
-            "velocity": v,
-            "cost_scale": mem_w,
-            "_motor_debug_source": "gated",
-          })
+    if not _MotorPlane.is_motor_physics_body(n):
+      continue
+    var rb := n as Node
+    if motor_subject != null and rb == motor_subject:
+      continue
+    var id := rb.get_instance_id()
+    live_ids[id] = true
+    var p := _MotorPlane.body_motor_position(rb)
+    var v := _MotorPlane.body_motor_velocity(rb)
+    var gated := false
+    if awareness_r > 0.0:
+      var gd := _awareness_gate_distance_for_driver(creature_pos, he_xy, p)
+      if prey_omni_threat:
+        gated = gd > awareness_r
       else:
+        var eff := _effective_awareness_reach_for_driver(
+          creature_pos, p, awareness_r, cone_extra, cone_cos, facing_v, forward_cone_only
+        )
+        gated = gd > eff
+    if not gated:
+      _mob_ids_ever_observed[id] = true
+    if gated:
+      if mem_ticks > 0 and mem_w > 0.0 and _mob_ids_ever_observed.has(id):
+        var pred := p + v * horizon
         out.append({
-          "position": p,
+          "position": pred,
           "velocity": v,
-          "cost_scale": 1.0,
-          "_motor_debug_source": "live",
+          "cost_scale": mem_w,
+          "_motor_debug_source": "gated",
         })
+    else:
+      out.append({
+        "position": p,
+        "velocity": v,
+        "cost_scale": 1.0,
+        "_motor_debug_source": "live",
+      })
 
   if mem_ticks > 0 and mem_w > 0.0 and _mob_hist.size() > 0:
     var ghost_added: Dictionary = {}
@@ -4030,12 +4023,12 @@ func _hunger_exploration_modifiers(motor_p: Dictionary, calorie_body: PhysicsBod
 ## Returns:
 ## - Context dict with creature position (playable entity body), bounds, mob samples, and tunables.
 func _build_motor_context(
-  motor_p: Dictionary, hunger_explore: Dictionary = {}, motor_subject: PhysicsBody2D = null
+  motor_p: Dictionary, hunger_explore: Dictionary = {}, motor_subject: Node = null
 ) -> Dictionary:
   var body := motor_subject if motor_subject != null else _creature
   if body == null:
     return {}
-  var pos := body.global_position
+  var pos := _MotorPlane.body_motor_position(body)
   var spd := 400.0
   var spv: Variant = body.get("speed")
   if typeof(spv) == TYPE_FLOAT or typeof(spv) == TYPE_INT:
@@ -4043,17 +4036,7 @@ func _build_motor_context(
   var ss := body.get("screen_size") as Vector2
   if ss == Vector2.ZERO:
     ss = _viewport_playfield_size_px(body)
-  var he_xy := Vector2(
-    maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
-    maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
-  )
-  var cs_shape := body.get_node_or_null("CollisionShape2D") as CollisionShape2D
-  if cs_shape != null and cs_shape.shape is CapsuleShape2D:
-    var cap := cs_shape.shape as CapsuleShape2D
-    he_xy = Vector2(
-      maxf(0.0, cap.radius),
-      maxf(0.0, cap.radius + cap.height * 0.5),
-    )
+  var he_xy := _MotorPlane.footprint_half_extents(body, motor_p)
   var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
   var facing_display := Vector2.RIGHT
   var fd0: Variant = body.get("last_move_direction")
@@ -4764,7 +4747,7 @@ func _physics_process(_delta: float) -> void:
     return
   var focal := _primary_creature if _primary_creature != null else _creature
   if focal == null:
-    focal = subjects[0] as PhysicsBody2D
+    focal = subjects[0] as Node
 
   _physics_ticks += 1
   var p: Dictionary = _live_perception_params()

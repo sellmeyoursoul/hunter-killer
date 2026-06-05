@@ -46,6 +46,10 @@ const _SeekCandScr := preload("res://creature/motor/seek_candidate.gd")
 const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
+const _PlayfieldBounds3D := preload("res://environment/playfield_bounds_3d.gd")
+const _GameConfigScr := preload("res://game_config.gd")
 
 var _failures: int = 0
 
@@ -140,6 +144,14 @@ func _run_all() -> void:
   _test_diet_registry_defaults()
   _test_creature_perception_3d_scale()
   _test_creature_3d_template_scenes_load()
+  _test_motor_plane_xz_adapter()
+  _test_creature_kinematic_motor_intent_adapter()
+  _test_ai_driver_registers_3d_motor_body()
+  _test_m1_game_config_use_2d_default()
+  _test_m1_main_3d_scenes_exist()
+  _test_m1_3d_physics_layers()
+  _test_playfield_bounds_3d_from_floor()
+  _test_motor_obstacle_geometry_3d()
   _test_playfield_clamp()
   _test_footprint_geometry()
   _test_carnivore_pursuit_intent()
@@ -566,12 +578,12 @@ func _test_goal_kind_phase_c_replay() -> void:
     ),
     "salient write with catalog",
   )
-  var hash := _GoalMem.context_hash_for_find_food(_GkReg.GK_FIND_FOOD, anchor, motor_p, grid)
+  var context_hash := _GoalMem.context_hash_for_find_food(_GkReg.GK_FIND_FOOD, anchor, motor_p, grid)
   var replay_neutral := store.consult_replay_weight(
-    _GkReg.GK_FIND_FOOD, hash, motor_p, motor_ctx, Vector2(100.0, 70.0), {}
+    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector2(100.0, 70.0), {}
   )
   var replay_w := store.consult_replay_weight(
-    _GkReg.GK_FIND_FOOD, hash, motor_p, motor_ctx, Vector2(100.0, 70.0), traits_explorer
+    _GkReg.GK_FIND_FOOD, context_hash, motor_p, motor_ctx, Vector2(100.0, 70.0), traits_explorer
   )
   _assert(replay_w > replay_neutral, "explorer traits raise replay_weight vs neutral traits")
   _assert(
@@ -2968,19 +2980,143 @@ func _test_ai_driver_creature_registry() -> void:
 
 func _test_creature_3d_template_scenes_load() -> void:
   _assert(ResourceLoader.exists("res://creature/templates/creature_herbivore_kinematic_3d.tscn"), "herbivore 3d template exists")
-  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_rigid_3d.tscn"), "carnivore 3d template exists")
+  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_kinematic_3d.tscn"), "carnivore kinematic 3d template exists")
+  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_rigid_3d.tscn"), "carnivore rigid 3d stub exists")
+  _assert(ResourceLoader.exists("res://tests/scenes/duel_3d_m0.tscn"), "M0 duel 3d test scene exists")
   var herb := load("res://creature/templates/creature_herbivore_kinematic_3d.tscn") as PackedScene
-  var carn := load("res://creature/templates/creature_carnivore_rigid_3d.tscn") as PackedScene
+  var carn_kin := load("res://creature/templates/creature_carnivore_kinematic_3d.tscn") as PackedScene
+  var carn_rig := load("res://creature/templates/creature_carnivore_rigid_3d.tscn") as PackedScene
   var root_h := herb.instantiate() as Node
-  var root_c := carn.instantiate() as Node
+  var root_ck := carn_kin.instantiate() as Node
+  var root_cr := carn_rig.instantiate() as Node
   _assert(root_h.get_script() == _CreatureRoot3D, "herbivore root uses CreatureRoot3D script")
-  _assert(root_c.get_script() == _CreatureRoot3D, "carnivore root uses CreatureRoot3D script")
+  _assert(root_ck.get_script() == _CreatureRoot3D, "carnivore kinematic root uses CreatureRoot3D script")
+  _assert(root_cr.get_script() == _CreatureRoot3D, "carnivore rigid root uses CreatureRoot3D script")
   root_h.queue_free()
-  root_c.queue_free()
+  root_ck.queue_free()
+  root_cr.queue_free()
   var rabbit: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
   _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
   _assert(rabbit.get("species_id") == &"rabbit", "rabbit archetype id")
   _assert(rabbit.get("locomotion_profile") != null, "rabbit has locomotion profile")
+
+
+func _test_motor_plane_xz_adapter() -> void:
+  var v2 := Vector2(3.0, -7.0)
+  var v3 := _MotorPlane.to_horizontal_vec3(v2)
+  _assert(is_equal_approx(v3.x, 3.0) and is_equal_approx(v3.y, 0.0) and is_equal_approx(v3.z, -7.0), "motor plane to XZ")
+  var back := _MotorPlane.from_vec3(Vector3(5.0, 9.0, -2.0))
+  _assert(is_equal_approx(back.x, 5.0) and is_equal_approx(back.y, -2.0), "XZ to motor plane drops Y")
+  var body := CharacterBody3D.new()
+  body.position = Vector3(11.0, 2.0, -4.0)
+  root.add_child(body)
+  var mp := _MotorPlane.body_motor_position(body)
+  _assert(is_equal_approx(mp.x, 11.0) and is_equal_approx(mp.y, -4.0), "body motor position from Node3D")
+  body.queue_free()
+
+
+func _test_creature_kinematic_motor_intent_adapter() -> void:
+  var body := CharacterBody3D.new()
+  body.set_script(_KinematicBody3DScr)
+  root.add_child(body)
+  body.call("set_creature_move_intent", Vector2(0.0, 1.0))
+  var stored: Variant = body.get("creature_move_intent")
+  _assert(typeof(stored) == TYPE_VECTOR2, "kinematic stores Vector2 intent")
+  var sv := stored as Vector2
+  _assert(sv.is_equal_approx(Vector2(0.0, 1.0)), "kinematic intent normalized")
+  body.queue_free()
+
+
+func _test_ai_driver_registers_3d_motor_body() -> void:
+  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
+  var d: Node = AD.new()
+  root.add_child(d)
+  var body := CharacterBody3D.new()
+  body.set_script(_KinematicBody3DScr)
+  root.add_child(body)
+  d.call("register_creature", body)
+  d.call("register_creature", body)
+  var reg: Array = d.get("_registered_creatures") as Array
+  _assert(reg.size() == 1, "3d motor body registered once")
+  var subjects: Array = d.call("_scripted_motor_subjects") as Array
+  _assert(subjects.size() == 1 and subjects[0] == body, "scripted motor subjects include 3d body")
+  d.call("clear_creature_registry")
+  body.queue_free()
+  d.free()
+
+
+func _test_m1_game_config_use_2d_default() -> void:
+  var gc: Node = _GameConfigScr.new()
+  root.add_child(gc)
+  _assert(not gc.call("use_2d"), "Use-2d missing defaults to 3D main path")
+  gc.free()
+
+
+func _test_m1_main_3d_scenes_exist() -> void:
+  _assert(ResourceLoader.exists("res://main_3d.tscn"), "M1 main_3d scene exists")
+  _assert(ResourceLoader.exists("res://bootstrap_main.tscn"), "bootstrap_main scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub_3d.tscn"), "solid_shrub_3d exists")
+  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub_3d.tscn"), "open_shrub_3d exists")
+
+
+func _test_m1_3d_physics_layers() -> void:
+  _assert(
+    ProjectSettings.get_setting("layer_names/3d_physics/layer_1") == &"world_static",
+    "3d layer 1 world_static",
+  )
+  _assert(
+    ProjectSettings.get_setting("layer_names/3d_physics/layer_2") == &"player",
+    "3d layer 2 player",
+  )
+  _assert(
+    ProjectSettings.get_setting("layer_names/3d_physics/layer_4") == &"mob",
+    "3d layer 4 mob",
+  )
+  _assert(
+    ProjectSettings.get_setting("layer_names/3d_physics/layer_8") == &"plant_mob_block",
+    "3d layer 8 plant_mob_block",
+  )
+
+
+func _test_playfield_bounds_3d_from_floor() -> void:
+  var pf := Node3D.new()
+  root.add_child(pf)
+  var floor_body := StaticBody3D.new()
+  pf.add_child(floor_body)
+  var col := CollisionShape3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(30.0, 0.2, 20.0)
+  col.shape = box
+  floor_body.add_child(col)
+  floor_body.position = Vector3(15.0, 0.0, 10.0)
+  var bounds: Dictionary = _PlayfieldBounds3D.xz_bounds_from_playfield_root(pf)
+  _assert(bool(bounds.get("valid", false)), "playfield bounds valid from floor box")
+  var sz: Vector2 = bounds.get("size", Vector2.ZERO)
+  _assert(sz.x >= 29.0 and sz.x <= 31.0, "playfield bounds X span")
+  _assert(sz.y >= 19.0 and sz.y <= 21.0, "playfield bounds Z span")
+  var wp := _PlayfieldBounds3D.world_position_from_fraction(bounds, Vector2(0.5, 0.5), 0.6)
+  _assert(wp.x >= 14.0 and wp.x <= 16.0, "fraction center X")
+  _assert(wp.z >= 9.0 and wp.z <= 11.0, "fraction center Z")
+  pf.queue_free()
+
+
+func _test_motor_obstacle_geometry_3d() -> void:
+  var sb := StaticBody3D.new()
+  var cs := CollisionShape3D.new()
+  var sphere := SphereShape3D.new()
+  sphere.radius = 2.0
+  cs.shape = sphere
+  cs.position = Vector3(10.0, 0.0, 5.0)
+  sb.add_child(cs)
+  root.add_child(sb)
+  var aabbs: Array = []
+  var samples := PackedVector2Array()
+  _GeomScr.append_static_body_shapes_3d(sb, aabbs, samples)
+  _assert(aabbs.size() == 1, "3d obstacle emits one AABB")
+  _assert(samples.size() >= 8, "3d obstacle emits rim samples")
+  var ohe: Vector2 = (aabbs[0] as Dictionary).get("half_extents", Vector2.ZERO)
+  _assert(ohe.x > 0.0 and ohe.y > 0.0, "3d obstacle AABB has motor-plane half extents")
+  sb.queue_free()
 
 
 func _test_obstacle_visual_tiers() -> void:

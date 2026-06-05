@@ -9,7 +9,24 @@ const _Threat := preload("res://creature/motor/threat_sample.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 
 
-static func feeding_mode_for_body(body: PhysicsBody2D) -> int:
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
+
+static func _spatial_motor_position(n: Node) -> Vector2:
+  if n is Node2D:
+    return (n as Node2D).global_position
+  if n is Node3D:
+    return _MotorPlane.from_vec3((n as Node3D).global_position)
+  return Vector2.ZERO
+
+
+static func _spatial_motor_velocity(n: Node) -> Vector2:
+  if _MotorPlane.is_motor_physics_body(n):
+    return _MotorPlane.body_motor_velocity(n as Node)
+  return Vector2.ZERO
+
+
+static func feeding_mode_for_body(body: Node) -> int:
   if body != null and body.has_method(&"get_feeding_mode"):
     return int(body.call(&"get_feeding_mode"))
   if body != null and body.is_in_group(&"mobs") and not body.is_in_group(&"prey"):
@@ -17,7 +34,7 @@ static func feeding_mode_for_body(body: PhysicsBody2D) -> int:
   return _CreatureDefinition.FeedingMode.HERBIVORE
 
 
-static func food_intake_policy_for_body(body: PhysicsBody2D) -> Resource:
+static func food_intake_policy_for_body(body: Node) -> Resource:
   if body != null and body.has_method(&"get_food_intake_policy"):
     var pol: Variant = body.call(&"get_food_intake_policy")
     if pol is Resource:
@@ -99,7 +116,7 @@ static func scan_food_plants_in_awareness(
     for n in tree.get_nodes_in_group(g):
       if not n.has_method(&"is_pickup_ready_for_motor"):
         continue
-      var fp: Vector2 = n.global_position
+      var fp: Vector2 = _spatial_motor_position(n)
       if not _in_awareness_zone(creature_pos, he_xy, fp, motor_p, facing, false):
         continue
       var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
@@ -117,7 +134,7 @@ static func scan_food_plants_in_awareness(
 ## Prey entries under awareness ([code]{instance_id, pos, velocity}[/code]).
 static func collect_prey_entries(
   tree: SceneTree,
-  body: PhysicsBody2D,
+  body: Node,
   policy: Resource,
   motor_p: Dictionary,
   creature_pos: Vector2,
@@ -134,7 +151,7 @@ static func collect_prey_entries(
   for group_name in prey_groups:
     var g := StringName(str(group_name))
     for n in tree.get_nodes_in_group(g):
-      if not (n is Node2D):
+      if not (n is Node2D or n is Node3D):
         continue
       if (n as Node) == body:
         continue
@@ -142,14 +159,10 @@ static func collect_prey_entries(
       if seen.has(nid):
         continue
       seen[nid] = true
-      var prey_pos := (n as Node2D).global_position
+      var prey_pos := _spatial_motor_position(n)
       if not _in_awareness_zone(creature_pos, he_xy, prey_pos, motor_p, facing, true):
         continue
-      var vel := Vector2.ZERO
-      if n is CharacterBody2D:
-        vel = (n as CharacterBody2D).velocity
-      elif n is RigidBody2D:
-        vel = (n as RigidBody2D).linear_velocity
+      var vel := _spatial_motor_velocity(n)
       out.append({"instance_id": nid, "pos": prey_pos, "velocity": vel})
   return out
 
@@ -157,7 +170,7 @@ static func collect_prey_entries(
 ## Prey [code]Vector2[/code] positions under awareness (policy [code]prey_groups[/code]).
 static func collect_prey_positions(
   tree: SceneTree,
-  body: PhysicsBody2D,
+  body: Node,
   policy: Resource,
   motor_p: Dictionary,
   creature_pos: Vector2,
@@ -177,7 +190,7 @@ static func collect_prey_positions(
 ## Pursuit dicts for carnivore/omnivore hunt ([code]position[/code], [code]velocity[/code], [code]cost_scale[/code]).
 static func collect_pursuit_targets(
   tree: SceneTree,
-  body: PhysicsBody2D,
+  body: Node,
   policy: Resource,
   motor_p: Dictionary,
   creature_pos: Vector2,
@@ -194,7 +207,7 @@ static func collect_pursuit_targets(
   for group_name in prey_groups:
     var g := StringName(str(group_name))
     for n in tree.get_nodes_in_group(g):
-      if not (n is Node2D):
+      if not (n is Node2D or n is Node3D):
         continue
       if (n as Node) == body:
         continue
@@ -202,14 +215,10 @@ static func collect_pursuit_targets(
       if seen.has(nid):
         continue
       seen[nid] = true
-      var prey_pos := (n as Node2D).global_position
+      var prey_pos := _spatial_motor_position(n)
       if not _in_awareness_zone(creature_pos, he_xy, prey_pos, motor_p, facing, true):
         continue
-      var vel := Vector2.ZERO
-      if n is CharacterBody2D:
-        vel = (n as CharacterBody2D).velocity
-      elif n is RigidBody2D:
-        vel = (n as RigidBody2D).linear_velocity
+      var vel := _spatial_motor_velocity(n)
       arr.append({"position": prey_pos, "velocity": vel, "cost_scale": 1.0})
   return arr
 
@@ -217,7 +226,7 @@ static func collect_pursuit_targets(
 ## Hostile mob threats for **Avoid hostiles** (herbivore / omnivore posture).
 static func collect_hostile_threat_samples(
   tree: SceneTree,
-  body: PhysicsBody2D,
+  body: Node,
   motor_p: Dictionary,
   creature_pos: Vector2,
   he_xy: Vector2,
@@ -230,16 +239,16 @@ static func collect_hostile_threat_samples(
   if awareness_r <= 0.0:
     return out
   for n in tree.get_nodes_in_group(&"mobs"):
-    if not (n is RigidBody2D):
+    if not _MotorPlane.is_motor_physics_body(n):
       continue
-    var rb := n as RigidBody2D
+    var rb := n as Node
     if rb == body:
       continue
-    var mp := rb.global_position
+    var mp := _spatial_motor_position(rb)
     if not _in_awareness_zone(creature_pos, he_xy, mp, motor_p, facing, false):
       continue
     var gd := _Motor.awareness_gate_distance(creature_pos, he_xy, mp)
-    var vel := rb.linear_velocity
+    var vel := _spatial_motor_velocity(rb)
     out.append(
       _Threat.make(mp, gd, true, vel, rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB)
     )
@@ -265,7 +274,7 @@ static func nearest_hostile_threat_sample(threat_samples: Array) -> Dictionary:
 ## Single builder entry — [code]feeding_mode[/code] + [FoodIntakePolicy] drive membership.
 static func build_motor_target_lists(
   tree: SceneTree,
-  body: PhysicsBody2D,
+  body: Node,
   motor_p: Dictionary,
   creature_pos: Vector2,
   he_xy: Vector2,

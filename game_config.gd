@@ -66,3 +66,8 @@ func get_creature_motor_params_for_pack(pack_root: String) -> Dictionary:
 ## Full merged root (advanced callers / tests).
 func get_merged_root() -> Dictionary:
   return _merged.duplicate(true)
+
+
+## [code]true[/code] when legacy 2D [code]main.tscn[/code] should load; missing key → [code]false[/code] (3D default).
+func use_2d() -> bool:
+  return bool(_merged.get("Use-2d", false))

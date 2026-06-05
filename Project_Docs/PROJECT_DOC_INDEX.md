@@ -54,7 +54,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
-| [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | **2D→3D migration umbrella:** playfield, physics layers, motor adapter, env/plants; defers creature stack to [CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md). |
+| [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | **2D→3D migration umbrella:** grasslands mesh playfield (no PNG terrain), `Use-2d` GameConfig flag, `CharacterBody3D` duel, motor adapter; defers creature stack to [CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md). |
 | [Draft_Features/CREATURE_3D_ARCHITECTURE.md](Draft_Features/CREATURE_3D_ARCHITECTURE.md) | **3D creature stack:** [CreatureDefinition](res://creature/definition/creature_definition.gd), capabilities, templates, AI intent bridge. |
 | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
 | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Canonical:** motivation tree Tier-1/2, **`CreatureDefinition`** traits (−100…+100), goal-kind rollup, habitual **`believed_goal_*`** modulation + strategy-class **`<<Question>>`** Actions **1–3**. Consumed by [CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) + [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
