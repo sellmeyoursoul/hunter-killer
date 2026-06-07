@@ -12,11 +12,14 @@ const _NoGoalPatrolLockScr := preload("res://creature/motor/no_goal_patrol_lock.
 const _SeekStationaryLookScr := preload("res://creature/motor/seek_stationary_look.gd")
 const _JeopardyTurnScr := preload("res://creature/motor/jeopardy_forced_turn.gd")
 const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
-const _PlayerScr := preload("res://player.gd")
+const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
+const _BushFood3DScr := preload("res://assets/plants/bush_food_3d.gd")
+const _Herbivore3DScene := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
+const _Carnivore3DScene := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
+const _SolidShrub3DScene := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
 const _EnvCell := preload("res://environment/environment_cell_data.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _EnvBake := preload("res://environment/environment_grid_bake.gd")
-const _ObstacleVisualTiersScr := preload("res://environment/obstacle_visual_tiers.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
 const _Tier2Dom := preload("res://creature/motor/tier2_dominance.gd")
 const _TraitTier2 := preload("res://creature/motor/trait_tier2_mapper.gd")
@@ -33,7 +36,6 @@ const _CreatureRoot3D := preload("res://creature/creature_root_3d.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _EXPANDING_CARDINAL_EXPLORE_SCR := preload("res://creature/motor/expanding_cardinal_explore.gd")
 const _CarnivorePursuit := preload("res://creature/motor/carnivore_pursuit.gd")
-const _MobScr := preload("res://mob.gd")
 const _ObstacleStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _GeomScr := preload("res://creature/motor/motor_obstacle_geometry.gd")
 const _SeekDirCommitScr := preload("res://creature/motor/seek_direction_commit.gd")
@@ -134,7 +136,6 @@ func _run_all() -> void:
   _test_environment_baked_grid()
   _test_cardinal_interior_env_grid()
   _test_wall_slide_pick()
-  _test_obstacle_visual_tiers()
   _test_pack_resource_resolver()
   _test_hunger_calorie_clamp()
   _test_calorie_drain_movement_formula()
@@ -147,17 +148,20 @@ func _run_all() -> void:
   _test_motor_plane_xz_adapter()
   _test_creature_kinematic_motor_intent_adapter()
   _test_ai_driver_registers_3d_motor_body()
-  _test_m1_game_config_use_2d_default()
   _test_m1_main_3d_scenes_exist()
   _test_m1_3d_physics_layers()
   _test_m2_vector3_motor_context()
   _test_m2_awareness_debug_overlay_3d()
   _test_playfield_bounds_3d_from_floor()
+  _test_playfield_ground_snap()
+  _test_duel_spawn_fractions_inside_bounds()
+  _test_grasslands_static_collision_layer()
+  _test_creature_root_visual_mount()
   _test_motor_obstacle_geometry_3d()
   _test_playfield_clamp()
   _test_footprint_geometry()
   _test_carnivore_pursuit_intent()
-  _test_creature_diet_on_2d_bodies()
+  _test_creature_diet_on_3d_bodies()
   _test_ai_driver_creature_registry()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
@@ -168,6 +172,29 @@ func _assert(cond: bool, msg: String) -> void:
     return
   _failures += 1
   push_error("ASSERT: %s" % msg)
+
+
+## Instantiates a 3D duel template and returns its [code]Body[/code] [CharacterBody3D] (root parented under test tree).
+func _spawn_creature_body(scene_path: String) -> CharacterBody3D:
+  var ps := load(scene_path) as PackedScene
+  var creature_root := ps.instantiate() as Node
+  root.add_child(creature_root)
+  return creature_root.get_node("Body") as CharacterBody3D
+
+
+## Legacy 1920×1080 playfield perimeter bar AABBs (motor XZ; replaces deleted [code]obstacle_field.tscn[/code]).
+func _synthetic_playfield_boundary_aabbs() -> Array:
+  return [
+    {"position": Vector3(960.0, 0.0, -30.0), "half_extents": Vector2(1020.0, 30.0)},
+    {"position": Vector3(960.0, 0.0, 1110.0), "half_extents": Vector2(1020.0, 30.0)},
+    {"position": Vector3(-30.0, 0.0, 540.0), "half_extents": Vector2(30.0, 570.0)},
+    {"position": Vector3(1950.0, 0.0, 540.0), "half_extents": Vector2(30.0, 570.0)},
+  ]
+
+
+func _motor_plane_v2_from_node(n: Node3D) -> Vector2:
+  var p := n.global_position
+  return Vector2(p.x, p.z)
 
 
 func _test_merge_defaults_and_override() -> void:
@@ -798,7 +825,7 @@ func _test_locale_prior_escalate_seek() -> void:
 
 func _test_escape_reversal_suppression() -> void:
   var ad: Node = _AiDriverScr.new()
-  var body := RigidBody2D.new()
+  var body := CharacterBody3D.new()
   var bid := body.get_instance_id()
   var motor_p := _Merge.creature_motor_spine()
   ad._escape_episode_by_body[bid] = {
@@ -1739,14 +1766,20 @@ func _test_playfield_open_corner_escape() -> void:
   )
 
 
-## Inner playable rect implied by wide/tall boundary bar AABBs in [code]obstacle_field.tscn[/code].
+## Inner playable rect implied by wide/tall perimeter bar AABBs on the motor XZ plane.
 func _playfield_inner_rect_from_boundary_aabbs(aabbs: Array) -> Rect2:
   var inner := Vector2(-INF, -INF)
   var outer := Vector2(INF, INF)
   for ob in aabbs:
     if typeof(ob) != TYPE_DICTIONARY:
       continue
-    var op: Vector2 = ob.get("position", Vector2.ZERO)
+    var op_raw: Variant = ob.get("position", Vector2.ZERO)
+    var op := Vector2.ZERO
+    if typeof(op_raw) == TYPE_VECTOR3:
+      var op3 := op_raw as Vector3
+      op = Vector2(op3.x, op3.z)
+    elif typeof(op_raw) == TYPE_VECTOR2:
+      op = op_raw as Vector2
     var he: Vector2 = ob.get("half_extents", Vector2.ZERO)
     if maxf(he.x, he.y) < 200.0:
       continue
@@ -1767,19 +1800,8 @@ func _playfield_inner_rect_from_boundary_aabbs(aabbs: Array) -> Rect2:
   return Rect2(inner, outer - inner)
 
 
-func _collect_obstacle_field_aabbs() -> Array:
-  var packed := load("res://obstacle_field.tscn") as PackedScene
-  if packed == null:
-    return []
-  var field := packed.instantiate() as Node
-  root.add_child(field)
-  var geom := _GeomScr.collect_obstacle_group_statics(field)
-  field.queue_free()
-  return geom.get("aabbs", []) as Array
-
-
 func _test_playfield_boundary_edge_rocks() -> void:
-  var aabbs := _collect_obstacle_field_aabbs()
+  var aabbs := _synthetic_playfield_boundary_aabbs()
   _assert(not aabbs.is_empty(), "obstacle field yields boundary AABBs")
   var inner := _playfield_inner_rect_from_boundary_aabbs(aabbs)
   _assert(is_equal_approx(inner.position.x, 0.0), "edge rocks inner left aligns with playfield")
@@ -1837,7 +1859,7 @@ func _test_ne_corner_food_seek_egress() -> void:
   var bounds_max := Vector2(1920.0, 1080.0)
   var he := Vector2(13.5, 30.5)
   var ne_pos := Vector2(bounds_max.x - he.x - 8.0, he.y + 6.0)
-  var aabbs := _collect_obstacle_field_aabbs()
+  var aabbs := _synthetic_playfield_boundary_aabbs()
   var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
   var food_east := ne_pos + Vector2(240.0, 0.0)
   var esc_food: Vector2 = d.call(
@@ -2398,11 +2420,8 @@ func _test_predator_prey_memory_chase() -> void:
   var prey_pos := Vector3(400.0, 0.0, 200.0)
   var pred_pos := Vector3(200.0, 0.0, 200.0)
   var prey_iid := 424242
-  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  _assert(mob_scene != null, "mob.tscn loads for predator memory chase")
-  var predator: RigidBody2D = mob_scene.instantiate() as RigidBody2D
-  root.add_child(predator)
-  predator.global_position = _MotorPlane.to_vec2(pred_pos)
+  var predator: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
+  predator.global_position = pred_pos
   var pred_bid := predator.get_instance_id()
   var now_ms := Time.get_ticks_msec()
   var beliefs: Dictionary = {}
@@ -2500,10 +2519,10 @@ func _test_predator_prey_memory_chase() -> void:
     Time.get_ticks_msec(),
   )
   driver.set("_goal_belief_by_body", {pred_bid: beliefs})
-  predator.global_position = _MotorPlane.to_vec2(prey_pos) + Vector2(5000.0, 0.0)
+  predator.global_position = prey_pos + Vector3(5000.0, 0.0, 0.0)
   var forgotten: Dictionary = _GoalBeliefScr.sample_best_moving(
     beliefs,
-    _MotorPlane.to_horizontal_vec3(predator.global_position),
+    predator.global_position,
     motor_p,
     _GkReg.GK_FIND_FOOD,
     {},
@@ -2844,8 +2863,8 @@ func _test_hunger_calorie_clamp() -> void:
   var grant := 5.0
   var next := minf(cap, cur + grant)
   _assert(is_equal_approx(next, 10.0), "hunger burst clamps at caloric_needs")
-  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub.tscn"), "solid_shrub scene exists")
-  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub.tscn"), "open_shrub scene exists")
+  _assert(ResourceLoader.exists(_SolidShrub3DScene), "solid_shrub_3d scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub_3d.tscn"), "open_shrub_3d scene exists")
 
 
 func _test_calorie_drain_movement_formula() -> void:
@@ -2861,15 +2880,12 @@ func _test_calorie_drain_movement_formula() -> void:
 func _test_predator_prey_meal_clamp() -> void:
   var base := _Merge.default_root()
   var meal := int(base["creature_motor"].get("predator_prey_meal_calories", 5))
-  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  _assert(mob_scene != null, "mob.tscn loads")
-  var mob: RigidBody2D = mob_scene.instantiate() as RigidBody2D
-  _assert(mob != null, "mob instantiates")
+  var mob: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
   mob.set("caloric_needs", 10)
   mob.set("current_calories", 8.0)
   mob.call("add_calories_from_prey", meal)
   _assert(is_equal_approx(float(mob.get("current_calories")), 10.0), "predator meal clamps at caloric_needs")
-  mob.queue_free()
+  mob.get_parent().queue_free()
 
 
 func _test_creature_vitals_math_burn_and_clamp() -> void:
@@ -2948,26 +2964,22 @@ func _test_carnivore_pursuit_intent() -> void:
   _assert(intent.is_equal_approx(Vector3(1.0, 0.0, 0.0)), "pursuit intent toward prey on +X")
 
 
-func _test_creature_diet_on_2d_bodies() -> void:
-  var p_scene: PackedScene = load("res://player.tscn") as PackedScene
-  var m_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  _assert(p_scene != null and m_scene != null, "player and mob scenes load")
-  var p: Node = p_scene.instantiate()
-  var m: Node = m_scene.instantiate()
-  root.add_child(p)
-  root.add_child(m)
-  _assert(int(p.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.HERBIVORE, "player default herbivore")
-  _assert(int(m.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE, "mob default carnivore")
-  _assert(p.is_in_group(&"herbivores") and p.is_in_group(&"prey"), "player prey groups")
-  p.queue_free()
-  m.queue_free()
+func _test_creature_diet_on_3d_bodies() -> void:
+  var p: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  var m: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
+  _assert(int(p.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.HERBIVORE, "herbivore 3d default diet")
+  _assert(int(m.call("get_feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE, "carnivore 3d default diet")
+  _assert(p.is_in_group(&"herbivores") and p.is_in_group(&"prey"), "herbivore 3d prey groups")
+  p.get_parent().queue_free()
+  m.get_parent().queue_free()
 
 
 func _test_ai_driver_creature_registry() -> void:
   var AD := load("res://AI_int_lib/ai_driver.gd") as Script
   var d: Node = AD.new()
   root.add_child(d)
-  var n := Node2D.new()
+  var n := CharacterBody3D.new()
+  n.set_script(_KinematicBody3DScr)
   d.call("register_creature", n)
   d.call("register_creature", n)
   d.call("set_duel_round_active", true)
@@ -2983,24 +2995,18 @@ func _test_ai_driver_creature_registry() -> void:
 func _test_creature_3d_template_scenes_load() -> void:
   _assert(ResourceLoader.exists("res://creature/templates/creature_herbivore_kinematic_3d.tscn"), "herbivore 3d template exists")
   _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_kinematic_3d.tscn"), "carnivore kinematic 3d template exists")
-  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_rigid_3d.tscn"), "carnivore rigid 3d stub exists")
-  _assert(ResourceLoader.exists("res://tests/scenes/duel_3d_m0.tscn"), "M0 duel 3d test scene exists")
   var herb := load("res://creature/templates/creature_herbivore_kinematic_3d.tscn") as PackedScene
   var carn_kin := load("res://creature/templates/creature_carnivore_kinematic_3d.tscn") as PackedScene
-  var carn_rig := load("res://creature/templates/creature_carnivore_rigid_3d.tscn") as PackedScene
   var root_h := herb.instantiate() as Node
   var root_ck := carn_kin.instantiate() as Node
-  var root_cr := carn_rig.instantiate() as Node
   _assert(root_h.get_script() == _CreatureRoot3D, "herbivore root uses CreatureRoot3D script")
   _assert(root_ck.get_script() == _CreatureRoot3D, "carnivore kinematic root uses CreatureRoot3D script")
-  _assert(root_cr.get_script() == _CreatureRoot3D, "carnivore rigid root uses CreatureRoot3D script")
   var body_h := root_h.get_node_or_null("Body")
   _assert(body_h != null and body_h.get_node_or_null("AwarenessDebugOverlay") != null, "herbivore Body has 3D awareness overlay")
   var body_ck := root_ck.get_node_or_null("Body")
   _assert(body_ck != null and body_ck.get_node_or_null("AwarenessDebugOverlay") != null, "carnivore Body has 3D awareness overlay")
   root_h.queue_free()
   root_ck.queue_free()
-  root_cr.queue_free()
   var rabbit: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
   _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
   _assert(rabbit.get("species_id") == &"rabbit", "rabbit archetype id")
@@ -3051,16 +3057,12 @@ func _test_ai_driver_registers_3d_motor_body() -> void:
   d.free()
 
 
-func _test_m1_game_config_use_2d_default() -> void:
-  var gc: Node = _GameConfigScr.new()
-  root.add_child(gc)
-  _assert(not gc.call("use_2d"), "Use-2d missing defaults to 3D main path")
-  gc.free()
-
-
 func _test_m1_main_3d_scenes_exist() -> void:
   _assert(ResourceLoader.exists("res://main_3d.tscn"), "M1 main_3d scene exists")
-  _assert(ResourceLoader.exists("res://bootstrap_main.tscn"), "bootstrap_main scene exists")
+  _assert(
+    str(ProjectSettings.get_setting("run/main_scene")) == "res://main_3d.tscn",
+    "run/main_scene points at main_3d",
+  )
   _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub_3d.tscn"), "solid_shrub_3d exists")
   _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub_3d.tscn"), "open_shrub_3d exists")
 
@@ -3134,6 +3136,126 @@ func _test_playfield_bounds_3d_from_floor() -> void:
   pf.queue_free()
 
 
+func _test_playfield_ground_snap() -> void:
+  var floor_body := StaticBody3D.new()
+  floor_body.collision_layer = 1
+  floor_body.collision_mask = 1
+  var col := CollisionShape3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(20.0, 0.2, 20.0)
+  col.shape = box
+  floor_body.add_child(col)
+  floor_body.position = Vector3(10.0, 0.0, 10.0)
+  root.add_child(floor_body)
+  var creature_root := Node3D.new()
+  root.add_child(creature_root)
+  var body := CharacterBody3D.new()
+  var cap := CapsuleShape3D.new()
+  cap.height = 1.2
+  cap.radius = 0.35
+  var body_col := CollisionShape3D.new()
+  body_col.shape = cap
+  body.add_child(body_col)
+  body.position = Vector3(0.0, 0.6, 0.0)
+  creature_root.add_child(body)
+  var w3d := root.get_world_3d()
+  if w3d == null:
+    push_warning("skip ground snap test — no World3D on test root")
+    creature_root.queue_free()
+    floor_body.queue_free()
+    return
+  var space := w3d.direct_space_state
+  var ground: Dictionary = _PlayfieldBounds3D.raycast_ground_surface(space, Vector2(10.0, 10.0), 0.0)
+  _assert(bool(ground.get("hit", false)), "ground raycast hits synthetic floor")
+  var surface_y := float(ground.get("surface_y", -999.0))
+  _assert(surface_y >= 0.05 and surface_y <= 0.15, "ground raycast surface Y on floor top")
+  var did_snap: bool = _PlayfieldBounds3D.snap_creature_root_to_ground(
+    creature_root, body, Vector2(10.0, 10.0), 0.0, space
+  )
+  _assert(did_snap, "snap_creature_root_to_ground reports hit")
+  var half_h := _PlayfieldBounds3D.capsule_half_height_on_body(body)
+  var cap_bottom := body.global_position.y - half_h
+  _assert(
+    cap_bottom >= surface_y - 0.05 and cap_bottom <= surface_y + 0.05,
+    "capsule bottom rests on raycast surface",
+  )
+  creature_root.queue_free()
+  floor_body.queue_free()
+
+
+func _test_duel_spawn_fractions_inside_bounds() -> void:
+  var bounds: Dictionary = {
+    "valid": true,
+    "min": Vector2(0.0, 0.0),
+    "max": Vector2(100.0, 80.0),
+    "size": Vector2(100.0, 80.0),
+    "center": Vector3(50.0, 0.0, 40.0),
+    "floor_y": 0.0,
+  }
+  var fracs: Array[Vector2] = [Vector2(0.68, 0.46), Vector2(0.18, 0.50)]
+  for frac in fracs:
+    var wp := _PlayfieldBounds3D.world_position_from_fraction(bounds, frac, 0.0)
+    _assert(
+      _PlayfieldBounds3D.xz_inside_bounds(bounds, Vector2(wp.x, wp.z)),
+      "duel spawn fraction %.2f,%.2f inside XZ bounds" % [frac.x, frac.y],
+    )
+
+
+func _assert_static_on_world_layer(node: Node) -> void:
+  if node is StaticBody3D:
+    _assert(
+      ((node as StaticBody3D).collision_layer & 1) != 0,
+      "StaticBody3D uses world_static layer 1",
+    )
+  for ch in node.get_children():
+    _assert_static_on_world_layer(ch)
+
+
+func _test_grasslands_static_collision_layer() -> void:
+  const grass_path := "res://assets/locations/grasslands/h-k-grasslands.blend"
+  if not ResourceLoader.exists(grass_path):
+    push_warning("skip grasslands collision test — blend not imported")
+    return
+  var grass := load(grass_path) as PackedScene
+  if grass == null:
+    push_warning("skip grasslands collision test — failed to load scene")
+    return
+  var inst := grass.instantiate()
+  if inst == null:
+    push_warning("skip grasslands collision test — failed to instantiate")
+    return
+  root.add_child(inst)
+  _PlayfieldBounds3D.ensure_world_static_layers(inst)
+  var collision_parent := Node3D.new()
+  root.add_child(collision_parent)
+  var static_count := _PlayfieldBounds3D.count_static_bodies(inst)
+  if static_count == 0:
+    static_count = _PlayfieldBounds3D.supplement_trimesh_collision_from_meshes(inst, collision_parent)
+  _assert(static_count >= 1, "grasslands playfield yields walkable StaticBody3D collision")
+  if _PlayfieldBounds3D.count_static_bodies(inst) > 0:
+    _assert_static_on_world_layer(inst)
+  else:
+    _assert_static_on_world_layer(collision_parent)
+  collision_parent.queue_free()
+  inst.queue_free()
+
+
+func _test_creature_root_visual_mount() -> void:
+  if not ResourceLoader.exists(_Herbivore3DScene):
+    push_warning("skip creature visual mount test — herbivore template missing")
+    return
+  var ps := load(_Herbivore3DScene) as PackedScene
+  var creature_root := ps.instantiate() as Node3D
+  var rabbit := load("res://creature/species/rabbit_archetype.tres")
+  creature_root.set("definition", rabbit)
+  root.add_child(creature_root)
+  if creature_root.has_method(&"_propagate_definition_to_children"):
+    creature_root.call(&"_propagate_definition_to_children")
+  if ResourceLoader.exists("res://assets/creatures/rabbit/rabbit.blend"):
+    _assert(creature_root.get_node_or_null("Visual") != null, "rabbit visual mounts from asset pack")
+  creature_root.queue_free()
+
+
 func _test_motor_obstacle_geometry_3d() -> void:
   var sb := StaticBody3D.new()
   var cs := CollisionShape3D.new()
@@ -3151,14 +3273,6 @@ func _test_motor_obstacle_geometry_3d() -> void:
   var ohe: Vector2 = (aabbs[0] as Dictionary).get("half_extents", Vector2.ZERO)
   _assert(ohe.x > 0.0 and ohe.y > 0.0, "3d obstacle AABB has motor-plane half extents")
   sb.queue_free()
-
-
-func _test_obstacle_visual_tiers() -> void:
-  ## Buckets obstacle footprint max-axis into three export texture slots on [ObstacleFieldRoot].
-  var tier_helper_obj: Object = _ObstacleVisualTiersScr.new()
-  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(110, 90))) == 0, "obstacle tier small")
-  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(140, 110))) == 1, "obstacle tier medium")
-  _assert(int(tier_helper_obj.call("tier_for_rect_size", Vector2(280, 220))) == 2, "obstacle tier large")
 
 
 func _test_environment_baked_grid() -> void:
@@ -3326,19 +3440,19 @@ func _test_mob_avoidance_acceptance() -> void:
   var cm: Dictionary = repo["merged"]["creature_motor"]
   _assert(str(cm.get("mode", "")).to_lower() == "scripted", "repo game_config creature_motor.mode scripted")
   _assert(
-    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("llm") == _PlayerScr.ai_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("llm") == _ControlMode.ai_as_int(),
     "PLAYING branch: llm motor → AI control int",
   )
   _assert(
-    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("LLM") == _PlayerScr.ai_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("LLM") == _ControlMode.ai_as_int(),
     "motor mode comparison is case-insensitive",
   )
   _assert(
-    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("scripted") == _PlayerScr.engine_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("scripted") == _ControlMode.engine_as_int(),
     "PLAYING branch: scripted motor → ENGINE control int",
   )
   _assert(
-    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("unknown_mode") == _PlayerScr.engine_control_as_int(),
+    Callable(AD, &"playing_control_mode_int_for_motor_mode_string").call("unknown_mode") == _ControlMode.engine_as_int(),
     "unknown motor mode maps to ENGINE (safe scripted motor)",
   )
 
@@ -3647,19 +3761,21 @@ func _test_herbivore_pinch_stall_zero_intent() -> void:
     push_warning("skip herbivore pinch stall test — AiDriver script did not compile")
     return
   var d: Node = AD.new() as Node
-  var body := CharacterBody2D.new()
+  var body := CharacterBody3D.new()
+  body.set_script(_KinematicBody3DScr)
+  root.add_child(body)
   body.add_to_group("prey")
-  body.global_position = Vector2(440.0, 300.0)
+  body.global_position = Vector3(440.0, 0.0, 300.0)
   var motor_p := _Merge.creature_motor_spine()
   var he := Vector2(13.5, 30.5)
-  var bush := {"position": Vector2(500.0, 300.0), "half_extents": Vector2(42.0, 42.0)}
-  var rock := {"position": Vector2(380.0, 300.0), "half_extents": Vector2(55.0, 55.0)}
+  var bush := {"position": Vector3(500.0, 0.0, 300.0), "half_extents": Vector2(42.0, 42.0)}
+  var rock := {"position": Vector3(380.0, 0.0, 300.0), "half_extents": Vector2(55.0, 55.0)}
   var obs := [bush, rock]
-  d.set("_motor_stuck_last_pos", {body.get_instance_id(): Vector2(440.0, 300.0)})
+  d.set("_motor_stuck_last_pos", {body.get_instance_id(): Vector3(440.0, 0.0, 300.0)})
   var stuck: int = d.call(
     "_motor_stuck_track_mob",
     body,
-    Vector2.ZERO,
+    Vector3.ZERO,
     motor_p,
     Vector2.ZERO,
     obs,
@@ -3843,19 +3959,16 @@ func _test_seek_wall_filter_and_backtrack() -> void:
 
 
 func _test_bush_proximity_pickup_adjacent() -> void:
-  var BushScr := load("res://assets/plants/bush_food.gd") as Script
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(player_scene != null, "player scene loads for bush proximity pickup")
-  var main := Node2D.new()
+  var main := Node3D.new()
   root.add_child(main)
-  var bush := Node2D.new()
-  bush.set_script(BushScr)
+  var bush := Node3D.new()
+  bush.set_script(_BushFood3DScr)
   main.add_child(bush)
   bush.call("_ready")
-  bush.global_position = Vector2(200.0, 200.0)
-  var prey: Node = player_scene.instantiate()
-  main.add_child(prey)
-  prey.global_position = bush.global_position + Vector2(0.0, -66.0)
+  bush.global_position = Vector3(200.0, 0.0, 200.0)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(prey.get_parent())
+  prey.global_position = bush.global_position + Vector3(0.0, 0.0, -6.0)
   var cals_before := float(prey.get("current_calories"))
   bush.call("_try_proximity_pickup_for_players")
   _assert(float(bush.get("current_calories")) < 1.0, "adjacent footprint pickup drains bush pool")
@@ -3954,22 +4067,19 @@ func _test_eaten_bush_moves_to_unready_not_seek() -> void:
   if not _ai_driver_can_instantiate():
     push_warning("skip eaten bush readiness test — AiDriver script did not compile")
     return
-  var BushScr := load("res://assets/plants/bush_food.gd") as Script
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(player_scene != null, "player scene loads for eaten bush readiness")
-  var main := Node2D.new()
+  var main := Node3D.new()
   root.add_child(main)
-  var bush := Node2D.new()
-  bush.set_script(BushScr)
+  var bush := Node3D.new()
+  bush.set_script(_BushFood3DScr)
   main.add_child(bush)
   bush.call("_ready")
-  bush.global_position = Vector2(80.0, 0.0)
+  bush.global_position = Vector3(80.0, 0.0, 0.0)
   bush.set("current_calories", 0.0)
   bush.set("_player_visit_locked", true)
-  var prey: Node = player_scene.instantiate()
-  main.add_child(prey)
-  prey.global_position = Vector2.ZERO
-  prey.set("last_move_direction", Vector2.RIGHT)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(prey.get_parent())
+  prey.global_position = Vector3.ZERO
+  prey.set("last_move_direction", Vector3(1.0, 0.0, 0.0))
   prey.set("current_calories", 10.0)
   var driver: Node = _AiDriverScr.new()
   root.add_child(driver)
@@ -3980,12 +4090,13 @@ func _test_eaten_bush_moves_to_unready_not_seek() -> void:
     "res://assets/creatures/rabbit",
   )
   var he := Vector2(13.5, 30.5)
+  var prey_pos := _MotorPlane.body_motor_position(prey)
   var split: Dictionary = driver.call(
     "_motor_food_plants_in_awareness_by_readiness",
     motor_p,
-    prey.global_position,
+    prey_pos,
     he,
-    Vector2.RIGHT,
+    Vector3(1.0, 0.0, 0.0),
   )
   var ready: Array = split.get("ready", []) as Array
   var unready: Array = split.get("unready", []) as Array
@@ -4647,19 +4758,15 @@ func _test_ai_driver_helpers() -> void:
 
 func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
   ## Carnivore ENGINE prey list uses the same radius/cone gate as herbivore-vs-predator mob sampling.
-  var main := Node2D.new()
-  var hunter_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  var prey_scene_ps: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(hunter_scene != null and prey_scene_ps != null, "mob and player scenes load for prey gate")
-  var hunter: Node = hunter_scene.instantiate()
-  var prey: Node = prey_scene_ps.instantiate()
+  var main := Node3D.new()
   root.add_child(main)
-  main.add_child(hunter)
-  main.add_child(prey)
-  hunter.global_position = Vector2(320.0, 240.0)
-  prey.global_position = hunter.global_position + Vector2(80.0, 0.0)
-  hunter.set("last_move_direction", Vector2.RIGHT)
-  prey.show()
+  var hunter: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(hunter.get_parent())
+  main.add_child(prey.get_parent())
+  hunter.global_position = Vector3(320.0, 0.0, 240.0)
+  prey.global_position = hunter.global_position + Vector3(80.0, 0.0, 0.0)
+  hunter.set("last_move_direction", Vector3(1.0, 0.0, 0.0))
   var driver: Node = ad_script.new()
   root.add_child(driver)
   driver.call("attach_main", main)
@@ -4668,14 +4775,14 @@ func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
     "awareness_cone_extra": 0.0,
     "awareness_cone_half_angle_deg": 45.0,
   }
-  var pos_h: Vector2 = hunter.global_position
+  var pos_h := _MotorPlane.body_motor_position(hunter)
   var he := Vector2(10.0, 10.0)
   var near_arr: Array = driver.call("_collect_prey_positions", hunter, motor_gate, pos_h, he)
   _assert(near_arr.size() == 1, "prey inside carnivore awareness radius is tracked")
-  prey.global_position = hunter.global_position + Vector2(-260.0, 0.0)
+  prey.global_position = hunter.global_position + Vector3(-260.0, 0.0, 0.0)
   var far_arr: Array = driver.call("_collect_prey_positions", hunter, motor_gate, pos_h, he)
   _assert(far_arr.is_empty(), "prey outside carnivore awareness radius is omitted")
-  prey.global_position = hunter.global_position + Vector2(-80.0, 0.0)
+  prey.global_position = hunter.global_position + Vector3(-80.0, 0.0, 0.0)
   var cone_strict := {
     "awareness_radius": 500.0,
     "awareness_cone_extra": 0.0,
@@ -4684,10 +4791,10 @@ func _test_carnivore_prey_awareness_gating(ad_script: Script) -> void:
   }
   var behind_arr: Array = driver.call("_collect_prey_positions", hunter, cone_strict, pos_h, he)
   _assert(behind_arr.is_empty(), "prey behind hunter omitted with forward_cone_only")
-  prey.global_position = hunter.global_position + Vector2(80.0, 0.0)
+  prey.global_position = hunter.global_position + Vector3(80.0, 0.0, 0.0)
   var ahead_arr: Array = driver.call("_collect_prey_positions", hunter, cone_strict, pos_h, he)
   _assert(ahead_arr.size() == 1, "prey ahead still tracked with forward_cone_only")
-  prey.global_position = hunter.global_position + Vector2(150.0, 0.0)
+  prey.global_position = hunter.global_position + Vector3(150.0, 0.0, 0.0)
   var fox_hybrid := _Merge.merge_creature_motor_pack_overlay(
     _Merge.default_creature_motor_params().duplicate(true),
     "res://assets/creatures/fox",
@@ -4745,32 +4852,31 @@ func _test_forward_cone_only_awareness() -> void:
 
 
 func _test_forward_cone_only_food_gating(ad_script: Script) -> void:
-  var BushScr := load("res://assets/plants/bush_food.gd") as Script
-  var main := Node.new()
+  var main := Node3D.new()
   root.add_child(main)
-  var bush := Node2D.new()
-  bush.set_script(BushScr)
+  var bush := Node3D.new()
+  bush.set_script(_BushFood3DScr)
   main.add_child(bush)
   bush.call("_ready")
   var driver: Node = ad_script.new()
   root.add_child(driver)
   driver.call("attach_main", main)
-  var creature_pos := Vector2.ZERO
+  var creature_pos := Vector3.ZERO
   var he := Vector2(13.5, 30.5)
-  var facing := Vector2.RIGHT
+  var facing := Vector3(1.0, 0.0, 0.0)
   var motor_cone := {
     "awareness_radius": 500.0,
     "awareness_cone_extra": 0.0,
     "awareness_cone_half_angle_deg": 45.0,
     "awareness_forward_cone_only": true,
   }
-  bush.global_position = Vector2(-80.0, 0.0)
+  bush.global_position = Vector3(-80.0, 0.0, 0.0)
   var split_behind: Dictionary = driver.call(
     "_motor_food_plants_in_awareness_by_readiness", motor_cone, creature_pos, he, facing
   )
   var ready_behind: Array = split_behind.get("ready", []) as Array
   _assert(ready_behind.is_empty(), "bush behind creature hidden with forward_cone_only")
-  bush.global_position = Vector2(80.0, 0.0)
+  bush.global_position = Vector3(80.0, 0.0, 0.0)
   var split_ahead: Dictionary = driver.call(
     "_motor_food_plants_in_awareness_by_readiness", motor_cone, creature_pos, he, facing
   )
@@ -4781,18 +4887,15 @@ func _test_forward_cone_only_food_gating(ad_script: Script) -> void:
 
 
 func _test_forward_cone_only_threat_gating(ad_script: Script) -> void:
-  var main := Node2D.new()
-  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(mob_scene != null and player_scene != null, "mob and player scenes load for threat gate")
-  var prey: Node = player_scene.instantiate()
-  var predator: Node = mob_scene.instantiate()
+  var main := Node3D.new()
   root.add_child(main)
-  main.add_child(prey)
-  main.add_child(predator)
-  prey.global_position = Vector2(400.0, 300.0)
-  predator.global_position = prey.global_position + Vector2(-120.0, 0.0)
-  prey.set("last_move_direction", Vector2.RIGHT)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  var predator: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
+  main.add_child(prey.get_parent())
+  main.add_child(predator.get_parent())
+  prey.global_position = Vector3(400.0, 0.0, 300.0)
+  predator.global_position = prey.global_position + Vector3(-120.0, 0.0, 0.0)
+  prey.set("last_move_direction", Vector3(1.0, 0.0, 0.0))
   var driver: Node = ad_script.new()
   root.add_child(driver)
   driver.call("attach_main", main)
@@ -4804,22 +4907,23 @@ func _test_forward_cone_only_threat_gating(ad_script: Script) -> void:
     "herbivore_threat_awareness_omni": false,
   }
   var he := Vector2(13.5, 30.5)
-  var facing := Vector2.RIGHT
+  var facing := Vector3(1.0, 0.0, 0.0)
+  var prey_pos := _MotorPlane.body_motor_position(prey)
   var behind_threat: Dictionary = driver.call(
     "_herbivore_predator_threat_sample",
     prey,
     motor_p,
-    prey.global_position,
+    prey_pos,
     he,
     facing,
   )
   _assert(not bool(behind_threat.get("in_awareness", true)), "fox behind rabbit not in threat awareness")
-  predator.global_position = prey.global_position + Vector2(120.0, 0.0)
+  predator.global_position = prey.global_position + Vector3(120.0, 0.0, 0.0)
   var ahead_threat: Dictionary = driver.call(
     "_herbivore_predator_threat_sample",
     prey,
     motor_p,
-    prey.global_position,
+    prey_pos,
     he,
     facing,
   )
@@ -4829,19 +4933,16 @@ func _test_forward_cone_only_threat_gating(ad_script: Script) -> void:
 
 
 func _test_sated_herbivore_explore_with_off_cone_food(ad_script: Script) -> void:
-  var BushScr := load("res://assets/plants/bush_food.gd") as Script
-  var main := Node2D.new()
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(player_scene != null, "player scene loads for sated explore test")
-  var prey: Node = player_scene.instantiate()
+  var main := Node3D.new()
   root.add_child(main)
-  main.add_child(prey)
-  var bush := Node2D.new()
-  bush.set_script(BushScr)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(prey.get_parent())
+  var bush := Node3D.new()
+  bush.set_script(_BushFood3DScr)
   main.add_child(bush)
   bush.call("_ready")
-  bush.global_position = prey.global_position + Vector2(-120.0, 0.0)
-  prey.set("last_move_direction", Vector2.RIGHT)
+  bush.global_position = prey.global_position + Vector3(-120.0, 0.0, 0.0)
+  prey.set("last_move_direction", Vector3(1.0, 0.0, 0.0))
   prey.set("current_calories", float(prey.get("caloric_needs")))
   var driver: Node = ad_script.new()
   root.add_child(driver)
@@ -4872,18 +4973,15 @@ func _test_sated_herbivore_explore_with_off_cone_food(ad_script: Script) -> void
 
 
 func _test_sated_predator_ignores_prey(ad_script: Script) -> void:
-  var mob_scene: PackedScene = load("res://mob.tscn") as PackedScene
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(mob_scene != null and player_scene != null, "mob and player scenes load for sated predator test")
-  var main := Node2D.new()
+  var main := Node3D.new()
   root.add_child(main)
-  var predator: Node = mob_scene.instantiate()
-  var prey: Node = player_scene.instantiate()
-  main.add_child(predator)
-  main.add_child(prey)
-  predator.global_position = Vector2.ZERO
-  prey.global_position = Vector2(120.0, 0.0)
-  predator.set("last_move_direction", Vector2.RIGHT)
+  var predator: CharacterBody3D = _spawn_creature_body(_Carnivore3DScene)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(predator.get_parent())
+  main.add_child(prey.get_parent())
+  predator.global_position = Vector3.ZERO
+  prey.global_position = Vector3(120.0, 0.0, 0.0)
+  predator.set("last_move_direction", Vector3(1.0, 0.0, 0.0))
   predator.set("current_calories", float(predator.get("caloric_needs")))
   var driver: Node = ad_script.new()
   root.add_child(driver)
@@ -4931,43 +5029,40 @@ func _test_duel_spawn_facing_variance() -> void:
   if not _ai_driver_can_instantiate():
     push_warning("skip duel spawn facing test — AiDriver script did not compile")
     return
-  var main := Node2D.new()
-  var player_scene: PackedScene = load("res://player.tscn") as PackedScene
-  _assert(player_scene != null, "player scene loads for duel facing variance")
-  var prey: Node = player_scene.instantiate()
+  var main := Node3D.new()
   root.add_child(main)
-  main.add_child(prey)
+  var prey: CharacterBody3D = _spawn_creature_body(_Herbivore3DScene)
+  main.add_child(prey.get_parent())
   var driver: Node = _AiDriverScr.new()
   root.add_child(driver)
   driver.call("attach_main", main)
   driver.call("register_creature", prey)
   driver.set("_duel_motor_round_salt", 0x1234)
   driver.call("_randomize_duel_spawn_facing")
-  var facing_a: Vector2 = prey.get("last_move_direction")
+  var facing_a: Vector3 = prey.get("last_move_direction")
   driver.set("_duel_motor_round_salt", 0x5678)
   driver.call("_randomize_duel_spawn_facing")
-  var facing_b: Vector2 = prey.get("last_move_direction")
+  var facing_b: Vector3 = prey.get("last_move_direction")
   _assert(facing_a.length_squared() > 1e-12, "random duel facing is non-zero")
-  _assert(facing_a != facing_b, "duel spawn facing varies with round salt")
+  _assert(not facing_a.is_equal_approx(facing_b), "duel spawn facing varies with round salt")
   driver.queue_free()
   main.queue_free()
 
 
 func _test_food_plant_awareness_gating(ad_script: Script) -> void:
-  var BushScr := load("res://assets/plants/bush_food.gd") as Script
-  var main := Node.new()
+  var main := Node3D.new()
   root.add_child(main)
-  var bush := Node2D.new()
-  bush.set_script(BushScr)
+  var bush := Node3D.new()
+  bush.set_script(_BushFood3DScr)
   main.add_child(bush)
   bush.call("_ready")
-  bush.global_position = Vector2(80.0, 0.0)
+  bush.global_position = Vector3(80.0, 0.0, 0.0)
   var driver: Node = ad_script.new()
   root.add_child(driver)
   driver.call("attach_main", main)
-  var creature_pos := Vector2.ZERO
+  var creature_pos := Vector3.ZERO
   var he := Vector2(13.5, 30.5)
-  var facing := Vector2.RIGHT
+  var facing := Vector3(1.0, 0.0, 0.0)
   var motor_off := {
     "awareness_radius": 0.0,
     "awareness_cone_extra": 0.0,
@@ -4989,7 +5084,7 @@ func _test_food_plant_awareness_gating(ad_script: Script) -> void:
   )
   var ready_near: Array = split_near.get("ready", []) as Array
   _assert(ready_near.size() == 1, "bush inside awareness radius is visible to motor")
-  bush.global_position = Vector2(5000.0, 0.0)
+  bush.global_position = Vector3(5000.0, 0.0, 0.0)
   var split_far: Dictionary = driver.call(
     "_motor_food_plants_in_awareness_by_readiness", motor_on, creature_pos, he, facing
   )

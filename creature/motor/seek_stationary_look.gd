@@ -1,9 +1,6 @@
-## Rotates creature facing through 8-way directions while no-goal patrol lock holds [code]Vector2.ZERO[/code].
+## Rotates creature facing through 8-way directions while no-goal patrol lock holds [code]Vector3.ZERO[/code].
 ## Used during active seek search so awareness cone sweeps without translation.
 extends Object
-
-const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
-const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const DIRECTION_COUNT: int = 8
 
@@ -14,7 +11,7 @@ const DIRECTION_COUNT: int = 8
 ## - hold_elapsed_ticks: Ticks since this stationary hold began (nonnegative).
 ## - phase_seed: Per-body salt so creatures do not sync sweep phases.
 ## Returns:
-## - One of [member _EightWay.DIRECTIONS] (sector order +Y = N).
+## - One of [member EightWayDirections.DIRECTIONS] (sector order −Z = N).
 static func pick_facing(segment_ticks: int, hold_elapsed_ticks: int, phase_seed: int) -> Vector3:
   var seg := maxi(1, segment_ticks)
   var elapsed := maxi(0, hold_elapsed_ticks)
@@ -23,4 +20,4 @@ static func pick_facing(segment_ticks: int, hold_elapsed_ticks: int, phase_seed:
   var seg_ix := int(floor(float(rem) / float(seg)))
   var ps := (phase_seed % DIRECTION_COUNT + DIRECTION_COUNT) % DIRECTION_COUNT
   var slot := (seg_ix + ps) % DIRECTION_COUNT
-  return _EightWay.DIRECTIONS[slot]
+  return EightWayDirections.DIRECTIONS[slot]

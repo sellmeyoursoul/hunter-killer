@@ -76,7 +76,7 @@ static func _detect_in_squeeze(
 ) -> bool:
   var clr_thr := float(motor_p.get("tactic_squeeze_clearance_px", 28.0))
   if not static_obstacles.is_empty() and clr_thr > 0.0:
-    var clr := _Motor.footprint_static_clearance(
+    var clr: float = Callable(_Motor, &"footprint_static_clearance").call(
       creature_pos,
       creature_half,
       static_obstacles,

@@ -60,7 +60,7 @@ static func creature_motor_spine() -> Dictionary:
     ## Vitals / calories (CREATURE_MEMORY §3): baseline time drain matches [HUNGER_AND_EATING.md](../Project_Docs/Completed_Features/HUNGER_AND_EATING.md) §3; movement adds cost per pixel traveled this tick.
     "calorie_baseline_drain_per_sec": 1.0,
     "calorie_cost_per_px_moved": 0.002,
-    ## Predator (mob) gain on successful prey contact; clamped at that mob's [code]caloric_needs[/code] in [code]mob.gd[/code].
+    ## Predator meal gain on successful prey contact; clamped at [code]caloric_needs[/code] on the carnivore body.
     "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
     ## Unified goal seek ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); pack may override; falls back to [code]weight_seek_ready_food[/code] when absent.

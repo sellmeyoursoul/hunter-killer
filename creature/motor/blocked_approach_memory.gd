@@ -1,5 +1,6 @@
 ## Short-lived memory of the heading used to enter a pinch so motor can avoid 180° backtrack ([CREATURE_MEMORY.md §2](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md) trail + locale sector).
 extends Object
+class_name BlockedApproachMemory
 
 const _BelievedSector := preload("res://creature/motor/believed_goal_sector.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")

@@ -171,7 +171,7 @@ static func collect_prey_entries(
   for group_name in prey_groups:
     var g := StringName(str(group_name))
     for n in tree.get_nodes_in_group(g):
-      if not (n is Node2D or n is Node3D):
+      if not (n is Node3D):
         continue
       if (n as Node) == body:
         continue
@@ -227,7 +227,7 @@ static func collect_pursuit_targets(
   for group_name in prey_groups:
     var g := StringName(str(group_name))
     for n in tree.get_nodes_in_group(g):
-      if not (n is Node2D or n is Node3D):
+      if not (n is Node3D):
         continue
       if (n as Node) == body:
         continue

@@ -5,7 +5,6 @@ class_name CardinalAvoidance
 extends Object
 
 const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
-const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
@@ -255,13 +254,18 @@ static func seek_backtrack_step_cost(direction: Vector3, last_move: Vector3, wei
   return weight * maxf(0.0, -direction.normalized().dot(last_move.normalized()))
 
 
+## Callable wrapper — preload static typing still reports legacy Vector2 for [code]is_backtrack_step[/code].
+static func _is_backtrack_step(step_dir: Vector3, approach_dir: Vector3, min_dot: float) -> bool:
+  return bool(Callable(_BlockedApproach, &"is_backtrack_step").call(step_dir, approach_dir, min_dot))
+
+
 ## Additive penalty when [param step_dir] re-enters a remembered blocked approach heading.
 static func blocked_approach_step_cost(
   step_dir: Vector3, approach_dir: Vector3, weight: float, min_dot: float
 ) -> float:
   if (
     weight <= 1e-8
-    or not _BlockedApproach.is_backtrack_step(step_dir, approach_dir, min_dot)
+    or not _is_backtrack_step(step_dir, approach_dir, min_dot)
   ):
     return 0.0
   return weight
@@ -336,7 +340,7 @@ static func has_non_backtrack_alternative(
       filter_blocked_cardinals,
     ):
       continue
-    if not _BlockedApproach.is_backtrack_step(dir, approach_dir, backtrack_dot):
+    if not _is_backtrack_step(dir, approach_dir, backtrack_dot):
       return true
   return false
 
@@ -823,7 +827,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         continue
       if (
         skip_backtrack
-        and _BlockedApproach.is_backtrack_step(d, blocked_approach_v, backtrack_dot)
+        and _is_backtrack_step(d, blocked_approach_v, backtrack_dot)
       ):
         continue
     var step := (
@@ -1018,7 +1022,7 @@ static func believed_goal_step_cost(d: Vector3, ctx: Dictionary) -> float:
       continue
     cost += (
       -sw
-      * _GoalMem.align_step_with_sector(d, s)
+      * GoalSourceMemoryStore.align_step_with_sector(d, s)
       * w_sector
     )
   var blocked_sector := int(ctx.get("blocked_approach_sector", -1))
@@ -1026,7 +1030,7 @@ static func believed_goal_step_cost(d: Vector3, ctx: Dictionary) -> float:
   if blocked_sector >= 0 and w_blocked_sector > 1e-8 and d.length_squared() > 1e-12:
     cost += (
       w_blocked_sector
-      * _GoalMem.align_step_with_sector(d, blocked_sector)
+      * GoalSourceMemoryStore.align_step_with_sector(d, blocked_sector)
     )
   return cost
 

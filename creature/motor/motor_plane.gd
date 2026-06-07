@@ -13,12 +13,12 @@ const HORIZONTAL_RIGHT := Vector3(1.0, 0.0, 0.0)
 const HORIZONTAL_FORWARD := Vector3(0.0, 0.0, -1.0)
 
 
-## True when [param node] is a 2D or 3D physics body the ENGINE motor can drive.
+## True when [param node] is a 3D physics body the ENGINE motor can drive.
 static func is_motor_physics_body(node: Variant) -> bool:
-  return node is PhysicsBody2D or node is PhysicsBody3D
+  return node is PhysicsBody3D
 
 
-## Projects world position onto the horizontal motor plane (2D: XY; 3D: XZ).
+## Projects world position onto the horizontal motor plane (XZ).
 static func from_vec3(v: Vector3) -> Vector2:
   return Vector2(v.x, v.z)
 
@@ -60,10 +60,8 @@ static func to_grid_world(v: Vector3) -> Vector2:
   return Vector2(v.x, v.z)
 
 
-## Motor-plane position for a duel body ([Node2D] or [Node3D] physics child).
+## Motor-plane position for a duel [Node3D] physics child.
 static func body_motor_position(body: Node) -> Vector3:
-  if body is Node2D:
-    return to_horizontal_vec3((body as Node2D).global_position)
   if body is Node3D:
     var n3 := body as Node3D
     var p := n3.global_position if n3.is_inside_tree() else n3.position
@@ -71,12 +69,8 @@ static func body_motor_position(body: Node) -> Vector3:
   return Vector3.ZERO
 
 
-## Horizontal velocity on the motor plane (2D velocity or 3D XZ components).
+## Horizontal velocity on the motor plane (3D XZ components).
 static func body_motor_velocity(body: Node) -> Vector3:
-  if body is CharacterBody2D:
-    return to_horizontal_vec3((body as CharacterBody2D).velocity)
-  if body is RigidBody2D:
-    return to_horizontal_vec3((body as RigidBody2D).linear_velocity)
   if body is CharacterBody3D:
     var v := (body as CharacterBody3D).velocity
     return Vector3(v.x, 0.0, v.z)
@@ -86,7 +80,7 @@ static func body_motor_velocity(body: Node) -> Vector3:
   return Vector3.ZERO
 
 
-## Capsule footprint half-extents on the motor plane (2D capsule or 3D capsule child).
+## Capsule footprint half-extents on the motor plane ([CollisionShape3D] capsule child).
 static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   var he_xy := Vector2(
     maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
@@ -94,13 +88,6 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   )
   if body == null:
     return he_xy
-  var cs2 := body.get_node_or_null("CollisionShape2D") as CollisionShape2D
-  if cs2 != null and cs2.shape is CapsuleShape2D:
-    var cap := cs2.shape as CapsuleShape2D
-    return Vector2(
-      maxf(0.0, cap.radius),
-      maxf(0.0, cap.radius + cap.height * 0.5),
-    )
   var cs3 := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs3 != null and cs3.shape is CapsuleShape3D:
     var cap3 := cs3.shape as CapsuleShape3D

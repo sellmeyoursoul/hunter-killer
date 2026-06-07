@@ -14,7 +14,7 @@ const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd
 const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
-const _PlayerScr := preload("res://player.gd")
+const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 
 @export var definition: Variant
 @export var is_hostile: bool = false
@@ -39,7 +39,7 @@ var _wall_slide_away_hint: Vector3 = Vector3.ZERO
 
 
 func _ready() -> void:
-  control_mode = _PlayerScr.engine_control_as_int()
+  control_mode = _ControlMode.engine_as_int()
   _apply_definition_defaults()
   _sync_calories_from_vitals()
   _refresh_calorie_burn_params()
@@ -372,7 +372,7 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
 
 
 func _read_move_intent() -> Vector3:
-  if control_mode == _PlayerScr.engine_control_as_int() or control_mode == _PlayerScr.ai_control_as_int():
+  if control_mode == _ControlMode.engine_as_int() or control_mode == _ControlMode.ai_as_int():
     return creature_move_intent
   var input := Vector2(
     Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
@@ -433,7 +433,7 @@ func _physics_process(delta: float) -> void:
   if _defeat_hidden:
     return
   var intent := _read_move_intent()
-  if control_mode == _PlayerScr.engine_control_as_int() or control_mode == _PlayerScr.ai_control_as_int():
+  if control_mode == _ControlMode.engine_as_int() or control_mode == _ControlMode.ai_as_int():
     intent = _engine_heading_with_wall_slide(intent)
   apply_horizontal_move_intent(intent, delta)
   var hvel := Vector3(velocity.x, 0.0, velocity.z)

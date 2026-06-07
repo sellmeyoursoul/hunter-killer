@@ -2,7 +2,6 @@ extends RefCounted
 class_name CarnivorePursuit
 ## 8-way pursuit toward nearest prey position with playfield OOB penalty (same frame as [CardinalAvoidance]).
 
-const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 
@@ -33,7 +32,7 @@ static func pick_pursuit_intent(ctx: Dictionary) -> Vector3:
     if d2 < best_d2:
       best_d2 = d2
       best = p
-  var delta := best - pos
+  var delta := Vector3(best.x - pos.x, 0.0, best.z - pos.z)
   if delta.length_squared() < 1.0:
     return Vector3.ZERO
-  return _EightWay.best_aligned_to(delta)
+  return EightWayDirections.best_aligned_to(delta)

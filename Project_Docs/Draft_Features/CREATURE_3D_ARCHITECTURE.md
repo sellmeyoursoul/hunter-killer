@@ -1,6 +1,6 @@
 # Hunter Killer — 3D creature architecture (reuse vs leaf data)
 
-> **Purpose:** Implementable map of the **3D creature** stack: **one copy** of each **capability** (vitals math, locomotion, perception scales, diet policies, predation clamp) and **leaf-heavy** [CreatureDefinition](../../creature/definition/creature_definition.gd) Resources for species. **Parallel** to today’s 2D `player.gd` / `mob.gd` — does not replace them until [CONVERT_TO_3D.md](CONVERT_TO_3D.md) retires the 2D path. **Parent design:** internal plan “3D creatures: reuse vs leaf data”; goals alignment: [CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md). **Index:** [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
+> **Purpose:** Implementable map of the **3D creature** stack: **one copy** of each **capability** (vitals math, locomotion, perception scales, diet policies, predation clamp) and **leaf-heavy** [CreatureDefinition](../../creature/definition/creature_definition.gd) Resources for species. **Production** stack (replaces retired 2D bodies); was parallel to today’s 2D `player.gd` / `mob.gd` — is the only production duel path ([CONVERT_TO_3D.md](CONVERT_TO_3D.md) M2.1 retired legacy 2D bodies). **Parent design:** internal plan “3D creatures: reuse vs leaf data”; goals alignment: [CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md). **Index:** [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 
 ---
 
@@ -14,7 +14,7 @@
 | **Diet → default groups** | [diet_registry.gd](../../creature/capabilities/diet_registry.gd) (static) | Runs at setup / AI context build | [CreatureDefinition.FeedingMode](../../creature/definition/creature_definition.gd) |
 | **Intake policy data** | [food_intake_policy.gd](../../creature/definition/food_intake_policy.gd) (Resource) | Referenced by AI / overlap handlers | `plant_groups`, `prey_groups` |
 | **Locomotion (production)** | [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd) | `CharacterBody3D` **Body** child | [LocomotionProfile](../../creature/definition/locomotion_profile.gd) on definition; **`move_and_slide()`** on this node |
-| **Locomotion (rigid stub — non-production)** | [creature_rigid_body_3d.gd](../../creature/capabilities/creature_rigid_body_3d.gd) | `RigidBody3D` **Body** child | **Deprecated** for duel per [CONVERT_TO_3D.md §D4](CONVERT_TO_3D.md); retained only for experiments / tests until removed |
+| **Control modes** | [creature_control_mode.gd](../../creature/capabilities/creature_control_mode.gd) (static) | Shared HUMAN / ENGINE / AI ints | [ai_driver.gd](../../AI_int_lib/ai_driver.gd), kinematic bodies |
 | **Orchestration** | [creature_root_3d.gd](../../creature/creature_root_3d.gd) | `Node3D` scene root | `@export var definition` |
 
 **Normative (duel / migration):** **All** 3D duel creatures — herbivore and carnivore — use **`CharacterBody3D` + `move_and_slide()`** via [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd). Do **not** use `RigidBody3D` chase for production.
@@ -35,7 +35,6 @@ Single Resource type (plus [LocomotionProfile](../../creature/definition/locomot
 |-------|---------|-----|
 | [creature_herbivore_kinematic_3d.tscn](../../creature/templates/creature_herbivore_kinematic_3d.tscn) | **`CharacterBody3D` + `move_and_slide`** + capsule | Herbivore / omnivore ground locomotion |
 | [creature_carnivore_kinematic_3d.tscn](../../creature/templates/creature_carnivore_kinematic_3d.tscn) | **`CharacterBody3D` + `move_and_slide`** + capsule | Carnivore duel locomotion (M0+) |
-| [creature_carnivore_rigid_3d.tscn](../../creature/templates/creature_carnivore_rigid_3d.tscn) | `RigidBody3D` (stub) | **Non-production** — experiments only |
 
 Both production templates: [code]CreatureRoot3D[/code] + child [code]Body[/code] ([code]CharacterBody3D[/code] + [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd)) + child [code]Vitals[/code] ([CreatureVitalsComponent](res://creature/capabilities/creature_vitals_component.gd)). **Shared** scripts and definition; species differ via [code]CreatureDefinition[/code] only.
 
@@ -44,7 +43,7 @@ Both production templates: [code]CreatureRoot3D[/code] + child [code]Body[/code]
 ## 4. AI / motor bridge (intent API)
 
 - **Production path:** `CreatureKinematicBody3D` — horizontal intent via `apply_horizontal_move_intent(Vector3, delta)`; **Y is ignored** for steering; **`move_and_slide()`** integrates motion and floor contact; **gravity** applied on this node when airborne.
-- **Adapter (M0–M1):** Expose `set_creature_move_intent(Vector2)` on the **Body** (or thin wrapper) that maps `Vector2(x, y)` → `Vector3(x, 0, z)` so [ai_driver.gd](../../AI_int_lib/ai_driver.gd) keeps its 2D motor contract until full `Vector3` motor ships ([CONVERT_TO_3D.md §D3](CONVERT_TO_3D.md)).
+- **Intent API:** `set_creature_move_intent(Vector3)` on the **Body** — horizontal components on XZ ([CONVERT_TO_3D.md §D3](CONVERT_TO_3D.md), M2+).
 - **XZ ownership:** All flattening from “2D motor direction” to “3D ground plane” happens **at the body boundary** — **not** scattered per species.
 
 ---

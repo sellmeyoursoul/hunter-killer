@@ -5,6 +5,10 @@ class_name PlayfieldBounds3D
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
+const WORLD_STATIC_COLLISION_MASK := 1
+const GROUND_RAY_HEIGHT := 256.0
+const GROUND_RAY_DEPTH := 512.0
+
 
 ## Params:
 ## - root: Playfield subtree (grasslands import, floor colliders, etc.).
@@ -176,3 +180,124 @@ static func world_position_from_fraction(bounds: Dictionary, frac: Vector2, body
 ## Motor-plane position for a world point (XZ only).
 static func motor_position_from_world(world_pos: Vector3) -> Vector2:
   return _MotorPlane.from_vec3(world_pos)
+
+
+## Half-height of the Body [CapsuleShape3D] used for duel spawn grounding.
+static func capsule_half_height_on_body(body: CharacterBody3D) -> float:
+  var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+  if cs != null and cs.shape is CapsuleShape3D:
+    return (cs.shape as CapsuleShape3D).height * 0.5
+  return 0.6
+
+
+## Root global Y so the Body capsule bottom rests on [param surface_y].
+static func root_global_y_for_surface(body: CharacterBody3D, surface_y: float) -> float:
+  return surface_y - body.position.y + capsule_half_height_on_body(body)
+
+
+## Raycasts on XZ for [code]world_static[/code] (layer 1) walkable surface.
+## Params:
+## - space: Active [PhysicsDirectSpaceState3D] (caller must be in tree).
+## - xz: Horizontal sample point.
+## - hint_y: Start near expected floor ([code]floor_y[/code] from bounds).
+## Returns:
+## - [code]hit[/code], [code]surface_y[/code] (hint when no hit).
+static func raycast_ground_surface(
+  space: PhysicsDirectSpaceState3D,
+  xz: Vector2,
+  hint_y: float,
+  collision_mask: int = WORLD_STATIC_COLLISION_MASK,
+) -> Dictionary:
+  if space == null:
+    return {"hit": false, "surface_y": hint_y}
+  var x := xz.x
+  var z := xz.y
+  var down_from := Vector3(x, hint_y + GROUND_RAY_HEIGHT, z)
+  var down_to := Vector3(x, hint_y - GROUND_RAY_DEPTH, z)
+  var query := PhysicsRayQueryParameters3D.create(down_from, down_to)
+  query.collision_mask = collision_mask
+  query.hit_from_inside = true
+  var hit: Dictionary = space.intersect_ray(query)
+  if not hit.is_empty():
+    return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
+  var up_from := Vector3(x, hint_y - 10.0, z)
+  var up_to := Vector3(x, hint_y + GROUND_RAY_HEIGHT, z)
+  query = PhysicsRayQueryParameters3D.create(up_from, up_to)
+  query.collision_mask = collision_mask
+  hit = space.intersect_ray(query)
+  if not hit.is_empty():
+    return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
+  return {"hit": false, "surface_y": hint_y}
+
+
+## Places [param creature_root] so [param body] capsule bottom sits on raycast ground at [param xz].
+## Returns true when a static surface was hit.
+static func snap_creature_root_to_ground(
+  creature_root: Node3D,
+  body: CharacterBody3D,
+  xz: Vector2,
+  hint_y: float,
+  space: PhysicsDirectSpaceState3D,
+) -> bool:
+  var ground: Dictionary = raycast_ground_surface(space, xz, hint_y)
+  var surface_y := float(ground.get("surface_y", hint_y))
+  var root_y := root_global_y_for_surface(body, surface_y)
+  creature_root.global_position = Vector3(xz.x, root_y, xz.y)
+  return bool(ground.get("hit", false))
+
+
+## True when [param world_xz] lies inside motor bounds (XZ only).
+static func xz_inside_bounds(bounds: Dictionary, world_xz: Vector2) -> bool:
+  if not bool(bounds.get("valid", false)):
+    return false
+  var mn: Vector2 = bounds.get("min", Vector2.ZERO)
+  var mx: Vector2 = bounds.get("max", Vector2.ZERO)
+  return world_xz.x >= mn.x and world_xz.x <= mx.x and world_xz.y >= mn.y and world_xz.y <= mx.y
+
+
+## Counts [StaticBody3D] nodes under [param node].
+static func count_static_bodies(node: Node) -> int:
+  var n := 0
+  if node is StaticBody3D:
+    n += 1
+  for ch in node.get_children():
+    n += count_static_bodies(ch)
+  return n
+
+
+## Forces [code]world_static[/code] layer/mask on playfield [StaticBody3D] colliders.
+static func ensure_world_static_layers(node: Node) -> void:
+  if node is StaticBody3D:
+    var sb := node as StaticBody3D
+    sb.collision_layer = WORLD_STATIC_COLLISION_MASK
+    sb.collision_mask = WORLD_STATIC_COLLISION_MASK
+    return
+  for ch in node.get_children():
+    ensure_world_static_layers(ch)
+
+
+## When a mesh import has no physics bodies, bake trimesh [StaticBody3D] colliders (layer 1).
+## Returns the number of colliders added.
+static func supplement_trimesh_collision_from_meshes(scene_root: Node, collision_parent: Node3D) -> int:
+  var acc: Array = [0]
+  _supplement_trimesh_recursive(scene_root, collision_parent, acc)
+  return int(acc[0])
+
+
+static func _supplement_trimesh_recursive(node: Node, collision_parent: Node3D, acc: Array) -> void:
+  if node is MeshInstance3D:
+    var mi := node as MeshInstance3D
+    var mesh: Mesh = mi.mesh
+    if mesh != null:
+      var sb := StaticBody3D.new()
+      sb.name = "AutoCollision_%s" % mi.name
+      var cs := CollisionShape3D.new()
+      cs.shape = mesh.create_trimesh_shape()
+      sb.add_child(cs)
+      collision_parent.add_child(sb)
+      sb.global_transform = mi.global_transform
+      sb.collision_layer = WORLD_STATIC_COLLISION_MASK
+      sb.collision_mask = WORLD_STATIC_COLLISION_MASK
+      acc[0] = int(acc[0]) + 1
+  for ch in node.get_children():
+    _supplement_trimesh_recursive(ch, collision_parent, acc)
