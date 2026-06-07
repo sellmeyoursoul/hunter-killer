@@ -4,6 +4,11 @@ class_name CreatureRoot3D
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 
+const _SPECIES_MESH_FILE: Dictionary = {
+  &"rabbit": "rabbit.blend",
+  &"fox": "fox.blend",
+}
+
 @export var definition: Variant
 
 
@@ -21,3 +26,44 @@ func _propagate_definition_to_children() -> void:
   var vitals := get_node_or_null("Vitals")
   if vitals != null and vitals.has_method(&"apply_parent_definition"):
     vitals.call(&"apply_parent_definition", definition)
+  _mount_visual_from_definition()
+
+
+## Instantiates [member CreatureDefinition.variant_scene] or species [code].blend[/code] under [code]Visual[/code] (no collision).
+func _mount_visual_from_definition() -> void:
+  if get_node_or_null("Visual") != null:
+    return
+  var variant: Variant = definition.get("variant_scene")
+  if variant is PackedScene:
+    _attach_visual_scene(variant as PackedScene)
+    return
+  var pack_root := str(definition.get("asset_pack_root")).strip_edges()
+  var species: StringName = definition.get("species_id")
+  var mesh_file: String = str(_SPECIES_MESH_FILE.get(species, ""))
+  if mesh_file.is_empty() or pack_root.is_empty():
+    return
+  var path := "%s/%s" % [pack_root, mesh_file]
+  if not ResourceLoader.exists(path):
+    return
+  var ps := load(path) as PackedScene
+  if ps == null:
+    return
+  _attach_visual_scene(ps)
+
+
+func _attach_visual_scene(ps: PackedScene) -> void:
+  var inst := ps.instantiate() as Node3D
+  if inst == null:
+    return
+  inst.name = "Visual"
+  _disable_collision_recursive(inst)
+  add_child(inst)
+
+
+func _disable_collision_recursive(node: Node) -> void:
+  if node is CollisionObject3D:
+    var co := node as CollisionObject3D
+    co.collision_layer = 0
+    co.collision_mask = 0
+  for ch in node.get_children():
+    _disable_collision_recursive(ch)

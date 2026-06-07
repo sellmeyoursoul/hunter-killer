@@ -3,12 +3,40 @@ extends RigidBody3D
 ## Same **intent API** as [code]CreatureKinematicBody3D.apply_horizontal_move_intent[/code] for a future motor bridge.
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 
 @export var definition: Variant
 ## Scales central force; tune per mass in scene.
 @export var move_force_scale: float = 120.0
 
+var creature_move_intent: Vector3 = Vector3.ZERO
+var last_move_direction: Vector3 = MotorPlane.HORIZONTAL_RIGHT
+var control_mode: int = 0
+var screen_size: Vector2 = Vector2.ZERO
+
 var _horizontal_intent: Vector3 = Vector3.ZERO
+
+
+func _ready() -> void:
+  control_mode = _ControlMode.engine_as_int()
+
+
+func set_control_mode(mode: int) -> void:
+  control_mode = mode
+
+
+## AiDriver motor contract: [code]Vector3(x, 0, z)[/code] or legacy [code]Vector2(x, z)[/code].
+func set_creature_move_intent(dir: Variant) -> void:
+  var h := _MotorPlane.read_dir(dir, MotorPlane.HORIZONTAL_ZERO)
+  creature_move_intent = h if h.length_squared() > 1e-12 else Vector3.ZERO
+  set_horizontal_move_intent_for_tick(creature_move_intent)
+
+
+func apply_duel_spawn_facing(facing: Variant) -> void:
+  var h := _MotorPlane.read_dir(facing, MotorPlane.HORIZONTAL_ZERO)
+  if h.length_squared() > 1e-12:
+    last_move_direction = h
 
 func _resolve_definition() -> Variant:
   var local_def: Variant = get("definition")
@@ -33,7 +61,13 @@ func apply_horizontal_move_intent(intent: Vector3, _delta: float) -> void:
 
 
 func _physics_process(_delta: float) -> void:
+  if control_mode != _ControlMode.engine_as_int():
+    return
   _apply_intent_force()
+  var lv := linear_velocity
+  var hvel := Vector3(lv.x, 0.0, lv.z)
+  if hvel.length_squared() > 1e-8:
+    last_move_direction = hvel.normalized()
 
 
 func _apply_intent_force() -> void:

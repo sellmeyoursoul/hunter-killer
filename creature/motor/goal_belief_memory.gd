@@ -7,17 +7,36 @@ const TIER_COARSE := &"COARSE"
 const _SectorScr := preload("res://creature/motor/believed_goal_sector.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _SeekCand := preload("res://creature/motor/seek_candidate.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 
-## Extract world positions from awareness entries ([code]Vector2[/code] or [code]{pos, instance_id}[/code]).
+static func _read_pos_v3(v: Variant) -> Vector3:
+  var p: Variant = Callable(_MotorPlane, &"read_pos").call(v)
+  if typeof(p) == TYPE_VECTOR3:
+    return p as Vector3
+  if typeof(p) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(p as Vector2)
+  return Vector3.ZERO
+
+
+static func _read_vel_v3(v: Variant) -> Vector3:
+  var vel: Variant = Callable(_MotorPlane, &"read_velocity").call(v)
+  if typeof(vel) == TYPE_VECTOR3:
+    return vel as Vector3
+  if typeof(vel) == TYPE_VECTOR2:
+    return _MotorPlane.to_horizontal_vec3(vel as Vector2)
+  return Vector3.ZERO
+
+
+## Extract world positions from awareness entries ([code]Vector3[/code] or [code]{pos, instance_id}[/code]).
 static func food_positions_from_entries(entries: Array) -> Array:
   var out: Array = []
   for e in entries:
-    if typeof(e) == TYPE_VECTOR2:
+    if typeof(e) == TYPE_VECTOR3:
       out.append(e)
     elif typeof(e) == TYPE_DICTIONARY:
       var p: Variant = (e as Dictionary).get("pos", null)
-      if typeof(p) == TYPE_VECTOR2:
+      if typeof(p) == TYPE_VECTOR3:
         out.append(p)
   return out
 
@@ -75,10 +94,10 @@ static func _upsert_row(
   beliefs: Dictionary,
   instance_id: int,
   goal_kind: StringName,
-  pos: Vector2,
+  pos: Vector3,
   now_ms: int,
   is_moving: bool,
-  velocity: Vector2 = Vector2.ZERO,
+  velocity: Vector3 = Vector3.ZERO,
   consumable_now: bool = true,
 ) -> void:
   if instance_id == 0:
@@ -125,8 +144,8 @@ static func sync_from_scene(
       var iid: int = int(ent.get("instance_id", 0))
       if iid == 0:
         continue
-      var pos: Vector2 = ent.get("pos", Vector2.ZERO)
-      _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, false, Vector2.ZERO, consumable)
+      var pos: Vector3 = _read_pos_v3(ent.get("pos", Vector3.ZERO))
+      _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, false, Vector3.ZERO, consumable)
       if ent.has("anticipated_calories"):
         beliefs[iid]["anticipated_calories"] = float(ent["anticipated_calories"])
   return beliefs
@@ -145,10 +164,8 @@ static func sync_from_prey_entries(
     var iid: int = int(ent.get("instance_id", 0))
     if iid == 0:
       continue
-    var pos: Vector2 = ent.get("pos", Vector2.ZERO)
-    var vel: Vector2 = ent.get("velocity", Vector2.ZERO)
-    if typeof(vel) != TYPE_VECTOR2:
-      vel = Vector2.ZERO
+    var pos: Vector3 = _read_pos_v3(ent.get("pos", Vector3.ZERO))
+    var vel: Vector3 = _read_vel_v3(ent.get("velocity", Vector3.ZERO))
     _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, true, vel, true)
   return beliefs
 
@@ -168,10 +185,8 @@ static func sync_from_threat_samples(
     var iid: int = int(row.get("instance_id", 0))
     if iid == 0:
       continue
-    var pos: Vector2 = row.get("world_pos", Vector2.ZERO)
-    var vel: Vector2 = row.get("velocity", Vector2.ZERO)
-    if typeof(vel) != TYPE_VECTOR2:
-      vel = Vector2.ZERO
+    var pos: Vector3 = _read_pos_v3(row.get("world_pos", Vector3.ZERO))
+    var vel: Vector3 = _read_vel_v3(row.get("velocity", Vector3.ZERO))
     _upsert_row(beliefs, iid, _GkReg.GK_AVOID_HOSTILES, pos, now_ms, true, vel, false)
   return beliefs
 
@@ -179,7 +194,7 @@ static func sync_from_threat_samples(
 ## Best precise moving belief for [param goal_kind] (nearest, in envelope, not live).
 static func sample_best_moving(
   beliefs: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   motor_p: Dictionary,
   goal_kind: StringName,
   live_ids: Dictionary,
@@ -187,8 +202,8 @@ static func sample_best_moving(
 ) -> Dictionary:
   var inactive := {
     "active": false,
-    "position": Vector2.ZERO,
-    "velocity": Vector2.ZERO,
+    "position": Vector3.ZERO,
+    "velocity": Vector3.ZERO,
     "strength": 0.0,
     "instance_id": 0,
   }
@@ -196,8 +211,8 @@ static func sample_best_moving(
   var forget_r := float(motor_p.get("goal_memory_forget_radius_px", 2400.0))
   var precise_r := float(motor_p.get("goal_memory_precise_radius_px", 1000.0))
   var best_iid := 0
-  var best_pos := Vector2.ZERO
-  var best_vel := Vector2.ZERO
+  var best_pos := Vector3.ZERO
+  var best_vel := Vector3.ZERO
   var best_strength := 0.0
   var best_d_sq := INF
   for iid in beliefs.keys():
@@ -210,7 +225,7 @@ static func sample_best_moving(
       continue
     if row.get("tier", TIER_COARSE) != TIER_PRECISE:
       continue
-    var last_pos: Vector2 = row.get("last_world_pos", Vector2.ZERO)
+    var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
     if creature_pos.distance_to(last_pos) > precise_r:
       continue
     var last_obs := int(row.get("last_observed_ms", 0))
@@ -224,9 +239,7 @@ static func sample_best_moving(
       best_d_sq = d_sq
       best_iid = int(iid)
       best_pos = last_pos
-      best_vel = row.get("last_velocity", Vector2.ZERO)
-      if typeof(best_vel) != TYPE_VECTOR2:
-        best_vel = Vector2.ZERO
+      best_vel = _read_vel_v3(row.get("last_velocity", Vector3.ZERO))
       best_strength = _memory_strength(age_ms, ttl_ms)
   if best_iid == 0:
     return inactive
@@ -242,7 +255,7 @@ static func sample_best_moving(
 ## True when a precise remembered [code]avoid_hostiles[/code] mover is still in envelope.
 static func has_remembered_avoid_threat(
   beliefs: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   motor_p: Dictionary,
   live_ids: Dictionary,
   now_ms: int,
@@ -262,14 +275,12 @@ static func inject_moving_memory_chase(
 ) -> void:
   if not bool(sample.get("active", false)):
     return
-  var mp: Vector2 = sample.get("position", Vector2.ZERO)
-  if mp == Vector2.ZERO:
+  var mp: Vector3 = _read_pos_v3(sample.get("position", Vector3.ZERO))
+  if mp == Vector3.ZERO:
     return
   prey_pts_live.clear()
   prey_pts_live.append(mp)
-  var mem_vel: Vector2 = sample.get("velocity", Vector2.ZERO)
-  if typeof(mem_vel) != TYPE_VECTOR2:
-    mem_vel = Vector2.ZERO
+  var mem_vel: Vector3 = _read_vel_v3(sample.get("velocity", Vector3.ZERO))
   var mem_scale := clampf(float(sample.get("strength", 1.0)), 0.4, 1.0)
   pursuit_targets.clear()
   pursuit_targets.append({
@@ -290,7 +301,7 @@ static func inject_moving_memory_chase(
 ## TTL / precise→coarse / LRU maintenance.
 static func maintain(
   beliefs: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   now_ms: int,
   motor_p: Dictionary,
 ) -> Dictionary:
@@ -303,7 +314,7 @@ static func maintain(
   var to_erase: Array = []
   for iid in beliefs.keys():
     var row: Dictionary = beliefs[iid]
-    var last_pos: Vector2 = row.get("last_world_pos", Vector2.ZERO)
+    var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
     var dist := creature_pos.distance_to(last_pos)
     if dist > forget_r:
       to_erase.append(iid)
@@ -345,8 +356,8 @@ static func maintain(
 
 static func _append_pursuit_ghost(
   pursuit_targets: Array,
-  pos: Vector2,
-  vel: Vector2,
+  pos: Vector3,
+  vel: Vector3,
   cost_scale: float,
   motor_p: Dictionary,
 ) -> void:
@@ -365,7 +376,7 @@ static func _append_pursuit_ghost(
 static func merge_into_motor_context(
   beliefs: Dictionary,
   ctx: Dictionary,
-  creature_pos: Vector2,
+  creature_pos: Vector3,
   motor_p: Dictionary,
   live_ids: Dictionary,
   now_ms: int,
@@ -390,7 +401,7 @@ static func merge_into_motor_context(
       var row: Dictionary = beliefs[iid]
       if row.get("tier", TIER_COARSE) != TIER_PRECISE:
         continue
-      var last_pos: Vector2 = row.get("last_world_pos", Vector2.ZERO)
+      var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
       if creature_pos.distance_to(last_pos) > precise_r:
         continue
       var gk: StringName = row.get("goal_kind", &"")
@@ -401,12 +412,10 @@ static func merge_into_motor_context(
         var age_ms := now_ms - int(row.get("last_observed_ms", 0))
         if age_ms > ttl_ms:
           continue
-        var vel: Vector2 = row.get("last_velocity", Vector2.ZERO)
-        if typeof(vel) != TYPE_VECTOR2:
-          vel = Vector2.ZERO
+        var _vel: Vector3 = _read_vel_v3(row.get("last_velocity", Vector3.ZERO))
         var strength := _memory_strength(age_ms, ttl_ms)
         seek_candidates.append(
-          _SeekCand.make(
+          Callable(_SeekCand, &"make").call(
             last_pos,
             _GkReg.GK_FIND_FOOD,
             true,
@@ -423,7 +432,7 @@ static func merge_into_motor_context(
         else:
           unready_targets.append(last_pos)
         seek_candidates.append(
-          _SeekCand.make(
+          Callable(_SeekCand, &"make").call(
             last_pos,
             _GkReg.GK_FIND_FOOD,
             consumable,
@@ -452,7 +461,7 @@ static func merge_into_motor_context(
       var row_c: Dictionary = beliefs[iid]
       if row_c.get("tier", TIER_PRECISE) != TIER_COARSE:
         continue
-      var last_c: Vector2 = row_c.get("last_world_pos", Vector2.ZERO)
+      var last_c: Vector3 = _read_pos_v3(row_c.get("last_world_pos", Vector3.ZERO))
       var delta := last_c - creature_pos
       if delta.length_squared() < 1e-8:
         continue

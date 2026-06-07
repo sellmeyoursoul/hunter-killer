@@ -5,17 +5,17 @@ extends Object
 ## Computes additive motor cost from obstacle flank cues ([negative] lowers total cost when advantageous).
 ## Params:
 ## - predicted: Candidate creature footprint center after lookahead.
-## - threat_pos: Predator center when [param shield_weight] active ([code]Vector2.ZERO[/code] disables shield term).
-## - prey_pin_pos: Prey center when [param pin_weight] active ([code]Vector2.ZERO[/code] disables pin term).
+## - threat_pos: Predator center when [param shield_weight] active ([code]Vector3.ZERO[/code] disables shield term).
+## - prey_pin_pos: Prey center when [param pin_weight] active ([code]Vector3.ZERO[/code] disables pin term).
 ## - obstacle_points: World-space obstacle outline samples inside awareness (corners / capsule rim).
 ## - eps: Distance floor for inverse weighting.
 ## Returns:
 ## - Scalar added to cardinal cost (negative values reward that move).
 static func strategic_obstacle_cost(
-  predicted: Vector2,
-  threat_pos: Vector2,
-  prey_pin_pos: Vector2,
-  obstacle_points: PackedVector2Array,
+  predicted: Vector3,
+  threat_pos: Vector3,
+  prey_pin_pos: Vector3,
+  obstacle_points: PackedVector3Array,
   shield_weight: float,
   pin_weight: float,
   eps: float,

@@ -4,23 +4,24 @@ extends Object
 
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 const _BelievedSector := preload("res://creature/motor/believed_goal_sector.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const DIRECTION_COUNT: int = 8
 
 
-## Sector index 0..7 for unit [param dir] (+Y = N).
-static func sector_index(dir: Vector2) -> int:
+## Sector index 0..7 for unit [param dir] on XZ motor plane.
+static func sector_index(dir: Vector3) -> int:
   return _BelievedSector.sector_index_for_step(dir)
 
 
 ## Unit direction for sector [param ix] (wrapped mod 8).
-static func direction_at_index(ix: int) -> Vector2:
+static func direction_at_index(ix: int) -> Vector3:
   var n := (ix % DIRECTION_COUNT + DIRECTION_COUNT) % DIRECTION_COUNT
   return _EightWay.DIRECTIONS[n]
 
 
 ## Count of 45° steps along the shortest arc from [param from_dir] to [param to_dir]; 0 when same sector.
-static func turn_steps_between(from_dir: Vector2, to_dir: Vector2) -> int:
+static func turn_steps_between(from_dir: Vector3, to_dir: Vector3) -> int:
   if from_dir.length_squared() < 1e-12 or to_dir.length_squared() < 1e-12:
     return 0
   var from_ix := sector_index(from_dir)
@@ -44,7 +45,7 @@ static func shortest_turn_sign(from_ix: int, to_ix: int) -> int:
 
 
 ## Facing after [param step_ix] steps (0-based) from [param from_ix] toward [param to_ix].
-static func facing_at_turn_step(from_ix: int, to_ix: int, step_ix: int) -> Vector2:
+static func facing_at_turn_step(from_ix: int, to_ix: int, step_ix: int) -> Vector3:
   var arc_sign := shortest_turn_sign(from_ix, to_ix)
   var ix: int
   if arc_sign > 0:
@@ -61,8 +62,8 @@ static func facing_at_turn_step(from_ix: int, to_ix: int, step_ix: int) -> Vecto
 ## Returns:
 ## - [code]{ "facing": Vector2, "complete": bool, "steps_total": int }[/code]
 static func pick_turn_facing(
-  from_dir: Vector2,
-  to_dir: Vector2,
+  from_dir: Vector3,
+  to_dir: Vector3,
   segment_ticks: int,
   elapsed_ticks: int,
 ) -> Dictionary:

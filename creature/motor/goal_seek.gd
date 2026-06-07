@@ -13,7 +13,7 @@ const _SeekCand := preload("res://creature/motor/seek_candidate.gd")
 ## - w_seek_food: Scaled [code]weight_seek_ready_food[/code] (plants + remembered ready).
 ## - w_seek_prey: Scaled [code]weight_seek_prey[/code] (carnivore live prey).
 ## Returns:
-## - [code]goal_seek_targets[/code] ([code]Vector2[][/code]), [code]weight_seek_goal[/code], [code]seek_candidates[/code] (filtered).
+## - [code]goal_seek_targets[/code] ([code]Vector3[][/code]), [code]weight_seek_goal[/code], [code]seek_candidates[/code] (filtered).
 static func resolve_for_dominant_leaf(
   dom_leaf: StringName,
   candidates: Array,
@@ -55,8 +55,8 @@ static func resolve_for_dominant_leaf(
           and bool(row2.get("consumable_now", true))
         ):
           var p: Variant = row2.get("pos", null)
-          if typeof(p) == TYPE_VECTOR2:
-            positions.append(p as Vector2)
+          if typeof(p) == TYPE_VECTOR3:
+            positions.append(p as Vector3)
           filtered.append(row2)
       weight = w_seek_food
   return {
