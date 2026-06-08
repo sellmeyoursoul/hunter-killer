@@ -6,35 +6,51 @@ class_name PlayfieldClamp
 ## Params:
 ## - world_pos: Position to clamp.
 ## - half_extents: Footprint half-size (x = horizontal radius, y = vertical half-height).
-## - screen_size: Playfield size in pixels (typically viewport visible rect).
+## - bounds_max: Playfield max corner (2D viewport size, or 3D world [code]max[/code] on XZ).
+## - bounds_min: Playfield min corner (usually [code]Vector2.ZERO[/code] in 2D; world offset in 3D).
 ## Returns:
-## - Clamped position inside [half_extents, screen_size - half_extents] on each axis.
-static func clamp_position(world_pos: Vector2, half_extents: Vector2, screen_size: Vector2) -> Vector2:
+## - Clamped position inside the playfield AABB inset by [param half_extents].
+static func clamp_position(
+  world_pos: Vector2,
+  half_extents: Vector2,
+  bounds_max: Vector2,
+  bounds_min: Vector2 = Vector2.ZERO,
+) -> Vector2:
   var h := half_extents
   if h.x <= 0.0:
     h.x = 1.0
   if h.y <= 0.0:
     h.y = 1.0
-  return world_pos.clamp(Vector2(h.x, h.y), screen_size - h)
+  return world_pos.clamp(bounds_min + h, bounds_max - h)
 
 
 ## Footprint clearance to each playfield edge: x=left, y=right, z=top, w=bottom.
-static func edge_margins(world_pos: Vector2, half_extents: Vector2, screen_size: Vector2) -> Vector4:
+static func edge_margins(
+  world_pos: Vector2,
+  half_extents: Vector2,
+  bounds_max: Vector2,
+  bounds_min: Vector2 = Vector2.ZERO,
+) -> Vector4:
   var h := half_extents
   if h.x <= 0.0:
     h.x = 1.0
   if h.y <= 0.0:
     h.y = 1.0
-  var left := world_pos.x - h.x
-  var right := (screen_size.x - h.x) - world_pos.x
-  var top := world_pos.y - h.y
-  var bottom := (screen_size.y - h.y) - world_pos.y
+  var left := world_pos.x - h.x - bounds_min.x
+  var right := bounds_max.x - (world_pos.x + h.x)
+  var top := world_pos.y - h.y - bounds_min.y
+  var bottom := bounds_max.y - (world_pos.y + h.y)
   return Vector4(left, right, top, bottom)
 
 
 ## Minimum footprint clearance to any playfield edge.
-static func min_edge_margin(world_pos: Vector2, half_extents: Vector2, screen_size: Vector2) -> float:
-  var m := edge_margins(world_pos, half_extents, screen_size)
+static func min_edge_margin(
+  world_pos: Vector2,
+  half_extents: Vector2,
+  bounds_max: Vector2,
+  bounds_min: Vector2 = Vector2.ZERO,
+) -> float:
+  var m := edge_margins(world_pos, half_extents, bounds_max, bounds_min)
   return minf(minf(m.x, m.y), minf(m.z, m.w))
 
 
@@ -43,9 +59,10 @@ static func inbound_normal_if_closing(
   heading_unit: Vector2,
   world_pos: Vector2,
   half_extents: Vector2,
-  screen_size: Vector2,
+  bounds_max: Vector2,
   step_length: float,
   min_clearance_px: float = 4.0,
+  bounds_min: Vector2 = Vector2.ZERO,
 ) -> Vector2:
   if heading_unit.length_squared() < 1e-12 or step_length <= 0.0:
     return Vector2.ZERO
@@ -55,12 +72,12 @@ static func inbound_normal_if_closing(
   if h.y <= 0.0:
     h.y = 1.0
   var u := heading_unit.normalized()
-  var m := edge_margins(world_pos, h, screen_size)
+  var m := edge_margins(world_pos, h, bounds_max, bounds_min)
   var predicted := world_pos + u * step_length
-  var left_pred := predicted.x - h.x
-  var right_pred := (screen_size.x - h.x) - predicted.x
-  var top_pred := predicted.y - h.y
-  var bot_pred := (screen_size.y - h.y) - predicted.y
+  var left_pred := predicted.x - h.x - bounds_min.x
+  var right_pred := bounds_max.x - (predicted.x + h.x)
+  var top_pred := predicted.y - h.y - bounds_min.y
+  var bot_pred := bounds_max.y - (predicted.y + h.y)
   const AXIS_EPS := 0.12
   const CLOSURE_EPS := 0.25
   var best_n := Vector2.ZERO
@@ -93,13 +110,14 @@ static func inbound_normal_if_hugging(
   heading_unit: Vector2,
   world_pos: Vector2,
   half_extents: Vector2,
-  screen_size: Vector2,
+  bounds_max: Vector2,
   hug_band_px: float,
+  bounds_min: Vector2 = Vector2.ZERO,
 ) -> Vector2:
   if heading_unit.length_squared() < 1e-12 or hug_band_px <= 0.0:
     return Vector2.ZERO
   var u := heading_unit.normalized()
-  var m := edge_margins(world_pos, half_extents, screen_size)
+  var m := edge_margins(world_pos, half_extents, bounds_max, bounds_min)
   const AXIS_EPS := 0.12
   var best_n := Vector2.ZERO
   var tightest := INF
@@ -126,10 +144,11 @@ static func slide_heading_along_edge(
   heading_unit: Vector2,
   world_pos: Vector2,
   half_extents: Vector2,
-  screen_size: Vector2,
+  bounds_max: Vector2,
   lookahead_px: float,
   slide_pick: RefCounted,
   away_hint: Vector2 = Vector2.ZERO,
+  bounds_min: Vector2 = Vector2.ZERO,
   min_clearance_px: float = 4.0,
 ) -> Vector2:
   if heading_unit.length_squared() < 1e-12 or slide_pick == null:
@@ -137,11 +156,11 @@ static func slide_heading_along_edge(
   var inc := heading_unit.normalized()
   var step := maxf(lookahead_px, 8.0)
   var n := inbound_normal_if_closing(
-    inc, world_pos, half_extents, screen_size, step, min_clearance_px
+    inc, world_pos, half_extents, bounds_max, step, min_clearance_px, bounds_min
   )
   if n.length_squared() < 1e-12:
     var hug_band := maxf(min_clearance_px * 2.0, 14.0)
-    n = inbound_normal_if_hugging(inc, world_pos, half_extents, screen_size, hug_band)
+    n = inbound_normal_if_hugging(inc, world_pos, half_extents, bounds_max, hug_band, bounds_min)
   if n.length_squared() < 1e-12:
     return inc
   if away_hint.length_squared() > 1e-12 and slide_pick.has_method(&"pick_tangent_away_from"):

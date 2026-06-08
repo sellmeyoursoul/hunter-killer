@@ -23,6 +23,11 @@
 *.dll
 *.so.*
 
+# Godot Git Plugin (GDExtension binaries from official release)
+!addons/godot-git-plugin/windows/*.dll
+!addons/godot-git-plugin/linux/*.so
+!addons/godot-git-plugin/macos/*.dylib
+
 
 # Fortran module files
 *.mod

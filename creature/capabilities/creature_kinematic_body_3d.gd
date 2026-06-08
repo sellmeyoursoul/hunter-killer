@@ -25,6 +25,8 @@ var last_move_direction: Vector3 = _MotorPlane.HORIZONTAL_RIGHT
 var control_mode: int = 0
 var speed: float = 5.0
 var screen_size: Vector2 = Vector2.ZERO
+var playfield_bounds_min: Vector2 = Vector2.ZERO
+var playfield_bounds_max: Vector2 = Vector2.ZERO
 var creature_size: float = 1.0
 var caloric_needs: int = 30
 var current_calories: float = 30.0
@@ -280,6 +282,13 @@ func _footprint_half_for_clamp() -> Vector2:
   return _MotorPlane.footprint_half_extents(self, motor_p)
 
 
+func _playfield_bounds_for_clamp() -> Dictionary:
+  var bmax := playfield_bounds_max
+  if bmax == Vector2.ZERO:
+    bmax = screen_size
+  return {"min": playfield_bounds_min, "max": bmax}
+
+
 ## Port of [method Player._engine_heading_with_wall_slide] for 3D physics + playfield edges.
 func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   if heading.length_squared() < 1e-8:
@@ -287,15 +296,21 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   var inc := Vector3(heading.x, 0.0, heading.z).normalized()
   var half := _footprint_half_for_clamp()
   var pos2 := _MotorPlane.from_vec3(global_position)
+  var bounds: Dictionary = _playfield_bounds_for_clamp()
+  var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
+  var bmax: Vector2 = bounds.get("max", screen_size)
+  # Playfield clamp helpers expect a zero-origin AABB; translate world XZ into that space.
+  var pos2_local := pos2 - bmin
+  var bmax_local := bmax - bmin
   var dist_scale := _motor_distance_scale()
   var lookahead := maxf(obstacle_lookahead_px, 48.0) * dist_scale
   if _wall_slide_pick == null:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
         _MotorPlane.from_vec3(inc),
-        pos2,
+        pos2_local,
         half,
-        screen_size,
+        bmax_local,
         lookahead,
         _wall_slide_pick,
         _MotorPlane.from_vec3(_wall_slide_away_hint),
@@ -306,9 +321,9 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
         _MotorPlane.from_vec3(inc),
-        pos2,
+        pos2_local,
         half,
-        screen_size,
+        bmax_local,
         lookahead,
         _wall_slide_pick,
         _MotorPlane.from_vec3(_wall_slide_away_hint),
@@ -324,9 +339,9 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
         _MotorPlane.from_vec3(inc),
-        pos2,
+        pos2_local,
         half,
-        screen_size,
+        bmax_local,
         lookahead,
         _wall_slide_pick,
         _MotorPlane.from_vec3(_wall_slide_away_hint),
@@ -337,23 +352,30 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
         _MotorPlane.from_vec3(inc),
-        pos2,
+        pos2_local,
         half,
-        screen_size,
+        bmax_local,
         lookahead,
         _wall_slide_pick,
         _MotorPlane.from_vec3(_wall_slide_away_hint),
       )
     )
   var n_raw := normal_v as Vector3
-  var n := Vector3(n_raw.x, 0.0, n_raw.z)
+  var n_flat := Vector3(n_raw.x, 0.0, n_raw.z)
+  var n := Vector3.ZERO
+  if n_flat.length_squared() > 1e-8:
+    n = n_flat.normalized()
+  elif absf(n_raw.y) > 0.08:
+    var ramp := Vector3(n_raw.x, 0.0, n_raw.z)
+    if ramp.length_squared() > 1e-8:
+      n = ramp.normalized()
   if n.length_squared() < 1e-12:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
         _MotorPlane.from_vec3(inc),
-        pos2,
+        pos2_local,
         half,
-        screen_size,
+        bmax_local,
         lookahead,
         _wall_slide_pick,
         _MotorPlane.from_vec3(_wall_slide_away_hint),
@@ -378,14 +400,25 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   return _MotorPlane.to_horizontal_vec3(
     _PlayfieldClamp.slide_heading_along_edge(
       _MotorPlane.from_vec3(inc),
-      pos2,
+      pos2_local,
       half,
-      screen_size,
+      bmax_local,
       lookahead,
       _wall_slide_pick,
       _MotorPlane.from_vec3(_wall_slide_away_hint),
     )
   )
+
+
+## World-space HUMAN intent from motor-plane input ([code](right−left, down−up)[/code] action strengths).
+## Params:
+## - plane_input: [code]Vector2(move_right−move_left, move_down−move_up)[/code].
+## Returns:
+## - Normalized ground intent; [member _MotorPlane.HORIZONTAL_ZERO] when input is zero.
+static func human_world_move_intent_from_plane_input(plane_input: Vector2) -> Vector3:
+  if plane_input.length_squared() < 1e-8:
+    return Vector3.ZERO
+  return _MotorPlane.to_horizontal_vec3(plane_input.normalized())
 
 
 func _read_move_intent() -> Vector3:
@@ -395,24 +428,7 @@ func _read_move_intent() -> Vector3:
     Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
     Input.get_action_strength("move_down") - Input.get_action_strength("move_up"),
   )
-  if input.length_squared() < 1e-8:
-    return Vector3.ZERO
-  var cam := get_viewport().get_camera_3d()
-  if cam == null:
-    return _MotorPlane.to_horizontal_vec3(input.normalized())
-  var cam_basis := cam.global_transform.basis
-  var forward := Vector3(-cam_basis.z.x, 0.0, -cam_basis.z.z)
-  var right := Vector3(cam_basis.x.x, 0.0, cam_basis.x.z)
-  if forward.length_squared() < 1e-8:
-    forward = Vector3(0.0, 0.0, -1.0)
-  else:
-    forward = forward.normalized()
-  if right.length_squared() < 1e-8:
-    right = Vector3(1.0, 0.0, 0.0)
-  else:
-    right = right.normalized()
-  var world_dir := right * input.x + forward * input.y
-  return Vector3(world_dir.x, 0.0, world_dir.z).normalized()
+  return human_world_move_intent_from_plane_input(input)
 
 
 ## Params:
@@ -446,16 +462,85 @@ func apply_jump_if_floor() -> void:
     velocity.y = jv
 
 
+## Picks HUMAN facing from horizontal displacement; uses velocity only when moving freely.
+## Params:
+## - pos_before: [code]global_position[/code] before [method apply_horizontal_move_intent].
+## - pos_after: [code]global_position[/code] after [method CharacterBody3D.move_and_slide].
+## - body_velocity: Body velocity after the move step.
+## - blocked_by_wall: [method CharacterBody3D.is_on_wall] after the move step.
+## - fallback_facing: Prior [member last_move_direction] when blocked with no displacement.
+## Returns:
+## - Normalized horizontal facing vector.
+static func human_facing_after_move(
+  pos_before: Vector3,
+  pos_after: Vector3,
+  body_velocity: Vector3,
+  blocked_by_wall: bool,
+  fallback_facing: Vector3,
+) -> Vector3:
+  var disp := pos_after - pos_before
+  disp.y = 0.0
+  if disp.length_squared() > 1e-10:
+    return disp.normalized()
+  var hvel := Vector3(body_velocity.x, 0.0, body_velocity.z)
+  if hvel.length_squared() > 1e-8 and not blocked_by_wall:
+    return hvel.normalized()
+  if fallback_facing.length_squared() > 1e-12:
+    return fallback_facing.normalized()
+  return _MotorPlane.HORIZONTAL_RIGHT
+
+
+## HUMAN facing after a horizontal move step: active intent wins; coasting uses displacement/velocity.
+## Params:
+## - intent: Move intent applied this tick.
+## - pos_before: [code]global_position[/code] before [method apply_horizontal_move_intent].
+## - pos_after: [code]global_position[/code] after [method CharacterBody3D.move_and_slide].
+## - body_velocity: Body velocity after the move step.
+## - blocked_by_wall: [method CharacterBody3D.is_on_wall] after the move step.
+## - fallback_facing: Prior facing when coasting with no displacement/velocity signal.
+## Returns:
+## - Normalized horizontal facing vector.
+static func human_facing_after_horizontal_move(
+  intent: Vector3,
+  pos_before: Vector3,
+  pos_after: Vector3,
+  body_velocity: Vector3,
+  blocked_by_wall: bool,
+  fallback_facing: Vector3,
+) -> Vector3:
+  var h := Vector3(intent.x, 0.0, intent.z)
+  if h.length_squared() > 1e-8:
+    return h.normalized()
+  return human_facing_after_move(
+    pos_before, pos_after, body_velocity, blocked_by_wall, fallback_facing
+  )
+
+
+func _apply_facing_after_horizontal_move(pos_before: Vector3, intent: Vector3) -> void:
+  if control_mode == _ControlMode.human_as_int():
+    last_move_direction = human_facing_after_horizontal_move(
+      intent,
+      pos_before,
+      global_position,
+      velocity,
+      is_on_wall(),
+      last_move_direction,
+    )
+    return
+  var hvel := Vector3(velocity.x, 0.0, velocity.z)
+  if hvel.length_squared() > 1e-8:
+    last_move_direction = hvel.normalized()
+
+
 func _physics_process(delta: float) -> void:
   if _defeat_hidden:
     return
+  var pos_before := global_position
   var intent := _read_move_intent()
   if control_mode == _ControlMode.engine_as_int() or control_mode == _ControlMode.ai_as_int():
     intent = _engine_heading_with_wall_slide(intent)
   apply_horizontal_move_intent(intent, delta)
-  var hvel := Vector3(velocity.x, 0.0, velocity.z)
-  if hvel.length_squared() > 1e-8:
-    last_move_direction = hvel.normalized()
+  _apply_facing_after_horizontal_move(pos_before, intent)
   _sync_calories_from_vitals()
   _apply_calorie_drain_and_starvation(delta)
 

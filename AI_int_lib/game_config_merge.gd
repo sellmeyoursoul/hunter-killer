@@ -104,6 +104,11 @@ static func creature_motor_spine() -> Dictionary:
     "weight_stuck_escape_explore": 2.2,
     ## Softer expanding hint while prey is visible but movement has stalled ([code]motor_stuck_allow_expand_hint[/code]).
     "weight_stuck_escape_explore_when_chasing": 0.95,
+    ## 3D terrain: uphill bonus when local depression exceeds [code]terrain_depression_threshold_m[/code].
+    "terrain_elevation_motor_active": true,
+    "weight_terrain_uphill": 4.0,
+    "terrain_depression_threshold_m": 0.5,
+    "terrain_stuck_min_uphill_m": 0.15,
     "motor_stuck_turn_bias_scale": 0.25,
     "motor_stuck_idle_penalty_scale": 2.5,
     "motor_stuck_prey_expand_floor": 0.95,

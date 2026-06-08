@@ -9,6 +9,7 @@ const _CarnScene := preload("res://creature/templates/creature_carnivore_kinemat
 const _RabbitArchetype := preload("res://creature/species/rabbit_archetype.tres")
 const _FoxArchetype := preload("res://creature/species/fox_archetype.tres")
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
+const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
 
 const _GRASSLANDS_SCENE := "res://assets/locations/grasslands/h-k-grasslands.blend"
@@ -44,6 +45,7 @@ var _playfield_root: Node3D
 var _obstacles_root: Node3D
 var _food_root: Node3D
 var _using_fallback_floor: bool = false
+var _ground_sampler: PlayfieldGroundSampler
 
 
 func _ready() -> void:
@@ -66,12 +68,29 @@ func get_motor_playfield_size() -> Vector2:
   return _FALLBACK_PLAYFIELD_SIZE
 
 
+func get_motor_playfield_bounds_min() -> Vector2:
+  if bool(_playfield_bounds.get("valid", false)):
+    return _playfield_bounds.get("min", Vector2.ZERO)
+  return Vector2.ZERO
+
+
+func get_motor_playfield_bounds_max() -> Vector2:
+  if bool(_playfield_bounds.get("valid", false)):
+    return _playfield_bounds.get("max", _FALLBACK_PLAYFIELD_SIZE)
+  return _FALLBACK_PLAYFIELD_SIZE
+
+
 func get_environment_grid() -> Resource:
   return environment_grid
 
 
 func get_herbivore_motor_body() -> Node:
   return _herb_body
+
+
+## Baked ground-elevation grid for rim spawn placement and terrain-aware motor (null when invalid).
+func get_ground_sampler() -> PlayfieldGroundSampler:
+  return _ground_sampler
 
 
 func new_game() -> void:
@@ -132,8 +151,10 @@ func _process(_delta: float) -> void:
 
 func _playfield_look_target() -> Vector3:
   var center: Vector3 = _playfield_bounds.get("center", Vector3.ZERO)
-  var floor_y := float(_playfield_bounds.get("floor_y", 0.0))
-  return Vector3(center.x, floor_y, center.z)
+  var surface_y := float(
+    _playfield_bounds.get("surface_y", _playfield_bounds.get("floor_y", 0.0)),
+  )
+  return Vector3(center.x, surface_y, center.z)
 
 
 func _apply_top_down_camera() -> void:
@@ -195,6 +216,8 @@ func _build_playfield() -> void:
   _spawn_perimeter_boulders()
   _spawn_interior_boulders()
   _ensure_food_plants()
+  call_deferred("_snap_playfield_props_to_ground")
+  call_deferred("_bake_ground_sampler")
   _log_playfield_diagnostics()
 
 
@@ -273,7 +296,54 @@ func _recompute_playfield_bounds() -> void:
         _FALLBACK_PLAYFIELD_SIZE.y * 0.5,
       ),
       "floor_y": 0.0,
+      "surface_y": 0.0,
     }
+  _ground_sampler = null
+
+
+func _ensure_ground_sampler_ready() -> void:
+  if _ground_sampler != null and _ground_sampler.is_valid():
+    return
+  if not bool(_playfield_bounds.get("valid", false)):
+    return
+  var world_3d := get_world_3d()
+  if world_3d == null:
+    return
+  _ground_sampler = _GroundSampler.bake_from_playfield(
+    _playfield_bounds, world_3d.direct_space_state
+  )
+
+
+func _bake_ground_sampler() -> void:
+  await get_tree().physics_frame
+  if not bool(_playfield_bounds.get("valid", false)):
+    _ground_sampler = null
+    return
+  var world_3d := get_world_3d()
+  if world_3d == null:
+    _ground_sampler = null
+    return
+  var space := world_3d.direct_space_state
+  _ground_sampler = _GroundSampler.bake_from_playfield(_playfield_bounds, space)
+  if _ground_sampler != null and _ground_sampler.is_valid():
+    var center_xz: Vector2 = (
+      _playfield_bounds.get("min", Vector2.ZERO)
+      + _playfield_bounds.get("size", Vector2.ZERO) * 0.5
+    )
+    var center_elev: float = _ground_sampler.sample_elevation(center_xz)
+    var fracs: Array = _ground_sampler.pick_duel_spawn_fractions()
+    OLog.info(
+      "Main3D: ground sampler baked — center_y=%.2f spawn_fracs=(%.2f,%.2f) (%.2f,%.2f)"
+      % [
+        center_elev,
+        (fracs[0] as Vector2).x,
+        (fracs[0] as Vector2).y,
+        (fracs[1] as Vector2).x,
+        (fracs[1] as Vector2).y,
+      ],
+      false,
+      "Main3D",
+    )
 
 
 func _spawn_perimeter_boulders() -> void:
@@ -305,11 +375,114 @@ func _spawn_interior_boulders() -> void:
     _obstacles_root.add_child(rock)
     rock.global_position = pos
     rock.add_to_group(&"obstacles")
-    _ensure_world_static_collision(rock)
+    PlayfieldBounds3D.ensure_obstacle_physics(rock)
 
 
 func _ensure_world_static_collision(root: Node) -> void:
   _Bounds3D.ensure_world_static_layers(root)
+
+
+func _snap_playfield_props_to_ground() -> void:
+  await get_tree().physics_frame
+  var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
+  var space := get_world_3d().direct_space_state if get_world_3d() != null else null
+  if space == null:
+    return
+  for prop_root in [_obstacles_root, _food_root]:
+    if prop_root == null or not is_instance_valid(prop_root):
+      continue
+    var sibling_exclude := _prop_collision_rids_under(prop_root)
+    for ch in prop_root.get_children():
+      if ch is Node3D:
+        var prop := ch as Node3D
+        var xz := Vector2(prop.global_position.x, prop.global_position.z)
+        var skip := sibling_exclude.duplicate()
+        for rid in _prop_collision_rids_under(prop):
+          if not skip.has(rid):
+            skip.append(rid)
+        var ground := _raycast_prop_ground_surface(space, xz, hint_y, skip)
+        if not bool(ground.get("hit", false)):
+          OLog.info(
+            "Main3D: no ground hit for prop %s at (%.1f, %.1f) — left at Y estimate"
+            % [prop.name, xz.x, xz.y],
+            true,
+            "Main3D",
+          )
+          continue
+        var surface_y := float(ground.get("surface_y", hint_y))
+        var bottom_y := _prop_mesh_local_bottom_y(prop)
+        prop.global_position = Vector3(xz.x, surface_y - bottom_y, xz.y)
+
+
+func _prop_collision_rids_under(root: Node) -> Array:
+  var rids: Array = []
+  _prop_collision_rids_under_recursive(root, rids)
+  return rids
+
+
+func _prop_collision_rids_under_recursive(node: Node, rids: Array) -> void:
+  if node is CollisionObject3D:
+    rids.append((node as CollisionObject3D).get_rid())
+  for ch in node.get_children():
+    _prop_collision_rids_under_recursive(ch, rids)
+
+
+func _raycast_prop_ground_surface(
+  space: PhysicsDirectSpaceState3D,
+  xz: Vector2,
+  hint_y: float,
+  exclude_rids: Array,
+) -> Dictionary:
+  if space == null:
+    return {"hit": false, "surface_y": hint_y}
+  var mask := _Bounds3D.WORLD_STATIC_COLLISION_MASK
+  var x := xz.x
+  var z := xz.y
+  var down_from := Vector3(x, hint_y + _Bounds3D.GROUND_RAY_HEIGHT, z)
+  var down_to := Vector3(x, hint_y - _Bounds3D.GROUND_RAY_DEPTH, z)
+  var query := PhysicsRayQueryParameters3D.create(down_from, down_to)
+  query.collision_mask = mask
+  query.hit_from_inside = true
+  if not exclude_rids.is_empty():
+    query.exclude = exclude_rids
+  var hit: Dictionary = space.intersect_ray(query)
+  if not hit.is_empty():
+    return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
+  var up_from := Vector3(x, hint_y - 10.0, z)
+  var up_to := Vector3(x, hint_y + _Bounds3D.GROUND_RAY_HEIGHT, z)
+  query = PhysicsRayQueryParameters3D.create(up_from, up_to)
+  query.collision_mask = mask
+  if not exclude_rids.is_empty():
+    query.exclude = exclude_rids
+  hit = space.intersect_ray(query)
+  if not hit.is_empty():
+    return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
+  return {"hit": false, "surface_y": hint_y}
+
+
+func _prop_mesh_local_bottom_y(prop_root: Node3D) -> float:
+  var acc: Array = [INF]
+  _accum_prop_mesh_bottom_in_root_space(prop_root, prop_root, acc)
+  var min_y: float = acc[0]
+  return 0.0 if min_y == INF else min_y
+
+
+func _accum_prop_mesh_bottom_in_root_space(prop_root: Node3D, node: Node, acc: Array) -> void:
+  if node is MeshInstance3D:
+    var mi := node as MeshInstance3D
+    var mesh: Mesh = mi.mesh
+    if mesh != null:
+      var local_aabb := mesh.get_aabb()
+      var root_inv := prop_root.global_transform.affine_inverse()
+      var size := local_aabb.size
+      for ox in [0.0, size.x]:
+        for oy in [0.0, size.y]:
+          for oz in [0.0, size.z]:
+            var mesh_point: Vector3 = local_aabb.position + Vector3(ox, oy, oz)
+            var in_root: Vector3 = root_inv * (mi.global_transform * mesh_point)
+            acc[0] = minf(float(acc[0]), in_root.y)
+  for ch in node.get_children():
+    _accum_prop_mesh_bottom_in_root_space(prop_root, ch, acc)
 
 
 func _ensure_food_plants() -> void:
@@ -354,8 +527,16 @@ func _reset_food_plants() -> void:
 
 
 func _spawn_duel_pair() -> void:
-  var hpos := _spawn_position("HerbivoreSpawn", Vector2(0.68, 0.46))
-  var cpos := _spawn_position("CarnivoreSpawn", Vector2(0.18, 0.50))
+  _ensure_ground_sampler_ready()
+  var herb_frac := Vector2(0.50, 0.50)
+  var carn_frac := Vector2(0.18, 0.50)
+  if _ground_sampler != null and _ground_sampler.is_valid():
+    var spawn_fracs: Array = _ground_sampler.pick_duel_spawn_fractions()
+    if spawn_fracs.size() >= 2:
+      herb_frac = spawn_fracs[0] as Vector2
+      carn_frac = spawn_fracs[1] as Vector2
+  var hpos := _spawn_position("HerbivoreSpawn", herb_frac)
+  var cpos := _spawn_position("CarnivoreSpawn", carn_frac)
   _herbivore_root = _HerbScene.instantiate() as Node3D
   _herbivore_root.set("definition", _RabbitArchetype)
   add_child(_herbivore_root)
@@ -372,13 +553,15 @@ func _spawn_duel_pair() -> void:
     _herb_body.call(&"start_duel_spawn")
   if _carn_body.has_method(&"start_duel_spawn"):
     _carn_body.call(&"start_duel_spawn")
-  call_deferred("_log_spawn_floor_contact")
+  call_deferred("_settle_spawned_creature_bodies")
 
 
 func _setup_motor_body(body: CharacterBody3D, groups: Array[StringName]) -> void:
   for g in groups:
     body.add_to_group(g)
   body.screen_size = get_motor_playfield_size()
+  body.playfield_bounds_min = get_motor_playfield_bounds_min()
+  body.playfield_bounds_max = get_motor_playfield_bounds_max()
   body.set_control_mode(_ControlMode.engine_as_int())
 
 
@@ -411,6 +594,16 @@ func _snap_creature_to_ground(
       true,
       "Main3D",
     )
+  _Bounds3D.settle_character_body_on_floor(body)
+
+
+func _settle_spawned_creature_bodies() -> void:
+  await get_tree().physics_frame
+  for body in [_herb_body, _carn_body]:
+    if body == null or not is_instance_valid(body):
+      continue
+    _Bounds3D.settle_character_body_on_floor(body)
+  call_deferred("_log_spawn_floor_contact")
 
 
 func _log_playfield_diagnostics() -> void:
@@ -562,6 +755,8 @@ func _on_player_hit() -> void:
 func _on_hud_start_game() -> void:
   _camera_mode = CameraMode.OVER_SHOULDER
   new_game()
+  if _herb_body != null and _herb_body.has_method(&"set_control_mode"):
+    _herb_body.set_control_mode(_ControlMode.human_as_int())
 
 
 func _on_hud_ai_player_game() -> void:

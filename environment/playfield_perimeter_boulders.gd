@@ -2,9 +2,10 @@ extends RefCounted
 class_name PlayfieldPerimeterBoulders
 ## Places perimeter [code]h-k-boulder1[/code] rocks along the playfield XZ AABB ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
 
-
-const DEFAULT_SPACING := 4.0
-const DEFAULT_INSET := 0.8
+## [code]h-k-boulder1[/code] mesh spans ~2.1 m on XZ; fox capsule diameter is 0.8 m.
+## Spacing below rock diameter overlaps colliders so creatures cannot slip between rocks.
+const DEFAULT_SPACING := 1.4
+const DEFAULT_INSET := 0.5
 
 
 ## Params:
@@ -62,13 +63,4 @@ static func _spawn_one(parent: Node3D, scene: PackedScene, pos: Vector3) -> void
   parent.add_child(rock)
   rock.global_position = pos
   rock.add_to_group(&"obstacles")
-  _ensure_world_static_collision(rock)
-
-
-static func _ensure_world_static_collision(root: Node) -> void:
-  if root is StaticBody3D:
-    (root as StaticBody3D).collision_layer = 1
-    (root as StaticBody3D).collision_mask = 1
-    return
-  for ch in root.get_children():
-    _ensure_world_static_collision(ch)
+  PlayfieldBounds3D.ensure_obstacle_physics(rock)

@@ -105,7 +105,14 @@ func _resolve_duel_creatures() -> void:
   if m == null:
     return
   if _herbivore == null or not is_instance_valid(_herbivore):
-    _herbivore = m.get_node_or_null("Player")
+    if m.has_method(&"get_herbivore_motor_body"):
+      _herbivore = m.call(&"get_herbivore_motor_body") as Node
+    if _herbivore == null:
+      _herbivore = m.get_node_or_null("Player")
+    if _herbivore == null:
+      var players := get_tree().get_nodes_in_group(&"player")
+      if players.size() >= 1:
+        _herbivore = players[0]
   var mobs := get_tree().get_nodes_in_group(&"mobs")
   if mobs.size() >= 1:
     _carnivore = mobs[0]

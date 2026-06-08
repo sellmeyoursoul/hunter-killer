@@ -45,6 +45,8 @@ const _GoalSeekScr := preload("res://creature/motor/goal_seek.gd")
 const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
+const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -235,6 +237,31 @@ var _predator_prey_ever_seen_by_id: Dictionary = {}
 
 ## Monotonic id for each [method arm_ai_session] entry; helps detect overlapping arms in NDJSON (debug).
 static var _debug_arm_invoke_seq: int = 0
+
+
+## Resolves world or viewport playfield [code]min[/code]/[code]max[/code] for motor clamping.
+## Prefers [member CreatureKinematicBody3D.playfield_bounds_min] / [code]playfield_bounds_max[/code] on 3D mains.
+func _motor_playfield_bounds_rect(body: Node) -> Dictionary:
+  var bmin_v: Variant = body.get("playfield_bounds_min")
+  var bmax_v: Variant = body.get("playfield_bounds_max")
+  if typeof(bmin_v) == TYPE_VECTOR2 and typeof(bmax_v) == TYPE_VECTOR2:
+    var bmin := bmin_v as Vector2
+    var bmax := bmax_v as Vector2
+    if _playfield_bounds_valid(bmin, bmax):
+      return {"min": bmin, "max": bmax}
+  if _main != null and _main.has_method(&"get_motor_playfield_bounds_min"):
+    var mn_v: Variant = _main.call(&"get_motor_playfield_bounds_min")
+    var mx_v: Variant = _main.call(&"get_motor_playfield_bounds_max")
+    if typeof(mn_v) == TYPE_VECTOR2 and typeof(mx_v) == TYPE_VECTOR2:
+      var mn := mn_v as Vector2
+      var mx := mx_v as Vector2
+      if _playfield_bounds_valid(mn, mx):
+        return {"min": mn, "max": mx}
+  var ss: Variant = body.get("screen_size")
+  var playfield := ss as Vector2 if typeof(ss) == TYPE_VECTOR2 else Vector2.ZERO
+  if playfield == Vector2.ZERO:
+    playfield = _viewport_playfield_size_px(body)
+  return {"min": Vector2.ZERO, "max": playfield}
 
 
 ## Resolves viewport pixel size for motor bounds when [member Player.screen_size] / mob [member Mob.screen_size] is zero or the node cannot query [method CanvasItem.get_viewport_rect] yet.
@@ -711,6 +738,11 @@ func _pick_playfield_interior_escape_cardinal(
   bounds_max: Vector2,
   prefer_world: Vector3 = Vector3.ZERO,
 ) -> Vector3:
+  var uphill := _pick_terrain_uphill_escape_cardinal(
+    creature_pos, he_xy, static_obs, body_id, motor_p
+  )
+  if uphill.length_squared() > 1e-12:
+    return uphill
   if not _creature_playfield_corner_hugging(creature_pos, he_xy, bounds_min, bounds_max, motor_p):
     return Vector3.ZERO
   var cur_edge := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
@@ -2689,6 +2721,92 @@ static func _motor_cardinal_probe_step(he_xy: Vector2) -> float:
   return _MOTOR.motor_cardinal_probe_step(he_xy)
 
 
+func _terrain_sampler_from_main() -> _GroundSampler:
+  if _main != null and _main.has_method(&"get_ground_sampler"):
+    return _main.call(&"get_ground_sampler") as _GroundSampler
+  return null
+
+
+func _terrain_motor_active(motor_p: Dictionary) -> bool:
+  if not bool(motor_p.get("terrain_elevation_motor_active", true)):
+    return false
+  var sampler: _GroundSampler = _terrain_sampler_from_main()
+  return sampler != null and sampler.is_valid()
+
+
+func _terrain_physics_space_for_body(body: Node) -> PhysicsDirectSpaceState3D:
+  if body is CharacterBody3D:
+    var w3d := (body as CharacterBody3D).get_world_3d()
+    if w3d != null:
+      return w3d.direct_space_state
+  return null
+
+
+func _body_from_instance_id(body_id: int) -> CharacterBody3D:
+  for x in _registered_creatures:
+    if x is CharacterBody3D and is_instance_valid(x) and (x as Node).get_instance_id() == body_id:
+      return x as CharacterBody3D
+  return null
+
+
+func _terrain_escape_refs(body_id: int) -> Dictionary:
+  var body := _body_from_instance_id(body_id)
+  return {
+    "sampler": _terrain_sampler_from_main(),
+    "space": _terrain_physics_space_for_body(body) if body != null else null,
+    "body": body,
+  }
+
+
+func _terrain_cardinal_blocked(
+  creature_pos: Vector3,
+  direction: Vector3,
+  step: float,
+  body_id: int,
+) -> bool:
+  var refs := _terrain_escape_refs(body_id)
+  var space: PhysicsDirectSpaceState3D = refs.get("space")
+  var body: CharacterBody3D = refs.get("body")
+  if space == null or body == null:
+    return false
+  return _TerrainMotor.cardinal_blocked_by_terrain(space, body, creature_pos, direction, step)
+
+
+func _pick_terrain_uphill_escape_cardinal(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  body_id: int,
+  motor_p: Dictionary,
+) -> Vector3:
+  var refs := _terrain_escape_refs(body_id)
+  var sampler = refs.get("sampler")
+  if sampler == null or not sampler.has_method(&"is_valid") or not bool(sampler.call(&"is_valid")):
+    return Vector3.ZERO
+  var xz := Vector2(creature_pos.x, creature_pos.z)
+  var dep: float = sampler.call(&"local_depression_score", xz)
+  if dep < float(motor_p.get("terrain_depression_threshold_m", 0.5)):
+    return Vector3.ZERO
+  var step := _motor_cardinal_probe_step(he_xy)
+  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance_px", 4.0))
+  var cur_y: float = sampler.call(&"sample_elevation", xz, creature_pos.y)
+  var best_d := Vector3.ZERO
+  var best_score := -INF
+  for c: Vector3 in _MotorOctScr.SEEK_DIRECTIONS:
+    if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
+      creature_pos, he_xy, c, static_obs, min_clr
+    ):
+      continue
+    if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
+      continue
+    var probe_y: float = sampler.call(&"elevation_at_cardinal_probe", creature_pos, c, step)
+    var score := _TerrainMotor.elevation_escape_score(cur_y, probe_y, dep, motor_p)
+    if score > best_score:
+      best_score = score
+      best_d = c
+  return best_d
+
+
 ## True when a unit cardinal step would leave the footprint pinched against static geometry.
 static func _cardinal_step_blocked(
   creature_pos: Variant,
@@ -2748,6 +2866,18 @@ func _pick_stuck_escape_cardinal(
   )
   var best_d := Vector3.ZERO
   var best_score := -INF
+  var refs := _terrain_escape_refs(body_id)
+  var terrain_sampler = refs.get("sampler")
+  var terrain_dep := 0.0
+  var terrain_cur_y := creature_pos.y
+  if (
+    terrain_sampler != null
+    and terrain_sampler.has_method(&"is_valid")
+    and bool(terrain_sampler.call(&"is_valid"))
+  ):
+    var xz_dep := Vector2(creature_pos.x, creature_pos.z)
+    terrain_dep = terrain_sampler.call(&"local_depression_score", xz_dep)
+    terrain_cur_y = terrain_sampler.call(&"sample_elevation", xz_dep, creature_pos.y)
   for k in escape_dirs.size():
     var c: Vector3 = escape_dirs[(start_i + k) % escape_dirs.size()]
     if _stuck_escape_should_skip_backtrack(
@@ -2758,12 +2888,21 @@ func _pick_stuck_escape_cardinal(
       creature_pos, he_xy, c, static_obs, min_clr
     ):
       continue
+    if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
+      continue
     var probe_pos := creature_pos + c * step
     if use_bounds and not _footprint_in_bounds(probe_pos, he_xy, bounds_min, bounds_max):
       continue
     var info := _static_obstacle_slip_info(probe_pos, he_xy, static_obs)
     var cl := float(info.get("clearance", -INF))
     var score := cl
+    if terrain_sampler != null and terrain_dep >= float(
+      motor_p.get("terrain_depression_threshold_m", 0.5)
+    ):
+      var probe_y: float = terrain_sampler.call(
+        &"elevation_at_cardinal_probe", creature_pos, c, step
+      )
+      score += _TerrainMotor.elevation_escape_score(terrain_cur_y, probe_y, terrain_dep, motor_p)
     if use_bounds:
       var probe_edge := _footprint_edge_margin(probe_pos, he_xy, bounds_min, bounds_max)
       score = (probe_edge - cur_edge) * 3.0 + cl * 0.25
@@ -2785,6 +2924,8 @@ func _pick_stuck_escape_cardinal(
         continue
       if _cardinal_step_blocked_for_escape(creature_pos, he_xy, c_rel, static_obs, min_clr):
         continue
+      if _terrain_cardinal_blocked(creature_pos, c_rel, step, body_id):
+        continue
       var probe_rel := creature_pos + c_rel * step
       if not _footprint_in_bounds(probe_rel, he_xy, bounds_min, bounds_max):
         continue
@@ -2797,6 +2938,11 @@ func _pick_stuck_escape_cardinal(
         best_d = c_rel
     if best_d.length_squared() > 1e-12:
       return best_d
+  var uphill_fb := _pick_terrain_uphill_escape_cardinal(
+    creature_pos, he_xy, static_obs, body_id, motor_p
+  )
+  if uphill_fb.length_squared() > 1e-12:
+    return uphill_fb
   if use_bounds and cur_edge < float(motor_p.get("motor_playfield_corner_band_px", 56.0)):
     var interior_esc := _pick_playfield_interior_escape_cardinal(
       creature_pos, he_xy, static_obs, body_id, motor_p, bounds_min, bounds_max
@@ -2835,6 +2981,8 @@ func _pick_stuck_escape_preferring(
     if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
       creature_pos, he_xy, c, static_obs, min_clr
     ):
+      continue
+    if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
       continue
     var probe_pos := creature_pos + c * step
     var info := _static_obstacle_slip_info(probe_pos, he_xy, static_obs)
@@ -4105,6 +4253,9 @@ func _build_motor_context(
   var ss := body.get("screen_size") as Vector2
   if ss == Vector2.ZERO:
     ss = _viewport_playfield_size_px(body)
+  var playfield_rect: Dictionary = _motor_playfield_bounds_rect(body)
+  var bounds_min: Vector2 = playfield_rect.get("min", Vector2.ZERO)
+  var bounds_max: Vector2 = playfield_rect.get("max", ss)
   var he_xy := _MotorPlane.footprint_half_extents(body, motor_p)
   var half_deg: float = float(motor_p.get("awareness_cone_half_angle_deg", 45.0))
   var facing_display := Vector3(1.0, 0.0, 0.0)
@@ -4575,10 +4726,10 @@ func _build_motor_context(
   var prey_seek_motor: Array = prey_pts_live if predator_hunt_motivated else []
   var pursuit_motor: Array = pursuit_targets if predator_hunt_motivated else []
   var motor_corner_wedge := _creature_playfield_corner_wedge_active(
-    pos, he_xy, geom_aabbs, Vector2.ZERO, ss, motor_p
+    pos, he_xy, geom_aabbs, bounds_min, bounds_max, motor_p
   )
   var motor_corner_hugging := _creature_playfield_corner_hugging(
-    pos, he_xy, Vector2.ZERO, ss, motor_p
+    pos, he_xy, bounds_min, bounds_max, motor_p
   )
   var filter_blocked_cardinals := herbivore_flee_active or (
     is_predator_body
@@ -4721,8 +4872,8 @@ func _build_motor_context(
     "creature_position": pos,
     "creature_speed": spd,
     "lookahead_sec": float(motor_p.get("lookahead_sec", 0.15)),
-    "bounds_min": Vector2.ZERO,
-    "bounds_max": ss,
+    "bounds_min": bounds_min,
+    "bounds_max": bounds_max,
     "mobs": mobs_arr,
     "weight_dist": w_dist_out,
     "weight_dist_sq": w_dist_sq_out,
@@ -4820,6 +4971,19 @@ func _build_motor_context(
     "threat_response_replay_rank": float(threat_response.get("replay_rank_score", 0.0)),
     "believed_goal_source_bias": believed_bias,
     "weight_believed_goal_pull": w_believed_pull,
+    "terrain_sampler": _terrain_sampler_from_main(),
+    "terrain_elevation_motor_active": _terrain_motor_active(motor_p),
+    "terrain_depression_threshold_m": float(motor_p.get("terrain_depression_threshold_m", 0.5)),
+    "weight_terrain_uphill": float(motor_p.get("weight_terrain_uphill", 4.0)),
+    "terrain_stuck_min_uphill_m": float(motor_p.get("terrain_stuck_min_uphill_m", 0.15)),
+    "terrain_physics_space": _terrain_physics_space_for_body(body),
+    "terrain_physics_body": body if body is CharacterBody3D else null,
+    "terrain_motor_params": {
+      "terrain_elevation_motor_active": _terrain_motor_active(motor_p),
+      "terrain_depression_threshold_m": float(motor_p.get("terrain_depression_threshold_m", 0.5)),
+      "weight_terrain_uphill": float(motor_p.get("weight_terrain_uphill", 4.0)),
+      "terrain_stuck_min_uphill_m": float(motor_p.get("terrain_stuck_min_uphill_m", 0.15)),
+    },
   }
 
 

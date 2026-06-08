@@ -13,16 +13,22 @@ const GROUND_RAY_DEPTH := 512.0
 ## Params:
 ## - root: Playfield subtree (grasslands import, floor colliders, etc.).
 ## Returns:
-## - [code]valid[/code], motor-plane [code]min[/code]/[code]max[/code]/[code]size[/code], world [code]center[/code], [code]floor_y[/code].
+## - [code]valid[/code], motor-plane [code]min[/code]/[code]max[/code]/[code]size[/code], world [code]center[/code],
+##   [code]floor_y[/code] (collision AABB min Y — raycast hint), [code]surface_y[/code] (collision AABB max Y).
 static func xz_bounds_from_playfield_root(root: Node3D) -> Dictionary:
   if root == null:
     return _empty_bounds()
   var acc: Array = [Vector3(INF, INF, INF), Vector3(-INF, -INF, -INF)]
-  _accumulate_node_bounds(root, acc)
+  _accumulate_collision_bounds(root, acc)
   var mn: Vector3 = acc[0]
   var mx: Vector3 = acc[1]
   if mn.x >= mx.x or mn.z >= mx.z:
-    return _empty_bounds()
+    acc = [Vector3(INF, INF, INF), Vector3(-INF, -INF, -INF)]
+    _accumulate_mesh_bounds(root, acc)
+    mn = acc[0]
+    mx = acc[1]
+    if mn.x >= mx.x or mn.z >= mx.z:
+      return _empty_bounds()
   var min2 := Vector2(mn.x, mn.z)
   var max2 := Vector2(mx.x, mx.z)
   var center := Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5)
@@ -33,6 +39,7 @@ static func xz_bounds_from_playfield_root(root: Node3D) -> Dictionary:
     "size": max2 - min2,
     "center": center,
     "floor_y": mn.y,
+    "surface_y": mx.y,
   }
 
 
@@ -44,16 +51,24 @@ static func _empty_bounds() -> Dictionary:
     "size": Vector2.ZERO,
     "center": Vector3.ZERO,
     "floor_y": 0.0,
+    "surface_y": 0.0,
   }
 
 
-static func _accumulate_node_bounds(node: Node, acc: Array) -> void:
+## Walkable playfield extent from physics colliders only (visual meshes can pad the AABB).
+static func _accumulate_collision_bounds(node: Node, acc: Array) -> void:
   if node is CollisionShape3D:
     _accumulate_collision_shape(node as CollisionShape3D, acc)
-  elif node is MeshInstance3D:
+  for ch in node.get_children():
+    _accumulate_collision_bounds(ch, acc)
+
+
+## Fallback when a playfield import has meshes but no collision yet.
+static func _accumulate_mesh_bounds(node: Node, acc: Array) -> void:
+  if node is MeshInstance3D:
     _accumulate_mesh_instance(node as MeshInstance3D, acc)
   for ch in node.get_children():
-    _accumulate_node_bounds(ch, acc)
+    _accumulate_mesh_bounds(ch, acc)
 
 
 static func _accumulate_collision_shape(cs: CollisionShape3D, acc: Array) -> void:
@@ -169,10 +184,10 @@ static func world_position_from_fraction(bounds: Dictionary, frac: Vector2, body
     return Vector3(frac.x, body_lift, frac.y)
   var mn: Vector2 = bounds.get("min", Vector2.ZERO)
   var sz: Vector2 = bounds.get("size", Vector2.ZERO)
-  var floor_y := float(bounds.get("floor_y", 0.0))
+  var spawn_y := float(bounds.get("surface_y", bounds.get("floor_y", 0.0)))
   return Vector3(
     mn.x + frac.x * sz.x,
-    floor_y + body_lift,
+    spawn_y + body_lift,
     mn.y + frac.y * sz.y,
   )
 
@@ -182,12 +197,13 @@ static func motor_position_from_world(world_pos: Vector3) -> Vector2:
   return _MotorPlane.from_vec3(world_pos)
 
 
-## Half-height of the Body [CapsuleShape3D] used for duel spawn grounding.
+## Distance from [param body] origin to capsule bottom (hemisphere included) for duel spawn grounding.
 static func capsule_half_height_on_body(body: CharacterBody3D) -> float:
   var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs != null and cs.shape is CapsuleShape3D:
-    return (cs.shape as CapsuleShape3D).height * 0.5
-  return 0.6
+    var cap := cs.shape as CapsuleShape3D
+    return cap.height * 0.5 + cap.radius
+  return 0.95
 
 
 ## Root global Y so the Body capsule bottom rests on [param surface_y].
@@ -207,6 +223,7 @@ static func raycast_ground_surface(
   xz: Vector2,
   hint_y: float,
   collision_mask: int = WORLD_STATIC_COLLISION_MASK,
+  exclude_rids: Array = [],
 ) -> Dictionary:
   if space == null:
     return {"hit": false, "surface_y": hint_y}
@@ -217,6 +234,8 @@ static func raycast_ground_surface(
   var query := PhysicsRayQueryParameters3D.create(down_from, down_to)
   query.collision_mask = collision_mask
   query.hit_from_inside = true
+  if not exclude_rids.is_empty():
+    query.exclude = exclude_rids
   var hit: Dictionary = space.intersect_ray(query)
   if not hit.is_empty():
     return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
@@ -224,6 +243,8 @@ static func raycast_ground_surface(
   var up_to := Vector3(x, hint_y + GROUND_RAY_HEIGHT, z)
   query = PhysicsRayQueryParameters3D.create(up_from, up_to)
   query.collision_mask = collision_mask
+  if not exclude_rids.is_empty():
+    query.exclude = exclude_rids
   hit = space.intersect_ray(query)
   if not hit.is_empty():
     return {"hit": true, "surface_y": float((hit.get("position", Vector3.ZERO) as Vector3).y)}
@@ -243,6 +264,89 @@ static func snap_creature_root_to_ground(
   var surface_y := float(ground.get("surface_y", hint_y))
   var root_y := root_global_y_for_surface(body, surface_y)
   creature_root.global_position = Vector3(xz.x, root_y, xz.y)
+  return bool(ground.get("hit", false))
+
+
+## Runs zero-intent [method CharacterBody3D.move_and_slide] steps so [method CharacterBody3D.is_on_floor] stabilizes after snap.
+## Params:
+## - body: Duel creature [code]Body[/code] already in the scene tree.
+## - steps: Physics iterations (default 6).
+## - step_sec: Fixed timestep per iteration (default 1/60 s).
+static func settle_character_body_on_floor(
+  body: CharacterBody3D,
+  steps: int = 6,
+  step_sec: float = 1.0 / 60.0,
+) -> void:
+  if body == null:
+    return
+  var grav := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+  if not body.is_on_floor():
+    body.velocity = Vector3(0.0, -2.0, 0.0)
+    body.move_and_slide()
+  body.velocity = Vector3.ZERO
+  for _i in steps:
+    if body.is_on_floor():
+      body.velocity.y = 0.0
+    else:
+      body.velocity.y -= grav * step_sec
+    body.move_and_slide()
+
+
+## Lowest mesh point in [param prop_root] local space (for grounding imported props).
+static func mesh_local_bottom_y(prop_root: Node3D) -> float:
+  var acc: Array = [INF]
+  _accum_mesh_bottom_in_root_space(prop_root, prop_root, acc)
+  var min_y: float = acc[0]
+  return 0.0 if min_y == INF else min_y
+
+
+static func _accum_mesh_bottom_in_root_space(prop_root: Node3D, node: Node, acc: Array) -> void:
+  if node is MeshInstance3D:
+    var mi := node as MeshInstance3D
+    var mesh: Mesh = mi.mesh
+    if mesh != null:
+      var local_aabb := mesh.get_aabb()
+      var root_inv := prop_root.global_transform.affine_inverse()
+      for c in _box_corners_local(local_aabb.size):
+        var mesh_point: Vector3 = local_aabb.position + c
+        var in_root: Vector3 = root_inv * (mi.global_transform * mesh_point)
+        acc[0] = minf(float(acc[0]), in_root.y)
+  for ch in node.get_children():
+    _accum_mesh_bottom_in_root_space(prop_root, ch, acc)
+
+
+## RIDs of every [CollisionObject3D] under [param root] (for ground-ray exclude lists).
+static func collect_collision_object_rids(root: Node) -> Array:
+  var rids: Array = []
+  _collect_collision_object_rids_recursive(root, rids)
+  return rids
+
+
+static func _collect_collision_object_rids_recursive(node: Node, rids: Array) -> void:
+  if node is CollisionObject3D:
+    rids.append((node as CollisionObject3D).get_rid())
+  for ch in node.get_children():
+    _collect_collision_object_rids_recursive(ch, rids)
+
+
+## Places [param prop_root] so mesh bottom rests on raycast ground at [param xz].
+## Skips [param exclude_rids] plus any colliders on [param prop_root] so baked prop meshes do not block the ray.
+## Returns true when a static surface was hit.
+static func snap_prop_root_to_ground(
+  prop_root: Node3D,
+  xz: Vector2,
+  hint_y: float,
+  space: PhysicsDirectSpaceState3D,
+  exclude_rids: Array = [],
+) -> bool:
+  var skip: Array = exclude_rids.duplicate()
+  for rid in collect_collision_object_rids(prop_root):
+    if not skip.has(rid):
+      skip.append(rid)
+  var ground: Dictionary = raycast_ground_surface(space, xz, hint_y, WORLD_STATIC_COLLISION_MASK, skip)
+  var surface_y := float(ground.get("surface_y", hint_y))
+  var bottom_y := mesh_local_bottom_y(prop_root)
+  prop_root.global_position = Vector3(xz.x, surface_y - bottom_y, xz.y)
   return bool(ground.get("hit", false))
 
 
@@ -274,6 +378,27 @@ static func ensure_world_static_layers(node: Node) -> void:
     return
   for ch in node.get_children():
     ensure_world_static_layers(ch)
+
+
+## Bakes trimesh colliders for mesh-only obstacle imports and tags bodies for motor + physics.
+## Returns the number of [StaticBody3D] colliders now under [param root] (existing or newly added).
+static func ensure_obstacle_physics(root: Node3D) -> int:
+  if root == null:
+    return 0
+  var existing := count_static_bodies(root)
+  if existing == 0:
+    supplement_trimesh_collision_from_meshes(root, root)
+  ensure_world_static_layers(root)
+  _tag_obstacle_static_bodies(root)
+  return count_static_bodies(root)
+
+
+static func _tag_obstacle_static_bodies(node: Node) -> void:
+  if node is StaticBody3D:
+    node.add_to_group(&"obstacles")
+    return
+  for ch in node.get_children():
+    _tag_obstacle_static_bodies(ch)
 
 
 ## When a mesh import has no physics bodies, bake trimesh [StaticBody3D] colliders (layer 1).

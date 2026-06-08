@@ -8,6 +8,7 @@ const _ObsStrat := preload("res://creature/motor/motor_obstacle_strategy.gd")
 const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector3] = [
@@ -788,6 +789,12 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     last_move_v = blocked_approach_v.normalized()
   var step_len := speed * lookahead
 
+  var terrain_active := bool(ctx.get("terrain_elevation_motor_active", false))
+  var terrain_space: PhysicsDirectSpaceState3D = ctx.get("terrain_physics_space")
+  var terrain_body: CharacterBody3D = ctx.get("terrain_physics_body")
+  var terrain_sampler = ctx.get("terrain_sampler")
+  var terrain_motor_p: Dictionary = ctx.get("terrain_motor_params", {})
+
   var order := evaluation_order_from_ctx(ctx)
   var skip_backtrack := (
     filter_blocked_approach
@@ -812,6 +819,12 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   var scored: Array = []
   for d in order:
     if d.length_squared() > 1e-14:
+      if terrain_active and terrain_space != null and terrain_body != null:
+        var terrain_probe := motor_cardinal_probe_step(footprint_half)
+        if _TerrainMotor.cardinal_blocked_by_terrain(
+          terrain_space, terrain_body, creature_pos, d, terrain_probe
+        ):
+          continue
       if intent_candidate_blocked_by_geometry(
         d,
         creature_pos,
@@ -913,6 +926,30 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       and (filter_seek_wall_hits or filter_blocked_approach or has_active_goal)
     ):
       cost += seek_backtrack_step_cost(d, last_move_v, w_seek_backtrack)
+    if (
+      terrain_active
+      and terrain_sampler != null
+      and d.length_squared() > 1e-14
+    ):
+      var xz_terrain := Vector2(creature_pos.x, creature_pos.z)
+      if terrain_sampler.has_method(&"local_depression_score"):
+        var dep_terrain: float = terrain_sampler.call(
+          &"local_depression_score", xz_terrain
+        )
+        var cur_elev: float = float(
+          terrain_sampler.call(&"sample_elevation", xz_terrain, creature_pos.y)
+        )
+        var probe_elev: float = float(
+          terrain_sampler.call(
+            &"elevation_at_cardinal_probe",
+            creature_pos,
+            d,
+            motor_cardinal_probe_step(footprint_half),
+          )
+        )
+        cost += _TerrainMotor.elevation_cost_delta(
+          cur_elev, probe_elev, dep_terrain, terrain_motor_p
+        )
     if chaos_amp > 1e-10 and d.length_squared() > 1e-14:
       var dir_rng := RandomNumberGenerator.new()
       var dir_seed := chaos_seed_base

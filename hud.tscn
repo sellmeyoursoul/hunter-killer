@@ -114,7 +114,7 @@ offset_bottom = 56.0
 grow_horizontal = 0
 theme_override_fonts/font = ExtResource("2_8sq4i")
 theme_override_font_sizes/font_size = 28
-text = "Rabbit 10 / 10"
+text = ""
 horizontal_alignment = 2
 
 [node name="MessageTimer" type="Timer" parent="." unique_id=1993260872]
