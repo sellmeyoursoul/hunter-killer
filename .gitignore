@@ -28,6 +28,9 @@
 !addons/godot-git-plugin/linux/*.so
 !addons/godot-git-plugin/macos/*.dylib
 
+# Godot Git Plugin temp/backup DLLs (Windows lock artifacts)
+addons/godot-git-plugin/**/~*
+
 
 # Fortran module files
 *.mod
