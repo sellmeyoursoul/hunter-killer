@@ -5,6 +5,9 @@ class_name MotorPlane
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 
+## Legacy 2D duel playfield width ([code]project.godot[/code] viewport) used to scale [code]*_px[/code] motor distances on 3D mains.
+const REFERENCE_MOTOR_PLAYFIELD_PX := 1890.0
+
 ## Idle intent on the horizontal motor plane.
 const HORIZONTAL_ZERO := Vector3.ZERO
 ## World +X (motor "right" / east).
@@ -96,6 +99,32 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
       maxf(0.0, cap3.radius + cap3.height * 0.5),
     )
   return he_xy
+
+
+## Multiplier for legacy pixel-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -> float:
+  if main == null or not main.has_method(&"get_motor_playfield_size"):
+    return 1.0
+  if playfield_size.x <= 0.0 or playfield_size.y <= 0.0:
+    return 1.0
+  var long_edge := maxf(playfield_size.x, playfield_size.y)
+  if long_edge >= REFERENCE_MOTOR_PLAYFIELD_PX * 0.25:
+    return 1.0
+  return minf(playfield_size.x, playfield_size.y) / REFERENCE_MOTOR_PLAYFIELD_PX
+
+
+## Scales distance-like [code]creature_motor[/code] keys ([code]*_px[/code], awareness radii) for 3D world units.
+static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Dictionary:
+  if is_equal_approx(scale, 1.0):
+    return motor_p
+  var out := motor_p.duplicate(true)
+  for key in [&"awareness_radius", &"awareness_cone_extra"]:
+    if out.has(key):
+      out[key] = float(out[key]) * scale
+  for key in out.keys():
+    if str(key).ends_with("_px"):
+      out[key] = float(out[key]) * scale
+  return out
 
 
 ## [CreatureDefinition] on the body or its [code]CreatureRoot3D[/code] parent.

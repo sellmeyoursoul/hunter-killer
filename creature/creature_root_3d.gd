@@ -29,13 +29,19 @@ func _propagate_definition_to_children() -> void:
   _mount_visual_from_definition()
 
 
+## Body child when present — visuals must follow [code]move_and_slide[/code] on [code]Body[/code], not the static root.
+func _visual_parent() -> Node:
+  return get_node_or_null("Body") if get_node_or_null("Body") != null else self
+
+
 ## Instantiates [member CreatureDefinition.variant_scene] or species [code].blend[/code] under [code]Visual[/code] (no collision).
 func _mount_visual_from_definition() -> void:
-  if get_node_or_null("Visual") != null:
+  var mount := _visual_parent()
+  if mount.get_node_or_null("Visual") != null:
     return
   var variant: Variant = definition.get("variant_scene")
   if variant is PackedScene:
-    _attach_visual_scene(variant as PackedScene)
+    _attach_visual_scene(variant as PackedScene, mount)
     return
   var pack_root := str(definition.get("asset_pack_root")).strip_edges()
   var species: StringName = definition.get("species_id")
@@ -48,16 +54,16 @@ func _mount_visual_from_definition() -> void:
   var ps := load(path) as PackedScene
   if ps == null:
     return
-  _attach_visual_scene(ps)
+  _attach_visual_scene(ps, mount)
 
 
-func _attach_visual_scene(ps: PackedScene) -> void:
+func _attach_visual_scene(ps: PackedScene, mount: Node) -> void:
   var inst := ps.instantiate() as Node3D
   if inst == null:
     return
   inst.name = "Visual"
   _disable_collision_recursive(inst)
-  add_child(inst)
+  mount.add_child(inst)
 
 
 func _disable_collision_recursive(node: Node) -> void:

@@ -17,7 +17,6 @@ const CELL_SIZE: int = 24
 const _TOKENS := preload("res://AI_int_lib/ai_action_tokens.gd")
 const _WIRE := preload("res://AI_int_lib/perception_wire.gd")
 const _RISK := preload("res://AI_int_lib/perception_risk_hints.gd")
-const _SAMPLING := preload("res://AI_int_lib/perception_sampling.gd")
 const _MOTOR := preload("res://creature/motor/cardinal_avoidance.gd")
 const _MotorOctScr := preload("res://creature/motor/motor_oct_directions.gd")
 const _ExploreScr := preload("res://creature/motor/expanding_cardinal_explore.gd")
@@ -286,29 +285,40 @@ func _creature_motor_params_for_body(body: Node) -> Dictionary:
   var base := _live_creature_motor_params()
   if body == null:
     return base
+  var motor_p := base
   var def_v: Variant = _MotorPlane.definition_for_body(body)
-  if def_v == null or not (def_v is Resource):
-    return base
-  var def_res := def_v as Resource
-  if def_res.get_script() != _CreatureDefinition:
-    return base
-  var pack_v: Variant = def_res.get("asset_pack_root")
-  var pack_root := str(pack_v).strip_edges() if pack_v != null else ""
-  if pack_root.is_empty():
-    var bid := body.get_instance_id()
-    if not _warned_missing_creature_pack_by_id.has(bid):
-      _warned_missing_creature_pack_by_id[bid] = true
-      _OLogSafe.error(
-        "Creature motor: asset_pack_root empty on '%s' — pack_resources.json overlay skipped; motion may oscillate (dev spine / high chaos)."
-        % str(body.name),
-        false,
-        "AiDriver",
-      )
-    return base
-  var g := get_node_or_null("/root/GameConfig")
-  if g != null and g.has_method("get_creature_motor_params_for_pack"):
-    return g.call("get_creature_motor_params_for_pack", pack_root) as Dictionary
-  return _Merge.merge_creature_motor_pack_overlay(base.duplicate(true), pack_root)
+  if def_v != null and def_v is Resource:
+    var def_res := def_v as Resource
+    if def_res.get_script() == _CreatureDefinition:
+      var pack_v: Variant = def_res.get("asset_pack_root")
+      var pack_root := str(pack_v).strip_edges() if pack_v != null else ""
+      if pack_root.is_empty():
+        var bid := body.get_instance_id()
+        if not _warned_missing_creature_pack_by_id.has(bid):
+          _warned_missing_creature_pack_by_id[bid] = true
+          _OLogSafe.error(
+            "Creature motor: asset_pack_root empty on '%s' — pack_resources.json overlay skipped; motion may oscillate (dev spine / high chaos)."
+            % str(body.name),
+            false,
+            "AiDriver",
+          )
+      else:
+        var g := get_node_or_null("/root/GameConfig")
+        if g != null and g.has_method("get_creature_motor_params_for_pack"):
+          motor_p = g.call("get_creature_motor_params_for_pack", pack_root) as Dictionary
+        else:
+          motor_p = _Merge.merge_creature_motor_pack_overlay(base.duplicate(true), pack_root)
+  return _scale_motor_params_for_playfield(body, motor_p)
+
+
+## Applies 3D world-meter scaling to legacy pixel-tuned motor distance keys.
+func _scale_motor_params_for_playfield(body: Node, motor_p: Dictionary) -> Dictionary:
+  var ss: Variant = body.get("screen_size")
+  var playfield := ss as Vector2 if typeof(ss) == TYPE_VECTOR2 else Vector2.ZERO
+  if playfield == Vector2.ZERO:
+    playfield = _viewport_playfield_size_px(body)
+  var dist_scale := _MotorPlane.motor_distance_scale_for_main(_main, playfield)
+  return _MotorPlane.scale_motor_distance_params(motor_p, dist_scale)
 
 
 ## Returns merged [code]perception[/code] dict (same fallback pattern as [_live_creature_motor_params]).

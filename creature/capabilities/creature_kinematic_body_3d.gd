@@ -267,6 +267,11 @@ func _on_mob_hitbox_body_entered(body: Node3D) -> void:
   hit.emit()
 
 
+func _motor_distance_scale() -> float:
+  var main := get_tree().current_scene if is_inside_tree() else null
+  return _MotorPlane.motor_distance_scale_for_main(main, screen_size)
+
+
 func _footprint_half_for_clamp() -> Vector2:
   var gc := get_node_or_null("/root/GameConfig")
   var motor_p: Dictionary = {}
@@ -282,7 +287,8 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   var inc := Vector3(heading.x, 0.0, heading.z).normalized()
   var half := _footprint_half_for_clamp()
   var pos2 := _MotorPlane.from_vec3(global_position)
-  var lookahead := maxf(obstacle_lookahead_px, 48.0)
+  var dist_scale := _motor_distance_scale()
+  var lookahead := maxf(obstacle_lookahead_px, 48.0) * dist_scale
   if _wall_slide_pick == null:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
@@ -355,9 +361,20 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
     )
   n = n.normalized()
   if _wall_slide_away_hint.length_squared() > 1e-12:
-    inc = _wall_slide_pick.pick_tangent_away_from_v3(inc, n, _wall_slide_away_hint)
+    inc = _MotorPlane.to_horizontal_vec3(
+      _wall_slide_pick.pick_tangent_away_from(
+        _MotorPlane.from_vec3(inc),
+        _MotorPlane.from_vec3(n),
+        _MotorPlane.from_vec3(_wall_slide_away_hint),
+      )
+    )
   else:
-    inc = _wall_slide_pick.pick_tangent_closer_v3(inc, n)
+    inc = _MotorPlane.to_horizontal_vec3(
+      _wall_slide_pick.pick_tangent_closer(
+        _MotorPlane.from_vec3(inc),
+        _MotorPlane.from_vec3(n),
+      )
+    )
   return _MotorPlane.to_horizontal_vec3(
     _PlayfieldClamp.slide_heading_along_edge(
       _MotorPlane.from_vec3(inc),

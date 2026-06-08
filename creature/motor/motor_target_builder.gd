@@ -270,8 +270,8 @@ static func collect_hostile_threat_samples(
     var gd := _Motor.awareness_gate_distance(creature_pos, he_xy, mp)
     var vel := _spatial_motor_velocity(rb)
     out.append(
-      Callable(_Threat, &"make").call(
-        mp, gd, true, vel, rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB
+      _Threat.make(
+        _as_grid(mp), gd, true, _as_grid(vel), rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB
       )
     )
   return out
