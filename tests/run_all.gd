@@ -2517,18 +2517,18 @@ func _test_predator_prey_memory_chase() -> void:
     Time.get_ticks_msec(),
   )
   driver.set("_goal_belief_by_body", {pred_bid: beliefs})
-  predator.global_position = Vector2(prey_pos.x + 5000.0, prey_pos.z)
+  predator.global_position = Vector3(prey_pos.x + 5000.0, 0.0, prey_pos.z)
   var forgotten: Dictionary = _GoalBeliefScr.sample_best_moving(
     beliefs,
-    Vector3(predator.global_position.x, 0.0, predator.global_position.y),
+    predator.global_position,
     motor_p,
     _GkReg.GK_FIND_FOOD,
     {},
     Time.get_ticks_msec(),
   )
   _assert(not bool(forgotten.get("active", false)), "memory cleared past forget radius")
-  root.remove_child(predator)
-  predator.free()
+  root.remove_child(carn_root)
+  carn_root.free()
   root.remove_child(driver)
   driver.free()
 
