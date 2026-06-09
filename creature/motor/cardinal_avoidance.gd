@@ -9,6 +9,8 @@ const _EightWay := preload("res://creature/motor/eight_way_directions.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
+const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
+const _NavHint := preload("res://environment/nav_path_hint.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector3] = [
@@ -641,12 +643,10 @@ static func interior_env_cost_at(
   var grid := environment_grid as EnvironmentGridBaked
   if not grid.is_valid_shape():
     return 0.0
-  var cell_r := grid.sample_cell_data_at_world(_motor_to_grid_world(predicted))
-  if cell_r == null:
+  var footprint_r := maxf(creature_size * 0.5, 0.25)
+  var env := _Footprint.merged_env_at_footprint(grid, predicted, footprint_r)
+  if env == null:
     return 0.0
-  if not (cell_r is EnvironmentCellData):
-    return 0.0
-  var env := cell_r as EnvironmentCellData
   var w_solid: float = float(p.get("weight_solid", 8000.0))
   var w_slow: float = float(p.get("weight_slow", 4.0))
   if not env.can_enter(creature_size):
@@ -789,6 +789,41 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     last_move_v = blocked_approach_v.normalized()
   var step_len := speed * lookahead
 
+  goal_seek_targets = _filter_occluded_vector3_targets(goal_seek_targets)
+  food_targets = _filter_occluded_vector3_targets(food_targets)
+  prey_seek_targets = _filter_occluded_vector3_targets(prey_seek_targets)
+
+  var nav_bias_dir := Vector3.ZERO
+  var nav_w := 0.0
+  if bool(ctx.get("navmesh_hint_enabled", false)):
+    nav_w = float(ctx.get("navmesh_hint_weight", 6.0))
+    var map_rid: RID = ctx.get("navmesh_map_rid", RID())
+    if map_rid.is_valid() and nav_w > 0.0:
+      var seek_goal := _nearest_vector3_target(creature_pos, goal_seek_targets)
+      if seek_goal == Vector3.ZERO:
+        seek_goal = _nearest_vector3_target(creature_pos, prey_seek_targets)
+      if seek_goal != Vector3.ZERO:
+        var toward := (seek_goal - creature_pos)
+        toward.y = 0.0
+        if toward.length_squared() > 4.0:
+          var probe_dir := toward.normalized()
+          if intent_candidate_blocked_by_geometry(
+            probe_dir,
+            creature_pos,
+            footprint_half,
+            step_len,
+            static_obs,
+            bounds_min,
+            bounds_max,
+            block_min_clr,
+            filter_seek_wall_hits,
+            filter_blocked_cardinals,
+          ):
+            var agent_r := float(ctx.get("nav_agent_radius", maxf(footprint_half.x, footprint_half.y)))
+            nav_bias_dir = _NavHint.unit_direction_to_next_waypoint(
+              map_rid, creature_pos, seek_goal, agent_r
+            )
+
   var terrain_active := bool(ctx.get("terrain_elevation_motor_active", false))
   var terrain_space: PhysicsDirectSpaceState3D = ctx.get("terrain_physics_space")
   var terrain_body: CharacterBody3D = ctx.get("terrain_physics_body")
@@ -892,6 +927,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       w_seek_prey_raw,
       forward_cone_only,
     )
+    if nav_w > 0.0 and nav_bias_dir.length_squared() > 1e-12 and d.length_squared() > 1e-14:
+      cost -= nav_w * maxf(0.0, d.normalized().dot(nav_bias_dir))
     if d.length_squared() < 1e-14:
       if w_idle_explore > 0.0 and allow_explore:
         cost += w_idle_explore
@@ -1488,3 +1525,22 @@ static func _as_vector3_array(v: Variant) -> Array:
     elif typeof(item) == TYPE_DICTIONARY:
       out.append(_motor_read_pos((item as Dictionary).get("position", _motor_horizontal_zero())))
   return out
+
+
+## Live motor targets with LoS blocked are removed at ingest; passthrough keeps memory-routed positions.
+static func _filter_occluded_vector3_targets(targets: Array) -> Array:
+  return targets
+
+
+static func _nearest_vector3_target(creature_pos: Vector3, targets: Array) -> Vector3:
+  var best := Vector3.ZERO
+  var best_d := INF
+  for t in targets:
+    if typeof(t) != TYPE_VECTOR3:
+      continue
+    var p := t as Vector3
+    var d := creature_pos.distance_squared_to(p)
+    if d < best_d:
+      best_d = d
+      best = p
+  return best

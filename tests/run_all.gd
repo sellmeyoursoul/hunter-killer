@@ -55,6 +55,10 @@ const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kine
 const _SolidShrub3DScenePath := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
 const _RabbitArchetypeRes := preload("res://creature/species/rabbit_archetype.tres")
 const _FoxArchetypeRes := preload("res://creature/species/fox_archetype.tres")
+const _EnvMerge := preload("res://environment/environment_movement_impact.gd")
+const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
+const _LoS := preload("res://creature/motor/line_of_sight.gd")
+const _NavHint := preload("res://environment/nav_path_hint.gd")
 
 var _failures: int = 0
 
@@ -225,6 +229,11 @@ func _run_all() -> void:
   _test_carnivore_pursuit_intent()
   _test_creature_diet_on_3d_bodies()
   _test_ai_driver_creature_registry()
+  _test_environment_movement_impact_merge()
+  _test_environment_footprint_overlap()
+  _test_creature_size_sync_capsule()
+  await _test_line_of_sight_wall_occlusion()
+  _test_nav_path_hint_invalid_map()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -1756,7 +1765,7 @@ func _test_playfield_open_corner_escape() -> void:
   )
 
 
-## Inner playable rect implied by wide/tall boundary bar AABBs in [code]obstacle_field.tscn[/code].
+## Inner playable rect implied by wide/tall perimeter boundary bar AABBs (motor-plane game units).
 func _playfield_inner_rect_from_boundary_aabbs(aabbs: Array) -> Rect2:
   var inner := Vector2(-INF, -INF)
   var outer := Vector2(INF, INF)
@@ -1784,20 +1793,24 @@ func _playfield_inner_rect_from_boundary_aabbs(aabbs: Array) -> Rect2:
   return Rect2(inner, outer - inner)
 
 
-func _collect_obstacle_field_aabbs() -> Array:
-  var packed := load("res://obstacle_field.tscn") as PackedScene
-  if packed == null:
-    return []
-  var field := packed.instantiate() as Node
-  root.add_child(field)
-  var geom := _GeomScr.collect_obstacle_group_statics(field)
-  field.queue_free()
-  return geom.get("aabbs", []) as Array
+## Synthetic perimeter bars for legacy 1920×1080 motor-plane boundary escape tests (no scene load).
+func _synthetic_playfield_boundary_bar_aabbs(inner_size: Vector2) -> Array:
+  var hw := inner_size.x * 0.5
+  var hh := inner_size.y * 0.5
+  var bar_thick := 50.0
+  var bar_long := maxf(hw, hh) + bar_thick
+  return [
+    {"position": Vector2(hw, -bar_thick), "half_extents": Vector2(bar_long, bar_thick)},
+    {"position": Vector2(hw, inner_size.y + bar_thick), "half_extents": Vector2(bar_long, bar_thick)},
+    {"position": Vector2(-bar_thick, hh), "half_extents": Vector2(bar_thick, bar_long)},
+    {"position": Vector2(inner_size.x + bar_thick, hh), "half_extents": Vector2(bar_thick, bar_long)},
+  ]
 
 
 func _test_playfield_boundary_edge_rocks() -> void:
-  var aabbs := _collect_obstacle_field_aabbs()
-  _assert(not aabbs.is_empty(), "obstacle field yields boundary AABBs")
+  var inner_size := Vector2(1920.0, 1080.0)
+  var aabbs := _synthetic_playfield_boundary_bar_aabbs(inner_size)
+  _assert(not aabbs.is_empty(), "synthetic boundary bars yield AABBs")
   var inner := _playfield_inner_rect_from_boundary_aabbs(aabbs)
   _assert(is_equal_approx(inner.position.x, 0.0), "edge rocks inner left aligns with playfield")
   _assert(is_equal_approx(inner.position.y, 0.0), "edge rocks inner top aligns with playfield")
@@ -1854,7 +1867,7 @@ func _test_ne_corner_food_seek_egress() -> void:
   var bounds_max := Vector2(1920.0, 1080.0)
   var he := Vector2(13.5, 30.5)
   var ne_pos := Vector3(bounds_max.x - he.x - 8.0, 0.0, he.y + 6.0)
-  var aabbs := _collect_obstacle_field_aabbs()
+  var aabbs := _synthetic_playfield_boundary_bar_aabbs(bounds_max)
   var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var food_east := ne_pos + Vector3(240.0, 0.0, 0.0)
   var esc_food: Vector3 = d.call(
@@ -3464,9 +3477,9 @@ func _test_ai_driver_creature_registry() -> void:
 
 func _test_creature_3d_template_scenes_load() -> void:
   _assert(ResourceLoader.exists("res://creature/templates/creature_herbivore_kinematic_3d.tscn"), "herbivore 3d template exists")
-  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_rigid_3d.tscn"), "carnivore 3d template exists")
+  _assert(ResourceLoader.exists("res://creature/templates/creature_carnivore_kinematic_3d.tscn"), "carnivore 3d template exists")
   var herb := load("res://creature/templates/creature_herbivore_kinematic_3d.tscn") as PackedScene
-  var carn := load("res://creature/templates/creature_carnivore_rigid_3d.tscn") as PackedScene
+  var carn := load("res://creature/templates/creature_carnivore_kinematic_3d.tscn") as PackedScene
   var root_h := herb.instantiate() as Node
   var root_c := carn.instantiate() as Node
   _assert(root_h.get_script() == _CreatureRoot3D, "herbivore root uses CreatureRoot3D script")
@@ -3477,6 +3490,9 @@ func _test_creature_3d_template_scenes_load() -> void:
   _assert(mob_hitbox != null, "herbivore template has MobHitbox Area3D")
   _assert(mob_hitbox.monitoring, "MobHitbox monitoring enabled")
   _assert(mob_hitbox.collision_mask == 4, "MobHitbox collision_mask includes mob layer")
+  var pred_body := root_c.get_node_or_null("Body") as CharacterBody3D
+  _assert(pred_body != null, "carnivore template has Body CharacterBody3D")
+  _assert(pred_body.is_hostile, "carnivore template Body is hostile")
   root_h.queue_free()
   root_c.queue_free()
   var rabbit: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
@@ -5292,6 +5308,76 @@ func _test_food_plant_awareness_gating(ad_script: Script) -> void:
   _assert(ready_far.is_empty() and unready_far.is_empty(), "bush outside awareness radius is excluded")
   driver.queue_free()
   main.queue_free()
+
+
+func _test_environment_movement_impact_merge() -> void:
+  var solid := _EnvCell.new()
+  solid.passible = false
+  var mud := _EnvCell.new()
+  mud.passible = true
+  mud.movement_impact = 0.3
+  var water := _EnvCell.new()
+  water.passible = true
+  water.movement_impact = 0.1
+  var m1 := _EnvMerge.merge_greatest_impact([mud, solid])
+  _assert(m1 != null and not m1.passible, "solid beats mud in merge")
+  var m2 := _EnvMerge.merge_greatest_impact([mud, water])
+  _assert(m2 != null and is_equal_approx(m2.movement_impact, 0.3), "mud beats water in merge")
+
+
+func _test_environment_footprint_overlap() -> void:
+  var frac := _Footprint.circle_cell_overlap_fraction(
+    Vector2(50.0, 50.0), 10.0, Vector2(40.0, 40.0), 20.0
+  )
+  _assert(frac >= _Footprint.MIN_OVERLAP_FRACTION, "centered footprint meets overlap threshold")
+  var frac_edge := _Footprint.circle_cell_overlap_fraction(
+    Vector2(95.0, 50.0), 5.0, Vector2(80.0, 40.0), 20.0
+  )
+  _assert(frac_edge < _Footprint.MIN_OVERLAP_FRACTION, "grazing overlap below threshold")
+
+
+func _test_creature_size_sync_capsule() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3.ZERO)
+  var base_r: float = body.get_collision_capsule_radius()
+  var base_size: float = body.creature_size
+  body.apply_effective_creature_size(base_size * 2.0)
+  _assert(
+    is_equal_approx(body.get_collision_capsule_radius(), base_r * 2.0),
+    "capsule radius tracks creature_size scale",
+  )
+  _assert(
+    is_equal_approx(body.get_los_eye_height(), body.get_collision_capsule_height() * 0.9),
+    "los eye height derives from capsule height",
+  )
+  main.queue_free()
+
+
+func _test_line_of_sight_wall_occlusion() -> void:
+  var scene_root := Node3D.new()
+  root.add_child(scene_root)
+  var wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(2.0, 4.0, 4.0)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  wall.add_child(col)
+  wall.position = Vector3(5.0, 1.0, 0.0)
+  wall.collision_layer = 1
+  scene_root.add_child(wall)
+  await process_frame
+  var space := scene_root.get_world_3d().direct_space_state
+  var from := Vector3(0.0, 1.0, 0.0)
+  var to := Vector3(10.0, 1.0, 0.0)
+  var frac := _LoS.occlusion_fraction(space, from, to, [])
+  _assert(_LoS.is_occluded(frac), "static wall occludes line of sight > 60%")
+  scene_root.queue_free()
+
+
+func _test_nav_path_hint_invalid_map() -> void:
+  var dir := _NavHint.unit_direction_to_next_waypoint(RID(), Vector3.ZERO, Vector3(10, 0, 0), 0.35)
+  _assert(dir == Vector3.ZERO, "invalid nav map returns zero hint")
 
 
 func _test_bundled_inference_helpers() -> void:

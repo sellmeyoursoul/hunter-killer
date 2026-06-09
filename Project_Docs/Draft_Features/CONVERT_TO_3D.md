@@ -42,11 +42,11 @@
 |------|-------------------------|-------------------------|
 | **Main loop** | [`main_3d.gd`](../../main_3d.gd) — grasslands `.blend` playfield (fallback floor box), ENGINE/HUMAN duel, HUD overlay, perspective camera (`TOP_DOWN` / `OVER_SHOULDER`) | — |
 | **Playfield bounds** | [`PlayfieldBounds3D`](../../environment/playfield_bounds_3d.gd) — XZ bounds from playfield root collision AABB (mesh fallback) — **D10** | — |
-| **Creatures** | Unified **`CharacterBody3D` + `move_and_slide`** for all species — [`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn), [`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn) — **D4** | [`creature_rigid_body_3d.gd`](../../creature/capabilities/creature_rigid_body_3d.gd) stub + stale test/doc refs to rigid template — cleanup |
+| **Creatures** | Unified **`CharacterBody3D` + `move_and_slide`** for all species — [`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn), [`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn) — **D4** | — |
 | **Obstacles / plants** | Perimeter/interior boulders; [`solid_shrub_3d`](../../assets/plants/solid_shrub/solid_shrub_3d.tscn) / [`open_shrub_3d`](../../assets/plants/open_shrub/open_shrub_3d.tscn); [`MotorObstacleGeometry`](../../creature/motor/motor_obstacle_geometry.gd) | — |
 | **Motor / AI** | [`MotorPlane`](../../creature/motor/motor_plane.gd) XZ adapter; [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) on `PhysicsBody3D`; [`TerrainMotor`](../../creature/motor/terrain_motor.gd) ground conforming; awareness = radius + forward cone (**no LoS rays**) | — |
 | **Environment grid** | [`main_3d.gd`](../../main_3d.gd) `_create_default_open_grid()` — procedural flat all-open grid in world meters; [`PlayfieldGroundSampler`](../../environment/playfield_ground_sampler.gd) for sculpted terrain elevation | **D5:** dev scaffold only; PNG kind bake and 3D tile pipeline deferred |
-| **Physics config** | [`project.godot`](../../project.godot) — **`3d_physics/layer_*`**: `world_static`, `player`, `mob`, `plant_mob_block` | Promote to [ENVIRONMENT_MODEL §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) (§3.11) |
+| **Physics config** | [`project.godot`](../../project.godot) — **`3d_physics/layer_*`**: `world_static`, `player`, `mob`, `plant_mob_block`; promoted to [ENVIRONMENT_MODEL §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | — |
 | **Debug** | [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on **both** duel templates (herbivore: live + ghost mob samples; carnivore: prey in reach) | — |
 | **Tests** | 3D template smoke, predation contact, playfield bounds, 3D-only motor/awareness fixtures in [`tests/run_all.gd`](../../tests/run_all.gd) | — |
 
@@ -54,11 +54,11 @@
 
 | Topic | Doc |
 |-------|-----|
-| **3D creature capabilities & templates** | [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) — **drift:** §3 rigid fork stale vs **D4** |
-| **Motor refactor, awareness cone, LoS policy** | [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) (§D–§E) |
+| **3D creature capabilities & templates** | [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) — unified kinematic **D4** |
+| **Motor refactor, awareness cone, LoS policy** | [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) (§D–§E) — active design; supersedes 2D inventory |
 | **Memory, occlusion boundary** | [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md) |
-| **Environment / layer contract** | [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — promote **§6** to 3D when layers ship |
-| **2D motor inventory (until superseded)** | [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) |
+| **Environment / layer contract** | [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — **§6 3D layers** |
+| **2D motor inventory (historical)** | [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) |
 | **Backlog parking lot** | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — Perception & awareness; 3D tile tools (D5) |
 
 ### 2.3 Migration dependency graph
@@ -100,10 +100,10 @@ flowchart TB
 | **M0** | **Done** | `MotorPlane`; 3D templates; headless tests in `run_all.gd` |
 | **M1** | **Done** | `main_3d.tscn`; 3D layers; plants/obstacles; **D10** bounds |
 | **M2** | **Done** | Motor parity on XZ; D7 unit rename; 3D-only `run_all.gd` fixtures |
-| **M3** | **Partial** | 2D production scenes removed; §3.11 definitive doc promotion not done |
-| **M4** | **Not started** | LoS, navmesh, vertical crush, **3D tile tools (D5)** |
+| **M3** | **Done** | Rigid stub removed; §3.11 doc promotion; `run_all.gd` 3D-only fixtures |
+| **M4** | **Partial** | **Done:** LoS (combined gate), navmesh cardinal hint, footprint ≥25%, movement_impact merge. **Out of scope:** D5 tile authoring (separate project). **Deferred:** vertical crush. |
 
-**Workstreams** — see §3 for detail; summary: **3.1–3.5, 3.6, 3.8–3.10 Done**; **3.7 Partial**; **3.11 Open**.
+**Workstreams** — see §3 for detail; summary: **3.1–3.6, 3.8–3.11 Done**; **3.7 Partial**.
 
 ### 2.5 Intentional drift / lessons learned
 
@@ -111,7 +111,6 @@ Gaps between this doc’s **2026-06-04** draft and today’s code. Many reflect 
 
 | Gap | Code today | Likely intent | Tracking |
 |-----|------------|---------------|----------|
-| **Species physics fork** | `creature_rigid_body_3d.gd` stub; [CREATURE_3D_ARCHITECTURE §3](CREATURE_3D_ARCHITECTURE.md) lists rigid carnivore | **D4:** abandoned; all species kinematic | Cleanup stub + child doc (M3) |
 | **Env grid vs terrain mesh** | Procedural open grid + separate `PlayfieldGroundSampler` | **D5:** dev/test scaffold; not production tile pipeline | §3.7 Partial |
 | **TerrainMotor vs D6** | Elevation costs + ground snap on sculpted mesh | **Ground conforming** in scope; **vertical gameplay** out | D6 |
 | **Vector2 motor plane** | `MotorPlane`, `PlayfieldClamp`, `EnvironmentGridBaked.origin_world: Vector2` | **D3 Phase A:** deliberate adapter boundary | Not unit debt |
@@ -187,11 +186,11 @@ Ordered checklist. **Status:** Done / Partial / Open.
 - **Done:** 3D template load, predation contact, playfield bounds, HUD motor-body resolve, and legacy motor/awareness tests ported to 3D fixtures in [`tests/run_all.gd`](../../tests/run_all.gd).
 - **Acceptance:** CI / local `run_all` green on 3D-only fixtures. **Met.**
 
-### 3.11 Documentation promotion triggers — **Open**
+### 3.11 Documentation promotion triggers — **Done**
 
-- When **3d** layers shipped: update **Definitive** [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
-- When motor runs on 3D main: [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) supersedes [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) inventory.
-- Update [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) §3 for **D4** (remove rigid fork as active path).
+- **3D layers shipped:** [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) updated to **`3d_physics`** table.
+- **Motor on 3D main:** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) is active design; [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) marked **2D historical** with supersession banner.
+- [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) §3 reflects **D4** (unified kinematic templates only).
 
 ---
 
@@ -234,14 +233,19 @@ Resolved items are **normative**.
 | **Skeleton animation** | `Sprite2D` | `CreatureDefinition.variant_scene` |
 | **Silhouette vs unexplored FOV** | Single interior motor bucket | [ENVIRONMENT_MODEL §11](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) / OBJECT carry-forward |
 
-### 5.1 Line of sight — implementation sketch (post-shell)
+### 5.1 Line of sight — M4 normative (shipped)
 
-When 3D colliders exist:
+- **Rays:** [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd) — `PhysicsRayQueryParameters3D`, mask **`world_static` (layer 1)**.
+- **Eye height:** optional `creature_motor.los_eye_height` in pack; default **`0.9 × collision_capsule_height`** (synced with `creature_size` via [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)).
+- **Target:** centroid / AABB center.
+- **Gate:** **combined** distance + cone + LoS in [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd); **`>60%` occluded = blocked** for live ingest.
+- **Ghosts / memory:** persist when occluded (object permanence); LoS gates **live** refresh only.
+- **Deferred:** semantic env factors ([CREATURE_MEMORY §7.4](CREATURE_MEMORY.md)); stealth/observation skill checks ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 
-- Use `PhysicsRayQueryParameters3D` from **eye height** (creature) to target centroid or visibility point.
-- **Mask:** `world_static` + occluder / obstacle groups aligned with motor static collection.
-- Integrate into [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) awareness gate and future `SeekCandidate.line_of_sight_clear` / `occluded` ([CREATURE_MOVEMENT_V2 §D](CREATURE_MOVEMENT_V2.md)).
-- Pair with **semantic** env factors when grid-only truth fails ([CREATURE_MEMORY §7.4](CREATURE_MEMORY.md)).
+### 5.2 NavigationMesh3D — M4 normative (shipped)
+
+- **`NavigationRegion3D`** baked in [`main_3d.gd`](../../main_3d.gd); agent radius = max duel `collision_capsule_radius`.
+- **Integration:** cardinal **hint** only ([`nav_path_hint.gd`](../../environment/nav_path_hint.gd) + [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd)); all **ENGINE** creatures; `navmesh_hint_enabled` / `navmesh_hint_weight` in `creature_motor`.
 
 ---
 
@@ -252,8 +256,8 @@ When 3D colliders exist:
 | **M0** | **Done** | 3D templates + `MotorPlane`; headless duel tests in `run_all.gd` |
 | **M1** | **Done** | `main_3d` production entry — camera, **D10** bounds, 3D layers, static rocks/plants |
 | **M2** | **Done** | Motor parity on XZ; D7 unit rename; 3D-only `run_all.gd` fixtures |
-| **M3** | **Partial** | 2D production scenes removed; definitive doc promotion (§3.11) |
-| **M4** | **Not started** | LoS, navmesh, vertical crush, **3D tile tools (D5)** — separate plans / PRs |
+| **M3** | **Done** | Rigid stub cleanup; definitive doc promotion (§3.11); `run_all.gd` 3D-only fixtures |
+| **M4** | **Partial** | LoS + nav hint + footprint + merge **shipped**; D5 **separate project**; crush **deferred** |
 
 ---
 
@@ -278,3 +282,5 @@ When 3D colliders exist:
 | 2026-06-04 | Initial umbrella draft: as-is snapshot, workstreams, decisions D1–D9, deferred 3D capabilities, milestones M0–M4. |
 | 2026-06-08 | Restored living doc after implementation drift: 3D production snapshot (M0–M1 done, M2 partial); resolved D1–D10 (**D9:** in-repo under `assets/`); §2.4 status + §2.5 intentional drift; unified kinematic bodies (D4); dev terrain scaffold (D5); awareness overlay on both templates; §3.9 Done; acceptance scorecard updated. |
 | 2026-06-08 | **M2 complete:** D7 unit rename (no `px` in motor/env/creature/AI paths); `run_all.gd` migrated to 3D-only fixtures; §3.6 / §3.10 Done. |
+| 2026-06-08 | **M3 complete:** Deleted `creature_rigid_body_3d` stub; synthetic boundary AABB tests; §3.11 doc promotion (ENVIRONMENT_MODEL §6, CREATURE_MOVEMENT supersession, CREATURE_3D_ARCHITECTURE D4). |
+| 2026-06-08 | **M4 partial:** LoS combined gate (`line_of_sight.gd`), navmesh cardinal hint, footprint ≥25%, movement_impact merge, creature size↔capsule sync; D5 out of scope; crush deferred. |

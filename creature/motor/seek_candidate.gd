@@ -20,6 +20,9 @@ static func make(
   is_moving: bool = false,
   instance_id: int = 0,
   source: StringName = &"",
+  line_of_sight_clear: bool = true,
+  occluded: bool = false,
+  occlusion_fraction: float = 0.0,
 ) -> Dictionary:
   return {
     "pos": pos,
@@ -28,6 +31,9 @@ static func make(
     "is_moving": is_moving,
     "instance_id": instance_id,
     "source": source,
+    "line_of_sight_clear": line_of_sight_clear,
+    "occluded": occluded,
+    "occlusion_fraction": occlusion_fraction,
   }
 
 
@@ -58,6 +64,9 @@ static func build_from_food_split(food_split: Dictionary) -> Array:
           false,
           int(d.get("instance_id", 0)),
           SOURCE_LIVE_READY,
+          bool(d.get("line_of_sight_clear", true)),
+          bool(d.get("occluded", false)),
+          float(d.get("occlusion_fraction", 0.0)),
         )
       )
     else:
@@ -76,6 +85,9 @@ static func build_from_food_split(food_split: Dictionary) -> Array:
           false,
           int(d2.get("instance_id", 0)),
           SOURCE_LIVE_UNREADY,
+          bool(d2.get("line_of_sight_clear", true)),
+          bool(d2.get("occluded", false)),
+          float(d2.get("occlusion_fraction", 0.0)),
         )
       )
     else:

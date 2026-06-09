@@ -10,6 +10,7 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _LoS := preload("res://creature/motor/line_of_sight.gd")
 
 
 static func _as_grid(v: Vector3) -> Vector2:
@@ -70,6 +71,67 @@ static func _policy_groups(policy: Resource, key: String) -> Array:
   return raw as Array
 
 
+static func _resolve_los_eye_height(body: Node, motor_p: Dictionary) -> float:
+  var pack_h := float(motor_p.get("los_eye_height", -1.0))
+  if pack_h > 0.0:
+    return pack_h
+  if body != null and body.has_method(&"get_los_eye_height"):
+    return float(body.call(&"get_los_eye_height"))
+  return 1.0
+
+
+static func _los_context_from_body(body: Node, motor_p: Dictionary) -> Dictionary:
+  if body == null or not (body is Node3D):
+    return {"enabled": false}
+  var world := (body as Node3D).get_world_3d()
+  if world == null:
+    return {"enabled": false}
+  var space := world.direct_space_state
+  if space == null:
+    return {"enabled": false}
+  var exclude: Array = []
+  if body is CollisionObject3D:
+    exclude.append((body as CollisionObject3D).get_rid())
+  return {
+    "enabled": true,
+    "space_state": space,
+    "eye_height": _resolve_los_eye_height(body, motor_p),
+    "exclude_rids": exclude,
+  }
+
+
+static func _los_flags_for_target(
+  creature_pos: Vector3,
+  target_pos: Vector3,
+  los_ctx: Dictionary,
+) -> Dictionary:
+  if not bool(los_ctx.get("enabled", false)):
+    return {
+      "line_of_sight_clear": true,
+      "occluded": false,
+      "occlusion_fraction": 0.0,
+    }
+  var space: PhysicsDirectSpaceState3D = los_ctx.get("space_state")
+  var eye_h := float(los_ctx.get("eye_height", 1.0))
+  var exclude: Array = los_ctx.get("exclude_rids", []) as Array
+  return _LoS.line_of_sight_clear(space, creature_pos, eye_h, target_pos, exclude)
+
+
+static func _passes_combined_awareness(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  target_pos: Vector3,
+  motor_p: Dictionary,
+  facing: Vector3,
+  use_prey_cone: bool,
+  los_ctx: Dictionary,
+) -> bool:
+  if not _in_awareness_zone(creature_pos, he_xy, target_pos, motor_p, facing, use_prey_cone):
+    return false
+  var los := _los_flags_for_target(creature_pos, target_pos, los_ctx)
+  return bool(los.get("line_of_sight_clear", true))
+
+
 static func _in_awareness_zone(
   creature_pos: Vector3,
   he_xy: Vector2,
@@ -123,6 +185,7 @@ static func scan_food_plants_in_awareness(
   creature_pos: Vector3,
   he_xy: Vector2,
   facing: Vector3,
+  los_ctx: Dictionary = {},
 ) -> Dictionary:
   var ready_positions: Array = []
   var unready_positions: Array = []
@@ -137,10 +200,17 @@ static func scan_food_plants_in_awareness(
       if not n.has_method(&"is_pickup_ready_for_motor"):
         continue
       var fp: Vector3 = _spatial_motor_position(n)
-      if not _in_awareness_zone(creature_pos, he_xy, fp, motor_p, facing, false):
+      if not _passes_combined_awareness(creature_pos, he_xy, fp, motor_p, facing, false, los_ctx):
         continue
+      var los := _los_flags_for_target(creature_pos, fp, los_ctx)
       var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
-      var entry := {"pos": fp, "instance_id": n.get_instance_id()}
+      var entry := {
+        "pos": fp,
+        "instance_id": n.get_instance_id(),
+        "line_of_sight_clear": los.get("line_of_sight_clear", true),
+        "occluded": los.get("occluded", false),
+        "occlusion_fraction": los.get("occlusion_fraction", 0.0),
+      }
       var cal_v: Variant = n.get("current_calories")
       if typeof(cal_v) == TYPE_FLOAT or typeof(cal_v) == TYPE_INT:
         entry["anticipated_calories"] = float(cal_v)
@@ -160,6 +230,7 @@ static func collect_prey_entries(
   creature_pos: Vector3,
   he_xy: Vector2,
   facing: Vector3,
+  los_ctx: Dictionary = {},
 ) -> Array:
   var out: Array = []
   if tree == null or body == null:
@@ -180,10 +251,18 @@ static func collect_prey_entries(
         continue
       seen[nid] = true
       var prey_pos := _spatial_motor_position(n)
-      if not _in_awareness_zone(creature_pos, he_xy, prey_pos, motor_p, facing, true):
+      if not _passes_combined_awareness(creature_pos, he_xy, prey_pos, motor_p, facing, true, los_ctx):
         continue
       var vel := _spatial_motor_velocity(n)
-      out.append({"instance_id": nid, "pos": prey_pos, "velocity": vel})
+      var los := _los_flags_for_target(creature_pos, prey_pos, los_ctx)
+      out.append({
+        "instance_id": nid,
+        "pos": prey_pos,
+        "velocity": vel,
+        "line_of_sight_clear": los.get("line_of_sight_clear", true),
+        "occluded": los.get("occluded", false),
+        "occlusion_fraction": los.get("occlusion_fraction", 0.0),
+      })
   return out
 
 
@@ -196,9 +275,10 @@ static func collect_prey_positions(
   creature_pos: Vector3,
   he_xy: Vector2,
   facing: Vector3,
+  los_ctx: Dictionary = {},
 ) -> Array:
   var out: Array = []
-  for e in collect_prey_entries(tree, body, policy, motor_p, creature_pos, he_xy, facing):
+  for e in collect_prey_entries(tree, body, policy, motor_p, creature_pos, he_xy, facing, los_ctx):
     if typeof(e) != TYPE_DICTIONARY:
       continue
     var p: Variant = (e as Dictionary).get("pos", null)
@@ -216,6 +296,7 @@ static func collect_pursuit_targets(
   creature_pos: Vector3,
   he_xy: Vector2,
   facing: Vector3,
+  los_ctx: Dictionary = {},
 ) -> Array:
   var arr: Array = []
   if tree == null or body == null:
@@ -236,7 +317,7 @@ static func collect_pursuit_targets(
         continue
       seen[nid] = true
       var prey_pos := _spatial_motor_position(n)
-      if not _in_awareness_zone(creature_pos, he_xy, prey_pos, motor_p, facing, true):
+      if not _passes_combined_awareness(creature_pos, he_xy, prey_pos, motor_p, facing, true, los_ctx):
         continue
       var vel := _spatial_motor_velocity(n)
       arr.append({"position": prey_pos, "velocity": vel, "cost_scale": 1.0})
@@ -251,6 +332,7 @@ static func collect_hostile_threat_samples(
   creature_pos: Vector3,
   he_xy: Vector2,
   facing: Vector3,
+  los_ctx: Dictionary = {},
 ) -> Array:
   var out: Array = []
   if tree == null or body == null:
@@ -265,13 +347,24 @@ static func collect_hostile_threat_samples(
     if rb == body:
       continue
     var mp := _spatial_motor_position(rb)
-    if not _in_awareness_zone(creature_pos, he_xy, mp, motor_p, facing, false):
+    if not _passes_combined_awareness(creature_pos, he_xy, mp, motor_p, facing, false, los_ctx):
       continue
     var gd := _Motor.awareness_gate_distance(creature_pos, he_xy, mp)
     var vel := _spatial_motor_velocity(rb)
+    var los := _los_flags_for_target(creature_pos, mp, los_ctx)
     out.append(
       _Threat.make(
-        _as_grid(mp), gd, true, _as_grid(vel), rb.get_instance_id(), true, true, _Threat.SOURCE_LIVE_MOB
+        _as_grid(mp),
+        gd,
+        true,
+        _as_grid(vel),
+        rb.get_instance_id(),
+        true,
+        true,
+        _Threat.SOURCE_LIVE_MOB,
+        bool(los.get("line_of_sight_clear", true)),
+        bool(los.get("occluded", false)),
+        float(los.get("occlusion_fraction", 0.0)),
       )
     )
   return out
@@ -308,24 +401,25 @@ static func build_motor_target_lists(
   var prey_groups := _policy_groups(policy, "prey_groups")
   var supports_plant_belief := not plant_groups.is_empty()
   var supports_prey_hunt := not prey_groups.is_empty()
+  var los_ctx := _los_context_from_body(body, motor_p)
   var food_split := scan_food_plants_in_awareness(
-    tree, policy, motor_p, creature_pos, he_xy, facing
+    tree, policy, motor_p, creature_pos, he_xy, facing, los_ctx
   )
   var prey_entries: Array = []
   var prey_positions: Array = []
   var pursuit_targets: Array = []
   if supports_prey_hunt:
     prey_entries = collect_prey_entries(
-      tree, body, policy, motor_p, creature_pos, he_xy, facing
+      tree, body, policy, motor_p, creature_pos, he_xy, facing, los_ctx
     )
     prey_positions = collect_prey_positions(
-      tree, body, policy, motor_p, creature_pos, he_xy, facing
+      tree, body, policy, motor_p, creature_pos, he_xy, facing, los_ctx
     )
     pursuit_targets = collect_pursuit_targets(
-      tree, body, policy, motor_p, creature_pos, he_xy, facing
+      tree, body, policy, motor_p, creature_pos, he_xy, facing, los_ctx
     )
   var threat_samples: Array = collect_hostile_threat_samples(
-    tree, body, motor_p, creature_pos, he_xy, facing
+    tree, body, motor_p, creature_pos, he_xy, facing, los_ctx
   )
   var seek_candidates: Array = _SeekCand.build_from_food_split(food_split)
   for e in prey_entries:
@@ -343,6 +437,9 @@ static func build_motor_target_lists(
         true,
         int(ent.get("instance_id", 0)),
         _SeekCand.SOURCE_LIVE_PREY,
+        bool(ent.get("line_of_sight_clear", true)),
+        bool(ent.get("occluded", false)),
+        float(ent.get("occlusion_fraction", 0.0)),
       )
     )
   var primary_threat := nearest_hostile_threat_sample(threat_samples)
