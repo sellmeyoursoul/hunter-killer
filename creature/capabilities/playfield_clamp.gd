@@ -61,7 +61,7 @@ static func inbound_normal_if_closing(
   half_extents: Vector2,
   bounds_max: Vector2,
   step_length: float,
-  min_clearance_px: float = 4.0,
+  min_clearance: float = 4.0,
   bounds_min: Vector2 = Vector2.ZERO,
 ) -> Vector2:
   if heading_unit.length_squared() < 1e-12 or step_length <= 0.0:
@@ -82,22 +82,22 @@ static func inbound_normal_if_closing(
   const CLOSURE_EPS := 0.25
   var best_n := Vector2.ZERO
   var worst_closure := 0.0
-  if u.x < -AXIS_EPS and left_pred < min_clearance_px and left_pred < m.x - CLOSURE_EPS:
+  if u.x < -AXIS_EPS and left_pred < min_clearance and left_pred < m.x - CLOSURE_EPS:
     var closure := m.x - left_pred
     if closure > worst_closure:
       worst_closure = closure
       best_n = Vector2.RIGHT
-  if u.x > AXIS_EPS and right_pred < min_clearance_px and right_pred < m.y - CLOSURE_EPS:
+  if u.x > AXIS_EPS and right_pred < min_clearance and right_pred < m.y - CLOSURE_EPS:
     var closure := m.y - right_pred
     if closure > worst_closure:
       worst_closure = closure
       best_n = Vector2.LEFT
-  if u.y < -AXIS_EPS and top_pred < min_clearance_px and top_pred < m.z - CLOSURE_EPS:
+  if u.y < -AXIS_EPS and top_pred < min_clearance and top_pred < m.z - CLOSURE_EPS:
     var closure := m.z - top_pred
     if closure > worst_closure:
       worst_closure = closure
       best_n = Vector2.DOWN
-  if u.y > AXIS_EPS and bot_pred < min_clearance_px and bot_pred < m.w - CLOSURE_EPS:
+  if u.y > AXIS_EPS and bot_pred < min_clearance and bot_pred < m.w - CLOSURE_EPS:
     var closure := m.w - bot_pred
     if closure > worst_closure:
       worst_closure = closure
@@ -111,26 +111,26 @@ static func inbound_normal_if_hugging(
   world_pos: Vector2,
   half_extents: Vector2,
   bounds_max: Vector2,
-  hug_band_px: float,
+  hug_band: float,
   bounds_min: Vector2 = Vector2.ZERO,
 ) -> Vector2:
-  if heading_unit.length_squared() < 1e-12 or hug_band_px <= 0.0:
+  if heading_unit.length_squared() < 1e-12 or hug_band <= 0.0:
     return Vector2.ZERO
   var u := heading_unit.normalized()
   var m := edge_margins(world_pos, half_extents, bounds_max, bounds_min)
   const AXIS_EPS := 0.12
   var best_n := Vector2.ZERO
   var tightest := INF
-  if m.x < hug_band_px and u.x < -AXIS_EPS and m.x < tightest:
+  if m.x < hug_band and u.x < -AXIS_EPS and m.x < tightest:
     tightest = m.x
     best_n = Vector2.RIGHT
-  if m.y < hug_band_px and u.x > AXIS_EPS and m.y < tightest:
+  if m.y < hug_band and u.x > AXIS_EPS and m.y < tightest:
     tightest = m.y
     best_n = Vector2.LEFT
-  if m.z < hug_band_px and u.y < -AXIS_EPS and m.z < tightest:
+  if m.z < hug_band and u.y < -AXIS_EPS and m.z < tightest:
     tightest = m.z
     best_n = Vector2.DOWN
-  if m.w < hug_band_px and u.y > AXIS_EPS and m.w < tightest:
+  if m.w < hug_band and u.y > AXIS_EPS and m.w < tightest:
     tightest = m.w
     best_n = Vector2.UP
   return best_n
@@ -145,21 +145,21 @@ static func slide_heading_along_edge(
   world_pos: Vector2,
   half_extents: Vector2,
   bounds_max: Vector2,
-  lookahead_px: float,
+  lookahead: float,
   slide_pick: RefCounted,
   away_hint: Vector2 = Vector2.ZERO,
   bounds_min: Vector2 = Vector2.ZERO,
-  min_clearance_px: float = 4.0,
+  min_clearance: float = 4.0,
 ) -> Vector2:
   if heading_unit.length_squared() < 1e-12 or slide_pick == null:
     return heading_unit
   var inc := heading_unit.normalized()
-  var step := maxf(lookahead_px, 8.0)
+  var step := maxf(lookahead, 8.0)
   var n := inbound_normal_if_closing(
-    inc, world_pos, half_extents, bounds_max, step, min_clearance_px, bounds_min
+    inc, world_pos, half_extents, bounds_max, step, min_clearance, bounds_min
   )
   if n.length_squared() < 1e-12:
-    var hug_band := maxf(min_clearance_px * 2.0, 14.0)
+    var hug_band := maxf(min_clearance * 2.0, 14.0)
     n = inbound_normal_if_hugging(inc, world_pos, half_extents, bounds_max, hug_band, bounds_min)
   if n.length_squared() < 1e-12:
     return inc

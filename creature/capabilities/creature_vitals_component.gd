@@ -26,7 +26,7 @@ func apply_parent_definition(def: Variant) -> void:
 
 ## Params:
 ## - baseline_per_sec, cost_per_unit_moved: merged globals (e.g. [code]GameConfig[/code] / [code]creature_motor[/code]).
-## - distance_moved: units consistent with cost (pixels in 2D POC; 3D world units when wired).
+## - distance_moved: world units consistent with [param cost_per_unit_moved].
 ## - delta: tick seconds.
 func apply_burn_from_globals(baseline_per_sec: float, cost_per_unit_moved: float, distance_moved: float, delta: float) -> void:
   var bmul := 1.0

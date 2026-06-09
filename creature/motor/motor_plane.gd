@@ -5,8 +5,8 @@ class_name MotorPlane
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 
-## Legacy 2D duel playfield width ([code]project.godot[/code] viewport) used to scale [code]*_px[/code] motor distances on 3D mains.
-const REFERENCE_MOTOR_PLAYFIELD_PX := 1890.0
+## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
+const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
 
 ## Idle intent on the horizontal motor plane.
 const HORIZONTAL_ZERO := Vector3.ZERO
@@ -101,30 +101,55 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   return he_xy
 
 
-## Multiplier for legacy pixel-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Multiplier for legacy reference-playfield-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
 static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -> float:
   if main == null or not main.has_method(&"get_motor_playfield_size"):
     return 1.0
   if playfield_size.x <= 0.0 or playfield_size.y <= 0.0:
     return 1.0
   var long_edge := maxf(playfield_size.x, playfield_size.y)
-  if long_edge >= REFERENCE_MOTOR_PLAYFIELD_PX * 0.25:
+  if long_edge >= REFERENCE_MOTOR_PLAYFIELD_EDGE * 0.25:
     return 1.0
-  return minf(playfield_size.x, playfield_size.y) / REFERENCE_MOTOR_PLAYFIELD_PX
+  return minf(playfield_size.x, playfield_size.y) / REFERENCE_MOTOR_PLAYFIELD_EDGE
 
 
-## Scales distance-like [code]creature_motor[/code] keys ([code]*_px[/code], awareness radii) for 3D world units.
+## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
 static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Dictionary:
   if is_equal_approx(scale, 1.0):
     return motor_p
   var out := motor_p.duplicate(true)
-  for key in [&"awareness_radius", &"awareness_cone_extra"]:
-    if out.has(key):
-      out[key] = float(out[key]) * scale
   for key in out.keys():
-    if str(key).ends_with("_px"):
+    if _is_distance_motor_param_key(key):
       out[key] = float(out[key]) * scale
   return out
+
+
+## True when [param key] is a motor distance tuned for playfield scale ([method scale_motor_distance_params]).
+static func _is_distance_motor_param_key(key: Variant) -> bool:
+  var s := str(key)
+  if s in [
+    "awareness_radius",
+    "awareness_cone_extra",
+    "explore_coverage_cell",
+    "interior_env_near_mob",
+    "calorie_cost_per_unit_moved",
+    "motor_stuck_move_epsilon",
+  ]:
+    return true
+  for suffix in [
+    "_radius",
+    "_clearance",
+    "_band",
+    "_probe",
+    "_epsilon",
+    "_pad",
+    "_move",
+    "_edge",
+    "_lookahead",
+  ]:
+    if s.ends_with(suffix):
+      return true
+  return false
 
 
 ## [CreatureDefinition] on the body or its [code]CreatureRoot3D[/code] parent.

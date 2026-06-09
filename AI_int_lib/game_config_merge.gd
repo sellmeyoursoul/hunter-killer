@@ -47,19 +47,19 @@ static func creature_motor_spine() -> Dictionary:
     "awareness_memory_horizon_sec": 0.0,
     "weight_obstacle": 1.25,
     ## Prey ENGINE: strip merged shrub static AABBs this close to current [code]food_seek_targets[/code] so grazing can beat repulsion.
-    "vegetation_blocking_forage_clearance_px": 92.0,
+    "vegetation_blocking_forage_clearance": 92.0,
     ## Multiply base [code]weight_obstacle[/code] for carnivores (shrub footprints + pursuit balance).
     "weight_obstacle_predator_boost": 1.55,
-    "interior_env_near_mob_px": 70.0,
+    "interior_env_near_mob": 70.0,
     "weight_interior_env_solid": 8000.0,
     "weight_interior_env_slow": 4.0,
     "hunger_explore_interior_scale_min": 0.16,
     "hunger_explore_edge_scale_min": 0.16,
     "hunger_explore_hold_scale_min": 0.2,
     "hunger_explore_urgency_power": 1.25,
-    ## Vitals / calories (CREATURE_MEMORY §3): baseline time drain matches [HUNGER_AND_EATING.md](../Project_Docs/Completed_Features/HUNGER_AND_EATING.md) §3; movement adds cost per pixel traveled this tick.
+    ## Vitals / calories (CREATURE_MEMORY §3): baseline time drain matches [HUNGER_AND_EATING.md](../Project_Docs/Completed_Features/HUNGER_AND_EATING.md) §3; movement adds cost per world unit traveled this tick.
     "calorie_baseline_drain_per_sec": 1.0,
-    "calorie_cost_per_px_moved": 0.002,
+    "calorie_cost_per_unit_moved": 0.002,
     ## Predator meal gain on successful prey contact; clamped at [code]caloric_needs[/code] on the carnivore body.
     "predator_prey_meal_calories": 5,
     "weight_seek_ready_food": 16.0,
@@ -73,14 +73,14 @@ static func creature_motor_spine() -> Dictionary:
     "weight_blocked_approach_sector": 18.0,
     ## Forage pinch: physics ticks stalled (or zero-intent turn) before forced escape intent.
     "herbivore_pinch_escape_stuck_ticks": 1,
-    "food_seek_imminent_mob_radius_px": 100.0,
+    "food_seek_imminent_mob_radius": 100.0,
     "jeopardy_forced_turn_ticks": 5,
     "weight_avoid_unready_food": 5.5,
     "food_avoid_unready_scale_when_ready_target": 0.35,
     "weight_explore_idle_penalty": 10.5,
     "weight_explore_turn_bias": 0.14,
     "explore_intent_hold_extra_ticks": 5,
-    "explore_coverage_cell_px": 52.0,
+    "explore_coverage_cell": 52.0,
     "explore_trail_max_cells": 96,
     "weight_explore_trail_repulsion": 2.35,
     ## Expanding 8-way explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 8-leg cycle.
@@ -95,9 +95,9 @@ static func creature_motor_spine() -> Dictionary:
     "motor_seek_direction_lock_sec": 1.0,
     ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
     "weight_seek_prey": 22.0,
-    ## Consecutive physics ticks with nonzero intent but displacement below [code]motor_stuck_move_epsilon_px[/code] before escape shaping runs.
+    ## Consecutive physics ticks with nonzero intent but displacement below [code]motor_stuck_move_epsilon[/code] before escape shaping runs.
     "motor_stuck_escape_ticks": 8,
-    "motor_stuck_move_epsilon_px": 1.25,
+    "motor_stuck_move_epsilon": 1.25,
     ## Multiply [code]weight_seek_ready_food[/code] while stuck (breaks wall-slide deadlock toward prey).
     "motor_stuck_prey_pull_scale": 1.5,
     ## Boost expanding cardinal hint when stuck with no food/prey targets.
@@ -128,23 +128,23 @@ static func creature_motor_spine() -> Dictionary:
     ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
     "weight_obstacle_shield_prey": 28.0,
     "weight_obstacle_pin_predator": 22.0,
-    "predator_chase_edge_band_px": 110.0,
+    "predator_chase_edge_band": 110.0,
     "predator_chase_edge_weight_mul": 0.12,
     "predator_chase_pin_scale": 0.15,
     "predator_chase_closing_intent_dot": 0.35,
     "predator_obstructed_hunt_lock_ticks": 10,
     "predator_obstructed_max_toward_dot": 0.22,
     "predator_edge_kill_close_mul": 1.35,
-    "predator_edge_kill_close_pad_px": 12.0,
+    "predator_edge_kill_close_pad": 12.0,
     "predator_stalemate_full_ticks": 6,
     "herbivore_flee_toward_threat_penalty": 8.0,
     "herbivore_flee_obstacle_shield_scale": 14.0,
     "herbivore_flee_shield_max_toward_dot": 0.15,
     "herbivore_flee_shield_min_away_dot": -0.05,
     "herbivore_flee_shield_require_chase_block": true,
-    "herbivore_flee_corner_edge_px": 48.0,
-    "herbivore_flee_corner_threat_move_px": 120.0,
-    "motor_playfield_corner_band_px": 56.0,
+    "herbivore_flee_corner_edge": 48.0,
+    "herbivore_flee_corner_threat_move": 120.0,
+    "motor_playfield_corner_band": 56.0,
     ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
     "carnivore_explore_rotate_physics_ticks": 36,
     ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
@@ -154,8 +154,8 @@ static func creature_motor_spine() -> Dictionary:
     "starvation_override_food_ceiling": 0.10,
     ## Habitual locale / memory ([CREATURE_MEMORY.md §10](../Project_Docs/Draft_Features/CREATURE_MEMORY.md)) — wired in memory phase.
     "weight_believed_goal_pull": 6.4,
-    "believed_goal_hotspot_near_radius_px": 250.0,
-    "believed_goal_seek_escalate_radius_px": 1000.0,
+    "believed_goal_hotspot_near_radius": 250.0,
+    "believed_goal_seek_escalate_radius": 1000.0,
     "believed_goal_escalate_seek_mul": 1.35,
     "believed_goal_escalate_preserve_blend": 0.55,
     "locale_prior_pull_w_norm": 3.0,
@@ -166,8 +166,8 @@ static func creature_motor_spine() -> Dictionary:
     "locale_prior_idle_evict_per_attempt_sec": 1.0,
     "salient_write_max_per_sec": 100.0,
     "escape_reversal_window_sec": 1.0,
-    "tactic_squeeze_clearance_px": 28.0,
-    "tactic_conspecific_aid_radius_px": 120.0,
+    "tactic_squeeze_clearance": 28.0,
+    "tactic_conspecific_aid_radius": 120.0,
     "replay_bell_k": 1.4,
     "replay_w_fit": 0.4,
     "replay_w_store": 0.6,
@@ -175,11 +175,11 @@ static func creature_motor_spine() -> Dictionary:
     "replay_n_min": 3.0,
     "urgency_boost_linear_slope": 25.0,
     "replay_urgency_slot_b_min": 90.0,
-    "goal_memory_precise_radius_px": 1000.0,
-    "goal_memory_moving_last_known_radius_px": 50.0,
+    "goal_memory_precise_radius": 1000.0,
+    "goal_memory_moving_last_known_radius": 50.0,
     "goal_memory_mover_ttl_sec": 10.0,
     "goal_memory_ghost_horizon_sec": 0.4,
-    "goal_memory_forget_radius_px": 2400.0,
+    "goal_memory_forget_radius": 2400.0,
     "goal_memory_ttl_sec": 45.0,
     "goal_memory_coarse_ttl_sec": 15.0,
     "goal_memory_max_entries": 25,

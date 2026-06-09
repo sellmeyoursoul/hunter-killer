@@ -105,16 +105,16 @@ static func effective_modality_allowlist_for_pack(pack_root: String) -> Array:
   return out
 
 
-static func cell_px_from_motor(motor_p: Dictionary) -> float:
-  return maxf(16.0, float(motor_p.get("explore_coverage_cell_px", 52.0)))
+static func coverage_cell_from_motor(motor_p: Dictionary) -> float:
+  return maxf(16.0, float(motor_p.get("explore_coverage_cell", 52.0)))
 
 
 static func grid_indices_for_anchor(anchor: Vector3, motor_p: Dictionary) -> Vector2i:
   var anchor_2d := Vector2(anchor.x, anchor.z)
-  var cell_px := cell_px_from_motor(motor_p)
+  var coverage_cell := coverage_cell_from_motor(motor_p)
   return Vector2i(
-    int(floorf(anchor_2d.x / cell_px)),
-    int(floorf(anchor_2d.y / cell_px)),
+    int(floorf(anchor_2d.x / coverage_cell)),
+    int(floorf(anchor_2d.y / coverage_cell)),
   )
 
 
@@ -125,10 +125,10 @@ static func anchor_cell_in_bounds(anchor: Vector3, motor_p: Dictionary, env_grid
   var grid := env_grid as EnvironmentGridBaked
   if not grid.is_valid_shape():
     return false
-  var cell_px := cell_px_from_motor(motor_p)
+  var coverage_cell := coverage_cell_from_motor(motor_p)
   var rel := Vector2(anchor.x, anchor.z)
-  var cx := int(floorf(rel.x / cell_px))
-  var cy := int(floorf(rel.y / cell_px))
+  var cx := int(floorf(rel.x / coverage_cell))
+  var cy := int(floorf(rel.y / coverage_cell))
   return cx >= 0 and cy >= 0 and cx < grid.cell_width and cy < grid.cell_height
 
 
@@ -381,7 +381,7 @@ static func _jeopardy_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> fl
   if typeof(pos_v) != TYPE_VECTOR3:
     return 1.0
   var pos := pos_v as Vector3
-  var r := float(motor_p.get("food_seek_imminent_mob_radius_px", 100.0))
+  var r := float(motor_p.get("food_seek_imminent_mob_radius", 100.0))
   for mp in imminent:
     var threat_p := _read_pos_v3(mp)
     if threat_p != Vector3.ZERO and pos.distance_to(threat_p) <= r:
@@ -627,7 +627,7 @@ func consult_replay_weight(
     return 1.0
   var best_strength := 0.0
   var best_bundle: Dictionary = {}
-  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
   for key in _rows.keys():
     var row: Dictionary = _rows[key]
     if row.get("goal_kind") != goal_kind:
@@ -749,9 +749,9 @@ static func project_believed_goal_bias(
   var pull_mag := 0.0
   if store == null or dominant_goal_kind != _GkReg.GK_FIND_FOOD:
     return {"pull_dir": pull_dir, "pull_mag": pull_mag, "sector_weights": sector_out}
-  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
   var w_norm := float(motor_p.get("locale_prior_pull_w_norm", 3.0))
-  var cell_px := cell_px_from_motor(motor_p)
+  var coverage_cell := coverage_cell_from_motor(motor_p)
   var candidates: Array = []
   for key in store._rows.keys():
     var row: Dictionary = store._rows[key]
@@ -759,7 +759,7 @@ static func project_believed_goal_bias(
       continue
     var cx := int(row.get("cell_x", 0))
     var cy := int(row.get("cell_y", 0))
-    var center_2d := Vector2((float(cx) + 0.5) * cell_px, (float(cy) + 0.5) * cell_px)
+    var center_2d := Vector2((float(cx) + 0.5) * coverage_cell, (float(cy) + 0.5) * coverage_cell)
     var center := _MotorPlane.to_horizontal_vec3(center_2d)
     var dist := creature_pos.distance_to(center)
     if dist > hotspot_r:
@@ -805,7 +805,7 @@ static func project_believed_goal_bias(
     "replay_weight": replay_w,
     "consult_context_hash": consult_hash,
     "hotspot_centroid": centroid,
-    "nearest_prior_dist_px": _nearest_find_food_prior_dist(store, creature_pos, motor_p),
+    "nearest_prior_dist": _nearest_find_food_prior_dist(store, creature_pos, motor_p),
   }
 
 
@@ -815,7 +815,7 @@ static func _nearest_find_food_prior_dist(
 ) -> float:
   if store == null:
     return INF
-  var cell_px := cell_px_from_motor(motor_p)
+  var coverage_cell := coverage_cell_from_motor(motor_p)
   var best := INF
   for key in store._rows.keys():
     var row: Dictionary = store._rows[key]
@@ -824,7 +824,7 @@ static func _nearest_find_food_prior_dist(
     var cx := int(row.get("cell_x", 0))
     var cy := int(row.get("cell_y", 0))
     var center := _MotorPlane.to_horizontal_vec3(
-      Vector2((float(cx) + 0.5) * cell_px, (float(cy) + 0.5) * cell_px)
+      Vector2((float(cx) + 0.5) * coverage_cell, (float(cy) + 0.5) * coverage_cell)
     )
     best = minf(best, creature_pos.distance_to(center))
   return best
@@ -842,8 +842,8 @@ static func escalate_seek_multiplier(
     return 1.0
   if pull_mag > 1e-4:
     return 1.0
-  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
-  var escalate_r := float(motor_p.get("believed_goal_seek_escalate_radius_px", 1000.0))
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
+  var escalate_r := float(motor_p.get("believed_goal_seek_escalate_radius", 1000.0))
   var nearest := _nearest_find_food_prior_dist(store, creature_pos, motor_p)
   if nearest > hotspot_r and nearest <= escalate_r:
     return float(motor_p.get("believed_goal_escalate_seek_mul", 1.35))
@@ -859,7 +859,7 @@ func consult_threat_response(
 ) -> Dictionary:
   var best_mod := &""
   var best_rank := 0.0
-  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
   var ctx_hash := context_hash_for_avoid_hostiles(
     _GkReg.GK_AVOID_HOSTILES, creature_pos, motor_p, motor_ctx.get("environment_grid", null)
   )

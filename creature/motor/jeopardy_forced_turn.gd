@@ -46,17 +46,17 @@ static func _is_straight_continuation(candidate: Vector3, straight: Vector3) -> 
   return candidate.normalized().dot(straight.normalized()) >= _STRAIGHT_DOT_EPS
 
 
-## Closest mob in the forward cone within [param imminent_radius_px] (footprint clearance).
+## Closest mob in the forward cone within [param imminent_radius] (footprint clearance).
 static func primary_threat_in_forward_cone(
   creature_center: Vector3,
   half: Vector2,
   facing: Vector3,
   mobs: Array,
-  imminent_radius_px: float,
+  imminent_radius: float,
   cone_cos_threshold: float,
 ) -> Dictionary:
   var out := {"found": false, "clearance": INF, "mob_pos": Vector3.ZERO}
-  if imminent_radius_px <= 0.0 or mobs.is_empty():
+  if imminent_radius <= 0.0 or mobs.is_empty():
     return out
   var f := facing
   if f.length_squared() < 1e-8:
@@ -70,7 +70,7 @@ static func primary_threat_in_forward_cone(
       continue
     var mob_pos: Vector3 = _read_pos_v3(item.get("position", Vector3.ZERO))
     var clearance := _Motor.awareness_gate_distance(creature_center, half, mob_pos)
-    if clearance >= imminent_radius_px:
+    if clearance >= imminent_radius:
       continue
     var delta := mob_pos - creature_center
     var dist := delta.length()
@@ -91,7 +91,7 @@ static func primary_threat_in_forward_cone(
 ## Updates jeopardy streak state; returns whether a forced turn should fire this tick.
 ## Params:
 ## - io_state: Driver-owned dict ([code]last_incumbent[/code], [code]last_clearance[/code], [code]jeopardy_streak[/code]).
-## - tick: [code]incumbent[/code], [code]creature_position[/code], [code]creature_half_extents[/code], [code]creature_facing[/code], [code]mobs[/code], [code]imminent_radius_px[/code], [code]cone_cos_threshold[/code], [code]required_ticks[/code].
+## - tick: [code]incumbent[/code], [code]creature_position[/code], [code]creature_half_extents[/code], [code]creature_facing[/code], [code]mobs[/code], [code]imminent_radius[/code], [code]cone_cos_threshold[/code], [code]required_ticks[/code].
 static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Dictionary:
   var result := {"should_force": false, "threat_mob_pos": Vector3.ZERO}
   var incumbent: Vector3 = _read_dir_v3(tick.get("incumbent", Vector3.ZERO), Vector3.ZERO)
@@ -102,7 +102,7 @@ static func evaluate_jeopardy_tick(tick: Dictionary, io_state: Dictionary) -> Di
     Vector3(1.0, 0.0, 0.0),
   )
   var mobs: Array = tick.get("mobs", []) as Array
-  var imminent_r: float = float(tick.get("imminent_radius_px", 0.0))
+  var imminent_r: float = float(tick.get("imminent_radius", 0.0))
   var cone_cos: float = float(tick.get("cone_cos_threshold", -2.0))
   var required := maxi(1, int(tick.get("required_ticks", 5)))
 
@@ -179,7 +179,7 @@ static func pick_forced_turn(
   var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
   var facing_v: Vector3 = _read_dir_v3(ctx.get("creature_facing", Vector3(1.0, 0.0, 0.0)))
   var sz_env: float = float(ctx.get("creature_size", 0.0))
-  var near_thr: float = float(ctx.get("interior_env_near_mob_px", 70.0))
+  var near_thr: float = float(ctx.get("interior_env_near_mob", 70.0))
   var d_sq := _Motor.nearest_mob_dist_sq(creature_pos, footprint_half, mobs)
   var mob_threat_high := near_thr > 0.0 and d_sq < near_thr * near_thr
   var interior_p := {
@@ -191,7 +191,7 @@ static func pick_forced_turn(
   var food_targets: Array = ctx.get("food_seek_targets", []) as Array
   var w_seek_raw: float = float(ctx.get("weight_seek_ready_food", 0.0))
   var imminent_pts: Array = ctx.get("imminent_mob_points", []) as Array
-  var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius_px", 0.0))
+  var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius", 0.0))
   var w_seek := _Motor.effective_food_seek_weight(
     w_seek_raw, creature_pos, footprint_half, imminent_pts, imminent_r
   )

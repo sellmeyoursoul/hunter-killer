@@ -39,7 +39,7 @@
   "creature_half_extent_y": 30.5,
   "scripted_intent_hold_physics_ticks": 8,
   "explore_intent_hold_extra_ticks": 5,
-  "explore_coverage_cell_px": 52.0,
+  "explore_coverage_cell": 52.0,
   "explore_trail_max_cells": 96,
   "weight_explore_trail_repulsion": 2.35,
   "weight_explore_turn_bias": 0.14,
@@ -53,9 +53,9 @@
   "awareness_memory_weight": 0.35,
   "awareness_memory_horizon_sec": 0.0,
   "weight_obstacle": 1.25,
-  "food_seek_imminent_mob_radius_px": 100.0,
+  "food_seek_imminent_mob_radius": 100.0,
   "jeopardy_forced_turn_ticks": 5,
-  "interior_env_near_mob_px": 70.0,
+  "interior_env_near_mob": 70.0,
   "weight_interior_env_solid": 8000.0,
   "weight_interior_env_slow": 4.0
   }

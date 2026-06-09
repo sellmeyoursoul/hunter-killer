@@ -3,7 +3,7 @@ class_name CreatureVitalsMath
 ## Pure calorie math shared by 2D/3D creatures — **single definition** of burn formula.
 ## Params:
 ## - baseline_per_sec, cost_per_unit_moved: merged global defaults (e.g. from [code]GameConfig[/code]).
-## - distance_moved: path length this tick in **the same units** as [param cost_per_unit_moved] (px in 2D POC, world units in 3D when tuned).
+## - distance_moved: path length this tick in **the same units** as [param cost_per_unit_moved] (world units on 3D playfields).
 ## - delta: integration step seconds.
 ## - baseline_mul, movement_mul: [member CreatureDefinition.calorie_baseline_drain_multiplier] and movement multiplier.
 

@@ -18,7 +18,7 @@ const _ControlMode := preload("res://creature/capabilities/creature_control_mode
 
 @export var definition: Variant
 @export var is_hostile: bool = false
-@export var obstacle_lookahead_px: float = 96.0
+@export var obstacle_lookahead: float = 96.0
 
 var creature_move_intent: Vector3 = Vector3.ZERO
 var last_move_direction: Vector3 = _MotorPlane.HORIZONTAL_RIGHT
@@ -34,7 +34,7 @@ var current_calories: float = 30.0
 var _food_intake_policy: Resource
 var _starvation_fired: bool = false
 var _calorie_baseline_drain_per_sec: float = 1.0
-var _calorie_cost_per_px_moved: float = 0.002
+var _calorie_cost_per_unit_moved: float = 0.002
 var _defeat_hidden: bool = false
 var _wall_slide_pick: RefCounted
 var _wall_slide_away_hint: Vector3 = Vector3.ZERO
@@ -206,12 +206,12 @@ func _push_calories_to_vitals() -> void:
 
 func _refresh_calorie_burn_params() -> void:
   _calorie_baseline_drain_per_sec = 1.0
-  _calorie_cost_per_px_moved = 0.002
+  _calorie_cost_per_unit_moved = 0.002
   var gc := get_node_or_null("/root/GameConfig")
   if gc != null and gc.has_method(&"get_creature_motor_params"):
     var cm: Dictionary = gc.get_creature_motor_params()
     _calorie_baseline_drain_per_sec = float(cm.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec))
-    _calorie_cost_per_px_moved = float(cm.get("calorie_cost_per_px_moved", _calorie_cost_per_px_moved))
+    _calorie_cost_per_unit_moved = float(cm.get("calorie_cost_per_unit_moved", _calorie_cost_per_unit_moved))
 
 
 func _apply_calorie_drain_and_starvation(delta: float) -> void:
@@ -220,7 +220,7 @@ func _apply_calorie_drain_and_starvation(delta: float) -> void:
   var dist_moved := Vector2(velocity.x, velocity.z).length() * delta
   var burn: float = _CreatureVitalsMath.burn_amount(
     _calorie_baseline_drain_per_sec,
-    _calorie_cost_per_px_moved,
+    _calorie_cost_per_unit_moved,
     dist_moved,
     delta,
     1.0,
@@ -303,7 +303,7 @@ func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   var pos2_local := pos2 - bmin
   var bmax_local := bmax - bmin
   var dist_scale := _motor_distance_scale()
-  var lookahead := maxf(obstacle_lookahead_px, 48.0) * dist_scale
+  var lookahead := maxf(obstacle_lookahead, 48.0) * dist_scale
   if _wall_slide_pick == null:
     return _MotorPlane.to_horizontal_vec3(
       _PlayfieldClamp.slide_heading_along_edge(
