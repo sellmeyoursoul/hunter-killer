@@ -1,8 +1,8 @@
 # Hunter Killer — Convert to 3D (migration umbrella)
 
-> **Purpose:** Umbrella spec for moving the **playable application** from the current **2D playfield** to a **3D ship target**. Creature capability/templates are **not** duplicated here — see [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md). **Index:** [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
+> **Purpose:** Umbrella spec for the **2D → 3D playfield migration**. Production entry is **3D** ([`main_3d.tscn`](../../main_3d.tscn)). Creature capability/templates are **not** duplicated here — see [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md). **Index:** [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 >
-> **Tier:** Draft (tier II) — `<<Question>>` / `<<Comment>>` expected until maintainers resolve decisions in §4.
+> **Tier:** Draft (tier II) — living doc; resolved decisions in §4.
 
 ---
 
@@ -19,6 +19,8 @@
 - Replacing ENGINE motor with LLM-driven movement ([AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md)).
 - Big-bang `res://` repo layout ([REPO_LAYOUT_PLAN.md](REPO_LAYOUT_PLAN.md)) unless coordinated in a separate change.
 - Implementing line-of-sight, navmesh, or volumetric crush in the **same** milestone as the baseline 3D shell (§5 — separate phases).
+- **Vertical gameplay** (jump, climb, shelves) — **D6**; later enhancement.
+- **Production terrain authoring** via Godot 4.x 3D tile tools — **D5** follow-on; current mesh/grid is dev/test scaffolding only.
 
 ---
 
@@ -26,36 +28,38 @@
 
 **Repo / project root:** Directory containing `project.godot`.
 
-**Engine & version:** Godot **4.6.x** (match `project.godot`); **Forward Plus** renderer and **Jolt** 3D physics already configured.
+**Engine & version:** Godot **4.6.x** (match `project.godot`); **Forward Plus** renderer and **Jolt** 3D physics configured.
 
-**Main scenes / entry (today):** [`main.tscn`](../../main.tscn) + [`main.gd`](../../main.gd) — `run/main_scene` in `project.godot`.
+**Main scenes / entry (today):** [`main_3d.tscn`](../../main_3d.tscn) + [`main_3d.gd`](../../main_3d.gd) — `run/main_scene` in `project.godot`.
 
-**Autoloads (unchanged initially):** `GameConfig`, `OLog`, `AiDriver`.
+**Removed (no longer in tree):** `main.tscn`, `main.gd`, `player.tscn`, `player.gd`, `mob.tscn`, `mob.gd`, `obstacle_field.tscn`.
+
+**Autoloads:** `GameConfig`, `OLog`, `AiDriver`.
 
 ### 2.1 As-is snapshot (verified against code)
 
-| Area | Today (2D production) | 3D already started |
-|------|------------------------|-------------------|
-| **Main loop** | `Path2D` mob spawn, `TextureRect` background, duel spawns in **viewport pixel** space | Not wired to 3D main |
-| **Player** | [`player.gd`](../../player.gd) — `CharacterBody2D`, `Vector2` intent, `move_and_slide()` | — |
-| **Mob** | [`mob.gd`](../../mob.gd) — `RigidBody2D`, ENGINE sets `linear_velocity` | — |
-| **Obstacles** | [`obstacle_field.tscn`](../../obstacle_field.tscn) — `StaticBody2D` + `RectangleShape2D` | Motor collects AABB rects only ([HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](../Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md)) |
-| **Motor / AI** | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) + [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) — heavy **`Vector2`** usage; awareness = radius + forward cone (**no rays**) per [CREATURE_MOVEMENT_V2.md §E](CREATURE_MOVEMENT_V2.md) | — |
-| **Environment** | [`EnvironmentGridBaked`](../../environment/environment_grid_baked.gd) from 2D palette PNG; **center-cell** sampling ([ENVIRONMENT_MODEL_PLAN.md §11](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) | Height / volumetric crush **deferred** |
-| **Physics config** | [`project.godot`](../../project.godot) — **2d** layer names (bits 1, 2, 4, 8) | **No** `3d_physics/layer_*` table yet |
-| **Creature stack** | 2D bodies in `player.tscn` / `mob.tscn` | Parallel: [`creature_root_3d.gd`](../../creature/creature_root_3d.gd), templates, [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (**XZ intent, gravity on Y**) — [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) |
-| **Product intent** | [ASSET_MANAGEMENT_PLAN.md §5.1–5.2](../Completed_Features/ASSET_MANAGEMENT_PLAN.md): **2D is transitional**; **3D before release** | glTF storage policy still open there |
+| Area | 3D production (current) | Convert debt remaining |
+|------|-------------------------|-------------------------|
+| **Main loop** | [`main_3d.gd`](../../main_3d.gd) — grasslands `.blend` playfield (fallback floor box), ENGINE/HUMAN duel, HUD overlay, perspective camera (`TOP_DOWN` / `OVER_SHOULDER`) | — |
+| **Playfield bounds** | [`PlayfieldBounds3D`](../../environment/playfield_bounds_3d.gd) — XZ bounds from playfield root collision AABB (mesh fallback) — **D10** | — |
+| **Creatures** | Unified **`CharacterBody3D` + `move_and_slide`** for all species — [`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn), [`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn) — **D4** | [`creature_rigid_body_3d.gd`](../../creature/capabilities/creature_rigid_body_3d.gd) stub + stale test/doc refs to rigid template — cleanup |
+| **Obstacles / plants** | Perimeter/interior boulders; [`solid_shrub_3d`](../../assets/plants/solid_shrub/solid_shrub_3d.tscn) / [`open_shrub_3d`](../../assets/plants/open_shrub/open_shrub_3d.tscn); [`MotorObstacleGeometry`](../../creature/motor/motor_obstacle_geometry.gd) | — |
+| **Motor / AI** | [`MotorPlane`](../../creature/motor/motor_plane.gd) XZ adapter; [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) on `PhysicsBody3D`; [`TerrainMotor`](../../creature/motor/terrain_motor.gd) ground conforming; awareness = radius + forward cone (**no LoS rays**) | — |
+| **Environment grid** | [`main_3d.gd`](../../main_3d.gd) `_create_default_open_grid()` — procedural flat all-open grid in world meters; [`PlayfieldGroundSampler`](../../environment/playfield_ground_sampler.gd) for sculpted terrain elevation | **D5:** dev scaffold only; PNG kind bake and 3D tile pipeline deferred |
+| **Physics config** | [`project.godot`](../../project.godot) — **`3d_physics/layer_*`**: `world_static`, `player`, `mob`, `plant_mob_block` | Promote to [ENVIRONMENT_MODEL §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) (§3.11) |
+| **Debug** | [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on **both** duel templates (herbivore: live + ghost mob samples; carnivore: prey in reach) | — |
+| **Tests** | 3D template smoke, predation contact, playfield bounds, 3D-only motor/awareness fixtures in [`tests/run_all.gd`](../../tests/run_all.gd) | — |
 
 ### 2.2 Authoritative child docs (link; do not restate)
 
 | Topic | Doc |
 |-------|-----|
-| **3D creature capabilities & templates** | [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) |
+| **3D creature capabilities & templates** | [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) — **drift:** §3 rigid fork stale vs **D4** |
 | **Motor refactor, awareness cone, LoS policy** | [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) (§D–§E) |
 | **Memory, occlusion boundary** | [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md) |
 | **Environment / layer contract** | [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) — promote **§6** to 3D when layers ship |
 | **2D motor inventory (until superseded)** | [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) |
-| **Backlog parking lot** | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — Perception & awareness |
+| **Backlog parking lot** | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — Perception & awareness; 3D tile tools (D5) |
 
 ### 2.3 Migration dependency graph
 
@@ -64,120 +68,149 @@ flowchart TB
   subgraph phase0 [Foundation]
     Cam[Camera_and_root_Node3D]
     Layers[3d_physics_layers]
-    Adapter[Motor_XZ_adapter]
+    Adapter[MotorPlane_XZ_adapter]
+    Bounds[PlayfieldBounds3D]
   end
   subgraph phase1 [Playable_shell]
     Main3D[main_3d_scene]
-    Bodies[CharacterBody3D_and_RigidBody3D]
+    Bodies[CharacterBody3D_unified]
     Env3D[Static_env_collision]
   end
   subgraph phase2 [Systems_parity]
-    MotorRefactor[Motor_Vector3_or_adapter_boundary]
-    EnvBake[Env_grid_on_XZ_plane]
+    MotorRefactor[Motor_adapter_and_D7_units]
+    EnvScaffold[Dev_env_grid_scaffold]
     Plants3D[Plant_scenes_3D]
+    Debug3D[Awareness_debug_overlay_3d]
   end
   subgraph phase3 [3D_only_features]
     LoS[Line_of_sight_rays]
     Nav[NavigationMesh3D_optional]
     Vert[Vertical_affordances]
+    Tiles[Godot_3D_tile_tools]
   end
   phase0 --> phase1 --> phase2 --> phase3
 ```
 
+### 2.4 Implementation status (milestones & workstreams)
+
+**Milestones**
+
+| Milestone | Status | Key paths / notes |
+|-----------|--------|-------------------|
+| **M0** | **Done** | `MotorPlane`; 3D templates; headless tests in `run_all.gd` |
+| **M1** | **Done** | `main_3d.tscn`; 3D layers; plants/obstacles; **D10** bounds |
+| **M2** | **Done** | Motor parity on XZ; D7 unit rename; 3D-only `run_all.gd` fixtures |
+| **M3** | **Partial** | 2D production scenes removed; §3.11 definitive doc promotion not done |
+| **M4** | **Not started** | LoS, navmesh, vertical crush, **3D tile tools (D5)** |
+
+**Workstreams** — see §3 for detail; summary: **3.1–3.5, 3.6, 3.8–3.10 Done**; **3.7 Partial**; **3.11 Open**.
+
+### 2.5 Intentional drift / lessons learned
+
+Gaps between this doc’s **2026-06-04** draft and today’s code. Many reflect **testing lessons**, not accidental bugs.
+
+| Gap | Code today | Likely intent | Tracking |
+|-----|------------|---------------|----------|
+| **Species physics fork** | `creature_rigid_body_3d.gd` stub; [CREATURE_3D_ARCHITECTURE §3](CREATURE_3D_ARCHITECTURE.md) lists rigid carnivore | **D4:** abandoned; all species kinematic | Cleanup stub + child doc (M3) |
+| **Env grid vs terrain mesh** | Procedural open grid + separate `PlayfieldGroundSampler` | **D5:** dev/test scaffold; not production tile pipeline | §3.7 Partial |
+| **TerrainMotor vs D6** | Elevation costs + ground snap on sculpted mesh | **Ground conforming** in scope; **vertical gameplay** out | D6 |
+| **Vector2 motor plane** | `MotorPlane`, `PlayfieldClamp`, `EnvironmentGridBaked.origin_world: Vector2` | **D3 Phase A:** deliberate adapter boundary | Not unit debt |
+| **LLM snapshot** | `_build_snapshot_blob()` returns `""` | **D8:** deferred; may scrap entirely | Not migration blocker |
 ---
 
 ## 3. Migration workstreams
 
-Ordered checklist. Each item: **what changes**, **key paths**, **acceptance hint**.
+Ordered checklist. **Status:** Done / Partial / Open.
 
-### 3.1 Rendering & scene root
+### 3.1 Rendering & scene root — **Done**
 
-- **What:** New `Main3D` (or replace [`main.tscn`](../../main.tscn)): `Node3D` root, `WorldEnvironment`, `DirectionalLight3D`, `Camera3D`.
-- **What:** Replace `TextureRect` playfield art with ground mesh / terrain or orthographic “table” mesh.
-- **What:** Keep [`hud.tscn`](../../hud.tscn) as Control overlay.
-- **Acceptance:** Scene loads; camera frames duel playfield; HUD still works.
+- **What:** [`main_3d.tscn`](../../main_3d.tscn): `Node3D` root, `WorldEnvironment`, `DirectionalLight3D`, `Camera3D`.
+- **What:** Dev playfield: grasslands `.blend` mesh + fallback `StaticBody3D` floor (**D5** interim).
+- **What:** [`hud.tscn`](../../hud.tscn) Control overlay unchanged.
+- **Acceptance:** Scene loads; camera frames duel playfield; HUD works. **Met.**
 
-### 3.2 Coordinate & input contract
+### 3.2 Coordinate & input contract — **Done**
 
-- **Normative (already in 3D kinematic code):** Motor “compass” maps to **world XZ**; **Y** = vertical ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)).
-- **Normative:** **Single adapter** at body boundary ([CREATURE_3D_ARCHITECTURE.md §4](CREATURE_3D_ARCHITECTURE.md)) — not per-species scatter.
-- **Input:** `move_up` / `move_down` → **−Z / +Z** or camera-relative forward — see **D1** / input row in §4.
-- **Acceptance:** Human input and ENGINE intent both move creatures on the ground plane without Y drift in v1 unless **D6** chooses otherwise.
+- **Normative:** Motor compass → **world XZ**; **Y** = vertical ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)).
+- **Normative:** Single adapter — [`MotorPlane`](../../creature/motor/motor_plane.gd) — not per-species scatter (**D3** Phase A).
+- **Input:** `move_up` / `move_down` → **−Z / +Z** on ground plane; over-shoulder mode uses camera-relative intent (**D1**).
+- **Acceptance:** Human input and ENGINE intent move creatures on the ground plane. **Met** (ground conforming on sculpted mesh; **D6** excludes jump/climb).
 
-### 3.3 Actor bodies & scenes
+### 3.3 Actor bodies & scenes — **Done**
 
-- **What:** Migrate [`player.tscn`](../../player.tscn) / [`mob.tscn`](../../mob.tscn) to 3D templates ([`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn), [`creature_carnivore_rigid_3d.tscn`](../../creature/templates/creature_carnivore_rigid_3d.tscn)) or inline `CharacterBody3D` / `RigidBody3D` with shared capability nodes.
-- **What:** Retire `Area2D`-only locomotion; keep overlap as child **`Area3D`** for pickup / hit ([OBJECT_AVOIDANCE_PLAN.md §5.1](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md)).
-- **What:** [`playfield_clamp.gd`](../../creature/capabilities/playfield_clamp.gd) — viewport AABB → **world bounds** volume.
-- **Acceptance:** Collisions, eating, mob hit, starvation paths still fire.
+- **What:** Production duel uses [`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn) and [`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn). **No species physics fork** — all **`CharacterBody3D` + `move_and_slide`** (**D4**).
+- **What:** Overlap via child **`Area3D`** (MobHitbox, calorie pickup) — [OBJECT_AVOIDANCE_PLAN §5.1](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md).
+- **What:** [`playfield_clamp.gd`](../../creature/capabilities/playfield_clamp.gd) — motor-plane `Vector2` API for XZ world bounds from **D10**.
+- **What:** [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on **both** templates under `Body`.
+- **Acceptance:** Collisions, eating, mob hit, starvation paths fire. **Met.**
 
-### 3.4 Physics layers
+### 3.4 Physics layers — **Done**
 
-- **What:** Mirror [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) into **`3d_physics/layer_*`**: `world_static`, `player`, `mob`, `plant_mob_block`.
-- **What:** Update [`solid_shrub`](../../assets/plants/solid_shrub/) / [`open_shrub`](../../assets/plants/open_shrub/) to 3D collision; preserve Food A vs Food B mask story.
-- **Acceptance:** Player walks static + calorie areas; mob blocked by rocks and open-shrub shell; player not blocked by `plant_mob_block`.
+- **What:** `3d_physics/layer_*` in [`project.godot`](../../project.godot): `world_static`, `player`, `mob`, `plant_mob_block`.
+- **What:** [`solid_shrub_3d`](../../assets/plants/solid_shrub/solid_shrub_3d.tscn) / [`open_shrub_3d`](../../assets/plants/open_shrub/open_shrub_3d.tscn) with Food A vs Food B mask story.
+- **Acceptance:** Player walks static + calorie areas; mob blocked by rocks and open-shrub shell. **Met.**
 
-### 3.5 Obstacles & static environment
+### 3.5 Obstacles & static environment — **Done**
 
-- **What:** Replace [`obstacle_field.tscn`](../../obstacle_field.tscn) rectangles with `StaticBody3D` + `BoxShape3D` / `ConcavePolygonShape3D` (or CSG).
-- **What:** `AiDriver._static_obstacles_for_motor` — extend from `RectangleShape2D` AABBs to **3D AABB projected on XZ** (or dedicated motor occluder group).
-- **Acceptance:** Cardinal motor still avoids rocks; no regression in squeeze / edge penalties vs 2D baseline.
+- **What:** Boulders as `StaticBody3D`; [`PlayfieldPerimeterBoulders`](../../environment/playfield_perimeter_boulders.gd).
+- **What:** [`MotorObstacleGeometry`](../../creature/motor/motor_obstacle_geometry.gd) — 3D bodies projected to motor XZ; collected from scene tree by `AiDriver`.
+- **Acceptance:** Cardinal motor avoids rocks; squeeze / edge penalties within tolerance. **Met.**
 
-### 3.6 Motor & AiDriver
+### 3.6 Motor & AiDriver — **Done**
 
-- **Phase A (minimal):** Keep `Vector2` motor plane; convert at `AiDriver` → body via adapter (`Vector2(x, y)` → `Vector3(x, 0, z)`).
-- **Phase B (optional):** `MotorContext`, `SeekCandidate`, `ThreatSample`, `CardinalAvoidance` use horizontal `Vector3`; [`awareness_debug_overlay.gd`](../../creature/awareness_debug_overlay.gd) → `Node3D` debug draw or `ImmediateMesh`.
-- **What:** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) food scans use `global_position` from 3D nodes.
-- **What:** Carnivore pursuit stays on unified seek path ([CREATURE_MOVEMENT_V2.md §A.2](CREATURE_MOVEMENT_V2.md)).
-- **Acceptance:** ENGINE duel: forage, flee, pursuit, obstacle detour within documented tolerance.
+- **Phase A (done):** `Vector2` motor plane via **`MotorPlane`**; `AiDriver` drives `PhysicsBody3D` only.
+- **Phase B (done):** [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on both duel bodies; motor internals still use motor-plane `Vector2` in places (optional full `Vector3` refactor deferred).
+- **What:** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) food scans require `Node3D` positions.
+- **What:** [`terrain_motor.gd`](../../creature/motor/terrain_motor.gd) — ground conforming on sculpted playfield (**D6**); chase blocking uses XZ-projected AABB segments, not LoS rays.
+- **D7 (done):** motor/config distances use world units — no `px` in identifiers, config keys, or comments.
+- **Acceptance:** ENGINE duel: forage, flee, pursuit, obstacle detour. **Met.**
 
-### 3.7 Environment grid
+### 3.7 Environment grid — **Partial (dev scaffold)**
 
-- **What:** Logical cell grid on **XZ**: `origin_world` as `Vector3`; `cell_size` in world units; bake from image **or** future heightmap ([ENVIRONMENT_MODEL §11](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)).
-- **What:** v1 keeps **center-cell** `can_enter` / slowdown; mesh overlap sampling is follow-up.
-- **Acceptance:** `can_enter` and `movement_speed_multiplier` behave as in 2D for same authored kind map projected on XZ.
+- **What (today):** [`main_3d.gd`](../../main_3d.gd) `_create_default_open_grid()` — flat all-open logical grid on XZ in **world meters**; center-cell `can_enter` / slowdown.
+- **What (not convert goal):** PNG kind bake on XZ from 2D palette era.
+- **What (later — D5):** Godot 4.x **3D tile tools** for production terrain + kind authoring.
+- **Acceptance:** Grid API works for duel; production authoring pipeline **deferred**.
 
-### 3.8 Plants & food
+### 3.8 Plants & food — **Done**
 
-- **What:** 3D meshes + `StaticBody3D` / `Area3D` calorie pickup; preserve hunger semantics.
-- **What:** [`bush_food.gd`](../../assets/plants/bush_food.gd) proximity rules for capsule vs bush collision.
-- **Acceptance:** Solid vs open shrub blocking unchanged; player calorie pickup works.
+- **What:** 3D shrub scenes + [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) calorie pickup.
+- **Acceptance:** Solid vs open shrub blocking; player calorie pickup. **Met.**
 
-### 3.9 Assets & import
+### 3.9 Assets & import — **Done**
 
-- **What:** Follow [ASSET_MANAGEMENT_PLAN.md §5.2](../Completed_Features/ASSET_MANAGEMENT_PLAN.md) — glTF, shared `StandardMaterial3D`, collision at import.
-- **Note:** Mixed 2D UI / sprites acceptable during transition.
+- **What:** Dev `.blend`/glTF in grasslands, boulders, creatures per [ASSET_MANAGEMENT §5.2](../Completed_Features/ASSET_MANAGEMENT_PLAN.md).
+- **Normative:** **D9** — art sources live **in-repo** under [`assets/`](../../assets/), alongside the other files that define each asset (not LFS or external-only storage).
 
-### 3.10 Tests & CI
+### 3.10 Tests & CI — **Done**
 
-- **What:** Extend [`tests/run_all.gd`](../../tests/run_all.gd) — 3D template smoke + headless motor tests with adapter.
-- **What:** SubViewport or dedicated 3D test scene for physics integration ([CREATURE_3D_ARCHITECTURE.md §5](CREATURE_3D_ARCHITECTURE.md)).
-- **Acceptance:** CI / local `run_all` green.
+- **Done:** 3D template load, predation contact, playfield bounds, HUD motor-body resolve, and legacy motor/awareness tests ported to 3D fixtures in [`tests/run_all.gd`](../../tests/run_all.gd).
+- **Acceptance:** CI / local `run_all` green on 3D-only fixtures. **Met.**
 
-### 3.11 Documentation promotion triggers
+### 3.11 Documentation promotion triggers — **Open**
 
-- When **3d** layers ship: update **Definitive** [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) (2D table → 3D or dual table).
+- When **3d** layers shipped: update **Definitive** [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
 - When motor runs on 3D main: [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) supersedes [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) inventory.
+- Update [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md) §3 for **D4** (remove rigid fork as active path).
 
 ---
 
-## 4. Outstanding decisions
+## 4. Decisions
 
-Use `<<Question: …>>` until resolved. Agents must **not** guess product choices here.
+Resolved items are **normative**.
 
-| ID | Topic | Options / notes |
-|----|--------|-----------------|
-| **D1** | **Camera** | Orthographic top-down (2D-like readability) vs perspective third-person vs fixed isometric |
-| **D2** | **Migration strategy** | Parallel `main_3d.tscn` + feature flag vs in-place replace `run/main_scene` |
-| **D3** | **Motor typing** | Adapter-only (`Vector2` motor + XZ adapter) vs full `Vector3` motor refactor before 3D main |
-| **D4** | **Carnivore physics** | Keep `RigidBody3D` chase vs migrate to `CharacterBody3D` + `move_and_slide` |
-| **D5** | **Terrain authoring** | Retain PNG **kind grid on XZ** vs mesh/CSG + optional navmesh bake vs Godot 4.x 3D tile tools |
-| **D6** | **Vertical gameplay v1** | Ground-only (Y locked) vs jump/climb/shelves (kinematic already has gravity/jump hooks) |
-| **D7** | **Unit space** | Keep `awareness_*` “px” keys as world meters 1:1 vs rename config to meters |
-| **D8** | **LLM snapshot** | How to serialize 3D positions / relations in `AiDriver` snapshot ([HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](../Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md)) — separate from ENGINE motor |
-| **D9** | **Art source storage** | In-repo glTF vs LFS vs external ([ASSET_MANAGEMENT §5.2](../Completed_Features/ASSET_MANAGEMENT_PLAN.md)) |
-
-<<Comment: Default recommendation for D3 — Phase A adapter first to unblock M0–M1; Phase B only if adapter debt blocks LoS or env sampling.>>
+| ID | Topic | Resolution |
+|----|--------|------------|
+| **D1** | **Camera** | **Resolved (interim):** Perspective **top-down** for ENGINE/AI duel + **over-shoulder** for human play ([`main_3d.gd`](../../main_3d.gd) `CameraMode`). Orthographic/isometric remain future options. |
+| **D2** | **Migration strategy** | **Resolved:** In-place `run/main_scene` → `main_3d.tscn` (no parallel feature flag). |
+| **D3** | **Motor typing** | **Resolved:** Phase A — [`MotorPlane`](../../creature/motor/motor_plane.gd) adapter (`Vector2` motor plane ↔ XZ world). Phase B full `Vector3` motor refactor **optional**. |
+| **D4** | **Creature physics** | **Resolved:** **No species fork.** All creatures use **`CharacterBody3D` + `move_and_slide`**. Rigid-body path **abandoned**; stub is cleanup debt only. |
+| **D5** | **Terrain authoring** | **Resolved (interim):** Current grasslands mesh + procedural open env grid + hand-placed props = **dev/testing scaffolding**. **Later enhancement:** Godot 4.x **3D tile tools** for production terrain. |
+| **D6** | **Vertical gameplay** | **Resolved for this convert:** **Ground-only gameplay** — no jump, climb, shelves, or vertical affordances. **Ground conforming** (walk on sculpted mesh via ground rays / `TerrainMotor`) **is in scope**. Vertical gameplay = later enhancement. |
+| **D7** | **Unit space** | **Resolved:** **Meters** for player-facing distances; generic **game units** for motor/config internals. **Convert exit:** code must **not** refer to `px` (identifiers, config keys, comments). **Done (M2).** |
+| **D8** | **LLM snapshot** | **Deferred / likely dropped.** LLM integration deferred; may be scrapped entirely. `_build_snapshot_blob()` stub acceptable; **not** a migration-complete requirement. |
+| **D9** | **Art source storage** | **Resolved:** **In-repo** under [`assets/`](../../assets/), alongside the other files that define each asset (not LFS or external-only storage). See [ASSET_MANAGEMENT §5.2](../Completed_Features/ASSET_MANAGEMENT_PLAN.md). |
+| **D10** | **Playfield bounds** | **Resolved:** [`PlayfieldBounds3D.xz_bounds_from_playfield_root`](../../environment/playfield_bounds_3d.gd) — collision AABB from playfield root; mesh AABB fallback; motor clamp/spawn use XZ `min` / `max` / `size`. |
 
 ---
 
@@ -187,15 +220,16 @@ Use `<<Question: …>>` until resolved. Agents must **not** guess product choice
 
 | Capability | Why 2D lacked it | Hunter Killer touchpoints |
 |------------|------------------|---------------------------|
+| **3D tile terrain authoring** | 2D PNG palette | **D5 follow-on** — Godot 4.x tile tools; replaces dev grasslands scaffold |
 | **Line of sight (physics rays)** | No depth/occluders; cone + distance only | [CREATURE_MOVEMENT_V2 §E.2](CREATURE_MOVEMENT_V2.md), [CREATURE_MEMORY §7.4](CREATURE_MEMORY.md), `SeekCandidate` / `occluded`, [ENHANCEMENT_BACKLOG](../ENHANCEMENT_BACKLOG_PLAN.md) |
 | **Occlusion-aware awareness** | Rect obstacles ≠ vision blockers | Tier-2 hostile detection, ghost memory confidence |
 | **Stealth / hide behind cover** | No volumetric cover | [CREATURE_GOAL_DRIVERS §5.1.4](CREATURE_GOAL_DRIVERS.md) — Slot B `current_fit` LoS matchers |
 | **NavigationMesh3D** | Cardinal motor only | Optional mob detour ([ENVIRONMENT_MODEL §8](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) |
 | **Height / stacking / volumetric crush** | Planar grid only | `crush_weight`, multi-layer palettes ([ENVIRONMENT_MODEL](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) |
 | **Mesh footprint sampling** | Center-cell only | Sustained-slow / passible probes ([ENVIRONMENT_MODEL §11](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) |
-| **Vertical affordances** | Flat plane | Jump (kinematic), burrow/climb hooks ([CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)) |
-| **3D debug & gizmos** | `Node2D` draw | Awareness overlay, threat cones in world space |
-| **Lighting / shadows** | Flat sprites | Future stealth readability — not spec’d yet |
+| **Vertical affordances** | Flat plane | Jump, burrow, climb — **D6** later enhancement |
+| **3D debug & gizmos** | `Node2D` draw | [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) — **shipped on both duel templates** |
+| **Lighting / shadows** | Flat sprites | Directional shadows on 3D main; future stealth readability not spec’d |
 | **Spatial audio** | 2D pan only | Duel tension, threat direction |
 | **Skeleton animation** | `Sprite2D` | `CreatureDefinition.variant_scene` |
 | **Silhouette vs unexplored FOV** | Single interior motor bucket | [ENVIRONMENT_MODEL §11](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) / OBJECT carry-forward |
@@ -213,23 +247,27 @@ When 3D colliders exist:
 
 ## 6. Phased implementation plan
 
-| Milestone | Scope |
-|-----------|--------|
-| **M0** | 3D test scene + duel using existing templates; ENGINE motor → XZ adapter |
-| **M1** | Replace or parallel `main` — camera, bounds, 3D layer table, static rocks/plants as 3D bodies |
-| **M2** | Motor parity on XZ (food, mobs, obstacles, goal memory sync); 3D awareness debug |
-| **M3** | Promote definitive docs; deprecate 2D-only production scenes |
-| **M4** | Backlog features (LoS, navmesh, vertical crush) as **separate** plans / PRs |
+| Milestone | Status | Scope |
+|-----------|--------|--------|
+| **M0** | **Done** | 3D templates + `MotorPlane`; headless duel tests in `run_all.gd` |
+| **M1** | **Done** | `main_3d` production entry — camera, **D10** bounds, 3D layers, static rocks/plants |
+| **M2** | **Done** | Motor parity on XZ; D7 unit rename; 3D-only `run_all.gd` fixtures |
+| **M3** | **Partial** | 2D production scenes removed; definitive doc promotion (§3.11) |
+| **M4** | **Not started** | LoS, navmesh, vertical crush, **3D tile tools (D5)** — separate plans / PRs |
 
 ---
 
 ## 7. Acceptance criteria (migration complete)
 
-- [ ] `run/main_scene` loads a **3D** root; human + ENGINE duel playable end-to-end.
-- [ ] Herbivore forage + carnivore pursuit match 2D behavior within tolerance (document test scene / steps in PR).
-- [ ] `project.godot` lists **`3d_physics/layer_*`** mirroring hunger / obstacle semantics in [ENVIRONMENT_MODEL §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
-- [ ] Ship build has **no** production reliance on `CharacterBody2D` / `Path2D` mob path for the main duel.
-- [ ] [`tests/run_all.gd`](../../tests/run_all.gd) green; 3D template smoke included.
+- [x] `run/main_scene` loads a **3D** root; human + ENGINE duel playable end-to-end (`main_3d.tscn`).
+- [x] Herbivore forage + carnivore pursuit on unified **`CharacterBody3D`** bodies (headless: `_test_creature_3d_predation_contact` in `run_all.gd`).
+- [x] `project.godot` lists **`3d_physics/layer_*`** mirroring hunger / obstacle semantics.
+- [x] Ship build has **no** production reliance on removed 2D duel scenes (`CharacterBody2D` / `Path2D` mob path).
+- [x] **Both** duel templates include [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) under `Body`.
+- [x] **D7:** No `px` in identifiers, config keys, or comments across motor, env, creature, and AI paths.
+- [x] [`tests/run_all.gd`](../../tests/run_all.gd) green with **3D-only** fixtures (no removed 2D scenes).
+
+**Not required for migration complete (D8):** LLM 3D perception snapshot.
 
 ---
 
@@ -238,3 +276,5 @@ When 3D colliders exist:
 | Date | Change |
 |------|--------|
 | 2026-06-04 | Initial umbrella draft: as-is snapshot, workstreams, decisions D1–D9, deferred 3D capabilities, milestones M0–M4. |
+| 2026-06-08 | Restored living doc after implementation drift: 3D production snapshot (M0–M1 done, M2 partial); resolved D1–D10 (**D9:** in-repo under `assets/`); §2.4 status + §2.5 intentional drift; unified kinematic bodies (D4); dev terrain scaffold (D5); awareness overlay on both templates; §3.9 Done; acceptance scorecard updated. |
+| 2026-06-08 | **M2 complete:** D7 unit rename (no `px` in motor/env/creature/AI paths); `run_all.gd` migrated to 3D-only fixtures; §3.6 / §3.10 Done. |
