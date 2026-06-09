@@ -251,8 +251,8 @@ func _test_merge_defaults_and_override() -> void:
     "default calorie_baseline_drain_per_sec",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("calorie_cost_per_px_moved", 0.0)), 0.002),
-    "default calorie_cost_per_px_moved",
+    is_equal_approx(float(base["creature_motor"].get("calorie_cost_per_unit_moved", 0.0)), 0.002),
+    "default calorie_cost_per_unit_moved",
   )
   _assert(int(base["creature_motor"].get("predator_prey_meal_calories", -1)) == 5, "default predator_prey_meal_calories")
   _assert(
@@ -264,8 +264,8 @@ func _test_merge_defaults_and_override() -> void:
     "spine weight_seek_ready_food",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("food_seek_imminent_mob_radius_px", 0.0)), 100.0),
-    "default food_seek_imminent_mob_radius_px",
+    is_equal_approx(float(base["creature_motor"].get("food_seek_imminent_mob_radius", 0.0)), 100.0),
+    "default food_seek_imminent_mob_radius",
   )
   _assert(
     int(base["creature_motor"].get("jeopardy_forced_turn_ticks", -1)) == 5,
@@ -292,8 +292,8 @@ func _test_merge_defaults_and_override() -> void:
     "default explore_intent_hold_extra_ticks",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("explore_coverage_cell_px", 0.0)), 52.0),
-    "default explore_coverage_cell_px",
+    is_equal_approx(float(base["creature_motor"].get("explore_coverage_cell", 0.0)), 52.0),
+    "default explore_coverage_cell",
   )
   _assert(
     int(base["creature_motor"].get("explore_trail_max_cells", -1)) == 96,
@@ -463,7 +463,7 @@ func _test_goal_source_memory() -> void:
   var grid := _EnvGrid.new()
   grid.cell_width = 32
   grid.cell_height = 32
-  grid.cell_size_px = 52.0
+  grid.cell_size = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(32 * 32)
   var anchor := Vector3(120.0, 0.0, 80.0)
@@ -560,7 +560,7 @@ func _test_goal_kind_phase_c_replay() -> void:
   var grid := _EnvGrid.new()
   grid.cell_width = 8
   grid.cell_height = 8
-  grid.cell_size_px = 52.0
+  grid.cell_size = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(64)
   var anchor := Vector3(120.0, 0.0, 80.0)
@@ -714,7 +714,7 @@ func _test_motor_motivation_wiring() -> void:
   var grid := _EnvGrid.new()
   grid.cell_width = 8
   grid.cell_height = 8
-  grid.cell_size_px = 52.0
+  grid.cell_size = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(64)
   var flee_ctx := {
@@ -777,7 +777,7 @@ func _test_locale_prior_escalate_seek() -> void:
   var grid := _EnvGrid.new()
   grid.cell_width = 8
   grid.cell_height = 8
-  grid.cell_size_px = 52.0
+  grid.cell_size = 52.0
   grid.cell_kind_ids = PackedInt32Array()
   grid.cell_kind_ids.resize(64)
   var anchor := Vector3(400.0, 0.0, 400.0)
@@ -892,8 +892,8 @@ func _test_goal_belief_coarse_ttl() -> void:
   var ad: Node = _AiDriverScr.new()
   var motor_p := _Merge.creature_motor_spine()
   motor_p["goal_memory_coarse_ttl_sec"] = 15.0
-  motor_p["goal_memory_precise_radius_px"] = 1000.0
-  motor_p["goal_memory_forget_radius_px"] = 5000.0
+  motor_p["goal_memory_precise_radius"] = 1000.0
+  motor_p["goal_memory_forget_radius"] = 5000.0
   var now_ms := Time.get_ticks_msec()
   var iid := 424242
   const BODY_ID := 4242
@@ -921,7 +921,7 @@ func _test_goal_belief_coarse_ttl() -> void:
 func _test_goal_belief_merge_skips_live_awareness() -> void:
   var ad: Node = _AiDriverScr.new()
   var motor_p := _Merge.creature_motor_spine()
-  motor_p["goal_memory_precise_radius_px"] = 2000.0
+  motor_p["goal_memory_precise_radius"] = 2000.0
   const BODY_ID := 9001
   const LIVE_IID := 111
   ad.set("_goal_belief_by_body", {
@@ -1550,7 +1550,7 @@ func _test_world_corner_static_wedge_escape() -> void:
   var he := Vector2(13.5, 30.5)
   var wedge_pos := Vector3(he.x + 12.0, 0.0, bounds_max.y - he.y - 14.0)
   var bush := [{"position": Vector3(118.0, 0.0, 518.0), "half_extents": Vector2(78.0, 78.0)}]
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var esc_a: Vector3 = d.call(
     "_pick_stuck_escape_cardinal",
     wedge_pos,
@@ -1757,13 +1757,13 @@ func _test_playfield_boundary_edge_rocks() -> void:
   var bounds_max := Vector2(1920.0, 1080.0)
   var he := Vector2(13.5, 30.5)
   var ne_pos := Vector3(bounds_max.x - he.x - 8.0, 0.0, he.y + 6.0)
-  var probe_px := float(rabbit_m.get("herbivore_obstacle_probe_px", 200.0))
+  var probe_dist := float(rabbit_m.get("herbivore_obstacle_probe", 200.0))
   var clr := _Motor.footprint_static_clearance(ne_pos,   he,   aabbs)
   _assert(
-    clr < probe_px,
+    clr < probe_dist,
     "NE playfield pinch sees boundary rocks within herbivore obstacle probe",
   )
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var esc: Vector3 = d.call(
     "_herbivore_latched_corner_escape_intent",
     91,
@@ -1797,7 +1797,7 @@ func _test_ne_corner_food_seek_egress() -> void:
   var he := Vector2(13.5, 30.5)
   var ne_pos := Vector3(bounds_max.x - he.x - 8.0, 0.0, he.y + 6.0)
   var aabbs := _collect_obstacle_field_aabbs()
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var food_east := ne_pos + Vector3(240.0, 0.0, 0.0)
   var esc_food: Vector3 = d.call(
     "_pick_playfield_interior_escape_cardinal",
@@ -1999,7 +1999,7 @@ func _test_herbivore_flee_bush_rock_pinch() -> void:
   )
   var bounds_max := Vector2(1000.0, 600.0)
   var prey_he := Vector2(13.5, 30.5)
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var bush := {"position": Vector3(500.0, 0.0, 300.0), "half_extents": Vector2(42.0, 42.0)}
   var rock := {"position": Vector3(380.0, 0.0, 300.0), "half_extents": Vector2(55.0, 55.0)}
   var pinch_obs := [bush, rock]
@@ -2080,7 +2080,7 @@ func _test_herbivore_flee_diagonal_rock_pinch() -> void:
   )
   var bounds_max := Vector2(1000.0, 600.0)
   var prey_he := Vector2(13.5, 30.5)
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var rock_ne := {"position": Vector3(470.0, 0.0, 260.0), "half_extents": Vector2(55.0, 55.0)}
   var rock_sw := {"position": Vector3(360.0, 0.0, 370.0), "half_extents": Vector2(55.0, 55.0)}
   var pinch_obs := [rock_ne, rock_sw]
@@ -2163,7 +2163,7 @@ func _test_herbivore_flee_w_shrub_n_rock_pinch() -> void:
   )
   var bounds_max := Vector2(1000.0, 600.0)
   var prey_he := Vector2(13.5, 30.5)
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var shrub_w := {"position": Vector3(360.0, 0.0, 310.0), "half_extents": Vector2(42.0, 42.0)}
   var shrub_sw := {"position": Vector3(370.0, 0.0, 360.0), "half_extents": Vector2(42.0, 42.0)}
   var rock_n := {"position": Vector3(420.0, 0.0, 230.0), "half_extents": Vector2(55.0, 55.0)}
@@ -2344,11 +2344,11 @@ func _test_predator_prey_memory_chase() -> void:
   root.add_child(driver)
   var motor_p := {
     "goal_memory_mover_ttl_sec": 10.0,
-    "goal_memory_forget_radius_px": 2800.0,
-    "goal_memory_precise_radius_px": 5000.0,
+    "goal_memory_forget_radius": 2800.0,
+    "goal_memory_precise_radius": 5000.0,
     "goal_memory_ghost_horizon_sec": 0.4,
     "predator_memory_chase_lock_ticks": 24,
-    "motor_patrol_min_step_clearance_px": 4.0,
+    "motor_patrol_min_step_clearance": 4.0,
     "weight_seek_prey": 22.0,
     "weight_pursuit_dist": 0.55,
     "weight_pursuit_closing": 1.35,
@@ -2478,7 +2478,7 @@ func _test_predator_prey_memory_chase() -> void:
 func _test_goal_belief_moving_prey_ghost() -> void:
   var motor_p := {
     "goal_memory_mover_ttl_sec": 10.0,
-    "goal_memory_precise_radius_px": 5000.0,
+    "goal_memory_precise_radius": 5000.0,
     "goal_memory_ghost_horizon_sec": 0.5,
   }
   var prey_pos := Vector3(300.0, 0.0, 100.0)
@@ -2547,7 +2547,7 @@ func _test_no_goal_plateau_random() -> void:
     "motor_intent_cost_chaos": 0.0,
     "motor_no_goal_plateau_random": true,
     "motor_tie_cost_epsilon": 2.0,
-    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_cardinal_block_min_clearance": 4.0,
     "motor_pick_tick": 0,
     "motor_chaos_seed": 90210,
     "shuffle_tie_break": false,
@@ -2644,7 +2644,7 @@ func _test_food_seek_motor() -> void:
     "food_seek_targets": food,
     "weight_seek_ready_food": 2.0,
     "imminent_mob_points": [],
-    "food_seek_imminent_mob_radius_px": 0.0,
+    "food_seek_imminent_mob_radius": 0.0,
   }
   var toward := _Motor.pick_best_move_intent(seek_ctx)
   _assert(toward.is_equal_approx(Vector3.RIGHT), "food seek steers toward in-range ready bush when mob costs off")
@@ -2667,7 +2667,7 @@ func _test_food_seek_motor() -> void:
     "food_seek_targets": food,
     "weight_seek_ready_food": 80.0,
     "imminent_mob_points": [mob_pos],
-    "food_seek_imminent_mob_radius_px": 100.0,
+    "food_seek_imminent_mob_radius": 100.0,
   }
   var flee := _Motor.pick_best_move_intent(flee_ctx)
   _assert(flee.is_equal_approx(Vector3(-1.0, 0.0, 0.0)), "mob within imminent radius beats food seek")
@@ -2692,7 +2692,7 @@ func _test_explore_idle_when_no_pickup() -> void:
     "food_seek_targets": [],
     "weight_seek_ready_food": 0.0,
     "imminent_mob_points": [],
-    "food_seek_imminent_mob_radius_px": 0.0,
+    "food_seek_imminent_mob_radius": 0.0,
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
     "weight_explore_idle_penalty": 15.0,
@@ -2732,7 +2732,7 @@ func _test_explore_trail_repulsion_motor() -> void:
     "food_seek_targets": [],
     "weight_seek_ready_food": 0.0,
     "imminent_mob_points": [],
-    "food_seek_imminent_mob_radius_px": 0.0,
+    "food_seek_imminent_mob_radius": 0.0,
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
     "weight_explore_idle_penalty": 0.0,
@@ -2810,11 +2810,11 @@ func _test_hunger_calorie_clamp() -> void:
 func _test_calorie_drain_movement_formula() -> void:
   ## Same formula as [code]Player._apply_calorie_drain_and_starvation[/code] / [code]Mob._apply_calorie_burn[/code].
   var baseline := 1.0
-  var per_px := 0.002
+  var per_unit := 0.002
   var delta := 1.0
-  var speed_px_s := 100.0
-  var burn := baseline * delta + per_px * speed_px_s * delta
-  _assert(is_equal_approx(burn, 1.2), "1s at 100px/s matches baseline + per-px movement")
+  var speed_units_s := 100.0
+  var burn := baseline * delta + per_unit * speed_units_s * delta
+  _assert(is_equal_approx(burn, 1.2), "1s at 100 units/s matches baseline + per-unit movement")
 
 
 func _test_predator_prey_meal_clamp() -> void:
@@ -3539,7 +3539,7 @@ func _test_environment_baked_grid() -> void:
   _assert(baked.get_kind_id_at(0, 0) == 0 and baked.get_kind_id_at(1, 0) == 1, "bake maps top-left pixel per cell")
   _assert(baked.is_valid_shape(), "baked buffer matches dimensions")
   var wc: Vector2i = baked.world_to_cell(Vector3(33.0, 0.0, 10.0))
-  _assert(wc == Vector2i(1, 0), "world_to_cell uses floor division by cell_size_px")
+  _assert(wc == Vector2i(1, 0), "world_to_cell uses floor division by cell_size")
   var d1 = baked.sample_cell_data_at_world(Vector3(50.0, 0.0, 0.0))
   _assert(d1 != null and d1.get("passible") == false, "sample_cell_data_at_world returns squeeze preset")
 
@@ -3556,7 +3556,7 @@ func _test_cardinal_interior_env_grid() -> void:
   var grid := _EnvGrid.new()
   grid.cell_width = 5
   grid.cell_height = 1
-  grid.cell_size_px = 100.0
+  grid.cell_size = 100.0
   grid.origin_world = Vector2.ZERO
   grid.kind_presets = presets
   var ids := PackedInt32Array([0, 0, 0, 1, 0])
@@ -3673,7 +3673,7 @@ func _test_jeopardy_forced_turn() -> void:
     "creature_half_extents": Vector2.ZERO,
     "creature_facing": Vector3.RIGHT,
     "mobs": mobs,
-    "imminent_radius_px": 100.0,
+    "imminent_radius": 100.0,
     "cone_cos_threshold": cone_cos,
     "required_ticks": 2,
   }
@@ -3705,7 +3705,7 @@ func _test_jeopardy_forced_turn() -> void:
     "food_seek_targets": [],
     "weight_seek_ready_food": 0.0,
     "imminent_mob_points": [mob_pos],
-    "food_seek_imminent_mob_radius_px": 100.0,
+    "food_seek_imminent_mob_radius": 100.0,
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
   }
@@ -3731,7 +3731,7 @@ func _test_jeopardy_forced_turn() -> void:
     "food_seek_targets": [],
     "weight_seek_ready_food": 0.0,
     "imminent_mob_points": [mob_pos],
-    "food_seek_imminent_mob_radius_px": 100.0,
+    "food_seek_imminent_mob_radius": 100.0,
     "unready_food_avoid_targets": [],
     "weight_avoid_unready_food": 0.0,
   }
@@ -3938,7 +3938,7 @@ func _test_seek_diagonal_intent() -> void:
     "weight_expanding_explore_hint": 0.0,
     "motor_intent_cost_chaos": 0.0,
     "motor_tie_cost_epsilon": 0.45,
-    "motor_cardinal_block_min_clearance_px": 0.0,
+    "motor_cardinal_block_min_clearance": 0.0,
     "motor_pick_tick": 0,
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
@@ -4037,7 +4037,7 @@ func _test_blocked_approach_memory() -> void:
     "weight_expanding_explore_hint": 0.0,
     "motor_intent_cost_chaos": 0.0,
     "motor_tie_cost_epsilon": 0.45,
-    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_cardinal_block_min_clearance": 4.0,
     "motor_pick_tick": 0,
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
@@ -4076,7 +4076,7 @@ func _test_herbivore_food_seek_pinch_escape_backtrack() -> void:
     body_id: {"dir": Vector3(0.0, 0.0, -1.0), "sector": 0, "until_tick": 999999},
   })
   d.set("_physics_ticks", 0)
-  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var block_clr := float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0))
   var esc: Vector3 = d.call(
     "_herbivore_pinch_escape_intent",
     body_id,
@@ -4147,7 +4147,7 @@ func _test_seek_wall_filter_and_backtrack() -> void:
     "weight_expanding_explore_hint": 0.0,
     "motor_intent_cost_chaos": 0.0,
     "motor_tie_cost_epsilon": 0.45,
-    "motor_cardinal_block_min_clearance_px": 4.0,
+    "motor_cardinal_block_min_clearance": 4.0,
     "motor_pick_tick": 0,
     "motor_chaos_seed": 1,
     "shuffle_tie_break": false,
@@ -4187,7 +4187,7 @@ func _test_herbivore_forage_plateau_release() -> void:
   var body_id := 4242
   var motor_p := {
     "motor_forage_plateau_ticks": 3,
-    "motor_forage_plateau_radius_px": 95.0,
+    "motor_forage_plateau_radius": 95.0,
     "motor_stuck_escape_ticks": 1,
   }
   var ctx := {
@@ -4562,7 +4562,7 @@ func _test_ai_driver_helpers() -> void:
     2,
     fox_m,
   )
-  var corner_min_clr := float(fox_m.get("motor_patrol_min_step_clearance_px", 4.0))
+  var corner_min_clr := float(fox_m.get("motor_patrol_min_step_clearance", 4.0))
   _assert(
     flank_corner.length_squared() > 1e-12
     and not bool(
@@ -4766,7 +4766,7 @@ func _test_ai_driver_helpers() -> void:
         prey_he,
         flee_corner,
         corner_obs,
-        float(rabbit_m.get("motor_patrol_min_step_clearance_px", 4.0)),
+        float(rabbit_m.get("motor_patrol_min_step_clearance", 4.0)),
       )
     ),
     "cornered prey flee avoids blocked cardinals at obstacle corner",
@@ -4928,7 +4928,7 @@ func _test_ai_driver_helpers() -> void:
   }
   var prey_he_t := Vector2(13.5, 30.5)
   var close_band_t: float = d.call(
-    "_predator_edge_kill_close_band_px", fox_he, prey_he_t, fox_m
+    "_predator_edge_kill_close_band", fox_he, prey_he_t, fox_m
   )
   var fox_pos := Vector3(400.0, 0.0, 400.0)
   var prey_contact_pos := Vector3(400.0 + close_band_t * 0.5, 0.0, 400.0)

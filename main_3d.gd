@@ -706,7 +706,7 @@ func _create_default_open_grid() -> Resource:
   var grid := EnvironmentGridBaked.new()
   grid.cell_width = cw
   grid.cell_height = ch
-  grid.cell_size_px = cell_world
+  grid.cell_size = cell_world
   grid.origin_world = Vector2.ZERO
   grid.kind_presets = [open]
   var ids := PackedInt32Array()

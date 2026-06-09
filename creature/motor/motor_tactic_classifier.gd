@@ -74,7 +74,7 @@ static func _detect_in_squeeze(
   environment_grid: Variant,
   motor_p: Dictionary,
 ) -> bool:
-  var clr_thr := float(motor_p.get("tactic_squeeze_clearance_px", 28.0))
+  var clr_thr := float(motor_p.get("tactic_squeeze_clearance", 28.0))
   if not static_obstacles.is_empty() and clr_thr > 0.0:
     var clr: float = Callable(_Motor, &"footprint_static_clearance").call(
       creature_pos,
@@ -110,8 +110,8 @@ static func _detect_hide_viable(
     return false
   var panic_r := float(
     motor_p.get(
-      "herbivore_flee_panic_radius_px",
-      motor_p.get("herbivore_jeopardy_imminent_radius_px", 200.0),
+      "herbivore_flee_panic_radius",
+      motor_p.get("herbivore_jeopardy_imminent_radius", 200.0),
     )
   )
   return gate_dist > panic_r
@@ -124,7 +124,7 @@ static func _detect_return_home_payoff(
 ) -> bool:
   if hotspot_centroid == Vector3.ZERO:
     return false
-  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius_px", 250.0))
+  var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
   if hotspot_r <= 1e-4:
     return false
   var dist := creature_pos.distance_to(hotspot_centroid)
@@ -132,7 +132,7 @@ static func _detect_return_home_payoff(
 
 
 static func _count_conspecifics_near(creature_pos: Vector3, mobs_arr: Array, motor_p: Dictionary) -> int:
-  var radius := float(motor_p.get("tactic_conspecific_aid_radius_px", 120.0))
+  var radius := float(motor_p.get("tactic_conspecific_aid_radius", 120.0))
   if radius <= 1e-4:
     return 0
   var count := 0

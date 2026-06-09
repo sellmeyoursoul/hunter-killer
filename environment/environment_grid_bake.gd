@@ -12,7 +12,7 @@ const _Baked := preload("res://environment/environment_grid_baked.gd")
 ## - image: Authored map (nearest filter recommended). Size should be divisible by [param pixels_per_cell] (extra pixels truncated).
 ## - pixels_per_cell: Source pixels per logical cell edge (>= 1).
 ## - origin_world: World-space origin of cell (0,0)'s **top-left** corner.
-## - cell_size_px: World size of one cell edge (often matches pixel size for 1:1 art).
+## - cell_size: World size of one cell edge (often matches world meters per cell edge).
 ## - color_to_kind_id: Maps sampled [Color] (exact match after [method Image.get_pixel]) to kind id.
 ## - kind_presets: Dense array; id **i** references **kind_presets[i]**.
 ## - default_kind_id: Used when a pixel color is missing from [param color_to_kind_id].
@@ -22,7 +22,7 @@ static func bake_from_image(
   image: Image,
   pixels_per_cell: int,
   origin_world: Vector2,
-  cell_size_px: float,
+  cell_size: float,
   color_to_kind_id: Dictionary,
   kind_presets: Array,
   default_kind_id: int = 0,
@@ -39,9 +39,9 @@ static func bake_from_image(
   cells.resize(cw * ch)
   for cy in ch:
     for cx in cw:
-      var px := cx * pixels_per_cell
-      var py := cy * pixels_per_cell
-      var col := image.get_pixel(px, py)
+      var src_x := cx * pixels_per_cell
+      var src_y := cy * pixels_per_cell
+      var col := image.get_pixel(src_x, src_y)
       var kid: int = default_kind_id
       if color_to_kind_id.has(col):
         kid = int(color_to_kind_id[col])
@@ -52,7 +52,7 @@ static func bake_from_image(
   var out = _Baked.new()
   out.cell_width = cw
   out.cell_height = ch
-  out.cell_size_px = cell_size_px
+  out.cell_size = cell_size
   out.origin_world = origin_world
   out.kind_presets = kind_presets.duplicate()
   out.cell_kind_ids = cells

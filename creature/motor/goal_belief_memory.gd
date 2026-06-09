@@ -208,8 +208,8 @@ static func sample_best_moving(
     "instance_id": 0,
   }
   var ttl_ms := _moving_ttl_ms(motor_p)
-  var forget_r := float(motor_p.get("goal_memory_forget_radius_px", 2400.0))
-  var precise_r := float(motor_p.get("goal_memory_precise_radius_px", 1000.0))
+  var forget_r := float(motor_p.get("goal_memory_forget_radius", 2400.0))
+  var precise_r := float(motor_p.get("goal_memory_precise_radius", 1000.0))
   var best_iid := 0
   var best_pos := Vector3.ZERO
   var best_vel := Vector3.ZERO
@@ -305,8 +305,8 @@ static func maintain(
   now_ms: int,
   motor_p: Dictionary,
 ) -> Dictionary:
-  var precise_r := float(motor_p.get("goal_memory_precise_radius_px", 1000.0))
-  var forget_r := float(motor_p.get("goal_memory_forget_radius_px", 2400.0))
+  var precise_r := float(motor_p.get("goal_memory_precise_radius", 1000.0))
+  var forget_r := float(motor_p.get("goal_memory_forget_radius", 2400.0))
   var coarse_ttl_ms := int(float(motor_p.get("goal_memory_coarse_ttl_sec", 15.0)) * 1000.0)
   var global_ttl_ms := int(float(motor_p.get("goal_memory_ttl_sec", 45.0)) * 1000.0)
   var mover_ttl_ms := _moving_ttl_ms(motor_p)
@@ -384,7 +384,7 @@ static func merge_into_motor_context(
 ) -> Dictionary:
   var w_remember := float(motor_p.get("weight_seek_remembered_goal", 8.0))
   var w_coarse := float(motor_p.get("weight_coarse_sector_goal_bias", 3.0))
-  var precise_r := float(motor_p.get("goal_memory_precise_radius_px", 1000.0))
+  var precise_r := float(motor_p.get("goal_memory_precise_radius", 1000.0))
   var max_merge := 25
   var merged_n := 0
   var sector_acc: Array = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

@@ -3,11 +3,11 @@
 class_name PerceptionRiskHints
 extends Object
 
-## Treat mobs slower than this (world px/s) as not closing for threat dot math.
+## Treat mobs slower than this (world units/s) as not closing for threat dot math.
 static var mob_speed_eps: float = 15.0
-## Radial inward speed (toward playable creature axis, px/s) must exceed this to count as closing.
+## Radial inward speed (toward playable creature axis, units/s) must exceed this to count as closing.
 static var closing_radial_eps: float = 10.0
-## Creature speed magnitude below → `stopped` hint band (world px/s).
+## Creature speed magnitude below → `stopped` hint band (world units/s).
 static var creature_stopped_eps: float = 1.0
 
 ## Computes playable creature grid patch and stationary vs motion band labels.
@@ -53,20 +53,20 @@ static func mob_closing_metrics(mob_point: Vector2, mob_vel: Vector2, creature_p
 
   if dist_sq <= tiny:
     inward_radial = 0.0
-    return {"closing": true, "t_approx_sec": 0.0, "inward_radial_px_s": inward_radial}
+    return {"closing": true, "t_approx_sec": 0.0, "inward_radial_speed": inward_radial}
 
   if speed < mob_speed_eps:
-    return {"closing": false, "t_approx_sec": inf_sec, "inward_radial_px_s": 0.0}
+    return {"closing": false, "t_approx_sec": inf_sec, "inward_radial_speed": 0.0}
 
   inward_radial = mob_vel.dot(toward.normalized())
 
   var closing := inward_radial > closing_radial_eps
 
   if not closing:
-    return {"closing": false, "t_approx_sec": inf_sec, "inward_radial_px_s": inward_radial}
+    return {"closing": false, "t_approx_sec": inf_sec, "inward_radial_speed": inward_radial}
 
   var t_approx := toward.length() / maxf(inward_radial, closing_radial_eps)
-  return {"closing": true, "t_approx_sec": t_approx, "inward_radial_px_s": inward_radial}
+  return {"closing": true, "t_approx_sec": t_approx, "inward_radial_speed": inward_radial}
 
 
 ## Picks nearest-list salient mob for option B among **closing** movers.

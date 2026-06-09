@@ -162,13 +162,13 @@ static func collect_from_scene_tree(main: Node) -> Dictionary:
   return merge_geometry_packs(rocks, plants)
 
 
-## Drops obstacle samples farther than [param radius_px] from [param creature_center] ([code]<= 0[/code] keeps all).
+## Drops obstacle samples farther than [param radius] from [param creature_center] ([code]<= 0[/code] keeps all).
 static func filter_samples_by_radius(
-  creature_center: Vector3, radius_px: float, samples: PackedVector3Array
+  creature_center: Vector3, radius: float, samples: PackedVector3Array
 ) -> PackedVector3Array:
-  if radius_px <= 0.0:
+  if radius <= 0.0:
     return samples
-  var r2 := radius_px * radius_px
+  var r2 := radius * radius
   var out := PackedVector3Array()
   for i in range(samples.size()):
     var p := samples[i]
@@ -204,21 +204,21 @@ static func _segment_intersects_rect(a: Vector3, b: Vector3, rect: Rect2) -> boo
 ## - hunter_pos / prey_pos: Footprint centers in world space.
 ## - hunter_he / prey_he: Capsule half-extents used to pad obstacle rects.
 ## - static_obs: Motor AABB dicts with [code]position[/code] and [code]half_extents[/code].
-## - min_clearance_px: Extra padding beyond footprint halves.
+## - min_clearance: Extra padding beyond footprint halves.
 static func chase_segment_blocked_by_aabbs(
   hunter_pos: Vector3,
   hunter_he: Vector2,
   prey_pos: Vector3,
   prey_he: Vector2,
   static_obs: Array,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
-  if prey_pos == Vector3.ZERO or static_obs.is_empty() or min_clearance_px <= 0.0:
+  if prey_pos == Vector3.ZERO or static_obs.is_empty() or min_clearance <= 0.0:
     return false
   if hunter_pos.distance_squared_to(prey_pos) < 64.0:
     return false
   var pad := maxf(
-    min_clearance_px,
+    min_clearance,
     maxf(maxf(hunter_he.x, hunter_he.y), maxf(prey_he.x, prey_he.y)) * 0.35,
   )
   for ob in static_obs:

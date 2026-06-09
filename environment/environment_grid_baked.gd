@@ -6,8 +6,8 @@ extends Resource
 @export var cell_width: int = 0
 @export var cell_height: int = 0
 
-## World-space edge length of one square cell (pixels or abstract units — match [member origin_world]).
-@export var cell_size_px: float = 32.0
+## World-space edge length of one square cell (meters — match [member origin_world]).
+@export var cell_size: float = 32.0
 
 ## World position of the **top-left** corner of cell **(0, 0)** (same frame as gameplay / [method world_to_cell]).
 @export var origin_world: Vector2 = Vector2.ZERO
@@ -39,14 +39,14 @@ func get_cell_data(cx: int, cy: int) -> Resource:
   return kind_presets[kid] as Resource
 
 
-## Converts world [param world] to cell indices using [member origin_world] and [member cell_size_px].
+## Converts world [param world] to cell indices using [member origin_world] and [member cell_size].
 func world_to_cell(world: Vector2) -> Vector2i:
-  if cell_size_px <= 0.0:
+  if cell_size <= 0.0:
     return Vector2i(0, 0)
   var rel := world - origin_world
   return Vector2i(
-    int(floor(rel.x / cell_size_px)),
-    int(floor(rel.y / cell_size_px)),
+    int(floor(rel.x / cell_size)),
+    int(floor(rel.y / cell_size)),
   )
 
 

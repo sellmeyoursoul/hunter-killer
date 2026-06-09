@@ -100,13 +100,13 @@ static func cardinal_step_blocked(
   he_xy: Vector2,
   direction: Vector3,
   static_obs: Array,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
-  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance_px <= 0.0:
+  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
   var step := motor_cardinal_probe_step(he_xy)
   var probe_pos := creature_pos + direction.normalized() * step
-  return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance_px
+  return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance
 
 
 ## Stricter blocked test for stuck / geometry escape: rejects far-probe-only openings and steps that tighten the pinch.
@@ -115,17 +115,17 @@ static func cardinal_step_blocked_for_escape(
   he_xy: Vector2,
   direction: Vector3,
   static_obs: Array,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
-  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance_px):
+  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance):
     return true
-  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance_px <= 0.0:
+  if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
   var clr_now := footprint_static_clearance(creature_pos, he_xy, static_obs)
   var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, 10.0)
   var near_pos := creature_pos + direction.normalized() * near_step
   var clr_near := footprint_static_clearance(near_pos, he_xy, static_obs)
-  if clr_near < min_clearance_px:
+  if clr_near < min_clearance:
     return true
   if clr_near < clr_now - 0.35:
     return true
@@ -168,7 +168,7 @@ static func step_blocked_into_playfield_wall(
   step_length: float,
   bounds_min: Vector2,
   bounds_max: Vector2,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
   if direction.length_squared() < 1e-12 or step_length <= 0.0:
     return false
@@ -188,13 +188,13 @@ static func step_blocked_into_playfield_wall(
   var bot_pred := bounds_max.y - (predicted.z + half.y)
   const AXIS_EPS := 0.12
   const CLOSURE_EPS := 0.25
-  if u.x < -AXIS_EPS and left_pred < min_clearance_px and left_pred < left_now - CLOSURE_EPS:
+  if u.x < -AXIS_EPS and left_pred < min_clearance and left_pred < left_now - CLOSURE_EPS:
     return true
-  if u.x > AXIS_EPS and right_pred < min_clearance_px and right_pred < right_now - CLOSURE_EPS:
+  if u.x > AXIS_EPS and right_pred < min_clearance and right_pred < right_now - CLOSURE_EPS:
     return true
-  if u.z < -AXIS_EPS and top_pred < min_clearance_px and top_pred < top_now - CLOSURE_EPS:
+  if u.z < -AXIS_EPS and top_pred < min_clearance and top_pred < top_now - CLOSURE_EPS:
     return true
-  if u.z > AXIS_EPS and bot_pred < min_clearance_px and bot_pred < bot_now - CLOSURE_EPS:
+  if u.z > AXIS_EPS and bot_pred < min_clearance and bot_pred < bot_now - CLOSURE_EPS:
     return true
   return false
 
@@ -206,7 +206,7 @@ static func step_blocked_into_static_wall(
   direction: Vector3,
   step_length: float,
   static_obs: Array,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
   if direction.length_squared() < 1e-12 or step_length <= 0.0 or static_obs.is_empty():
     return false
@@ -214,7 +214,7 @@ static func step_blocked_into_static_wall(
   var predicted := creature_pos + u * step_length
   var clr_now := footprint_static_clearance(creature_pos, half, static_obs)
   var clr_pred := footprint_static_clearance(predicted, half, static_obs)
-  if clr_pred >= min_clearance_px:
+  if clr_pred >= min_clearance:
     return false
   var escape_n := closest_static_escape_normal(creature_pos, half, static_obs)
   if escape_n.length_squared() < 1e-12:
@@ -235,16 +235,16 @@ static func step_blocked_into_wall(
   static_obs: Array,
   bounds_min: Vector2,
   bounds_max: Vector2,
-  min_clearance_px: float,
+  min_clearance: float,
 ) -> bool:
-  if min_clearance_px <= 0.0 or direction.length_squared() < 1e-12:
+  if min_clearance <= 0.0 or direction.length_squared() < 1e-12:
     return false
   if step_blocked_into_playfield_wall(
-    creature_pos, half, direction, step_length, bounds_min, bounds_max, min_clearance_px
+    creature_pos, half, direction, step_length, bounds_min, bounds_max, min_clearance
   ):
     return true
   return step_blocked_into_static_wall(
-    creature_pos, half, direction, step_length, static_obs, min_clearance_px
+    creature_pos, half, direction, step_length, static_obs, min_clearance
   )
 
 
@@ -473,7 +473,7 @@ static func minimum_footprint_point_clearance(center: Vector3, half: Vector2, po
 
 
 ## Linear pull toward nearest [param food_targets] world point; disabled when any imminent mob is within [param imminent_mob_radius] of [param predicted] footprint. Use [method effective_food_seek_weight] to disable the whole tick from the creature's current footprint.
-## **Goal-target memory (planned):** [param food_targets] should include only **precise-tier** remembered positions (within [code]goal_memory_precise_radius_px[/code] stationary envelope **or** the moving last-known disk per CREATURE_MEMORY). Coarse 8-way memories (N, NE, …) are egocentric — [code]weight_coarse_sector_goal_bias[/code] aligns with matching 8-way steps; do not append stale [code]Vector2[/code] targets here.
+## **Goal-target memory (planned):** [param food_targets] should include only **precise-tier** remembered positions (within [code]goal_memory_precise_radius[/code] stationary envelope **or** the moving last-known disk per CREATURE_MEMORY). Coarse 8-way memories (N, NE, …) are egocentric — [code]weight_coarse_sector_goal_bias[/code] aligns with matching 8-way steps; do not append stale [code]Vector2[/code] targets here.
 ## Params:
 ## - predicted: Candidate creature center after lookahead.
 ## - half: Footprint half-extents ([code]Vector2.ZERO[/code] uses center-point distance).
@@ -696,7 +696,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   var facing_v: Vector3 = _motor_read_dir(facing_raw, _motor_horizontal_right())
 
   var sz_env: float = float(ctx.get("creature_size", 0.0))
-  var near_thr: float = float(ctx.get("interior_env_near_mob_px", 70.0))
+  var near_thr: float = float(ctx.get("interior_env_near_mob", 70.0))
   var d_sq := nearest_mob_dist_sq(creature_pos, footprint_half, mobs)
   var mob_threat_high := near_thr > 0.0 and d_sq < near_thr * near_thr
   var interior_p := {
@@ -715,7 +715,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     w_seek_goal_raw = float(ctx.get("weight_seek_ready_food", 0.0))
   var w_seek_prey_raw: float = float(ctx.get("weight_seek_prey", 0.0))
   var imminent_pts: Array = _as_vector3_array(ctx.get("imminent_mob_points", []))
-  var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius_px", 0.0))
+  var imminent_r: float = float(ctx.get("food_seek_imminent_mob_radius", 0.0))
   var unready_food: Array = _as_vector3_array(ctx.get("unready_food_avoid_targets", []))
   var w_avoid_unready: float = float(ctx.get("weight_avoid_unready_food", 0.0))
   var w_idle_explore: float = float(ctx.get("weight_explore_idle_penalty", 0.0))
@@ -768,7 +768,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   var has_active_goal := bool(ctx.get("motor_has_active_goal", goal_in_sight))
   var tie_eps := float(ctx.get("motor_tie_cost_epsilon", 0.45))
   var plateau_random := bool(ctx.get("motor_no_goal_plateau_random", true))
-  var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance_px", 4.0))
+  var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance", 4.0))
   var filter_blocked_cardinals := bool(ctx.get("motor_filter_blocked_cardinals", false))
   filter_blocked_cardinals = (
     filter_blocked_cardinals or (not has_active_goal)
@@ -1108,7 +1108,7 @@ static func _interior_posture_cost(
 ## - predicted: Candidate creature center after lookahead.
 ## - half: Footprint half-extents ([code]Vector2.ZERO[/code] = point at [param predicted]).
 ## - bounds_min / bounds_max: In-bounds playfield rectangle (same frame as predicted).
-## - weight: Scales [code]1 / max(eps, margin_px)[/code] where [code]margin_px[/code] is clearance from footprint to nearest edge.
+## - weight: Scales [code]1 / max(eps, margin)[/code] where [code]margin[/code] is clearance from footprint to nearest edge.
 ## - eps: Floor for division (matches mob distance floor for stable tuning).
 ## Returns:
 ## - Nonnegative cost contribution.
@@ -1206,7 +1206,7 @@ static func _strategic_obstacle_cost(
 ## - static_obstacles: Array of dicts with `position` (center) and `half_extents` (half size of AABB); zero velocity repulsion via [param weight_obstacle].
 ## - food_targets: Optional [code]Vector2[/code] world positions of pickup-ready food (ENGINE hunger); [param weight_seek_ready_food] scales linear distance cost.
 ## - imminent_mob_points: Mob centers for disabling food pull when a mob is too close to [param predicted] (survival over foraging).
-## - imminent_mob_radius: Clearance threshold in px; [code]0[/code] disables gating.
+## - imminent_mob_radius: Clearance threshold in world units; [code]0[/code] disables gating.
 ## - unready_food_targets: Optional [code]Vector2[/code] world positions of bushes in awareness that are **not** pickup-ready; [param weight_avoid_unready_food] adds inverse-distance cost so the agent leaves depleted shrubs.
 ## - weight_avoid_unready_food: Scales [code]sum(1 / max(eps, dist))[/code] per unready bush; [code]0[/code] disables.
 ## Returns:
