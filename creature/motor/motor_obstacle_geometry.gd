@@ -1,6 +1,6 @@
 ## Builds static obstacle AABBs (repulsion channel) and outline sample points (strategic shield/pin channel).
 ## Rock field uses group [code]obstacles[/code]; **shrub footprints** ([code]food_plants[/code] subtree [StaticBody3D]) merge in separately so predators avoid bushes without putting shrubs on the global obstacle group ([code]bush_food_3d.gd[/code] grazing vs repulsion tuning in [method AiDriver._filter_obstacle_geom_for_foraging_prey]).
-## 3D bodies project collision onto the motor XZ plane ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## 3D bodies project collision onto the motor XZ plane ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 extends Object
 class_name MotorObstacleGeometry
 

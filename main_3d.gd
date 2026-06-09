@@ -1,5 +1,5 @@
 extends Node3D
-## M1 production 3D main: grasslands playfield, ENGINE duel harness, HUD overlay ([CONVERT_TO_3D.md §6 M1](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## M1 production 3D main: grasslands playfield, ENGINE duel harness, HUD overlay ([CONVERT_TO_3D.md §6 M1](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 const _Brand := preload("res://product_brand.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")

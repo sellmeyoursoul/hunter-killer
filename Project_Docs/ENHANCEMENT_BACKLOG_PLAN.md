@@ -108,7 +108,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
-| **2D → 3D playfield migration** | High | [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | M0–M3 done; **M4 v1** shipped LoS, navmesh cardinal hint, footprint ≥25%, movement_impact merge. **D5 tile authoring** = separate project; **crush** deferred. |
+| **3D tile terrain authoring (D5)** | Medium | [Completed_Features/CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md) §D5, [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Replace dev grasslands mesh + procedural open env grid with Godot 4.x 3D tile tools. Migration umbrella **shipped** — [CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md) archived. |
 
 ---
 

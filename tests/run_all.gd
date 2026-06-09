@@ -50,6 +50,8 @@ const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
+const _MotorPlaneScr := preload("res://creature/motor/motor_plane.gd")
+const _EightWayDirScr := preload("res://creature/motor/eight_way_directions.gd")
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
 const _SolidShrub3DScenePath := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
@@ -183,6 +185,7 @@ func _run_all() -> void:
   _test_seek_direction_turn()
   _test_no_goal_patrol_lock()
   _test_seek_stationary_look()
+  _test_motor_plane_yaw_from_facing()
   _test_seek_diagonal_intent()
   _test_seek_wall_filter_and_backtrack()
   _test_blocked_approach_memory()
@@ -3989,6 +3992,13 @@ func _test_seek_stationary_look() -> void:
   _assert(a.is_equal_approx(b), "stationary look is deterministic for tick + seed")
   var c: Vector2 = pick.call(seg, seg, phase_seed) as Vector2
   _assert(not a.is_equal_approx(c), "stationary look advances facing across segment boundary")
+
+
+func _test_motor_plane_yaw_from_facing() -> void:
+  for d in _EightWayDirScr.DIRECTIONS:
+    var yaw: float = _MotorPlaneScr.yaw_from_horizontal_dir(d)
+    var rebuilt := Vector3(sin(yaw), 0.0, -cos(yaw))
+    _assert(rebuilt.is_equal_approx(d), "yaw_from_horizontal_dir round-trips 8-way direction %s" % d)
 
 
 func _test_seek_diagonal_intent() -> void:

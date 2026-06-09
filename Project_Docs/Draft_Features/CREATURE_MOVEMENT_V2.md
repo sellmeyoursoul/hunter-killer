@@ -1,14 +1,123 @@
 # Hunter Killer — Creature movement V2 / unified motor (draft)
 
-> **Purpose:** Working spec for a **movement + motivation refactor**. **Canonical goal drivers** (motivation tree Tier-1/2, `CreatureDefinition` traits, habitual **`believed_goal_*`** modulation): **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**. This file **inherits** **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** 8-way intent pipeline for all species, and **wiring** the motivation tree into `MotorContext` / motor scorer.
+> **Purpose:** **Maintainer roadmap and technical spec** for the **movement + motivation refactor**. This file is the **source of truth for refactor phasing** (§**Refactor phases** below). **Sibling contracts:** motivation tree, traits, habitual replay — **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; belief tiers, locale priors, **`goal_*`** keys — **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)**. **This file** owns pack-scoped **`creature_motor`**, unified **`SeekCandidate`** ingress, **`MotorContext`** / scorer wiring, awareness/LoS, and **phase exit criteria** (§G).
 >
-> **Tier:** Draft — **3D production motor is live** on [`main_3d.tscn`](../../main_3d.tscn). Supersedes branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) for **active** design; the definitive inventory doc retains **2D historical** fork detail until trimmed.
+> **Tier:** Draft (tier II) — **3D production motor is live** on [`main_3d.tscn`](../../main_3d.tscn). Supersedes branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) for **active** design; the definitive inventory doc retains **2D historical** fork detail until Phase 7 trim.
+>
+> **Doc lifecycle (on refactor completion):** Move **this file** → [`Completed_Features/`](../Completed_Features/) (implementation snapshot). Move **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** and **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** → [`Definitive_Features/`](../Definitive_Features/) (ongoing contracts). Update [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) in the same coordinated change — no redirect stubs.
 >
 > **Refactor scope (ENGINE):** This phase **defines and implements scripted ENGINE motor only** (`creature_motor` weights, unified intent, motivation tree). **LLM / AI motor mode is out of scope** until ENGINE behavior is solid. When LLM motor is implemented later it must consume **motivation traits** at minimum; optionally share flattened motor params or read the species **`pack_resources.json`** so completions stay aligned with the same weighing story.
 >
 > **References:** [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) (`pack_resources.json`), [`creature_definition.gd`](../../creature/definition/creature_definition.gd), [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md), [game_config_merge.gd](../../AI_int_lib/game_config_merge.gd).
 >
 > **Co-development:** **Tier / trait semantics** — **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; **belief keys, hooks, tier belief tables** — **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** + code (**`goal_memory_*`**, **`_goal_belief`**). This file focuses on **routing** remembered targets into **`SeekCandidate[]`**, **`creature_motor`**, and scorer plumbing. **Archived** `[Completed_Features/](../Completed_Features/)** may still show older `food_memory_*` — ignore for implementation.
+
+---
+
+## Refactor phases (source of truth)
+
+**Phases 1–2 are shipped** (§G.1–G.4 `[x]`). **Phases 3–7** are the remaining work, in dependency order. Cross-cutting backlog items live in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
+
+### Phase status
+
+| Phase | Name | Status | Exit criterion (summary) |
+|-------|------|--------|--------------------------|
+| **1** | ENGINE movement foundations | **Done** | §G.1–G.2 — pack merge, unified builder, single cardinal path |
+| **2** | Generalized goal-memory | **Done** | §G.4 — `_goal_belief`, `LocalePriorMap`, salient writes, replay |
+| **3** | Retune and ship baseline | **Next** | Playable duel; real **`creature_motor_profile_ship`**; pack tuning |
+| **4** | Ingress cleanup | Pending | One `SeekCandidate[]` at scorer; **`weight_seek_remembered_goal`** per target |
+| **5** | Personality depth | Pending | Non-stub trait Tier-2; full Slot B **`current_fit`** |
+| **6** | New goal kinds and backends | Pending | **`shelter`** writes; mate/combat/ring when systems land |
+| **7** | Doc promotion | Pending | Sibling docs → tier III; **this file** → tier A snapshot |
+
+```mermaid
+flowchart LR
+  p1[Phase1_Foundations]
+  p2[Phase2_Memory]
+  p3[Phase3_Retune]
+  p4[Phase4_Ingress]
+  p5[Phase5_Traits]
+  p6[Phase6_GoalKinds]
+  p7[Phase7_Docs]
+  p1 --> p2 --> p3
+  p3 --> p4
+  p4 --> p5
+  p5 --> p6 --> p7
+```
+
+**Shipped stack (Phases 1–2):** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd), [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd), [`goal_seek.gd`](../../creature/motor/goal_seek.gd), [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd), [`motor_tactic_classifier.gd`](../../creature/motor/motor_tactic_classifier.gd) (partial — see Phase 5), [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) (stub), 3D duel on [`main_3d.tscn`](../../main_3d.tscn).
+
+### Phase 3 — Retune and ship baseline (§A.1)
+
+**Goal:** Turn the dev-profile wiring detector into playable duel behavior.
+
+1. Playtest duel loop (rabbit vs fox) — log rows in [CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md).
+2. Finalize **`creature_motor_profile_ship`** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — today stub/empty; ship numerics per species after baseline playtest.
+3. Per-species **`pack_resources.json`** tuning — Preserve/Find band, awareness, seek weights, belief radii ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)).
+4. Ship executable CI (**B-10**) — deferred until ship profile has real numerics ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
+
+**Primary files:** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), `assets/creatures/*/pack_resources.json`.
+
+### Phase 4 — Ingress cleanup (§A.2.2)
+
+**Goal:** Finish unified **`SeekCandidate`** ingress; remove parallel legacy scorer lists.
+
+**Known gap (code today):** [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) still scores **`food_seek_targets`**, **`pursuit_targets`**, and **`goal_seek_targets`**. [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) merges remembered bushes into **`food_seek_targets`** and bumps **`weight_seek_ready_food`** globally (`w_remember * 0.5`) instead of per-target **`weight_seek_remembered_goal`** on **`goal_seek_targets`** ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — *Remembered seek weighting*).
+
+1. Route precise remembered stationary targets through **`goal_seek.gd`** → **`goal_seek_targets`** + **`weight_seek_goal`**, using **`weight_seek_remembered_goal`** per merged `SeekCandidate`.
+2. Collapse carnivore **`pursuit_targets`** into **`seek_candidates`** metadata where profiling allows (internal peel OK; one builder output).
+3. Deprecate **`food_seek_targets`** / **`weight_seek_ready_food`** in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) + cardinal scorer once tests pass.
+4. Extend [`tests/run_all.gd`](../../tests/run_all.gd) — remembered-bush pull via **`goal_seek_targets`**.
+
+**Primary files:** [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`goal_seek.gd`](../../creature/motor/goal_seek.gd), [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd), [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd).
+
+### Phase 5 — Personality depth
+
+**Goal:** Traits affect Tier-2 urgency and tactic replay beyond Slot A tint. Authoritative formulas: **[CREATURE_GOAL_DRIVERS.md §3.3.1, §5.1.4](CREATURE_GOAL_DRIVERS.md)**; code map: **[CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md)**.
+
+| Item | Module |
+|------|--------|
+| Trait → Tier-2 urgency deltas | [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) `apply_trait_urgency_channels` |
+| Full Slot B **`current_fit`** + **`tactic_lasting_local_change`** | [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd), [`motor_tactic_classifier.gd`](../../creature/motor/motor_tactic_classifier.gd) |
+| **`anticipated_calories`** motor use | [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) — [CREATURE_MEMORY.md §6](CREATURE_MEMORY.md) |
+| Compassion / community motor (minimal) | Motor context fields — [CREATURE_GOAL_DRIVERS.md §3.1](CREATURE_GOAL_DRIVERS.md) |
+
+**Constraint:** Jeopardy hard-win and starvation override ([CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)) unchanged unless pack-combat verbs land.
+
+### Phase 6 — New goal kinds and backends
+
+**Goal:** Extend the **same** memory schema. Storage/write contracts: **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)**; **`GoalKind`** registry: **[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**.
+
+| GoalKind / backend | Status | Phase 6 work |
+|--------------------|--------|--------------|
+| **`find_food` / `avoid_hostiles`** | Live | Retune (Phase 3) + ingress (Phase 4) |
+| **`shelter`** | Registry only | Squeeze fingerprint **`context_hash`**, bolt-hole beliefs, salient writes — [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md), [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) |
+| **`find_mate`** | Stub urgency **0** | Blocked on mating vitals / pursuit system |
+| Pack **`extra_goal_kinds`** | Merge at spawn | Author in packs + tests (e.g. `nest_defense`) |
+| **`ExperienceRing`** | Deferred | Episodic backend + map/ring disagree — [CREATURE_GOAL_DRIVERS.md §5.1 Action 3](CREATURE_GOAL_DRIVERS.md) |
+| **`fight` modality** | **`current_fit = 0`** | Blocked on combat; revisit prey-chase vs **`avoid_hostiles`** — [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) |
+
+**LoS / stealth backlog** (post–M4 v1): skill-based occlusion threshold, semantic env fallback — §D–E, [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
+
+### Phase 7 — Doc promotion
+
+**Trigger:** Phases 3–4 stable in playtest; Phase 5–6 items may still be open but must not block contract promotion of siblings.
+
+| File | Destination | Role after move |
+|------|-------------|-----------------|
+| **This file** (`CREATURE_MOVEMENT_V2.md`) | [`Completed_Features/`](../Completed_Features/) | Refactor **snapshot** — drift vs code expected |
+| [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) | [`Definitive_Features/`](../Definitive_Features/) | Ongoing motivation / trait / replay contract |
+| [CREATURE_MEMORY.md](CREATURE_MEMORY.md) | [`Definitive_Features/`](../Definitive_Features/) | Ongoing belief / locale-prior contract |
+| [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) | *(stay tier III)* | Update §5 deferred table as Phase 5 ships |
+| [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) | *(stay tier III)* | Trim 2D fork detail superseded by [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) |
+
+**Out of scope until ENGINE solid:** LLM motor mode (§scope note below); trait heredity / experience-driven drift ([CREATURE_GOAL_DRIVERS.md §3.4](CREATURE_GOAL_DRIVERS.md)).
+
+### Suggested immediate sprint
+
+**Highest leverage:** Phase 4 ingress cleanup — closes spec/code gap on **`weight_seek_remembered_goal`** and reduces `ai_driver` / cardinal fork surface.
+
+**Parallel (low risk):** Phase 3 ship profile numerics for duel packs only — keys already in [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md).
 
 ---
 
@@ -136,17 +245,17 @@ When building **`MotorContext`** ([`_build_motor_context`](../../AI_int_lib/ai_d
 
 Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`find_food`** salient writes still use §5.1.1 **default modality / `explorer` pole** path.
 
-#### A.2.2 Goal seek vs food seek (phase-1 posture)
+#### A.2.2 Goal seek vs food seek (Phase 4 — ingress cleanup)
 
-**Target (§A.2):** one **`SeekCandidate[]`** ingress and **`goal_seek_cost`** — not parallel **`food_seek_targets`** / **`pursuit_targets`** forks. **Code today** still uses **`food_seek_*`** keys in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) / [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd).
+**Target (§A.2):** one **`SeekCandidate[]`** ingress and **`goal_seek_cost`** — not parallel **`food_seek_targets`** / **`pursuit_targets`** forks.
 
-**Phase A target builder (shipped):** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) — **`build_motor_target_lists()`** emits **`seek_candidates`**, **`threat_samples`**, **`food_split`**, **`prey_positions`**, **`pursuit_targets`** from **`feeding_mode`** + [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) (`DietRegistry`), not **`prey` / `mobs` group forks**. Typed hostile ingress: [`threat_sample.gd`](../../creature/motor/threat_sample.gd). **`_goal_belief_*`** runs when **`supports_plant_belief`** (plant groups on policy).
+**Shipped (Phases 1–2):** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) — **`build_motor_target_lists()`** emits **`seek_candidates`**, **`threat_samples`**, **`food_split`**, **`prey_positions`**, **`pursuit_targets`** from **`feeding_mode`** + [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) (`DietRegistry`), not **`prey` / `mobs` group forks**. Typed hostile ingress: [`threat_sample.gd`](../../creature/motor/threat_sample.gd). **`_goal_belief_*`** runs when **`supports_plant_belief`** (plant groups on policy). **`goal_seek_targets`** + **`weight_seek_goal`** on **`MotorContext`**, filtered by dominant Tier-2 via [`goal_seek.gd`](../../creature/motor/goal_seek.gd) + [`seek_candidate.gd`](../../creature/motor/seek_candidate.gd).
 
-**Phase-B goal seek (shipped):** **`goal_seek_targets`** + **`weight_seek_goal`** on **`MotorContext`**, filtered by **derived** dominant Tier-2 via [`goal_seek.gd`](../../creature/motor/goal_seek.gd) + [`seek_candidate.gd`](../../creature/motor/seek_candidate.gd). Cardinal linear pull uses **`goal_seek_cost_at_prediction`** (alias of legacy food seek cost). Legacy **`food_seek_targets`** / **`weight_seek_ready_food`** remain for belief merge and pack compat.
+**Remaining (Phase 4):** [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) / [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) still score legacy **`food_seek_targets`**, **`pursuit_targets`**, and **`weight_seek_ready_food`**. [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) bumps global seek weight instead of **`weight_seek_remembered_goal`** per remembered target — see **Refactor phases → Phase 4**.
 
-| Layer | Phase A/B (current) | Later |
-|-------|---------------------|-------|
-| Instance targets | **`goal_seek_targets`** + **`weight_seek_goal`**; legacy food keys mirrored | Drop parallel **`prey_seek_targets`** linear pull when pursuit-only path suffices |
+| Layer | Phases 1–2 (shipped) | Phase 4 (pending) |
+|-------|----------------------|-------------------|
+| Instance targets | **`goal_seek_targets`** + legacy food/pursuit keys mirrored | Drop **`food_seek_targets`** / **`pursuit_targets`** at scorer; per-target **`weight_seek_remembered_goal`** |
 | Habitual patches | **`believed_goal_source_bias`** vector + sector costs | Same — **never** merged into seek target list |
 | `replay_weight` | Multiplicative on **`weight_believed_goal_pull`** + **`weight_seek_goal`** | — |
 
@@ -219,30 +328,35 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 
 **V2 wording:** **`feeding_mode`** filters **`SeekCandidate`** **membership / metadata** (**§A.2**) and **consumption / bite rules**. The **motor does not fork** — it consumes one **`SeekCandidate[]`** plus **`ThreatSample[]`** from a builder step (perception façade). **No** separate “archetype memory stack” — all goal kinds share **`goal_*`** configs ([CREATURE_MEMORY.md](CREATURE_MEMORY.md)).
 
-**Phasing stance:** Accepted as written; delivery order (**movement foundations → memory → retune**) is nailed in **§B.3**.
+**Phasing stance:** Maintainer-approved order is **Refactor phases** (Phases 1–7). Historical two-step wording (foundations → memory → retune) maps to Phases **1–2** (done) and **3+** (remaining).
 
-### B.3 Implementation order — maintainer-approved phasing
+### B.3 Implementation order
 
-1. **`feeding_mode`** as **ingress-only** (**§B.2**) remains correct; predator/prey calorie path + **movement calorie cost** (per [CREATURE_MEMORY.md §4](CREATURE_MEMORY.md)) still gate claiming **predator memory-complete UX** wherever that overlaps schedule.
+**Authoritative phasing:** **Refactor phases** section above. Summary:
 
-2. **Phase — ENGINE movement first (this document’s refactor slice):** Land **correct unified scripted movement**: **`creature_motor`** = **`default_creature_motor_params()`** ∪ pack overlay (**§A.1**), single intent plumbing, avoidance/seek correctness from live sense + existing geometry gates. **Do not ship** persisted **`_goal_belief`** layering in this same slice unless it is negligible glue.
+| Legacy bullet | Phase |
+|---------------|-------|
+| **`feeding_mode`** ingress-only; predator calorie + locomotion cost prerequisites | **1–2** (done) — [CREATURE_MEMORY.md §4](CREATURE_MEMORY.md) |
+| ENGINE movement foundations — pack merge, unified builder, cardinal path | **Phase 1** (done) — §G.1–G.2 |
+| Generalized goal-memory — `_goal_belief`, locale priors, salient writes | **Phase 2** (done) — §G.4 |
+| Retune ship profile + duel packs | **Phase 3** (next) |
+| Unified scorer ingress — drop legacy food/pursuit lists | **Phase 4** |
+| Trait depth, new GoalKinds, doc promotion | **Phases 5–7** |
 
-3. **Phase — generalized goal-memory second:** Full memory implementation (**§C**, [CREATURE_MEMORY.md §4–§5](CREATURE_MEMORY.md)): merge **`SeekCandidate ∪ remembered`** through one façade. **Tune after integration** — if memory degrades movement versus the movement-phase baseline, adjust weights/rules in a focused follow-up (movement truth wins until memory proven stable).
-
-4. Technical enabler retained from prior draft: unify motor **routing** early so **`SeekCandidate` ownership** stays one codepath **before** memory writes into it.
+**Movement truth rule (unchanged):** If memory or personality changes degrade locomotion versus the Phase 1 baseline, adjust weights in a focused follow-up before advancing phase exit criteria.
 
 ---
 
-## C. Goal-target memory (design — not fully implemented)
+## C. Goal-target memory (Phase 2 shipped — Phase 4 ingress pending)
 
-**Objective:** Remember **goal-relevant** targets after they leave awareness — **without omniscient seek**. **Nutritional foliage + prey land first** — mates, nests, bolt-holes follow the **same** schema ([CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)).
+**Objective:** Remember **goal-relevant** targets after they leave awareness — **without omniscient seek**. **Stationary foliage + moving prey** are live ([CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)); mates, nests, bolt-holes follow the **same** schema in **Phase 6**.
 
 **Movement refactor scope:** **Authoritative** numerical defaults **and** TTL rules live in [CREATURE_MEMORY.md](CREATURE_MEMORY.md) (**`goal_memory_*`**). Here: how beliefs **fuse** into **`SeekCandidate[]`** (and threats) beside live sense, with **`consumable_now` / payloads** frozen until refreshed.
 
 | Tier | Condition (baseline — sync with CREATURE_MEMORY §5) | Representation | Motor use |
 |------|-----------------------------------------------------|----------------|-----------|
-| **Precise — stationary** | Distance to `last_world_pos` inside **`goal_memory_precise_radius_px`** (~**1000** px cue in commented merge defaults) | Exact **`Vector2`** + frozen affordability (`consumable_now`, optional payloads) | Merge into **`SeekCandidate`** (**§A.2**) |
-| **Precise — moving** | Last-known **`Vector2`** with disk **`goal_memory_moving_last_known_radius_px`** (starter ~**50** px; clamp **`≤ goal_memory_precise_radius_px`** unless waived — **§F**) | Blob + velocity ghost when extrapolating | Same list (**§A.2**) |
+| **Precise — stationary** | Distance to `last_world_pos` inside **`goal_memory_precise_radius_px`** (~**1000** px cue in commented merge defaults) | Exact world position + frozen affordability (`consumable_now`, optional payloads) | Merge into **`SeekCandidate`** — **Phase 4:** route via **`goal_seek_targets`** (**§A.2.2**) |
+| **Precise — moving** | Last-known position with disk **`goal_memory_moving_last_known_radius_px`** (starter ~**50** px; clamp **`≤ goal_memory_precise_radius_px`** unless waived — **§F**) | Blob + velocity ghost when extrapolating | Same list (**§A.2**) — Phase E shipped |
 | **Coarse** | Beyond precise envelope; still remembered under forget/LRU rules | Egocentric 8-way sector each tick (**+Y = N**) | Weak sector bias (**`weight_coarse_sector_goal_bias`**) on matching **8-way seek steps**; **never** spoof full-precision seek |
 
 **Alternative storage:** Mob ghosts, explore-grid keyed by **`instance_id`**, precise-only — **memory-phase** choices only (**§B.3**); **does not block** Foundations.
@@ -318,19 +432,19 @@ Let **`u`** = unit vector creature → target, **`f`** = facing. Target is **in 
 | Ghosts / memory | **Persist** when occluded |
 | Semantic fallback | **Deferred** — [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) |
 
-Tracking: [CONVERT_TO_3D.md §5.1](CONVERT_TO_3D.md), [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
+Tracking: [CONVERT_TO_3D.md §5.1](../Completed_Features/CONVERT_TO_3D.md), [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
 
 ---
 
 ## F. Resolved from CREATURE_MEMORY (coarse tiers / movers — `goal_*` naming)
 
-Carry-forward for ENGINE routing (**implement in memory phase**, **§B.3**). Authoritative policy: [CREATURE_MEMORY.md §5.3–§9](CREATURE_MEMORY.md).
+Carry-forward for ENGINE routing (**Phase 2 shipped**; tune in **Phase 3**). Authoritative policy: [CREATURE_MEMORY.md §5.3–§9](CREATURE_MEMORY.md).
 
 | Topic | Resolution |
 |-------|------------|
 | **Coarse sectors vs landmarks** | **Egocentric** coarse sectors **for now** (creature-relative). Map-fixed landmarks **deferred** unless revisit. |
 | **Forget policy** | **Combine** **`goal_memory_forget_radius_px`**, TTL since live observation (**`goal_memory_ttl_sec`**), TTL while continuously **coarse** (**`goal_memory_coarse_ttl_sec`**), LRU (**`goal_memory_max_entries`**) — ship together; tune interplay in-play. |
-| **Moving prey / movers** | **Last-known disk** **`goal_memory_moving_last_known_radius_px`** (starter ~**50** px — same knob as generalized movers). Pair with ghosts / velocity when implemented. |
+| **Moving prey / movers** | **Last-known disk** **`goal_memory_moving_last_known_radius_px`** (starter ~**50** px — same knob as generalized movers). Ghost velocity + intercept — Phase E shipped ([CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)). |
 
 **Note:** Tune in **`creature_motor`** packs; **never** resurrect **`food_memory_*`** identifiers.
 
@@ -338,9 +452,9 @@ Carry-forward for ENGINE routing (**implement in memory phase**, **§B.3**). Aut
 
 ## G. Acceptance criteria — V2 movement refactor slice
 
-**Order:** Satisfy §G prior to treating **persistent goal-memory** (`_goal_belief` / **`goal_*` keys**) as MVP-complete (**§B.3**, **§C** deferred storage strategies). Regression memory checklist (**§G.4**) runs after movement slice unless parallelized.
+**Phases 1–2 (§G.1–G.4):** complete — ENGINE foundations + goal-memory integration shipped. **Phases 3–7:** §G.5 checklists (see **Refactor phases**). Split PRs acceptable; update the matching §G rows when a phase closes.
 
-Motor unification separate from memory wiring — split PRs acceptable if each updates this checklist.
+Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune where dependencies allow.
 
 ### G.1 Config / packs
 
@@ -386,13 +500,50 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 - [x] **`replay_weight` multiplicative** on **`weight_believed_goal_pull`** / seek when consult hash matches — **[CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)** (not additive cardinal fork).
 
+### G.5 Phases 3–7 (remaining refactor)
+
+**Update this checklist as phases close.** Full work breakdown: **Refactor phases** section.
+
+#### G.5.1 Phase 3 — Retune and ship baseline
+
+- [ ] Duel playtest rows logged ([CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)).
+- [ ] **`creature_motor_profile_ship`** has real numerics (not stub/empty overlay).
+- [ ] Duel rabbit/fox **`pack_resources.json`** tuned for forage / flee / memory (Preserve/Find band, awareness, belief radii).
+- [ ] Ship executable CI strategy (**B-10**) documented or implemented ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
+
+#### G.5.2 Phase 4 — Ingress cleanup
+
+- [ ] Remembered precise stationary targets merge via **`goal_seek_targets`** + per-target **`weight_seek_remembered_goal`** (not global **`weight_seek_ready_food`** bump).
+- [ ] **`cardinal_avoidance.gd`** scores **`goal_seek_targets`** only — **`food_seek_targets`** / **`pursuit_targets`** deprecated at scorer boundary.
+- [ ] [`tests/run_all.gd`](../../tests/run_all.gd) regression for remembered-bush **`goal_seek`** pull.
+
+#### G.5.3 Phase 5 — Personality depth
+
+- [ ] **`trait_tier2_mapper.gd`** applies non-zero urgency deltas ([CREATURE_GOAL_DRIVERS.md §3.3.1](CREATURE_GOAL_DRIVERS.md)).
+- [ ] **`tactic_lasting_local_change`** detector live; Slot B qualitative **`current_fit`** beyond classifier flags ([CREATURE_GOAL_DRIVERS.md §5.1.4](CREATURE_GOAL_DRIVERS.md)).
+- [ ] **`anticipated_calories`** used in merge/scoring or documented waiver ([CREATURE_MEMORY.md §6](CREATURE_MEMORY.md)).
+
+#### G.5.4 Phase 6 — New goal kinds and backends
+
+- [ ] **`shelter`** salient writes + squeeze **`context_hash`** ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)).
+- [ ] LoS/stealth alignment with **`shelter`** ([CREATURE_MEMORY.md §13](CREATURE_MEMORY.md) open item) — or explicit deferral note in backlog.
+- [ ] **`find_mate`**, **`ExperienceRing`**, **`fight`** — shipped or remain backlog-blocked with index update.
+
+#### G.5.5 Phase 7 — Doc promotion
+
+- [ ] [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) → `Definitive_Features/`.
+- [ ] [CREATURE_MEMORY.md](CREATURE_MEMORY.md) → `Definitive_Features/`.
+- [ ] **This file** → `Completed_Features/`; [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) updated (no redirect stubs).
+- [ ] [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) §5 deferred table synced.
+
 ---
 
 ## H. Dependencies
 
-- [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) — V1 fork inventory **to deprecate**.
-- [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) — **canonical** motivation tree Tier-1/2, **`CreatureDefinition`** trait axes + application order, habitual **`believed_goal_*`** modulation (**§5.1** strategy-class tags — **Resolved**).
-- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — canonical goal-memory tiers + TTLs; success-pattern façade (**§2.1**); trait-mediated habitual replay consumption (**§2.2**); routed into **Tier-2** (**Find food**, **Avoid hostiles**, future mate/nest/evasion payloads).
+- **Refactor phasing (this file)** — **Refactor phases**, §G.5 checklists.
+- [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) — V1 fork inventory; trim in **Phase 7** where [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) supersedes.
+- [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) — motivation tree, traits, habitual replay (**→ `Definitive_Features/`** on Phase 7).
+- [CREATURE_MEMORY.md](CREATURE_MEMORY.md) — belief tiers, locale priors, **`goal_*`** keys (**→ `Definitive_Features/`** on Phase 7).
 - [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) — field catalog; traits.
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) — must stay consistent (**heredity out of scope** here; genome doc may evolve separately).
 - [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
@@ -403,6 +554,7 @@ Motor unification separate from memory wiring — split PRs acceptable if each u
 
 | Date | Change |
 |------|--------|
+| 2026-06-09 | **Refactor phases (source of truth):** Phases 1–2 marked done; Phases 3–7 roadmap (retune, ingress, traits, goal kinds, doc promotion). **Doc lifecycle:** this file → `Completed_Features/`; GOAL_DRIVERS + MEMORY → `Definitive_Features/`. §A.2.2, §B.3, §C, §G.5, §H synced. |
 | 2026-05-25 | **Phase 2:** `derive_dominant_tier2_leaf` + `believed_goal_source_bias` projection wired in `ai_driver`; Phase 1 ENGINE movement foundations marked complete. |
 | 2026-05-23 | **§A.3.1:** no-goal **patrol lock** — random cardinal + idle, **`motor_no_goal_patrol_lock_sec`** (1s duel default), goal interrupt. |
 | 2026-05-23 | **§E.1 Resolved:** zone of awareness = **radius disk + forward cone extension** (default `awareness_forward_cone_only = false`); duel packs + memory re-awareness cross-link. |

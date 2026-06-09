@@ -1,6 +1,6 @@
 extends RefCounted
 class_name PlayfieldBounds3D
-## Computes motor-playfield XZ bounds from a 3D playfield root ([CONVERT_TO_3D.md §D10](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Computes motor-playfield XZ bounds from a 3D playfield root ([CONVERT_TO_3D.md §D10](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")

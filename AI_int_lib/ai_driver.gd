@@ -6017,7 +6017,7 @@ func _apply_action_token(token: String) -> void:
 
 
 func _build_snapshot_blob(_snapshot_creature: Node = null) -> String:
-  ## 3D LLM snapshot deferred ([CONVERT_TO_3D.md §D8](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+  ## 3D LLM snapshot deferred ([CONVERT_TO_3D.md §D8](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
   return ""
 
 

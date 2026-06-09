@@ -58,7 +58,7 @@
 
 - **Vision layer (this file):** Roadmap and cross-links only.  
 - **Domain plans:** [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md), [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md), [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md).  
-- **2D → 3D migration:** [CONVERT_TO_3D.md](CONVERT_TO_3D.md) (playfield / motor / env umbrella); creature bodies → [CREATURE_3D_ARCHITECTURE.md](CREATURE_3D_ARCHITECTURE.md).  
+- **2D → 3D migration (shipped):** [CONVERT_TO_3D.md](../Completed_Features/CONVERT_TO_3D.md) (playfield / motor / env umbrella); creature bodies → [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md).  
 - **Near-term gameplay:** [PLANTS_PLAN.md](PLANTS_PLAN.md) (player food / starvation POC).  
 - **LLM posture:** [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md).
 
