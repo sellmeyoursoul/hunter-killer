@@ -1,6 +1,8 @@
 # Creature movement (2D duel / ENGINE motor)
 
-> **Tier III contract — inventory of current behavior.** This doc maps **where** movement is decided, **what** weights exist, and **every carnivore vs herbivore fork** in code today. It is intentionally verbose for refactor planning; trim sections as the motor is redesigned.
+> **Superseded for 3D production (2026-06):** Production motor runs on [`main_3d.gd`](../../main_3d.gd) with unified **`CharacterBody3D`** duel templates ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)). This file is a **historical 2D inventory** (`player.gd` / `mob.gd` era). **Active design and refactor:** [CREATURE_MOVEMENT_V2.md](../Draft_Features/CREATURE_MOVEMENT_V2.md).
+>
+> **Tier III contract — inventory of legacy 2D behavior.** This doc maps **where** movement was decided, **what** weights exist, and **every carnivore vs herbivore fork** in the pre-3D code path. It is intentionally verbose for refactor planning.
 >
 > **Drift policy:** When code and this file disagree, **code wins** until this doc is updated in the same change set.
 >
@@ -10,13 +12,15 @@
 
 ## 1. Executive summary
 
-| Layer | Role |
+| Layer | Role (3D production — see banner) |
 |-------|------|
 | **Intent producers** | `AiDriver` (scripted 8-way motor), human input, LLM tokens (`UP`/`DOWN`/`LEFT`/`RIGHT` — cardinals only today) |
-| **Intent storage** | `creature_move_intent` on `player.gd` / `mob.gd` |
-| **Physics application** | `player.gd` (`CharacterBody2D.move_and_slide`) or `mob.gd` ENGINE path (`linear_velocity = intent × speed`) |
+| **Intent storage** | `creature_move_intent` on [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (**Body** child) |
+| **Physics application** | **`CharacterBody3D.move_and_slide`** on all duel species (**D4** — no rigid mob fork) |
 | **Motor planner** | `creature/motor/cardinal_avoidance.gd` — scores **9 candidates** (8-way + idle), picks minimum cost |
 | **Driver orchestration** | `AI_int_lib/ai_driver.gd` — context build, stuck/jeopardy/hold, per-body state |
+
+**Legacy 2D rows below (§2–§13):** `player.gd` / `mob.gd` intent storage; `CharacterBody2D` vs `RigidBody2D` physics split.
 
 **Move vs not-move:** A creature **stands still** when final intent is `Vector2.ZERO`. There is no separate “movement enabled” flag in ENGINE mode beyond `control_mode == ENGINE` and round/session state.
 
@@ -434,7 +438,7 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 | Obstacles | `obstacles` + plant static bodies | Sample points filtered by awareness radius | repulsion + strategy |
 | Environment grid | `Main.environment_grid` | Cell at predicted point | player ENGINE interior cost |
 
-**Debug:** [`creature/awareness_debug_overlay.gd`](../../creature/awareness_debug_overlay.gd) — F9 / project setting `hunter_killer_debug/draw_awareness`.
+**Debug (3D):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`.
 
 ---
 
@@ -500,6 +504,14 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 
 ## 14. Maintenance
 
-- Update this file when adding/removing a cost term, config key, or group-based fork.
+- Update this file when adding/removing a cost term, config key, or group-based fork **in the legacy 2D inventory sections**.
 - When promoting behavior from draft docs, copy **contract** bullets here and link outward.
 - Trim §5–§9 once a replacement motor architecture is chosen.
+
+---
+
+## 15. Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-08 | Supersession banner for 3D production; §1 executive summary notes 3D paths; debug overlay → `awareness_debug_overlay_3d.gd` (M3). |

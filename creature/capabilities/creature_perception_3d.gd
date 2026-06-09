@@ -1,6 +1,6 @@
 extends RefCounted
 class_name CreaturePerception3D
-## Perception scaling only; cone math / queries land here in a later phase.
+## Perception radius/cone scaling; LoS rays live in [code]line_of_sight.gd[/code] (M4).
 ## Params:
 ## - base_radius / base_half_angle_deg: from merged [code]creature_motor[/code] or local defaults.
 ## - definition: [CreatureDefinition] or [code]null[/code] (duck-typed for tooling that avoids hard [code]class_name[/code] refs).

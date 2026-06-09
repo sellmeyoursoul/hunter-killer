@@ -14,6 +14,9 @@ static func make(
   acute: bool = true,
   hostile: bool = true,
   source: StringName = SOURCE_LIVE_MOB,
+  line_of_sight_clear: bool = true,
+  occluded: bool = false,
+  occlusion_fraction: float = 0.0,
 ) -> Dictionary:
   return {
     "world_pos": world_pos,
@@ -24,6 +27,9 @@ static func make(
     "acute": acute,
     "hostile": hostile,
     "source": source,
+    "line_of_sight_clear": line_of_sight_clear,
+    "occluded": occluded,
+    "occlusion_fraction": occlusion_fraction,
   }
 
 

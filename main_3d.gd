@@ -46,6 +46,7 @@ var _obstacles_root: Node3D
 var _food_root: Node3D
 var _using_fallback_floor: bool = false
 var _ground_sampler: PlayfieldGroundSampler
+var _nav_region: NavigationRegion3D
 
 
 func _ready() -> void:
@@ -218,7 +219,40 @@ func _build_playfield() -> void:
   _ensure_food_plants()
   call_deferred("_snap_playfield_props_to_ground")
   call_deferred("_bake_ground_sampler")
+  call_deferred("_bake_playfield_navmesh")
   _log_playfield_diagnostics()
+
+
+func get_navigation_map_rid() -> RID:
+  if _nav_region != null and is_instance_valid(_nav_region):
+    return _nav_region.get_navigation_map()
+  return RID()
+
+
+func _duel_max_capsule_radius() -> float:
+  var r := 0.35
+  if _RabbitArchetype != null:
+    r = maxf(r, float(_RabbitArchetype.collision_capsule_radius))
+  if _FoxArchetype != null:
+    r = maxf(r, float(_FoxArchetype.collision_capsule_radius))
+  return r
+
+
+func _bake_playfield_navmesh() -> void:
+  if _playfield_root == null:
+    return
+  if _nav_region != null and is_instance_valid(_nav_region):
+    _nav_region.queue_free()
+  _nav_region = NavigationRegion3D.new()
+  _nav_region.name = "PlayfieldNavRegion"
+  _playfield_root.add_child(_nav_region)
+  var nm := NavigationMesh.new()
+  nm.agent_radius = _duel_max_capsule_radius()
+  nm.agent_height = 2.0
+  nm.cell_size = 0.25
+  nm.cell_height = 0.15
+  _nav_region.navigation_mesh = nm
+  _nav_region.bake_navigation_mesh()
 
 
 func _mount_grasslands_floor() -> void:

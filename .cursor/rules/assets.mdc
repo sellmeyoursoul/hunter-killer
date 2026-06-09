@@ -13,7 +13,7 @@ alwaysApply: false
 ## Layout
 
 - Prefer **`res://assets/`** domain packages (§2–§4): `creatures/`, `plants/`, `environment/`, `locations/`, `_shared/`, future `ui/`/`audio/` when adopted.
-- **`main.tscn`**, menus, app shell → outside `assets/` (e.g. `scenes/app/`).
+- **`main_3d.tscn`**, menus, app shell → outside `assets/` (e.g. `scenes/app/`).
 - **`res://art/`** grandfathered — no new files unless task/feature doc says so.
 
 ## `pack_resources.json` + `_shared` (§2.1)

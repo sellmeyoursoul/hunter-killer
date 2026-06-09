@@ -87,7 +87,12 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|-------|
-| **Line of sight / occlusion** — solids reduce or block effective **awareness** (cone/radius) | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §7.4 | **Deferred this phase (B-8).** Future: **Godot 3D ray** vs props/tiles; pairs with memory (last known) and squeeze / `fit_size` hiding. |
+| **Line of sight / occlusion** — solids reduce or block effective **awareness** (cone/radius) | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §7.4 | **Shipped (M4 v1):** physics rays, combined gate, >60% blocked; ghosts persist. **Backlog:** semantic fallback on plant/env bodies; stealth vs observation skill checks. |
+| **Semantic LoS fallback** — plant/env body metadata when rays/grid inconclusive | Low | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §7.4 | Deferred post–M4 v1 (physics-only LoS shipped). |
+| **Stealth / observation skill checks** — replace hard 60% occlusion threshold | Medium | [Draft_Features/CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) §D–E | Competing skill checks for partial occlusion. |
+| **Ghost movement prediction** — escape routes vs known trapped | Low | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §7.3 | Object permanence shipped; prediction heuristics deferred. |
+| **Cumulative movement_impact** — combined terrains harder than either alone | Low | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | v1 uses greatest-impact-first merge only; revisit after playtest. |
+| **3D volumetric crush** — height, stacking, multi-layer semantics | Medium | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) §10 | Full spec TBD; `crush_weight` + creature `weight` wiring deferred. |
 
 ---
 
@@ -103,7 +108,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
-| **2D → 3D playfield migration** | High | [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | Umbrella for main scene, physics layers, motor XZ adapter, env/plants; **LoS / navmesh / vertical crush** stay in Perception & Environment backlog until baseline 3D shell (M1–M2) ships. |
+| **2D → 3D playfield migration** | High | [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | M0–M3 done; **M4 v1** shipped LoS, navmesh cardinal hint, footprint ≥25%, movement_impact merge. **D5 tile authoring** = separate project; **crush** deferred. |
 
 ---
 

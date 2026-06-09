@@ -28,6 +28,9 @@ var screen_size: Vector2 = Vector2.ZERO
 var playfield_bounds_min: Vector2 = Vector2.ZERO
 var playfield_bounds_max: Vector2 = Vector2.ZERO
 var creature_size: float = 1.0
+var _base_creature_size: float = 1.0
+var _base_capsule_radius: float = 0.35
+var _base_capsule_height: float = 1.2
 var caloric_needs: int = 30
 var current_calories: float = 30.0
 
@@ -97,15 +100,69 @@ func _apply_definition_defaults() -> void:
   if cap != null:
     caloric_needs = int(cap)
     current_calories = float(caloric_needs)
+  _cache_baseline_geometry(def)
   var sz: Variant = def.get("creature_size")
   if sz != null:
-    creature_size = float(sz)
+    apply_effective_creature_size(float(sz))
   var lp: Variant = def.get("locomotion_profile")
   if lp != null:
     speed = float(lp.get("max_speed"))
   _food_intake_policy = _DietRegistry.default_food_intake_policy(int(def.get("feeding_mode")))
   if int(def.get("feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE:
     is_hostile = true
+
+
+func _cache_baseline_geometry(def: Variant) -> void:
+  var sz := float(def.get("creature_size", 1.0))
+  if sz > 0.0:
+    _base_creature_size = sz
+    creature_size = sz
+  var cr := float(def.get("collision_capsule_radius", 0.35))
+  var ch := float(def.get("collision_capsule_height", 1.2))
+  if cr > 0.0:
+    _base_capsule_radius = cr
+  if ch > 0.0:
+    _base_capsule_height = ch
+
+
+## Scales capsule, mesh, and [member creature_size] together for runtime buffs/debuffs (M4 size sync).
+func apply_effective_creature_size(size: float) -> void:
+  if size <= 0.0 or _base_creature_size <= 0.0:
+    return
+  var factor := size / _base_creature_size
+  creature_size = size
+  scale = Vector3.ONE * factor
+  _apply_capsule_scale(factor, "CollisionShape3D")
+  _apply_capsule_scale(factor, "MobHitbox/CollisionShape3D")
+
+
+func get_collision_capsule_radius() -> float:
+  var factor := creature_size / maxf(_base_creature_size, 1e-6)
+  return _base_capsule_radius * factor
+
+
+func get_collision_capsule_height() -> float:
+  var factor := creature_size / maxf(_base_creature_size, 1e-6)
+  return _base_capsule_height * factor
+
+
+## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code].
+func get_los_eye_height() -> float:
+  return get_collision_capsule_height() * 0.9
+
+
+func _apply_capsule_scale(factor: float, node_path: String) -> void:
+  var col := get_node_or_null(node_path) as CollisionShape3D
+  if col == null:
+    return
+  if not (col.shape is CapsuleShape3D):
+    return
+  var cap := col.shape as CapsuleShape3D
+  if not cap.resource_local_to_scene:
+    col.shape = cap.duplicate()
+    cap = col.shape as CapsuleShape3D
+  cap.radius = _base_capsule_radius * factor
+  cap.height = _base_capsule_height * factor
 
 
 func _apply_physics_layers() -> void:

@@ -12,13 +12,13 @@
 | **Experiential slowdown** + **`terrain_kind_id`** (learn per terrain kind; **includes squeeze exploration**) | **FUTURE** — not object-avoidance phase | §11 (carry-forward); archived OBJECT §10; §4 `terrain_kind_id` |
 | **`crush_weight`** destructible props | **NOT IMPLEMENTED** — future phase | §4 Property catalog; §5 step 3 |
 | **`apply_movement_impact` / modifier merge** (shared helper) | Partially scoped — env side in object-avoidance plan; **plant + terrain merge** still **OUTSTANDING** | §5 step 1; §8 Risks |
-| Physics **layer/mask mapping** (hunger shrubs + actors) | **Specified** — layer/mask **split** (Option A); see **§6** | §6; [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.1 |
+| Physics **layer/mask mapping** (hunger shrubs + actors) | **Done (3D)** — layer/mask **split** (Option A); see **§6** | §6; [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.1 |
 | **`crush_weight == 0`** semantics in code comments | **OUTSTANDING** (blocked until crush phase) | §7 Acceptance |
-| **3D** height / volumetric crush | **OUTSTANDING / deferred** — keep **2D** until a future doc | §10 Open questions |
+| **3D** height / volumetric crush | **OUTSTANDING / deferred** — **3D layers shipped** ([CONVERT_TO_3D.md](../Draft_Features/CONVERT_TO_3D.md) M1); height/crush revisit in dedicated phase | §10 Open questions |
 | Nice-to-have: **`Area2D` water** with non-linear drag | **OUTSTANDING** | §3 Nice to have |
 | **Per-creature interior env belief — save-game persistence** | **FUTURE** | OBJECT §8.2.3 (memory on creature; persistence OOS) — §11 |
 | **Multi-layer palette / image → grid merge order** | **Document at bake time** | OBJECT §8.1 limits — §11 |
-| **Footprint: polygon–cell overlap vs center-only** | **FUTURE** (3D / mesh sampling) | OBJECT §9 — §11 |
+| **Footprint: polygon–cell overlap vs center-only** | **Shipped (M4):** ≥25% overlap via [environment_footprint_sampler.gd](../../environment/environment_footprint_sampler.gd) | OBJECT §9 — §11 |
 | **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §11; [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) |
 | **Silhouette vs unexplored** second motor bucket + LOS on snapshot | **FUTURE** (perception / FOV) | OBJECT §8.2.5 comments; OBJECT §10 — §11 |
 
@@ -42,14 +42,15 @@
 
 **Engine & version:** Godot **4.6.x** (match `project.godot`)
 
-**Main scenes / entry:** TBD—likely tilemap layers or `StaticBody2D` tiles under `Main`.
+**Main scenes / entry:** [`main_3d.tscn`](../../main_3d.tscn) + [`main_3d.gd`](../../main_3d.gd) — 3D playfield, perimeter boulders, 3D shrub scenes.
 
 **Key scripts (paths):**  
-- Future: `environment_tile.gd`, `EnvironmentData` Resource, or tile metadata.
+- [`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd), [`playfield_perimeter_boulders.gd`](../../environment/playfield_perimeter_boulders.gd)  
+- Future: tileset custom data or parallel grid for `passible` (+ `movement_impact`, `fit_size`).
 
 **Existing patterns to follow:**  
 - [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
-- [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (see [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md)); **2D** physics **layer/mask** mapping for hunger + actors is **§6** (extend when new props need bits).
+- [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (3D scenes **`solid_shrub_3d.tscn`** / **`open_shrub_3d.tscn`**); **3D** physics **layer/mask** mapping for hunger + actors is **§6**.
 - Align numeric semantics with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) for `movement_impact`, `fit_size`, `crush_weight` where possible (shared helper).
 
 ---
@@ -115,39 +116,39 @@
 
 ---
 
-## 6. Godot 2D physics — layer / mask (hunger shrubs)
+## 6. Godot 3D physics — layer / mask (hunger shrubs + duel actors)
 
-**Chosen approach:** **Layer / mask split (Option A)** for **Food B** (`open_shrub`) — **no** `PhysicsBody2D.add_collision_exception_with(player)` as the primary mechanism for v1. **Food A** (`solid_shrub`) uses the **same solidity class as `ObstacleField` rocks** (mobs and player both collide).
+**Chosen approach:** **Layer / mask split (Option A)** for **Food B** (`open_shrub_3d`) — **no** `PhysicsBody3D.add_collision_exception_with(player)` as the primary mechanism for v1. **Food A** (`solid_shrub_3d`) uses the **same solidity class as perimeter boulders** (player and mob both collide).
 
-**Authoritative numbers** below match **`player.gd`**, **`mob.tscn`**, and **`obstacle_field.tscn`** as of **2026-05-14**. If bits change in code, update **this table** and **`project.godot` `[layer_names]`** in the same PR.
+**Authoritative numbers** below match [`project.godot`](../../project.godot) **`3d_physics/layer_*`**, [`creature_*_kinematic_3d.tscn`](../../creature/templates/), and [`*_shrub_3d.tscn`](../../assets/plants/) as of **2026-06-08**. If bits change in code, update **this table** and **`project.godot`** in the same PR.
 
-### 6.1 Layer bits (2D physics)
+### 6.1 Layer bits (3D physics)
 
-| Bit | Value `2^(bit-1)` | Suggested `[layer_names]` name | Occupants |
-|-----|-------------------|----------------------------------|-----------|
-| 1 | `1` | `world_static` | `ObstacleField` **StaticBody2D** rocks; **Food A** **`solid_shrub`** blocker (match rock parity); **Food B** **`open_shrub`** calorie **`Area2D`** **collision_layer** (overlap detection only — see §6.2) |
-| 2 | `2` | `player` | **`Player`** **CharacterBody2D** |
-| 3 | `4` | `mob` | **`Mob`** **RigidBody2D** |
-| 4 | `8` | `plant_mob_block` | **Food B only:** **`open_shrub`** **StaticBody2D** shell that blocks **mobs** but **not** the player |
+| Bit | Value `2^(bit-1)` | `[layer_names]` name | Occupants |
+|-----|-------------------|----------------------|-----------|
+| 1 | `1` | `world_static` | Playfield floor / mesh collision; perimeter **StaticBody3D** boulders; **Food A** **`solid_shrub_3d`** blocker; **Food B** **`open_shrub_3d`** calorie **`Area3D`** **collision_layer** (overlap only — see §6.2) |
+| 2 | `2` | `player` | Herbivore duel **`CharacterBody3D`** ([`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn) **Body**; layers set in [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) `_apply_physics_layers()`) |
+| 3 | `4` | `mob` | Carnivore duel **`CharacterBody3D`** ([`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn) **Body**; `is_hostile` → mob layer) |
+| 4 | `8` | `plant_mob_block` | **Food B only:** **`open_shrub_3d`** **MobBlocker** **StaticBody3D** shell that blocks **mobs** but **not** the player |
 
-### 6.2 Masks (targets for hunger implementation)
+### 6.2 Masks (targets for hunger + duel)
 
 | Body | `collision_layer` | `collision_mask` | Role |
 |------|-------------------|------------------|------|
-| **Player** | `2` | `1` | Walks **world_static** + Food B calorie areas; **`1` excludes bit `8`** → **no** physics collision with **`plant_mob_block`**. |
-| **Mob** | `4` | `1 \| 8` (= **`9`**) | Collides with **rocks** and **`plant_mob_block`** — **same treatment as other solid obstacles** for movement / avoidance. |
-| **Food A `solid_shrub` static** | `1` | same as rocks (typically **`1`**) | Impassible for **player** and **mobs**. |
-| **Food B `open_shrub` mob shell** | `8` | **`4`** | Godot requires **mutual** mask↔layer agreement: shell **must** include **mob** in **`collision_mask`** so **`RigidBody2D`** contacts register. |
-| **Food B `open_shrub` calorie `Area2D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **player-only** `body_entered` / overlap for burst calories. Mobs (**layer `4`**) do **not** match mask **`2`** → **no** plant pickup or state changes from mob overlap. |
+| **Herbivore (player)** | `2` | `1` | Walks **world_static** + Food B calorie areas; **`1` excludes bit `8`** → **no** physics collision with **`plant_mob_block`**. |
+| **Carnivore (mob)** | `4` | `1 \| 8` (= **`9`**) | Collides with **rocks** and **`plant_mob_block`** — same treatment as other solid obstacles for movement / avoidance. |
+| **Food A `solid_shrub_3d` static** | `1` | **`7`** (scene default) | Impassible for **player** and **mobs**. |
+| **Food B `open_shrub_3d` MobBlocker** | `8` | **`4`** | Mutual mask↔layer with **mob** layer so **CharacterBody3D** contacts register. |
+| **Food B / Food A calorie `Area3D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **player-only** overlap for burst calories. Mobs (**layer `4`**) do **not** match mask **`2`**. |
 
-**Implementer note:** Calorie **`Area2D`** nodes are **not** a substitute for mob blocking; keep the **StaticBody2D** shell on **`plant_mob_block`** for **`open_shrub`**.
+**Implementer note:** Calorie **`Area3D`** nodes are **not** a substitute for mob blocking; keep the **StaticBody3D** shell on **`plant_mob_block`** for **`open_shrub_3d`**.
 
 ---
 
 ## 7. Acceptance criteria
 
-- [ ] **`project.godot`** lists **`2d_physics/layer_*`** names for bits used in §6.1 (at minimum **1, 2, 4, 8** once hunger ships).  
-- [ ] **`Mob`** `collision_mask` **ORs** in **`plant_mob_block`** (`8`) when Food B is present (target **`9`** if base mask was **`1`**).  
+- [x] **`project.godot`** lists **`3d_physics/layer_*`** names for bits used in §6.1 (at minimum **1, 2, 4, 8**).  
+- [x] **Carnivore** `collision_mask` **ORs** in **`plant_mob_block`** (`8`) when Food B is present (target **`9`**).  
 - [ ] **Food B** scene root (or shared plant README under **`res://assets/plants/open_shrub/`**) carries a **short comment** pointing to this **§6** table.  
 - [ ] `crush_weight == 0` semantics documented in code comments (unchanged — future crush phase).
 
@@ -174,7 +175,7 @@
 
 ## 10. Open questions
 
-- **Deferred:** <<Question: 2D top-down only, or future 3D height for crush?>> — **3D out of scope** for [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md); revisit when a dedicated phase addresses height/crush.
+- **Deferred:** **3D physics layers shipped** (§6). **Height / volumetric crush** still out of scope for [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md); revisit in a dedicated phase ([CONVERT_TO_3D.md](../Draft_Features/CONVERT_TO_3D.md) M4).
 
 ---
 
@@ -195,8 +196,9 @@
 
 ### Motor / grid sampling (deferred refinements)
 
-- **Center vs overlap:** v1 uses **footprint center** → cell for `can_enter` / `movement_speed_multiplier`; **full polygon–cell overlap** deferred until **3D** or mesh-based terrain sampling (OBJECT §9).
+- **Center vs overlap:** **M4 shipped** — motor uses **≥ 25%** circle–cell overlap ([`environment_footprint_sampler.gd`](../../environment/environment_footprint_sampler.gd)), not center-cell only.
 - **Sustained slow heuristic:** **≥ 25%** footprint overlap with slow region counts as “inside” for lookahead; **retune** if playtests disagree.
+- **Merge precedence (M4):** greatest impact first — impassible beats slowdowns; highest `movement_impact` wins ([`environment_movement_impact.gd`](../../environment/environment_movement_impact.gd)).
 - **Passible probe:** **≥ 1 logical pixel** overlap promotes **unknown → known** for passible (including slow) before **25%** dominates — tie **1px** to smallest **`cell_size_px`**.
 - **Multi-cell slowdown:** **min** of per-cell multipliers (**worst impact wins**); not multiplicative combine.
 - **Mode A squeeze + `movement_impact`:** Inside **`passible == false`** squeeze, active **`movement_impact`** applies to **all** legal occupants — **no** Mode B-style **`< fit_size`** small-body exemption **unless** a future spec adds it (OBJECT §3.5–§3.6).
@@ -226,6 +228,7 @@
 
 | Date | Change |
 |------|--------|
+| 2026-06-08 | **§6:** Promoted to **3D** layer/mask table (`3d_physics`, kinematic duel templates, `*_shrub_3d.tscn`); §2 context + §7 acceptance updated (M3). |
 | 2026-05-14 | **§6:** Godot **2D layer/mask split (Option A)** for **`solid_shrub`** / **`open_shrub`**; mob mask **`9`**; renumbered §6→§12. Tracking: physics table **Specified**. |
 | 2026-05-12 | §10: Mode A / float policy; silhouette vs unexplored. |
 | 2026-05-12 | §10: consolidated **future / deferred** checklist from OBJECT (perception, experiential memory, sampling, config, authoring); §11 changelog renumber; tracking table rows. |

@@ -188,7 +188,7 @@ var _predator_memory_chase_lock_by_body: Dictionary = {}
 var _predator_prey_engagement_until_tick_by_id: Dictionary = {}
 var _warned_missing_creature_pack_by_id: Dictionary = {}
 
-## Ring buffer of mob snapshots for motor memory: each entry maps [code]RigidBody2D.get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
+## Ring buffer of mob snapshots for motor memory: each entry maps motor body [code]get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
 var _mob_hist: Array = []
 
 ## Instance ids of mobs that have been inside effective awareness at least once this round; gates extrapolated [code]gated[/code] samples and [code]ghost[/code] entries to observed mobs only.
@@ -510,7 +510,7 @@ func clear_creature_registry() -> void:
 
 ## Registers a playable physics body for scripted ENGINE motor iteration ([method sync_duel_control_modes]). Ignores null and duplicate instance ids.
 ## Params:
-## - node: Main [code]Player[/code] ([CharacterBody2D]), duel carnivore ([RigidBody2D]), or 3D template [code]Body[/code] ([CharacterBody3D]).
+## - node: Duel template [code]Body[/code] ([CharacterBody3D]) — herbivore (player layer) or carnivore (mob layer).
 func register_creature(node: Node) -> void:
   if node == null or not is_instance_valid(node):
     return
@@ -526,7 +526,7 @@ func register_creature(node: Node) -> void:
 
 ## Sets the herbivore body whose view the LLM snapshot represents ([method _build_snapshot_blob]).
 ## Params:
-## - node: Main [code]Player[/code] expected for CREATURE_GOALS duel.
+## - node: Herbivore duel [code]Body[/code] ([CharacterBody3D] on player layer).
 func set_primary_creature(node: Node) -> void:
   if node != null and _MotorPlane.is_motor_physics_body(node):
     _primary_creature = node as Node
@@ -567,7 +567,7 @@ func _scripted_motor_subjects() -> Array:
   return out
 
 
-## Zeros [method PhysicsBody2D.set_creature_move_intent] on registered duel bodies plus legacy [member _creature] (deduped by instance id).
+## Zeros [method CreatureKinematicBody3D.set_creature_move_intent] on registered duel bodies plus [member _creature] (deduped by instance id).
 func _clear_registered_creature_move_intents() -> void:
   var seen: Dictionary = {}
   var stack: Array = _registered_creatures.duplicate()
@@ -625,7 +625,7 @@ func _predator_prey_cone_extra(motor_p: Dictionary) -> float:
 
 ## Prey world positions reachable under merged motor awareness gates ([code]weight_seek_prey[/code] pull uses these).
 ## Params:
-## - predator: Carnivore body ([RigidBody2D] mob).
+## - predator: Carnivore duel [code]Body[/code] ([CharacterBody3D] on mob layer).
 ## Returns:
 ## - Array of [code]Vector2[/code]; empty when awareness disabled or scene missing.
 ## Footprint half-extents for motor awareness / gating ([code]creature_motor[/code] or capsule shape).
@@ -2136,7 +2136,7 @@ func _predator_hunt_nudge_if_idle(ctx: Dictionary, raw_intent: Vector3) -> Vecto
 
 ## Prey world positions inside the duel carnivore awareness disk + forward cone (matches motor gating math).
 ## Params:
-## - predator: Carnivore body (mob overlay parent); when null, uses the first registered [RigidBody2D] in group [code]mobs[/code].
+## - predator: Carnivore duel [code]Body[/code]; when null, uses the first registered body in group [code]mobs[/code].
 ## Returns:
 ## - Array of [code]Vector2[/code] suitable for [method awareness_debug_overlay._draw] circles.
 func get_debug_carnivore_prey_snapshot(predator: Node = null) -> Array:
@@ -4984,7 +4984,25 @@ func _build_motor_context(
       "weight_terrain_uphill": float(motor_p.get("weight_terrain_uphill", 4.0)),
       "terrain_stuck_min_uphill_m": float(motor_p.get("terrain_stuck_min_uphill_m", 0.15)),
     },
+    "navmesh_map_rid": _navigation_map_rid_from_main(),
+    "navmesh_hint_enabled": interior_active and bool(motor_p.get("navmesh_hint_enabled", true)),
+    "navmesh_hint_weight": float(motor_p.get("navmesh_hint_weight", 6.0)),
+    "nav_agent_radius": _capsule_radius_for_body(body),
   }
+
+
+func _navigation_map_rid_from_main() -> RID:
+  if _main != null and _main.has_method(&"get_navigation_map_rid"):
+    var rid_v: Variant = _main.call(&"get_navigation_map_rid")
+    if typeof(rid_v) == TYPE_RID:
+      return rid_v as RID
+  return RID()
+
+
+func _capsule_radius_for_body(body: Node) -> float:
+  if body != null and body.has_method(&"get_collision_capsule_radius"):
+    return float(body.call(&"get_collision_capsule_radius"))
+  return 0.35
 
 
 func _physics_process(_delta: float) -> void:

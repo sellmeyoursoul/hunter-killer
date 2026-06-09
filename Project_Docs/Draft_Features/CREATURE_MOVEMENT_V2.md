@@ -2,7 +2,7 @@
 
 > **Purpose:** Working spec for a **movement + motivation refactor**. **Canonical goal drivers** (motivation tree Tier-1/2, `CreatureDefinition` traits, habitual **`believed_goal_*`** modulation): **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**. This file **inherits** **goal-target / belief memory semantics** from [CREATURE_MEMORY.md](CREATURE_MEMORY.md), and adds **V2 architectural goals**: per-creature motor tuning in packs, **one** 8-way intent pipeline for all species, and **wiring** the motivation tree into `MotorContext` / motor scorer.
 >
-> **Tier:** Draft — supersede branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) when implemented; inventory doc stays authoritative for *current* code until then.
+> **Tier:** Draft — **3D production motor is live** on [`main_3d.tscn`](../../main_3d.tscn). Supersedes branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) for **active** design; the definitive inventory doc retains **2D historical** fork detail until trimmed.
 >
 > **Refactor scope (ENGINE):** This phase **defines and implements scripted ENGINE motor only** (`creature_motor` weights, unified intent, motivation tree). **LLM / AI motor mode is out of scope** until ENGINE behavior is solid. When LLM motor is implemented later it must consume **motivation traits** at minimum; optionally share flattened motor params or read the species **`pack_resources.json`** so completions stay aligned with the same weighing story.
 >
@@ -266,11 +266,10 @@ Creature memory remains a **working set of salient world facts** keyed to goals 
 | **Squeeze / fit_size** | Small creatures behind `passible == false` façade — seekers and threats ultimately respect **LOS** alongside distance once pipeline ships (**resolved** below). |
 | **Planner opacity** | Conservative motor until squeeze “learned” — unchanged. |
 
-**LOS vs distance-only gates (resolved — phase 1 deferral)**
+**LOS vs distance-only gates (M4 shipped)**
 
-- **Target behavior (future):** **`SeekCandidate` (and symmetrical threat sampling)** exposes **`occluded` / `line_of_sight_clear`** so candidates blocked by squeeze/occluders/props are not scored as blindly reachable from **distance + cone** alone.
-- **Phase 1 (this round — out of scope):** Continue **§E.1 hybrid radius + forward cone** (+ environmental placeholders) in scripted motor. **No** `occluded` field work, **no** LoS API changes in Foundations PR.
-- **Follow-up:** Wire LoS via **Godot 3D ray** queries per [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md) + backlog **§E** — after gameplay baseline and **ship profile** stabilization.
+- **`SeekCandidate` / `ThreatSample`** expose **`occluded` / `line_of_sight_clear` / `occlusion_fraction`**; live ingest uses **combined** distance + cone + ray gate ([§E.2](CREATURE_MOVEMENT_V2.md)).
+- **Deferred:** stealth/observation skill checks replacing the hard **>60%** threshold; semantic env fallback ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 
 ---
 
@@ -304,17 +303,22 @@ Let **`u`** = unit vector creature → target, **`f`** = facing. Target is **in 
 - `_motor_food_plants_in_awareness_by_readiness` → live food seek + `_goal_belief_sync_from_scene`
 - `_motor_mobs_array` → mob repulsion + gated live / ghost memory
 - `_herbivore_predator_threat_sample`, `_collect_prey_positions`, `_pursuit_targets_for_predator` (unless `herbivore_threat_awareness_omni` / `predator_prey_awareness_omni`)
-- Debug overlay — [`awareness_debug_overlay.gd`](../../creature/awareness_debug_overlay.gd) (base disk + forward extra band)
+- Debug overlay — [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) (base disk + forward extra band)
 
 **Species overrides:** Prey pursuit may use separate **`predator_prey_awareness_cone_extra`** (defaults **0** — does not reuse plant `awareness_cone_extra`).
 
-### E.2 Line of sight (deferred backlog)
+### E.2 Line of sight (M4 — shipped v1)
 
-**Phase 1:** Zone of awareness remains **distance + cone** only — no occlusion ray tests.
+**Combined gate:** distance + cone + **physics ray** LoS in [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) via [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd).
 
-**LOS track (future):** **Godot 3D ray** checks aligning **Tier-2 hostile detection** and **Find-food `SeekCandidate` credibility with §D** — see [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
+| Policy | Value |
+|--------|--------|
+| Eye height | `creature_motor.los_eye_height` or **`0.9 × collision_capsule_height`** |
+| Blocked threshold | **`>60%` occluded** = blocked (live ingest) |
+| Ghosts / memory | **Persist** when occluded |
+| Semantic fallback | **Deferred** — [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) |
 
-Tracking: [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
+Tracking: [CONVERT_TO_3D.md §5.1](CONVERT_TO_3D.md), [CREATURE_MEMORY.md §7.4](CREATURE_MEMORY.md).
 
 ---
 
