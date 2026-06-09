@@ -31,6 +31,7 @@ const _CreaturePerception3D := preload("res://creature/capabilities/creature_per
 const _CreatureRoot3D := preload("res://creature/creature_root_3d.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _PlayfieldBounds3D := preload("res://environment/playfield_bounds_3d.gd")
+const _TopDownCameraScr := preload("res://environment/top_down_camera_control.gd")
 const _PerimeterBoulders := preload("res://environment/playfield_perimeter_boulders.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
@@ -184,6 +185,8 @@ func _run_all() -> void:
   _test_seek_direction_commit()
   _test_seek_direction_turn()
   _test_no_goal_patrol_lock()
+  _test_no_goal_patrol_lock_guided()
+  _test_predator_patrol_expanding_coverage()
   _test_seek_stationary_look()
   _test_motor_plane_yaw_from_facing()
   _test_seek_diagonal_intent()
@@ -213,6 +216,7 @@ func _run_all() -> void:
   _test_diet_registry_defaults()
   _test_creature_perception_3d_scale()
   _test_creature_3d_template_scenes_load()
+  _test_shrub_3d_visual_scenes_load()
   await _test_creature_3d_predation_contact()
   _test_playfield_clamp()
   _test_playfield_bounds_3d_collision_only()
@@ -228,6 +232,8 @@ func _run_all() -> void:
   _test_human_move_intent_world_space()
   _test_human_facing_blocked_no_spin()
   _test_human_strafe_intent_stable_under_camera_spin()
+  _test_top_down_camera_pan_directions()
+  _test_top_down_camera_zoom_clamp()
   _test_footprint_geometry()
   _test_carnivore_pursuit_intent()
   _test_creature_diet_on_3d_bodies()
@@ -503,6 +509,14 @@ func _test_creature_pack_motor_overlays() -> void:
   _assert(
     is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
     "fox pack no-goal patrol lock duration",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_explore_trail_repulsion", 0.0)), 2.35),
+    "fox pack explore trail repulsion for patrol coverage",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("expanding_explore_base_physics_ticks", 0.0)), 48.0),
+    "fox pack expanding explore segment ticks for guided patrol",
   )
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
@@ -2877,8 +2891,8 @@ func _test_hunger_calorie_clamp() -> void:
   var grant := 5.0
   var next := minf(cap, cur + grant)
   _assert(is_equal_approx(next, 10.0), "hunger burst clamps at caloric_needs")
-  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub.tscn"), "solid_shrub scene exists")
-  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub.tscn"), "open_shrub scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub_3d.tscn"), "solid_shrub_3d scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub_3d.tscn"), "open_shrub_3d scene exists")
 
 
 func _test_calorie_drain_movement_formula() -> void:
@@ -3398,6 +3412,31 @@ func _test_human_strafe_intent_stable_under_camera_spin() -> void:
   )
 
 
+func _test_top_down_camera_pan_directions() -> void:
+  var forward_only := _TopDownCameraScr.strengths_from_actions(0.0, 0.0, 0.0, 1.0)
+  _assert(
+    forward_only.is_equal_approx(Vector2(0.0, -1.0)),
+    "camera pan forward maps to world −Z",
+  )
+  var right_only := _TopDownCameraScr.strengths_from_actions(1.0, 0.0, 0.0, 0.0)
+  _assert(
+    right_only.is_equal_approx(Vector2(1.0, 0.0)),
+    "camera pan right maps to world +X",
+  )
+  var delta: Vector2 = _TopDownCameraScr.pan_offset_delta(forward_only, 1.0, 10.0)
+  _assert(
+    delta.is_equal_approx(Vector2(0.0, -10.0)),
+    "camera pan forward delta moves −Z at configured speed",
+  )
+
+
+func _test_top_down_camera_zoom_clamp() -> void:
+  var zoomed_in: float = _TopDownCameraScr.apply_zoom_step(0.4, true, 0.12, 0.35, 3.0)
+  _assert(is_equal_approx(zoomed_in, 0.35), "camera zoom in clamps at minimum scale")
+  var zoomed_out: float = _TopDownCameraScr.apply_zoom_step(2.95, false, 0.12, 0.35, 3.0)
+  _assert(is_equal_approx(zoomed_out, 3.0), "camera zoom out clamps at maximum scale")
+
+
 func _test_playfield_bounds_3d_collision_only() -> void:
   var playfield_root := Node3D.new()
   var floor_body := StaticBody3D.new()
@@ -3502,6 +3541,48 @@ func _test_creature_3d_template_scenes_load() -> void:
   _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
   _assert(rabbit.get("species_id") == &"rabbit", "rabbit archetype id")
   _assert(rabbit.get("locomotion_profile") != null, "rabbit has locomotion profile")
+
+
+func _test_shrub_3d_visual_scenes_load() -> void:
+  const open_path := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
+  const solid_path := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
+  _assert(ResourceLoader.exists(open_path), "open_shrub_3d exists")
+  _assert(ResourceLoader.exists(solid_path), "solid_shrub_3d exists")
+  _assert(
+    ResourceLoader.exists("res://assets/plants/open_shrub/bush_ready.blend"),
+    "open_shrub ready blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/open_shrub/bush.blend"),
+    "open_shrub depleted blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/solid_shrub/h-k-shrub_ready.blend"),
+    "solid_shrub ready blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/solid_shrub/h-k-shrub.blend"),
+    "solid_shrub depleted blend exists",
+  )
+  for path in [open_path, solid_path]:
+    var scene := load(path) as PackedScene
+    _assert(scene != null, "%s loads" % path)
+    var bush := scene.instantiate() as Node3D
+    var holder := Node3D.new()
+    root.add_child(holder)
+    holder.add_child(bush)
+    var ready_v := bush.get_node_or_null("Visual/ReadyVisual") as Node3D
+    var depleted_v := bush.get_node_or_null("Visual/DepletedVisual") as Node3D
+    _assert(ready_v != null, "%s has ReadyVisual" % path)
+    _assert(depleted_v != null, "%s has DepletedVisual" % path)
+    bush.call("reset_session")
+    _assert(ready_v.visible, "%s ready visual visible when full" % path)
+    _assert(not depleted_v.visible, "%s depleted hidden when full" % path)
+    bush.set("current_calories", 0.0)
+    bush.call("_refresh_visual")
+    _assert(not ready_v.visible, "%s ready hidden when depleted" % path)
+    _assert(depleted_v.visible, "%s depleted visible when empty" % path)
+    holder.queue_free()
 
 
 func _test_creature_3d_predation_contact() -> void:
@@ -3976,6 +4057,66 @@ func _test_no_goal_patrol_lock() -> void:
       not blocked_pick.is_equal_approx(Vector3.RIGHT),
       "patrol lock skips blocked cardinal directions",
     )
+
+
+func _test_no_goal_patrol_lock_guided() -> void:
+  var pick := Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided")
+  var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
+  var st: Dictionary = {}
+  var north := Vector3(0.0, 0.0, -1.0)
+  reset.call(st)
+  var guided: Vector3 = pick.call(st, 1.0, 42, north, Callable(), false) as Vector3
+  _assert(guided.is_equal_approx(north), "guided patrol prefers expand hint when unblocked")
+  var second: Vector3 = pick.call(st, 1.0, 42, Vector3.RIGHT, Callable(), false) as Vector3
+  _assert(second.is_equal_approx(north), "guided patrol holds locked hint within lock window")
+  var block_north := func(dir: Vector3) -> bool:
+    return dir.is_equal_approx(north)
+  reset.call(st)
+  var fallback: Vector3 = pick.call(st, 0.01, 99, north, block_north, false) as Vector3
+  _assert(not fallback.is_equal_approx(north), "guided patrol falls back when hint blocked")
+  _assert(fallback.length_squared() > 1e-12, "guided patrol fallback moves when allow_idle false")
+  for i in 64:
+    reset.call(st)
+    var no_idle: Vector3 = pick.call(st, 0.01, 1000 ^ i, Vector3.ZERO, Callable(), false) as Vector3
+    _assert(no_idle.length_squared() > 1e-12, "allow_idle false never returns stay-still")
+  var seg_lock: float = Callable(_NoGoalPatrolLockScr, &"segment_lock_sec").call(48, 1.0) as float
+  _assert(seg_lock >= 0.35 and seg_lock <= 1.0, "segment_lock_sec clamps to cap_sec")
+
+
+func _test_predator_patrol_expanding_coverage() -> void:
+  var X := _EXPANDING_CARDINAL_EXPLORE_SCR.Explore
+  var pick := Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided")
+  var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
+  var base_ticks := 48
+  var phase_seed := 9001
+  var sectors: Dictionary = {}
+  var pos := Vector3.ZERO
+  var speed := 400.0
+  var physics_hz := maxf(1.0, float(Engine.physics_ticks_per_second))
+  var dt := 1.0 / physics_hz
+  var st: Dictionary = {}
+  var tick := 0
+  while tick < 400:
+    var hint: Vector3 = X.pick_cardinal(base_ticks, tick, phase_seed)
+    var loc: Dictionary = X.locate(base_ticks, tick)
+    var seg_ticks := int(loc.get("segment_ticks", base_ticks))
+    reset.call(st)
+    var lock_sec: float = Callable(_NoGoalPatrolLockScr, &"segment_lock_sec").call(seg_ticks, 1.0) as float
+    var dir: Vector3 = pick.call(st, lock_sec, phase_seed, hint, Callable(), false) as Vector3
+    if dir.length_squared() > 1e-12:
+      sectors[dir] = true
+    for _seg in seg_ticks:
+      if tick >= 400:
+        break
+      if dir.length_squared() > 1e-12:
+        pos += dir.normalized() * speed * dt
+      tick += 1
+  _assert(sectors.size() >= 4, "predator guided patrol visits at least 4 headings over 400 ticks")
+  var coverage_cell := 52.0
+  _assert(
+    pos.length() >= coverage_cell * 1.5,
+    "predator guided patrol net displacement exceeds ~1.5 coverage cells",
+  )
 
 
 func _test_seek_stationary_look() -> void:

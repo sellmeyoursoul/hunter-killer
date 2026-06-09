@@ -27,8 +27,8 @@
 | Scenario | Setup | Pass criteria (ship profile) |
 |----------|--------|------------------------------|
 | **1. Herbivore forage** | Rabbit pack on Player, calories &lt; ~80% need, ready bushes in cone | Moves toward ready food (including diagonals); avoids depleted bushes when mixed; seek weakens in preserve band (~90%+ calories). With **no plant in cone**, expanding **8-way** hint (`herbivore_expanding_explore_mul` × pack hint) sweeps off walls; stuck escape uses `weight_stuck_escape_explore` (not predator prey-floor keys). |
-| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal patrol lock:** random **8-way** direction or still for **`motor_no_goal_patrol_lock_sec`** (1 s); no rapid heading flip. Chase when prey enters awareness. Memory expand only after first live sight. |
-| **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs differ between runs (random lock re-rolls each ~1 s). Chase leg stays directed once prey in cone. |
+| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal guided patrol lock:** expanding **8-way** hint (`expanding_cardinal_explore` + `predator_patrol_explore_mul`) held for one segment; trail repulsion active; random lock remains for herbivore. Chase when prey enters awareness. Memory expand only after first live sight. |
+| **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs follow expand sweep (segment-aligned lock); phase_seed still varies spawn offset. Chase leg stays directed once prey in cone. |
 | **3. Jeopardy flee** | Fox enters rabbit **awareness cone** (not omni); panic flee only inside `herbivore_flee_panic_radius_px` footprint distance | No flee while fox is off-cone/behind; alert band keeps partial forage seek. |
 | **4. Hunt corner escape** | Fox chasing prey, pinned on shrub AABB | After one tick with intent but no displacement, hunt forces clearance **8-way** step or rotating explore heading (`predator_hunt_stuck_rotate_ticks`). |
 
@@ -44,6 +44,7 @@
 | Coarse belief TTL | `_test_goal_belief_coarse_ttl` |
 | Predator chase without explore | `_test_predator_chase_motor_ctx` |
 | No-goal patrol lock | `_test_no_goal_patrol_lock` |
+| No-goal guided patrol (fox) | `_test_no_goal_patrol_lock_guided`, `_test_predator_patrol_expanding_coverage` |
 | Expand hint cardinal | `_test_expanding_cardinal_explore` (UP vs idle) |
 
 ## After memory (Phase 2 + Phase 3 retune)

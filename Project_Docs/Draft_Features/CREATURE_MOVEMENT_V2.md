@@ -56,7 +56,18 @@ flowchart LR
 3. Per-species **`pack_resources.json`** tuning — Preserve/Find band, awareness, seek weights, belief radii ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)).
 4. Ship executable CI (**B-10**) — deferred until ship profile has real numerics ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 
-**Primary files:** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), `assets/creatures/*/pack_resources.json`.
+**Phase 3 playtest boost (temporary — revert Phase 7):** Duel **body scale** and **awareness zone** are **2× ship baseline** so fox–rabbit contact and chase fire more often during retune. **Not** release tuning — log playtest rows with this caveat.
+
+| Asset | Ship baseline | Playtest (2×) |
+|-------|---------------|---------------|
+| [`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres) — `creature_size` | **0.85** | **1.7** |
+| same — `collision_capsule_radius` / `height` | **0.3** / **1.0** | **0.6** / **2.0** |
+| [`fox_archetype.tres`](../../creature/species/fox_archetype.tres) — `creature_size` | **1.0** | **2.0** |
+| same — `collision_capsule_radius` / `height` | **0.35** / **1.1** | **0.7** / **2.2** |
+| [`rabbit/pack_resources.json`](../../assets/creatures/rabbit/pack_resources.json) + [`fox/pack_resources.json`](../../assets/creatures/fox/pack_resources.json) — `awareness_radius` | **75** | **150** |
+| same — `awareness_cone_extra` (§E.1 hybrid zone) | **200** | **400** |
+
+**Primary files:** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), `assets/creatures/*/pack_resources.json`, duel archetypes above.
 
 ### Phase 4 — Ingress cleanup (§A.2.2)
 
@@ -110,6 +121,8 @@ flowchart LR
 | [CREATURE_MEMORY.md](CREATURE_MEMORY.md) | [`Definitive_Features/`](../Definitive_Features/) | Ongoing belief / locale-prior contract |
 | [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) | *(stay tier III)* | Update §5 deferred table as Phase 5 ships |
 | [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) | *(stay tier III)* | Trim 2D fork detail superseded by [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) |
+
+**Phase 7 cleanup — revert Phase 3 playtest boost:** Restore duel **ship-baseline** body scale and awareness (table under **Phase 3 — playtest boost**): [`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres), [`fox_archetype.tres`](../../creature/species/fox_archetype.tres), and **`awareness_radius` / `awareness_cone_extra`** in [`rabbit/pack_resources.json`](../../assets/creatures/rabbit/pack_resources.json) + [`fox/pack_resources.json`](../../assets/creatures/fox/pack_resources.json). Remove playtest notes from pack `notes` fields. Re-run headless tests + one ship-profile duel smoke after revert.
 
 **Out of scope until ENGINE solid:** LLM motor mode (§scope note below); trait heredity / experience-driven drift ([CREATURE_GOAL_DRIVERS.md §3.4](CREATURE_GOAL_DRIVERS.md)).
 
@@ -506,7 +519,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 #### G.5.1 Phase 3 — Retune and ship baseline
 
-- [ ] Duel playtest rows logged ([CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)).
+- [ ] Duel playtest rows logged ([CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)) — note **2× playtest boost** active (Phase 3 table).
 - [ ] **`creature_motor_profile_ship`** has real numerics (not stub/empty overlay).
 - [ ] Duel rabbit/fox **`pack_resources.json`** tuned for forage / flee / memory (Preserve/Find band, awareness, belief radii).
 - [ ] Ship executable CI strategy (**B-10**) documented or implemented ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
@@ -535,6 +548,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 - [ ] [CREATURE_MEMORY.md](CREATURE_MEMORY.md) → `Definitive_Features/`.
 - [ ] **This file** → `Completed_Features/`; [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) updated (no redirect stubs).
 - [ ] [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) §5 deferred table synced.
+- [ ] **Revert Phase 3 playtest boost** — ship-baseline duel scale + awareness (Phase 7 cleanup bullet above).
 
 ---
 
@@ -554,6 +568,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-09 | **Phase 3 playtest boost:** 2× duel body scale (rabbit/fox archetypes) + 2× `awareness_radius` / `awareness_cone_extra` in duel packs; Phase 7 cleanup to revert before doc promotion. |
 | 2026-06-09 | **Refactor phases (source of truth):** Phases 1–2 marked done; Phases 3–7 roadmap (retune, ingress, traits, goal kinds, doc promotion). **Doc lifecycle:** this file → `Completed_Features/`; GOAL_DRIVERS + MEMORY → `Definitive_Features/`. §A.2.2, §B.3, §C, §G.5, §H synced. |
 | 2026-05-25 | **Phase 2:** `derive_dominant_tier2_leaf` + `believed_goal_source_bias` projection wired in `ai_driver`; Phase 1 ENGINE movement foundations marked complete. |
 | 2026-05-23 | **§A.3.1:** no-goal **patrol lock** — random cardinal + idle, **`motor_no_goal_patrol_lock_sec`** (1s duel default), goal interrupt. |
