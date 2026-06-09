@@ -2,17 +2,18 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://wexhthnnk13i"
-path.s3tc="res://.godot/imported/Foliage 3.png-720863021cac2d2edcdb6f1abc0ff8a6.s3tc.ctex"
+uid="uid://bac085bkmxcyk"
+path.s3tc="res://.godot/imported/Berry.png-9a5ebfb92e62f661198f57275551d86f.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
+generator_parameters={}
 
 [deps]
 
-source_file="res://assets/plants/open_shrub/textures/Foliage 3.png"
-dest_files=["res://.godot/imported/Foliage 3.png-720863021cac2d2edcdb6f1abc0ff8a6.s3tc.ctex"]
+source_file="res://assets/plants/open_shrub/textures/Berry.png"
+dest_files=["res://.godot/imported/Berry.png-9a5ebfb92e62f661198f57275551d86f.s3tc.ctex"]
 
 [params]
 

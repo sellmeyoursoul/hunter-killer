@@ -14,7 +14,7 @@
 | **`apply_movement_impact` / modifier merge** (shared helper) | Partially scoped — env side in object-avoidance plan; **plant + terrain merge** still **OUTSTANDING** | §5 step 1; §8 Risks |
 | Physics **layer/mask mapping** (hunger shrubs + actors) | **Done (3D)** — layer/mask **split** (Option A); see **§6** | §6; [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.1 |
 | **`crush_weight == 0`** semantics in code comments | **OUTSTANDING** (blocked until crush phase) | §7 Acceptance |
-| **3D** height / volumetric crush | **OUTSTANDING / deferred** — **3D layers shipped** ([CONVERT_TO_3D.md](../Draft_Features/CONVERT_TO_3D.md) M1); height/crush revisit in dedicated phase | §10 Open questions |
+| **3D** height / volumetric crush | **OUTSTANDING / deferred** — **3D layers shipped** ([CONVERT_TO_3D.md](../Completed_Features/CONVERT_TO_3D.md) M1); height/crush revisit in dedicated phase | §10 Open questions |
 | Nice-to-have: **`Area2D` water** with non-linear drag | **OUTSTANDING** | §3 Nice to have |
 | **Per-creature interior env belief — save-game persistence** | **FUTURE** | OBJECT §8.2.3 (memory on creature; persistence OOS) — §11 |
 | **Multi-layer palette / image → grid merge order** | **Document at bake time** | OBJECT §8.1 limits — §11 |
@@ -175,7 +175,7 @@
 
 ## 10. Open questions
 
-- **Deferred:** **3D physics layers shipped** (§6). **Height / volumetric crush** still out of scope for [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md); revisit in a dedicated phase ([CONVERT_TO_3D.md](../Draft_Features/CONVERT_TO_3D.md) M4).
+- **Deferred:** **3D physics layers shipped** (§6). **Height / volumetric crush** still out of scope for [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md); revisit in a dedicated phase ([CONVERT_TO_3D.md](../Completed_Features/CONVERT_TO_3D.md) M4).
 
 ---
 

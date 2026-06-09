@@ -1,6 +1,6 @@
 extends RefCounted
 class_name PlayfieldPerimeterBoulders
-## Places perimeter [code]h-k-boulder1[/code] rocks along the playfield XZ AABB ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Places perimeter [code]h-k-boulder1[/code] rocks along the playfield XZ AABB ([CONVERT_TO_3D.md §3.5](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 ## [code]h-k-boulder1[/code] mesh spans ~2.1 m on XZ; fox capsule diameter is 0.8 m.
 ## Spacing below rock diameter overlaps colliders so creatures cannot slip between rocks.

@@ -1,14 +1,8 @@
 [gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://assets/plants/bush_food_3d.gd" id="1"]
-
-[sub_resource type="CylinderMesh" id="mesh"]
-top_radius = 0.75
-bottom_radius = 0.9
-height = 1.4
-
-[sub_resource type="StandardMaterial3D" id="mat"]
-albedo_color = Color(0.25, 0.55, 0.2, 1)
+[ext_resource type="PackedScene" uid="uid://dw6iu7nwfwxat" path="res://assets/plants/solid_shrub/h-k-shrub_ready.blend" id="2"]
+[ext_resource type="PackedScene" uid="uid://gc2p1qudr5dy" path="res://assets/plants/solid_shrub/h-k-shrub.blend" id="3"]
 
 [sub_resource type="SphereShape3D" id="body_shape"]
 radius = 0.8
@@ -26,10 +20,12 @@ collision_mask = 7
 [node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D"]
 shape = SubResource("body_shape")
 
-[node name="Mesh" type="MeshInstance3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.7, 0)
-mesh = SubResource("mesh")
-material_override = SubResource("mat")
+[node name="Visual" type="Node3D" parent="."]
+
+[node name="ReadyVisual" parent="Visual" instance=ExtResource("2")]
+
+[node name="DepletedVisual" parent="Visual" instance=ExtResource("3")]
+visible = false
 
 [node name="CalorieArea" type="Area3D" parent="."]
 collision_layer = 1

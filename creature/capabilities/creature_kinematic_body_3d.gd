@@ -19,6 +19,8 @@ const _ControlMode := preload("res://creature/capabilities/creature_control_mode
 @export var definition: Variant
 @export var is_hostile: bool = false
 @export var obstacle_lookahead: float = 96.0
+## Extra Y rotation on [code]Visual[/code] when imported mesh forward != -Z.
+@export var visual_yaw_offset_rad: float = 0.0
 
 var creature_move_intent: Vector3 = Vector3.ZERO
 var last_move_direction: Vector3 = _MotorPlane.HORIZONTAL_RIGHT
@@ -113,12 +115,15 @@ func _apply_definition_defaults() -> void:
 
 
 func _cache_baseline_geometry(def: Variant) -> void:
-  var sz := float(def.get("creature_size", 1.0))
+  var sz_v: Variant = def.get("creature_size")
+  var sz := 1.0 if sz_v == null else float(sz_v)
   if sz > 0.0:
     _base_creature_size = sz
     creature_size = sz
-  var cr := float(def.get("collision_capsule_radius", 0.35))
-  var ch := float(def.get("collision_capsule_height", 1.2))
+  var cr_v: Variant = def.get("collision_capsule_radius")
+  var cr := 0.35 if cr_v == null else float(cr_v)
+  var ch_v: Variant = def.get("collision_capsule_height")
+  var ch := 1.2 if ch_v == null else float(ch_v)
   if cr > 0.0:
     _base_capsule_radius = cr
   if ch > 0.0:
@@ -211,6 +216,7 @@ func apply_duel_spawn_facing(facing: Variant) -> void:
   var h := _MotorPlane.read_dir(facing, _MotorPlane.HORIZONTAL_ZERO)
   if h.length_squared() > 1e-12:
     last_move_direction = h
+    _sync_visual_facing()
 
 
 ## Biases [method _engine_heading_with_wall_slide] during flee/jeopardy (away from threat).
@@ -589,6 +595,16 @@ func _apply_facing_after_horizontal_move(pos_before: Vector3, intent: Vector3) -
     last_move_direction = hvel.normalized()
 
 
+## Rotates [code]Visual[/code] to match [member last_move_direction] (awareness cone facing); capsule stays axis-aligned.
+func _sync_visual_facing() -> void:
+  var visual := get_node_or_null("Visual") as Node3D
+  if visual == null:
+    return
+  visual.rotation.y = (
+    _MotorPlane.yaw_from_horizontal_dir(last_move_direction) + visual_yaw_offset_rad
+  )
+
+
 func _physics_process(delta: float) -> void:
   if _defeat_hidden:
     return
@@ -598,8 +614,15 @@ func _physics_process(delta: float) -> void:
     intent = _engine_heading_with_wall_slide(intent)
   apply_horizontal_move_intent(intent, delta)
   _apply_facing_after_horizontal_move(pos_before, intent)
+  _sync_visual_facing()
   _sync_calories_from_vitals()
   _apply_calorie_drain_and_starvation(delta)
+
+
+func _process(_delta: float) -> void:
+  if _defeat_hidden:
+    return
+  _sync_visual_facing()
 
 
 ## Resets duel spawn state (position set by parent).

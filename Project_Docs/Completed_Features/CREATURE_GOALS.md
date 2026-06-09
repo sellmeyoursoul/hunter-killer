@@ -118,7 +118,7 @@ Implementation: [`carnivore_pursuit.gd`](../../creature/motor/carnivore_pursuit.
 | [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) | Diet archetypes, predator/herbivore memory emphasis, §3 calorie prereqs |
 | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) | Parking-lot items (LoS, memory) that affect **fair** pursuit / hiding |
 | [HUNGER_AND_EATING.md](HUNGER_AND_EATING.md) | **Archive** — historical bush + HUD patterns; not authoritative for new duel rules unless maintainer cites |
-| [CREATURE_3D_ARCHITECTURE.md](../Draft_Features/CREATURE_3D_ARCHITECTURE.md) | 3D reuse vs leaf data: capabilities + templates + [CreatureDefinition](../../creature/definition/creature_definition.gd). |
+| [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) | 3D reuse vs leaf data: capabilities + templates + [CreatureDefinition](../../creature/definition/creature_definition.gd). |
 
 ---
 

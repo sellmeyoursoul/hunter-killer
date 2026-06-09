@@ -1,5 +1,5 @@
 extends Node3D
-## M1 production 3D main: grasslands playfield, ENGINE duel harness, HUD overlay ([CONVERT_TO_3D.md §6 M1](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## M1 production 3D main: grasslands playfield, ENGINE duel harness, HUD overlay ([CONVERT_TO_3D.md §6 M1](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 const _Brand := preload("res://product_brand.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
@@ -11,6 +11,7 @@ const _FoxArchetype := preload("res://creature/species/fox_archetype.tres")
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
+const _TopDownCamera := preload("res://environment/top_down_camera_control.gd")
 
 const _GRASSLANDS_SCENE := "res://assets/locations/grasslands/h-k-grasslands.blend"
 const _BOULDER_SCENE := "res://assets/environment/obstacle_boulder/h-k-boulder1.blend"
@@ -24,6 +25,10 @@ const _SHOULDER_SIDE := 0.65
 const _SHOULDER_HEIGHT := 1.55
 const _SHOULDER_LOOK_AHEAD := 3.0
 const _SHOULDER_LOOK_HEIGHT := 1.1
+const _CAMERA_PAN_SPEED := 24.0
+const _CAMERA_ZOOM_STEP := 0.12
+const _CAMERA_ZOOM_MIN := 0.35
+const _CAMERA_ZOOM_MAX := 3.0
 
 enum CameraMode { TOP_DOWN, OVER_SHOULDER }
 
@@ -31,6 +36,8 @@ enum CameraMode { TOP_DOWN, OVER_SHOULDER }
 
 var score: int = 0
 var _camera_mode: CameraMode = CameraMode.TOP_DOWN
+var _camera_pan_offset := Vector2.ZERO
+var _camera_zoom_scale := 1.0
 var _round_ended: bool = false
 var _motor_playfield_size: Vector2 = Vector2.ZERO
 var _playfield_bounds: Dictionary = {}
@@ -57,6 +64,7 @@ func _ready() -> void:
   )
   $HUD.ai_player_game.connect(_on_hud_ai_player_game)
   $HUD.end_ai_game.connect(_on_hud_end_ai_game)
+  set_process_unhandled_input(true)
   _build_playfield()
   _ensure_environment_grid()
   _apply_top_down_camera()
@@ -140,7 +148,9 @@ func game_over() -> void:
     ad.notify_main_game_over()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+  if _camera_mode == CameraMode.TOP_DOWN:
+    _update_top_down_camera_input(delta)
   match _camera_mode:
     CameraMode.TOP_DOWN:
       _apply_top_down_camera()
@@ -148,6 +158,48 @@ func _process(_delta: float) -> void:
       if _herb_body == null or not is_instance_valid(_herb_body) or _herb_body.visible == false:
         return
       _apply_over_shoulder_camera()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+  if _camera_mode != CameraMode.TOP_DOWN:
+    return
+  if event is InputEventMouseButton:
+    var mb := event as InputEventMouseButton
+    if not mb.pressed:
+      return
+    if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+      _camera_zoom_scale = _TopDownCamera.apply_zoom_step(
+        _camera_zoom_scale,
+        true,
+        _CAMERA_ZOOM_STEP,
+        _CAMERA_ZOOM_MIN,
+        _CAMERA_ZOOM_MAX,
+      )
+      get_viewport().set_input_as_handled()
+    elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+      _camera_zoom_scale = _TopDownCamera.apply_zoom_step(
+        _camera_zoom_scale,
+        false,
+        _CAMERA_ZOOM_STEP,
+        _CAMERA_ZOOM_MIN,
+        _CAMERA_ZOOM_MAX,
+      )
+      get_viewport().set_input_as_handled()
+
+
+func _update_top_down_camera_input(delta: float) -> void:
+  var strengths := _TopDownCamera.strengths_from_actions(
+    Input.get_action_strength("camera_pan_right"),
+    Input.get_action_strength("camera_pan_left"),
+    Input.get_action_strength("camera_pan_back"),
+    Input.get_action_strength("camera_pan_forward"),
+  )
+  _camera_pan_offset += _TopDownCamera.pan_offset_delta(strengths, delta, _CAMERA_PAN_SPEED)
+
+
+func _reset_top_down_camera_control() -> void:
+  _camera_pan_offset = Vector2.ZERO
+  _camera_zoom_scale = 1.0
 
 
 func _playfield_look_target() -> Vector3:
@@ -161,6 +213,7 @@ func _playfield_look_target() -> Vector3:
 func _apply_top_down_camera() -> void:
   var cam := $CameraRig/Camera3D as Camera3D
   var ground_focus := _playfield_look_target()
+  ground_focus += Vector3(_camera_pan_offset.x, 0.0, _camera_pan_offset.y)
   var sz: Vector2 = _playfield_bounds.get("size", _FALLBACK_PLAYFIELD_SIZE)
   var aspect := get_viewport().get_visible_rect().size.aspect()
   var v_fov_rad := deg_to_rad(cam.fov)
@@ -170,6 +223,11 @@ func _apply_top_down_camera() -> void:
   var height := maxf(
     maxf(half_w / tan(h_fov_rad * 0.5), half_h / tan(v_fov_rad * 0.5)),
     8.0,
+  )
+  height *= _TopDownCamera.clamped_zoom_scale(
+    _camera_zoom_scale,
+    _CAMERA_ZOOM_MIN,
+    _CAMERA_ZOOM_MAX,
   )
   $CameraRig.global_transform = Transform3D.IDENTITY
   cam.transform = Transform3D.IDENTITY
@@ -787,6 +845,7 @@ func _on_player_hit() -> void:
 
 
 func _on_hud_start_game() -> void:
+  _reset_top_down_camera_control()
   _camera_mode = CameraMode.OVER_SHOULDER
   new_game()
   if _herb_body != null and _herb_body.has_method(&"set_control_mode"):
@@ -804,6 +863,7 @@ func _on_hud_ai_player_game() -> void:
     $HUD.show_message("Could not start CPU player. See logs.")
     $HUD.set_ai_session_state(0)
     return
+  _reset_top_down_camera_control()
   _camera_mode = CameraMode.TOP_DOWN
   new_game()
 

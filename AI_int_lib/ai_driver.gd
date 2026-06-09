@@ -1181,13 +1181,7 @@ func _herbivore_flee_panic_active(
 func _creature_actively_seeking_patrol(body: Node, ctx: Dictionary, motor_p: Dictionary) -> bool:
   if bool(ctx.get("herbivore_flee_active", false)) or bool(ctx.get("herbivore_flee_panic", false)):
     return false
-  var cr := 1.0
-  var ccal: Variant = body.get("current_calories")
-  var cneed: Variant = body.get("caloric_needs")
-  if (typeof(ccal) == TYPE_FLOAT or typeof(ccal) == TYPE_INT) and (
-    typeof(cneed) == TYPE_FLOAT or typeof(cneed) == TYPE_INT
-  ):
-    cr = clampf(float(ccal) / maxf(1.0, float(cneed)), 0.0, 1.0)
+  var cr := _creature_calorie_ratio(body)
   if body.is_in_group(&"prey"):
     if cr >= float(motor_p.get("seek_priority_food_ceiling", 0.80)):
       return false
@@ -1195,6 +1189,26 @@ func _creature_actively_seeking_patrol(body: Node, ctx: Dictionary, motor_p: Dic
   if body.is_in_group(&"mobs") and not body.is_in_group(&"prey"):
     return cr < 0.998
   return false
+
+
+## Normalized calories / need for [param body] (1.0 when unknown or full).
+func _creature_calorie_ratio(body: Node) -> float:
+  var ccal: Variant = body.get("current_calories")
+  var cneed: Variant = body.get("caloric_needs")
+  if (typeof(ccal) == TYPE_FLOAT or typeof(ccal) == TYPE_INT) and (
+    typeof(cneed) == TYPE_FLOAT or typeof(cneed) == TYPE_INT
+  ):
+    return clampf(float(ccal) / maxf(1.0, float(cneed)), 0.0, 1.0)
+  return 1.0
+
+
+## Carnivore duel body is hungry enough to patrol-search for prey.
+func _predator_hunt_motivated_for_body(body: Node) -> bool:
+  return (
+    body.is_in_group(&"mobs")
+    and not body.is_in_group(&"prey")
+    and _creature_calorie_ratio(body) < 0.998
+  )
 
 
 ## Updates duel facing used by awareness cone gating ([code]last_move_direction[/code] / mob duel spawn facing).
@@ -4497,7 +4511,8 @@ func _build_motor_context(
             * float(motor_p.get("predator_patrol_explore_mul", 2.8)),
         )
         w_idle_exp = 0.0
-        w_trail_rep = 0.0
+        if prey_engaged:
+          w_trail_rep = 0.0
         w_turn_exp *= float(motor_p.get("predator_chase_turn_bias_mul", 0.15))
   w_idle_exp *= exploration_blend_multiplier
   w_turn_exp *= exploration_blend_multiplier
@@ -5263,9 +5278,32 @@ func _physics_process(_delta: float) -> void:
             if dir.length_squared() < 1e-14:
               return false
             return _cardinal_step_blocked(pred_pos, he_nav, dir, static_obs_nav, block_clr_patrol)
-          raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold").call(
-            patrol_state, patrol_lock_sec, patrol_seed, block_cb
-          ) as Vector3
+          if is_pred and _predator_hunt_motivated_for_body(subj):
+            var patrol_ex := int(motor_p.get("carnivore_explore_rotate_physics_ticks", 36))
+            if patrol_ex <= 0:
+              patrol_ex = int(motor_p.get("expanding_explore_base_physics_ticks", 36))
+            var seg_info: Dictionary = _ExploreScr.Explore.locate(patrol_ex, _physics_ticks)
+            var seg_ticks := int(seg_info.get("segment_ticks", patrol_ex))
+            var guided_lock_sec := Callable(_NoGoalPatrolLockScr, &"segment_lock_sec").call(
+              seg_ticks, patrol_lock_sec
+            ) as float
+            var expand_hint_patrol: Vector3 = ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+            var cr_patrol := _creature_calorie_ratio(subj)
+            var allow_idle_patrol := (
+              cr_patrol >= float(motor_p.get("seek_priority_food_ceiling", 0.80))
+            )
+            raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided").call(
+              patrol_state,
+              guided_lock_sec,
+              patrol_seed,
+              expand_hint_patrol,
+              block_cb,
+              allow_idle_patrol,
+            ) as Vector3
+          else:
+            raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold").call(
+              patrol_state, patrol_lock_sec, patrol_seed, block_cb
+            ) as Vector3
         if raw_intent.length_squared() > 1e-12:
           patrol_state.erase("stationary_since_tick")
         elif _creature_actively_seeking_patrol(subj, ctx, motor_p):
@@ -6017,7 +6055,7 @@ func _apply_action_token(token: String) -> void:
 
 
 func _build_snapshot_blob(_snapshot_creature: Node = null) -> String:
-  ## 3D LLM snapshot deferred ([CONVERT_TO_3D.md §D8](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+  ## 3D LLM snapshot deferred ([CONVERT_TO_3D.md §D8](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
   return ""
 
 

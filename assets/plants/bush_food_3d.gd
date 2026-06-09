@@ -8,14 +8,22 @@ signal calories_changed
 
 var current_calories: float = 5.0
 
-var _mesh: MeshInstance3D
+var _ready_visual: Node3D
+var _depleted_visual: Node3D
 var _calorie_area: Area3D
 var _player_visit_locked: bool = false
 
 
 func _ready() -> void:
   add_to_group(&"food_plants")
-  _mesh = get_node_or_null("Mesh") as MeshInstance3D
+  _ready_visual = get_node_or_null("Visual/ReadyVisual") as Node3D
+  if _ready_visual == null:
+    _ready_visual = get_node_or_null("ReadyVisual") as Node3D
+  _depleted_visual = get_node_or_null("Visual/DepletedVisual") as Node3D
+  if _depleted_visual == null:
+    _depleted_visual = get_node_or_null("DepletedVisual") as Node3D
+  _strip_editor_only_nodes(_ready_visual)
+  _strip_editor_only_nodes(_depleted_visual)
   _calorie_area = get_node_or_null("CalorieArea") as Area3D
   if _calorie_area != null:
     _calorie_area.body_entered.connect(_on_calorie_body_entered)
@@ -39,13 +47,29 @@ func _process(delta: float) -> void:
 
 
 func _refresh_visual() -> void:
-  if _mesh == null:
-    return
   var full := current_calories >= float(max_calories) - 1e-3
-  _mesh.visible = true
-  if _mesh.material_override is StandardMaterial3D:
-    var mat := _mesh.material_override as StandardMaterial3D
-    mat.albedo_color = Color(0.25, 0.55, 0.2) if full else Color(0.35, 0.3, 0.15)
+  if _ready_visual != null:
+    _ready_visual.visible = full
+  if _depleted_visual != null:
+    _depleted_visual.visible = not full
+
+
+## Remove Blender preview Light3D / Camera3D nodes bundled in imported .blend scenes.
+func _strip_editor_only_nodes(root: Node3D) -> void:
+  if root == null:
+    return
+  var to_remove: Array[Node] = []
+  _collect_editor_only_nodes(root, to_remove)
+  for node in to_remove:
+    node.queue_free()
+
+
+func _collect_editor_only_nodes(node: Node, out: Array[Node]) -> void:
+  for child in node.get_children():
+    if child is Light3D or child is Camera3D:
+      out.append(child)
+    else:
+      _collect_editor_only_nodes(child, out)
 
 
 func is_pickup_ready_for_motor() -> bool:
