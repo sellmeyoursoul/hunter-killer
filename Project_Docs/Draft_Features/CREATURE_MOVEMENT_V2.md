@@ -568,6 +568,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-09 | **Phase 3 refinement pass:** 3D Vector3 food latch/plateau fix; predator pacing trap + patrol nav escape; rabbit `plant_awareness_requires_los` occluded belief sync; duel pack retune (fox chaos/geometry lock, rabbit seek/hold). |
 | 2026-06-09 | **Phase 3 playtest boost:** 2× duel body scale (rabbit/fox archetypes) + 2× `awareness_radius` / `awareness_cone_extra` in duel packs; Phase 7 cleanup to revert before doc promotion. |
 | 2026-06-09 | **Refactor phases (source of truth):** Phases 1–2 marked done; Phases 3–7 roadmap (retune, ingress, traits, goal kinds, doc promotion). **Doc lifecycle:** this file → `Completed_Features/`; GOAL_DRIVERS + MEMORY → `Definitive_Features/`. §A.2.2, §B.3, §C, §G.5, §H synced. |
 | 2026-05-25 | **Phase 2:** `derive_dominant_tier2_leaf` + `believed_goal_source_bias` projection wired in `ai_driver`; Phase 1 ENGINE movement foundations marked complete. |

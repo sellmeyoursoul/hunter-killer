@@ -150,6 +150,7 @@ func _run_all() -> void:
   _test_escape_reversal_suppression()
   _test_goal_belief_coarse_ttl()
   _test_goal_belief_merge_skips_live_awareness()
+  _test_plant_occluded_live_food_entries()
   _test_goal_seek_resolve_and_cost()
   _test_motor_target_builder_feeding_mode()
   _test_load_merged_config_repo_fallback()
@@ -187,6 +188,8 @@ func _run_all() -> void:
   _test_no_goal_patrol_lock()
   _test_no_goal_patrol_lock_guided()
   _test_predator_patrol_expanding_coverage()
+  _test_predator_pacing_trap_break()
+  _test_predator_south_wall_boulder_pinch_escape()
   _test_seek_stationary_look()
   _test_motor_plane_yaw_from_facing()
   _test_seek_diagonal_intent()
@@ -459,8 +462,12 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
+    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.65),
     "rabbit pack no-goal patrol lock duration",
+  )
+  _assert(
+    not bool(rabbit_m.get("plant_awareness_requires_los", true)),
+    "rabbit pack allows occluded-in-zone plants for goal belief sync",
   )
   var fox_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
@@ -491,12 +498,20 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack herbivore expanding explore mul",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 8.0),
+    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 4.0),
     "rabbit pack restores intent hold ticks",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
+    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 18.0),
+    "rabbit pack seek ready food weight",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 3.8),
     "fox pack duel motor chaos",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("geometry_escape_lock_ticks", 0.0)), 6.0),
+    "fox pack geometry escape lock ticks",
   )
   _assert(
     not bool(fox_m.get("predator_prey_awareness_omni", true)),
@@ -1000,6 +1015,28 @@ func _test_goal_belief_coarse_ttl() -> void:
   var beliefs: Dictionary = (ad.get("_goal_belief_by_body") as Dictionary).get(BODY_ID, {})
   _assert(not beliefs.has(iid), "coarse belief evicted after coarse TTL")
   ad.queue_free()
+
+
+func _test_plant_occluded_live_food_entries() -> void:
+  var entries: Array = [
+    {
+      "pos": Vector3(120.0, 0.0, 80.0),
+      "instance_id": 501,
+      "occluded": true,
+      "line_of_sight_clear": false,
+    },
+    {
+      "pos": Vector3(200.0, 0.0, 80.0),
+      "instance_id": 502,
+      "occluded": false,
+      "line_of_sight_clear": true,
+    },
+  ]
+  var live: Array = _GoalBeliefScr.food_positions_from_live_entries(entries)
+  var all: Array = _GoalBeliefScr.food_positions_from_entries(entries)
+  _assert(live.size() == 1, "occluded plant excluded from live food seek positions")
+  _assert(all.size() == 2, "occluded plant kept for goal-belief sync ingest")
+  _assert((live[0] as Vector3).is_equal_approx(Vector3(200.0, 0.0, 80.0)), "live entry is LoS-clear bush")
 
 
 func _test_goal_belief_merge_skips_live_awareness() -> void:
@@ -4119,6 +4156,229 @@ func _test_predator_patrol_expanding_coverage() -> void:
   )
 
 
+func _test_predator_pacing_trap_break() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator pacing trap test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 88001
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+  }
+  var bounds_min := Vector2(0.0, 0.0)
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var pos := Vector3(500.0, 0.0, 980.0)
+  var he := Vector2(13.5, 30.5)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  driver.call(
+    "_predator_pacing_trap_active",
+    body_id,
+    south,
+    south,
+    2,
+    pos,
+    he,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  )
+  var trap_active := bool(
+    driver.call(
+      "_predator_pacing_trap_active",
+      body_id,
+      north,
+      south,
+      2,
+      pos,
+      he,
+      bounds_min,
+      bounds_max,
+      motor_p,
+    )
+  )
+  _assert(trap_active, "predator pacing trap detects opposing cardinals at south edge")
+  var break_dir: Vector3 = driver.call(
+    "_predator_pacing_trap_break_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+  ) as Vector3
+  _assert(break_dir.length_squared() > 1e-12, "predator pacing trap returns lateral escape")
+  _assert(absf(break_dir.dot(north)) < 0.35, "predator pacing trap breaks away from N-S axis")
+  var hold_st: Dictionary = {}
+  var incumbent_ns := north
+  var filtered: Vector3 = Callable(IntentHoldScr, &"filtered_intent").call(
+    break_dir, incumbent_ns, 1, hold_st
+  ) as Vector3
+  _assert(
+    filtered.is_equal_approx(break_dir),
+    "predator pacing trap lateral escape applies immediately with hold_apply=1",
+  )
+  driver.queue_free()
+
+
+func _test_south_perimeter_static_obs_near(
+  center_x: float, _bounds_min: Vector2, bounds_max: Vector2, span: float = 96.0
+) -> Array:
+  var obs: Array = []
+  var inset := 0.5
+  var spacing := 1.4
+  var rock_he := Vector2(1.05, 1.05)
+  var z_fixed := bounds_max.y - inset
+  var x := center_x - span
+  while x <= center_x + span + 0.001:
+    obs.append({"position": Vector3(x, 0.0, z_fixed), "half_extents": rock_he})
+    x += spacing
+  return obs
+
+
+func _test_predator_south_wall_boulder_pinch_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator south-wall boulder pinch test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 88002
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "predator_obstacle_probe": 280.0,
+    "predator_edge_slide_min_clearance": 2.0,
+    "geometry_escape_lock_ticks": 14,
+  }
+  var bounds_min := Vector2(0.0, 0.0)
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(27.0, 61.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  var boulder := {
+    "position": Vector3(680.0, 0.0, 820.0),
+    "half_extents": Vector2(55.0, 55.0),
+  }
+  var perimeter := _test_south_perimeter_static_obs_near(740.0, bounds_min, bounds_max)
+  var static_obs: Array = [boulder]
+  static_obs.append_array(perimeter)
+  var far_rim_pos := Vector3(740.0, 0.0, bounds_max.y - he.y - 8.0)
+  var edge_hint_far: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    far_rim_pos,
+    he,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    north,
+    false,
+  ) as Vector3
+  _assert(edge_hint_far.length_squared() > 1e-12, "far south rim edge expand returns a heading")
+  _assert(
+    absf(edge_hint_far.dot(north)) < 0.35,
+    "far south rim edge expand defaults to wall tangent not toward-center north",
+  )
+  var pos := Vector3(740.0, 0.0, 900.0)
+  var edge_hint_pinch: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    pos,
+    he,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    north,
+    true,
+  ) as Vector3
+  _assert(edge_hint_pinch.length_squared() > 1e-12, "pinch edge expand returns lateral slide")
+  _assert(
+    absf(edge_hint_pinch.dot(north)) < 0.35,
+    "pinch edge expand avoids north axis at south wall",
+  )
+  var pinch_esc: Vector3 = driver.call(
+    "_predator_edge_pinch_escape_intent",
+    body_id,
+    pos,
+    he,
+    static_obs,
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+    Vector3(1.0, 0.0, 0.0),
+  ) as Vector3
+  _assert(pinch_esc.length_squared() > 1e-12, "edge pinch escape returns lateral with perimeter chain")
+  _assert(absf(pinch_esc.dot(north)) < 0.35, "edge pinch escape avoids N-S oscillation axis")
+  driver.call(
+    "_predator_pacing_trap_active",
+    body_id,
+    south,
+    south,
+    2,
+    pos,
+    he,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  )
+  var trap_active := bool(
+    driver.call(
+      "_predator_pacing_trap_active",
+      body_id,
+      north,
+      south,
+      2,
+      pos,
+      he,
+      bounds_min,
+      bounds_max,
+      motor_p,
+    )
+  )
+  _assert(trap_active, "south-wall boulder pinch pacing trap detects N-S flip")
+  var break_dir: Vector3 = driver.call(
+    "_predator_pacing_trap_break_intent",
+    body_id,
+    pos,
+    he,
+    static_obs,
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+  ) as Vector3
+  _assert(break_dir.length_squared() > 1e-12, "south-wall boulder pinch returns lateral escape")
+  _assert(absf(break_dir.dot(north)) < 0.35, "south-wall boulder pinch breaks off N-S axis")
+  var hold_st: Dictionary = {}
+  var filtered: Vector3 = Callable(IntentHoldScr, &"filtered_intent").call(
+    break_dir, north, 1, hold_st
+  ) as Vector3
+  _assert(
+    filtered.is_equal_approx(break_dir),
+    "pinch trap break lateral escape applies immediately with hold_apply=1",
+  )
+  var pinch_active := bool(
+    driver.call(
+      "_predator_geometry_pinch_active",
+      pos,
+      he,
+      static_obs,
+      motor_p,
+    )
+  )
+  _assert(pinch_active, "predator geometry pinch active in south-wall boulder wedge")
+  driver.queue_free()
+
+
 func _test_seek_stationary_look() -> void:
   var pick := Callable(_SeekStationaryLookScr, &"pick_facing")
   var seg := 3
@@ -4414,6 +4674,11 @@ func _test_herbivore_forage_plateau_release() -> void:
   }
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector3.ZERO, 0, motor_p)
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector3.ZERO, 0, motor_p)
+  var plateau_state: Dictionary = driver.get("_forage_plateau_ticks_by_body")
+  _assert(
+    int(plateau_state.get(body_id, 0)) == 2,
+    "Vector3 food targets accumulate forage plateau ticks while idle near food",
+  )
   _assert(
     not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
     "forage plateau not released before threshold",
@@ -4466,6 +4731,16 @@ func _test_herbivore_food_awareness_latch() -> void:
   )
   _assert(latched and food_targets.size() == 1, "food latch records ready bush")
   _assert(bool(driver.call("_herbivore_food_latch_active", body_id)), "food latch stays active")
+  var food_after_dropout: Array = []
+  var merged_latch := bool(
+    driver.call("_herbivore_food_latch_merge", body_id, [], food_after_dropout, motor_p)
+  )
+  _assert(merged_latch, "food latch merge active after cone dropout")
+  _assert(food_after_dropout.size() == 1, "latched Vector3 food re-merges into seek targets")
+  _assert(
+    (food_after_dropout[0] as Vector3).is_equal_approx(Vector3(500.0, 0.0, 200.0)),
+    "latched food position preserved in Vector3 merge",
+  )
   var ctx := {
     "creature_position": Vector3(200.0, 0.0, 200.0),
     "food_seek_targets": [Vector3(500.0, 0.0, 200.0)],

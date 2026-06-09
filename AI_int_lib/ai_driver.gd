@@ -47,6 +47,7 @@ const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
+const _NavHint := preload("res://environment/nav_path_hint.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -230,6 +231,9 @@ var _forage_plateau_ticks_by_body: Dictionary = {}
 var _herbivore_food_latch_by_body: Dictionary = {}
 ## Prior tick move intent for herbivore pacing-trap detection.
 var _herbivore_prev_intent_by_body: Dictionary = {}
+var _predator_prev_intent_by_body: Dictionary = {}
+## Rate-limit keys for [code]predator_pinch_debug_log[/code] OLog lines.
+var _predator_pinch_debug_last_by_body: Dictionary = {}
 ## Latched playfield-corner egress for prey (runs even during food seek).
 var _herbivore_corner_escape_lock_by_body: Dictionary = {}
 ## True after carnivore has had prey inside live awareness this round (gates memory chase).
@@ -443,6 +447,8 @@ func _motor_reset_scripted_auxiliary_states() -> void:
   _forage_plateau_ticks_by_body.clear()
   _herbivore_food_latch_by_body.clear()
   _herbivore_prev_intent_by_body.clear()
+  _predator_prev_intent_by_body.clear()
+  _predator_pinch_debug_last_by_body.clear()
   _herbivore_corner_escape_lock_by_body.clear()
   _warned_missing_creature_pack_by_id.clear()
   _goal_belief_reset_all()
@@ -1267,7 +1273,9 @@ func _rescan_and_patch_goal_ctx(
     var food_split: Dictionary = _motor_food_plants_in_awareness_by_readiness(
       motor_p, pos3, he, facing3
     )
-    var ready_targets: Array = _GoalBeliefScr.food_positions_from_entries(food_split["ready"] as Array)
+    var ready_targets: Array = _GoalBeliefScr.food_positions_from_live_entries(
+      food_split["ready"] as Array
+    )
     if ready_targets.is_empty() or cr >= 0.998:
       return false
     var w_seek_base := float(motor_p.get("weight_seek_ready_food", 16.0))
@@ -1275,7 +1283,7 @@ func _rescan_and_patch_goal_ctx(
       return false
     var urg := clampf(1.0 - cr, 0.0, 1.0)
     ctx["food_seek_targets"] = ready_targets
-    ctx["unready_food_avoid_targets"] = _GoalBeliefScr.food_positions_from_entries(
+    ctx["unready_food_avoid_targets"] = _GoalBeliefScr.food_positions_from_live_entries(
       food_split["unready"] as Array
     )
     ctx["weight_seek_ready_food"] = w_seek_base * lerpf(0.28, 1.0, pow(urg, 0.85))
@@ -1760,14 +1768,18 @@ func _motor_stuck_track_mob(
   var stalled := trying and not moved
   if (
     not stalled
-    and body.is_in_group(&"prey")
     and not moved
     and not static_obs.is_empty()
     and he_xy.length_squared() > 1e-12
   ):
     var pinch_probe := float(motor_p.get("herbivore_obstacle_probe", 280.0))
-    if _creature_geometry_pinched(pos, he_xy, static_obs, pinch_probe):
-      stalled = true
+    if body.is_in_group(&"prey"):
+      if _creature_geometry_pinched(pos, he_xy, static_obs, pinch_probe):
+        stalled = true
+    elif body.is_in_group(&"mobs"):
+      pinch_probe = float(motor_p.get("predator_obstacle_probe", pinch_probe))
+      if _creature_geometry_pinched(pos, he_xy, static_obs, pinch_probe):
+        stalled = true
   if (
     not stalled
     and hunt_prey_pos != Vector3.ZERO
@@ -1908,6 +1920,269 @@ func _patch_herbivore_pinch_motor_ctx(
     ctx["motor_seek_filter_wall_hits"] = true
 
 
+## Sets [code]predator_geometry_pinch_active[/code] while carnivore patrol is wedged on statics (no live prey goal).
+func _patch_predator_pinch_motor_ctx(
+  ctx: Dictionary, body: Node, motor_p: Dictionary
+) -> void:
+  ctx["predator_geometry_pinch_active"] = false
+  if not body.is_in_group(&"mobs") or body.is_in_group(&"prey"):
+    return
+  if bool(ctx.get("motor_has_active_goal", false)):
+    return
+  var pos: Vector3 = _as_motor_vec3(ctx.get("creature_position", body.global_position))
+  var he: Vector2 = ctx.get("creature_half_extents", Vector2(13.5, 30.5))
+  var static_obs: Array = ctx.get("static_obstacles", []) as Array
+  ctx["predator_geometry_pinch_active"] = _predator_geometry_pinch_active(
+    pos, he, static_obs, motor_p
+  )
+
+
+## True when carnivore footprint clearance to static solids is within predator obstacle probe range.
+func _predator_geometry_pinch_active(
+  creature_pos: Vector3, he_xy: Vector2, static_obs: Array, motor_p: Dictionary
+) -> bool:
+  if static_obs.is_empty() or he_xy.length_squared() < 1e-12:
+    return false
+  var probe_dist := float(motor_p.get("predator_obstacle_probe", 280.0))
+  return _creature_geometry_pinched(creature_pos, he_xy, static_obs, probe_dist)
+
+
+## Nearest playfield edge inward normal and tangents for rim-slide patrol / pinch escape.
+func _playfield_wall_edge_info(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+) -> Dictionary:
+  if not _playfield_bounds_valid(bounds_min, bounds_max):
+    return {"valid": false}
+  var left := creature_pos.x - he_xy.x - bounds_min.x
+  var right := bounds_max.x - (creature_pos.x + he_xy.x)
+  var top := creature_pos.z - he_xy.y - bounds_min.y
+  var bottom := bounds_max.y - (creature_pos.z + he_xy.y)
+  var edge_margin := minf(minf(left, right), minf(top, bottom))
+  var min_side := edge_margin
+  var wall_inward := Vector3.ZERO
+  if is_equal_approx(min_side, left):
+    wall_inward = Vector3(1.0, 0.0, 0.0)
+  elif is_equal_approx(min_side, right):
+    wall_inward = Vector3(-1.0, 0.0, 0.0)
+  elif is_equal_approx(min_side, top):
+    wall_inward = Vector3(0.0, 0.0, 1.0)
+  else:
+    wall_inward = Vector3(0.0, 0.0, -1.0)
+  return {
+    "valid": true,
+    "edge_margin": edge_margin,
+    "wall_inward": wall_inward,
+    "tangent_a": Vector3(-wall_inward.z, 0.0, wall_inward.x),
+    "tangent_b": Vector3(wall_inward.z, 0.0, -wall_inward.x),
+  }
+
+
+## Relaxed static probe for sliding along perimeter rocks (no near-step tighten).
+func _cardinal_step_blocked_for_edge_slide(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  direction: Vector3,
+  static_obs: Array,
+  motor_p: Dictionary,
+) -> bool:
+  if direction.length_squared() < 1e-12:
+    return true
+  if static_obs.is_empty():
+    return false
+  var min_clr := float(motor_p.get("predator_edge_slide_min_clearance", 2.0))
+  return _cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clr)
+
+
+## Picks a wall-tangent cardinal; skips axes in [param exclude_axes].
+func _predator_pick_edge_tangent_cardinal(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+  exclude_axes: Array = [],
+  prefer_tangent: Vector3 = Vector3.ZERO,
+  body_id: int = 0,
+) -> Vector3:
+  var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  if not bool(info.get("valid", false)):
+    return Vector3.ZERO
+  var wall_inward: Vector3 = info.get("wall_inward", Vector3.ZERO) as Vector3
+  var tangents: Array = [info.get("tangent_a"), info.get("tangent_b")]
+  var axis_block: Array = exclude_axes.duplicate()
+  if wall_inward.length_squared() > 1e-12:
+    axis_block.append(wall_inward)
+    axis_block.append(-wall_inward)
+  var step := _motor_cardinal_probe_step(he_xy)
+  var best_d := Vector3.ZERO
+  var best_score := -INF
+  for tangent_v in tangents:
+    if typeof(tangent_v) != TYPE_VECTOR3:
+      continue
+    var tan_v := tangent_v as Vector3
+    if tan_v.length_squared() < 1e-12:
+      continue
+    var tan_u: Vector3 = tan_v.normalized()
+    var skip_axis := false
+    for ex_v in axis_block:
+      if typeof(ex_v) != TYPE_VECTOR3:
+        continue
+      var ex_u := (ex_v as Vector3).normalized()
+      if ex_u.length_squared() < 1e-12:
+        continue
+      if absf(tan_u.dot(ex_u)) > 0.85:
+        skip_axis = true
+        break
+    if skip_axis:
+      continue
+    if _cardinal_step_blocked_for_edge_slide(creature_pos, he_xy, tan_u, static_obs, motor_p):
+      continue
+    var probe_pos: Vector3 = creature_pos + tan_u * step
+    if not _footprint_in_bounds(probe_pos, he_xy, bounds_min, bounds_max):
+      continue
+    var cl := float(_static_obstacle_slip_info(probe_pos, he_xy, static_obs).get("clearance", 0.0))
+    var score := cl
+    if prefer_tangent.length_squared() > 1e-12:
+      score += tan_u.dot(prefer_tangent.normalized()) * 48.0
+    score += float((body_id + int(tan_u.x * 10.0) + int(tan_u.z * 10.0)) % 7) * 0.01
+    if score > best_score:
+      best_score = score
+      best_d = tan_u
+  return best_d
+
+
+## Latched lateral escape for carnivore edge pinches (wall/boulder corridor).
+func _predator_edge_pinch_escape_intent(
+  body_id: int,
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  _stuck_n: int,
+  motor_p: Dictionary,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  exclude_axis: Vector3 = Vector3.ZERO,
+  prefer_tangent: Vector3 = Vector3.ZERO,
+) -> Vector3:
+  var lock_ticks := maxi(6, int(motor_p.get("geometry_escape_lock_ticks", 14)))
+  var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  if not bool(info.get("valid", false)):
+    return Vector3.ZERO
+  var exclude: Array = []
+  if exclude_axis.length_squared() > 1e-12:
+    var ax_u := exclude_axis.normalized()
+    exclude.append(ax_u)
+    exclude.append(-ax_u)
+  var rec_v: Variant = _geometry_escape_lock_by_body.get(body_id, null)
+  if typeof(rec_v) == TYPE_DICTIONARY:
+    var rec: Dictionary = rec_v
+    if _physics_ticks < int(rec.get("until_tick", 0)):
+      var locked: Variant = rec.get("dir", Vector3.ZERO)
+      if typeof(locked) == TYPE_VECTOR3 and (locked as Vector3).length_squared() > 1e-12:
+        var locked_u := (locked as Vector3).normalized()
+        var keep_locked := true
+        for ex_v in exclude:
+          if typeof(ex_v) == TYPE_VECTOR3 and absf(locked_u.dot(ex_v as Vector3)) > 0.85:
+            keep_locked = false
+            break
+        if keep_locked and not _cardinal_step_blocked_for_edge_slide(
+          creature_pos, he_xy, locked_u, static_obs, motor_p
+        ):
+          return locked_u
+        _geometry_escape_lock_by_body.erase(body_id)
+  var pick := _predator_pick_edge_tangent_cardinal(
+    creature_pos,
+    he_xy,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    exclude,
+    prefer_tangent,
+    body_id,
+  )
+  if pick.length_squared() < 1e-12:
+    return Vector3.ZERO
+  _geometry_escape_lock_by_body[body_id] = {
+    "dir": pick,
+    "until_tick": _physics_ticks + lock_ticks,
+  }
+  return pick
+
+
+## Patrol expand hint near playfield edge: default wall-tangent slide; toward-center only as fallback.
+func _predator_patrol_edge_expand_hint(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+  current_hint: Vector3,
+  pinch_active: bool = false,
+) -> Vector3:
+  if not _playfield_bounds_valid(bounds_min, bounds_max):
+    return Vector3.ZERO
+  var edge_band := float(motor_p.get("predator_chase_edge_band", 110.0))
+  var edge_margin := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+  if edge_margin >= edge_band:
+    return Vector3.ZERO
+  var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  if not bool(info.get("valid", false)):
+    return Vector3.ZERO
+  var wall_inward: Vector3 = info.get("wall_inward", Vector3.ZERO) as Vector3
+  var prefer_slide := Vector3.ZERO
+  if current_hint.length_squared() > 1e-12:
+    var hint_u := current_hint.normalized()
+    if absf(hint_u.dot(wall_inward)) < 0.85:
+      prefer_slide = hint_u
+  var tangent := _predator_pick_edge_tangent_cardinal(
+    creature_pos,
+    he_xy,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    [],
+    prefer_slide,
+    0,
+  )
+  if tangent.length_squared() > 1e-12:
+    return tangent
+  if pinch_active:
+    return Vector3.ZERO
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center := Vector3(center.x, 0.0, center.y) - creature_pos
+  var interior_hint := _snap_seek_direction_v3(toward_center)
+  if interior_hint.length_squared() < 1e-12:
+    return Vector3.ZERO
+  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+  if static_obs.is_empty() or not _cardinal_step_blocked_for_escape(
+    creature_pos, he_xy, interior_hint, static_obs, min_clr
+  ):
+    return interior_hint
+  return Vector3.ZERO
+
+
+## Rate-limited OLog for predator pinch / pacing-trap diagnosis ([code]predator_pinch_debug_log[/code] pack flag).
+func _predator_pinch_debug_log(
+  body_id: int, motor_p: Dictionary, tag: String, msg: String
+) -> void:
+  if not bool(motor_p.get("predator_pinch_debug_log", false)):
+    return
+  var interval := maxi(1, int(motor_p.get("predator_pinch_debug_interval_ticks", 30)))
+  var key := "%d:%s" % [body_id, tag]
+  var last := int(_predator_pinch_debug_last_by_body.get(key, -99999))
+  if _physics_ticks - last < interval:
+    return
+  _predator_pinch_debug_last_by_body[key] = _physics_ticks
+  OLog.debug(msg, false, "CREATURE_GOALS")
+
+
 ## True when [param cardinal] re-enters a remembered pinch and another escape heading exists.
 ## When [param prefer_dir] aligns with [param cardinal], backtrack is allowed (forage wedge egress).
 func _stuck_escape_should_skip_backtrack(
@@ -1973,15 +2248,17 @@ func _herbivore_food_latch_merge(
     return false
   var latched: Array = rec.get("positions", []) as Array
   for p in latched:
-    if typeof(p) != TYPE_VECTOR2:
+    var p3 := _as_motor_vec3(_MotorPlane.read_pos(p))
+    if p3.length_squared() < 1e-12:
       continue
     var found := false
     for existing in food_targets:
-      if typeof(existing) == TYPE_VECTOR2 and (existing as Vector2).distance_squared_to(p) < 64.0:
+      var e3 := _as_motor_vec3(_MotorPlane.read_pos(existing))
+      if e3.distance_squared_to(p3) < 64.0:
         found = true
         break
     if not found:
-      food_targets.append(p)
+      food_targets.append(p3)
   return not latched.is_empty()
 
 
@@ -2002,13 +2279,19 @@ func _herbivore_nearest_latched_food_pos(body_id: int, creature_pos: Vector3) ->
   return _nearest_vector_from_positions(creature_pos, rec.get("positions", []) as Array)
 
 
-## True when prey is flipping between opposing cardinals while food remains latched (corridor pacing).
+## True when prey flips between opposing cardinals while seeking (latch, pinch, or multi-target conflict).
 func _herbivore_pacing_trap_active(
-  body_id: int, incumbent: Vector3, computed: Vector3, pinch_active: bool = false
+  body_id: int,
+  incumbent: Vector3,
+  computed: Vector3,
+  pinch_active: bool = false,
+  multi_food_conflict: bool = false,
 ) -> bool:
-  if pinch_active:
-    return false
-  if not _herbivore_food_latch_active(body_id):
+  if (
+    not _herbivore_food_latch_active(body_id)
+    and not pinch_active
+    and not multi_food_conflict
+  ):
     return false
   if incumbent.length_squared() < 1e-12 or computed.length_squared() < 1e-12:
     return false
@@ -2022,6 +2305,162 @@ func _herbivore_pacing_trap_active(
   if prev.length_squared() < 1e-12:
     return false
   return prev.dot(incumbent) < -0.85
+
+
+## True when two or more food cues lie in opposing directions (>90° apart from creature).
+func _herbivore_multi_food_seek_conflict(creature_pos: Vector3, food_targets: Array) -> bool:
+  if food_targets.size() < 2:
+    return false
+  var dirs: Array[Vector3] = []
+  for t in food_targets:
+    var p := _as_motor_vec3(_MotorPlane.read_pos(t))
+    var d := p - creature_pos
+    d.y = 0.0
+    if d.length_squared() < 64.0:
+      continue
+    dirs.append(d.normalized())
+  if dirs.size() < 2:
+    return false
+  for i in dirs.size():
+    for j in range(i + 1, dirs.size()):
+      if (dirs[i] as Vector3).dot(dirs[j] as Vector3) < 0.0:
+        return true
+  return false
+
+
+## True when carnivore patrol/hunt geometry flips between opposing cardinals at an edge pinch.
+func _predator_pacing_trap_active(
+  body_id: int,
+  incumbent: Vector3,
+  computed: Vector3,
+  stuck_n: int,
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+) -> bool:
+  var edge_active := false
+  if _playfield_bounds_valid(bounds_min, bounds_max):
+    var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+    edge_active = _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) < corner_band
+  if stuck_n < 1 and not edge_active:
+    return false
+  if incumbent.length_squared() < 1e-12 or computed.length_squared() < 1e-12:
+    return false
+  if incumbent.dot(computed) >= -0.15:
+    return false
+  var prev_v: Variant = _predator_prev_intent_by_body.get(body_id, null)
+  _predator_prev_intent_by_body[body_id] = incumbent
+  if typeof(prev_v) != TYPE_VECTOR3:
+    return false
+  var prev := prev_v as Vector3
+  if prev.length_squared() < 1e-12:
+    return false
+  return prev.dot(incumbent) < -0.85
+
+
+## Lateral escape when [_predator_pacing_trap_active] fires (wall/boulder N-S ping-pong).
+func _predator_pacing_trap_break_intent(
+  body_id: int,
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  stuck_n: int,
+  motor_p: Dictionary,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  oscillation_axis: Vector3,
+) -> Vector3:
+  var prefer := Vector3.ZERO
+  if oscillation_axis.length_squared() > 1e-12:
+    var ax := oscillation_axis.normalized()
+    prefer = Vector3(-ax.z, 0.0, ax.x)
+  return _predator_edge_pinch_escape_intent(
+    body_id,
+    creature_pos,
+    he_xy,
+    static_obs,
+    stuck_n,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    oscillation_axis,
+    prefer,
+  )
+
+
+## Sets nav detour goal on [param ctx] when patrol is stuck without an active seek target.
+func _patch_nav_patrol_escape_ctx(
+  ctx: Dictionary,
+  creature_pos: Vector3,
+  stuck_n: int,
+  has_active_goal: bool,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+) -> void:
+  ctx["nav_patrol_escape_active"] = false
+  ctx.erase("nav_patrol_escape_goal")
+  if has_active_goal:
+    return
+  if stuck_n < 1 and not bool(ctx.get("predator_geometry_pinch_active", false)):
+    return
+  if not bool(ctx.get("navmesh_hint_enabled", false)):
+    return
+  var map_rid: RID = ctx.get("navmesh_map_rid", RID())
+  if not map_rid.is_valid():
+    return
+  var goal := Vector3.ZERO
+  if _playfield_bounds_valid(bounds_min, bounds_max):
+    goal = Vector3(
+      (bounds_min.x + bounds_max.x) * 0.5,
+      creature_pos.y,
+      (bounds_min.y + bounds_max.y) * 0.5,
+    )
+  var he_nav: Vector2 = ctx.get("creature_half_extents", Vector2(13.5, 30.5))
+  var static_obs: Array = ctx.get("static_obstacles", []) as Array
+  var expand: Vector3 = ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+  var pinch := bool(ctx.get("predator_geometry_pinch_active", false))
+  if pinch and _playfield_bounds_valid(bounds_min, bounds_max):
+    var tangent_goal := _predator_pick_edge_tangent_cardinal(
+      creature_pos,
+      he_nav,
+      static_obs,
+      bounds_min,
+      bounds_max,
+      motor_p,
+      [],
+      expand,
+      0,
+    )
+    if tangent_goal.length_squared() > 1e-12:
+      goal = creature_pos + tangent_goal.normalized() * 320.0
+    elif expand.length_squared() > 1e-12:
+      goal = creature_pos + expand.normalized() * 320.0
+  elif expand.length_squared() > 1e-12:
+    goal = creature_pos + expand.normalized() * 320.0
+  if goal.length_squared() < 1e-12:
+    return
+  ctx["nav_patrol_escape_active"] = true
+  ctx["nav_patrol_escape_goal"] = goal
+
+
+## Cardinal snap toward next nav waypoint during no-goal patrol escape.
+func _nav_patrol_escape_cardinal(
+  creature_pos: Vector3,
+  goal: Vector3,
+  ctx: Dictionary,
+  he_xy: Vector2,
+) -> Vector3:
+  var map_rid: RID = ctx.get("navmesh_map_rid", RID())
+  if not map_rid.is_valid():
+    return Vector3.ZERO
+  var agent_r := float(ctx.get("nav_agent_radius", maxf(he_xy.x, he_xy.y)))
+  var dir := _NavHint.unit_direction_to_next_waypoint(map_rid, creature_pos, goal, agent_r)
+  if dir.length_squared() > 1e-12:
+    return _snap_seek_direction_v3(dir)
+  return Vector3.ZERO
 
 
 ## Tracks prey ticks spent idle or motor-stuck while footprint-clearance to a food cue is within forage plateau radius.
@@ -2059,11 +2498,12 @@ func _track_herbivore_forage_plateau(
   var he: Vector2 = ctx.get("creature_half_extents", Vector2.ZERO)
   var nearest_clr := INF
   for t in food:
-    if typeof(t) != TYPE_VECTOR2:
+    var t3 := _as_motor_vec3(_MotorPlane.read_pos(t))
+    if t3.length_squared() < 1e-12:
       continue
     nearest_clr = minf(
       nearest_clr,
-      Callable(_MOTOR, &"minimum_footprint_point_clearance").call(pos, he, [t as Vector2]),
+      Callable(_MOTOR, &"minimum_footprint_point_clearance").call(pos, he, [t3]),
     )
   if not is_finite(nearest_clr):
     _forage_plateau_ticks_by_body[body_id] = 0
@@ -4329,7 +4769,7 @@ func _build_motor_context(
     food_split, prey_entries, threat_samples
   )
   var live_food_ids := live_target_ids
-  var plant_ready_targets: Array = _GoalBeliefScr.food_positions_from_entries(
+  var plant_ready_targets: Array = _GoalBeliefScr.food_positions_from_live_entries(
     food_split["ready"] as Array
   )
   var food_targets: Array = plant_ready_targets.duplicate()
@@ -4376,7 +4816,7 @@ func _build_motor_context(
     is_predator_body
     and bool(_predator_prey_ever_seen_by_id.get(body.get_instance_id(), false))
   )
-  var unready_food_targets: Array = _GoalBeliefScr.food_positions_from_entries(
+  var unready_food_targets: Array = _GoalBeliefScr.food_positions_from_live_entries(
     food_split["unready"] as Array
   )
   ## Future food memory: for each belief outside awareness but inside precise radius, append world pos to ready/unready;
@@ -4492,18 +4932,6 @@ func _build_motor_context(
       var patrol_seed := body.get_instance_id() ^ _duel_motor_round_salt
       if expand_hint == Vector3.ZERO:
         expand_hint = _ExploreScr.Explore.pick_cardinal(patrol_ex, _physics_ticks, patrol_seed)
-      if use_explore_curve and not prey_engaged:
-        var edge_band_patrol := float(motor_p.get("predator_chase_edge_band", 110.0))
-        var patrol_edge_margin := _footprint_edge_margin(pos, he_xy, Vector2.ZERO, ss)
-        if patrol_edge_margin < edge_band_patrol:
-          var toward_center := Vector3((ss.x * 0.5) - pos.x, 0.0, (ss.y * 0.5) - pos.z)
-          var interior_hint := _snap_seek_direction_v3(toward_center)
-          if interior_hint.length_squared() > 1e-12:
-            expand_hint = interior_hint
-            w_expand_hint_out = maxf(
-              w_expand_hint_out,
-              float(motor_p.get("predator_patrol_interior_expand_weight", 9.0)),
-            )
       if expand_hint.length_squared() > 1e-12:
         w_expand_hint_out = maxf(
           w_expand_hint_out,
@@ -4623,6 +5051,22 @@ func _build_motor_context(
           )
           w_idle_exp = 0.0
           w_trail_rep = 0.0
+  if (
+    body.is_in_group(&"mobs")
+    and not body.is_in_group(&"prey")
+    and not prey_engaged
+    and prey_pts_live.is_empty()
+  ):
+    var pred_pinch_expand := _predator_geometry_pinch_active(pos, he_xy, geom_aabbs, motor_p)
+    var edge_expand := _predator_patrol_edge_expand_hint(
+      pos, he_xy, geom_aabbs, bounds_min, bounds_max, motor_p, expand_hint, pred_pinch_expand
+    )
+    if edge_expand.length_squared() > 1e-12:
+      expand_hint = edge_expand
+      w_expand_hint_out = maxf(
+        w_expand_hint_out,
+        float(motor_p.get("predator_patrol_interior_expand_weight", 9.0)),
+      )
   if (
     body.is_in_group(&"mobs")
     and not body.is_in_group(&"prey")
@@ -5092,6 +5536,7 @@ func _physics_process(_delta: float) -> void:
       )
       _patch_blocked_approach_motor_ctx(ctx, body_id, motor_p)
       _patch_herbivore_pinch_motor_ctx(ctx, subj, motor_p)
+      _patch_predator_pinch_motor_ctx(ctx, subj, motor_p)
       var stuck_thr := maxi(1, int(motor_p.get("motor_stuck_escape_ticks", 8)))
       if is_prey_body and bool(ctx.get("herbivore_geometry_pinch_active", false)):
         stuck_thr = maxi(1, int(motor_p.get("herbivore_pinch_escape_stuck_ticks", 1)))
@@ -5182,6 +5627,9 @@ func _physics_process(_delta: float) -> void:
           ctx["motor_has_active_goal"] = false
           _forage_plateau_ticks_by_body[body_id] = 0
       var has_active_goal := bool(ctx.get("motor_has_active_goal", true))
+      _patch_nav_patrol_escape_ctx(
+        ctx, pred_pos, stuck_n, has_active_goal, bounds_min_nav, bounds_max_nav, motor_p
+      )
       var patrol_lock_sec := float(motor_p.get("motor_no_goal_patrol_lock_sec", 0.0))
       var patrol_state := _no_goal_patrol_lock_state_for(body_id)
       var raw_intent: Vector3
@@ -5191,6 +5639,7 @@ func _physics_process(_delta: float) -> void:
       var open_hunt_close_override := false
       var playfield_corner_override := false
       var pinch_escape_override := false
+      var predator_pacing_trap_override := false
       var predator_lost_visual := bool(ctx.get("predator_lost_visual", false))
       var prey_visible := bool(ctx.get("prey_visible_in_awareness", false))
       var corner_wedge := bool(ctx.get("motor_corner_wedge_active", false))
@@ -5327,6 +5776,21 @@ func _physics_process(_delta: float) -> void:
           )
       else:
         raw_intent = _MOTOR.pick_best_move_intent(ctx)
+      if (
+        is_pred
+        and not has_active_goal
+        and (
+          stuck_n >= 1
+          or bool(ctx.get("predator_geometry_pinch_active", false))
+        )
+        and bool(ctx.get("nav_patrol_escape_active", false))
+      ):
+        var nav_goal: Vector3 = ctx.get("nav_patrol_escape_goal", Vector3.ZERO) as Vector3
+        var nav_esc := _nav_patrol_escape_cardinal(pred_pos, nav_goal, ctx, he_nav)
+        if nav_esc.length_squared() > 1e-12:
+          raw_intent = nav_esc
+          Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+          _geometry_escape_lock_by_body.erase(body_id)
       if is_prey_body:
         raw_intent = _herbivore_nudge_away_from_unready_if_idle(ctx, raw_intent, motor_p)
       if (
@@ -5599,20 +6063,140 @@ func _physics_process(_delta: float) -> void:
         body_id,
         incumbent,
         raw_intent,
-        bool(ctx.get("herbivore_geometry_pinch_active", false)) or pinch_escape_override
+        bool(ctx.get("herbivore_geometry_pinch_active", false)) or pinch_escape_override,
+        _herbivore_multi_food_seek_conflict(
+          pred_pos, ctx.get("food_seek_targets", []) as Array
+        ),
       ):
-        var break_pos := _herbivore_nearest_latched_food_pos(body_id, pred_pos)
-        if break_pos == Vector3.ZERO:
-          break_pos = _nearest_vector_from_positions(
-            pred_pos, ctx.get("food_seek_targets", []) as Array
+        var food_pull_pacing := Vector3.ZERO
+        var food_pacing: Array = ctx.get("food_seek_targets", []) as Array
+        if not food_pacing.is_empty():
+          food_pull_pacing = _nearest_vector_from_positions(pred_pos, food_pacing) - pred_pos
+        elif bool(ctx.get("herbivore_food_latched", false)):
+          var latch_fp := _herbivore_nearest_latched_food_pos(body_id, pred_pos)
+          if latch_fp != Vector3.ZERO:
+            food_pull_pacing = latch_fp - pred_pos
+        if (
+          bool(ctx.get("herbivore_geometry_pinch_active", false))
+          or pinch_escape_override
+          or _herbivore_multi_food_seek_conflict(pred_pos, food_pacing)
+        ):
+          var pinch_esc := _herbivore_pinch_escape_intent(
+            body_id,
+            pred_pos,
+            he_nav,
+            static_obs_nav,
+            stuck_n,
+            motor_p,
+            bounds_min_nav,
+            bounds_max_nav,
+            food_pull_pacing,
           )
-        if break_pos != Vector3.ZERO:
-          var break_dir := _snap_seek_direction_v3(break_pos - pred_pos)
-          if break_dir.length_squared() > 1e-12:
-            raw_intent = break_dir
+          if pinch_esc.length_squared() > 1e-12:
+            raw_intent = pinch_esc
             Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
             Callable(_IntentHoldScr, &"reset_state").call(hold_state)
             Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+        else:
+          var break_pos := _herbivore_nearest_latched_food_pos(body_id, pred_pos)
+          if break_pos == Vector3.ZERO:
+            break_pos = _nearest_vector_from_positions(
+              pred_pos, ctx.get("food_seek_targets", []) as Array
+            )
+          if break_pos != Vector3.ZERO:
+            var break_dir := _snap_seek_direction_v3(break_pos - pred_pos)
+            if break_dir.length_squared() > 1e-12:
+              raw_intent = break_dir
+              Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+              Callable(_IntentHoldScr, &"reset_state").call(hold_state)
+              Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+      if (
+        is_pred
+        and not has_active_goal
+        and bool(ctx.get("predator_geometry_pinch_active", false))
+      ):
+        var edge_band_pinch := float(motor_p.get("predator_chase_edge_band", 110.0))
+        var edge_m_pinch := _footprint_edge_margin(
+          pred_pos, he_nav, bounds_min_nav, bounds_max_nav
+        )
+        if edge_m_pinch < edge_band_pinch:
+          var pinch_esc := _predator_edge_pinch_escape_intent(
+            body_id,
+            pred_pos,
+            he_nav,
+            static_obs_nav,
+            maxi(1, stuck_n),
+            motor_p,
+            bounds_min_nav,
+            bounds_max_nav,
+          )
+          if pinch_esc.length_squared() > 1e-12:
+            raw_intent = pinch_esc
+            predator_pacing_trap_override = true
+            Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+            Callable(_IntentHoldScr, &"reset_state").call(hold_state)
+            Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+            _predator_pinch_debug_log(
+              body_id,
+              motor_p,
+              "pinch_esc",
+              "pred pinch escape intent=(%.2f,%.2f) edge_m=%.1f clr=%.1f"
+              % [
+                pinch_esc.x,
+                pinch_esc.z,
+                edge_m_pinch,
+                float(
+                  _static_obstacle_slip_info(pred_pos, he_nav, static_obs_nav).get("clearance", 0.0)
+                ),
+              ],
+            )
+      if (
+        is_pred
+        and not has_active_goal
+        and _predator_pacing_trap_active(
+          body_id,
+          incumbent,
+          raw_intent,
+          stuck_n,
+          pred_pos,
+          he_nav,
+          bounds_min_nav,
+          bounds_max_nav,
+          motor_p,
+        )
+      ):
+        var pred_trap_esc := _predator_pacing_trap_break_intent(
+          body_id,
+          pred_pos,
+          he_nav,
+          static_obs_nav,
+          stuck_n,
+          motor_p,
+          bounds_min_nav,
+          bounds_max_nav,
+          incumbent,
+        )
+        if pred_trap_esc.length_squared() > 1e-12:
+          raw_intent = pred_trap_esc
+          predator_pacing_trap_override = true
+          Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+          Callable(_IntentHoldScr, &"reset_state").call(hold_state)
+          Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+          _geometry_escape_lock_by_body.erase(body_id)
+          _predator_pinch_debug_log(
+            body_id,
+            motor_p,
+            "pacing_trap",
+            "pred pacing trap break intent=(%.2f,%.2f) inc=(%.2f,%.2f) raw=(%.2f,%.2f)"
+            % [
+              pred_trap_esc.x,
+              pred_trap_esc.z,
+              incumbent.x,
+              incumbent.z,
+              raw_intent.x,
+              raw_intent.z,
+            ],
+          )
       var is_prey: bool = subj.is_in_group(&"prey")
       var jeopardy_ticks := maxi(0, int(motor_p.get("jeopardy_forced_turn_ticks", 5)))
       if is_prey:
@@ -5751,6 +6335,7 @@ func _physics_process(_delta: float) -> void:
           or (is_prey_body and corner_wedge)
           or (is_prey_body and pinch_escape_override)
           or (is_pred and playfield_corner_override)
+          or (is_pred and predator_pacing_trap_override)
           or (is_pred and bool(ctx.get("creature_nav_slip_active", false)))
           or use_seek_commit
         ):
@@ -5774,6 +6359,21 @@ func _physics_process(_delta: float) -> void:
         intent = Callable(_IntentHoldScr, &"filtered_intent").call(
           raw_intent, incumbent, hold_apply, hold_state
         ) as Vector3
+      if is_pred and bool(motor_p.get("predator_pinch_debug_log", false)):
+        _predator_pinch_debug_log(
+          body_id,
+          motor_p,
+          "final_intent",
+          "pred final intent=(%.2f,%.2f) raw=(%.2f,%.2f) pinch=%s trap_ov=%s"
+          % [
+            intent.x,
+            intent.z,
+            raw_intent.x,
+            raw_intent.z,
+            str(bool(ctx.get("predator_geometry_pinch_active", false))).to_lower(),
+            str(predator_pacing_trap_override).to_lower(),
+          ],
+        )
       _call_set_creature_move_intent(subj, intent)
       if is_prey_body:
         if is_egress:

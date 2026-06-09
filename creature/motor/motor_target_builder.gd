@@ -200,9 +200,12 @@ static func scan_food_plants_in_awareness(
       if not n.has_method(&"is_pickup_ready_for_motor"):
         continue
       var fp: Vector3 = _spatial_motor_position(n)
-      if not _passes_combined_awareness(creature_pos, he_xy, fp, motor_p, facing, false, los_ctx):
+      if not _in_awareness_zone(creature_pos, he_xy, fp, motor_p, facing, false):
         continue
       var los := _los_flags_for_target(creature_pos, fp, los_ctx)
+      var requires_los := bool(motor_p.get("plant_awareness_requires_los", true))
+      if requires_los and not bool(los.get("line_of_sight_clear", true)):
+        continue
       var ready_v: Variant = n.call(&"is_pickup_ready_for_motor")
       var entry := {
         "pos": fp,

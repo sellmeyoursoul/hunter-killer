@@ -41,6 +41,22 @@ static func food_positions_from_entries(entries: Array) -> Array:
   return out
 
 
+## Live seek positions only; skips occluded-in-zone plants kept for goal-belief sync.
+static func food_positions_from_live_entries(entries: Array) -> Array:
+  var out: Array = []
+  for e in entries:
+    if typeof(e) == TYPE_DICTIONARY:
+      var ent: Dictionary = e as Dictionary
+      if bool(ent.get("occluded", false)):
+        continue
+      var p: Variant = ent.get("pos", null)
+      if typeof(p) == TYPE_VECTOR3:
+        out.append(p)
+    elif typeof(e) == TYPE_VECTOR3:
+      out.append(e)
+  return out
+
+
 ## Live instance ids from awareness [code]ready[/code] / [code]unready[/code] lists.
 static func live_food_instance_ids(food_split: Dictionary) -> Dictionary:
   var seen: Dictionary = {}

@@ -802,6 +802,10 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       var seek_goal := _nearest_vector3_target(creature_pos, goal_seek_targets)
       if seek_goal == Vector3.ZERO:
         seek_goal = _nearest_vector3_target(creature_pos, prey_seek_targets)
+      if seek_goal == Vector3.ZERO and bool(ctx.get("nav_patrol_escape_active", false)):
+        var patrol_goal_v: Variant = ctx.get("nav_patrol_escape_goal", Vector3.ZERO)
+        if typeof(patrol_goal_v) == TYPE_VECTOR3:
+          seek_goal = patrol_goal_v as Vector3
       if seek_goal != Vector3.ZERO:
         var toward := (seek_goal - creature_pos)
         toward.y = 0.0
