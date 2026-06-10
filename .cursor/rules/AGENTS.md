@@ -6,4 +6,6 @@ This file remains for existing references (Project_Docs, workspace rules).
 
 **Scoped rules:** `gdscript.mdc`, `logging.mdc`, `agentic-runtime-ai.mdc`, `assets.mdc`, `project-docs.mdc` in this folder.
 
+**Doc sync:** Policy in [`core.mdc`](./core.mdc) **Doc sync**; playbook in [`project-docs.mdc`](./project-docs.mdc).
+
 **Legacy focus stubs:** [`focus/`](./focus/) — each `*.md` points to the matching `.mdc`.

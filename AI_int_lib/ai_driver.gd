@@ -48,6 +48,7 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
+const _GoalVisLatch := preload("res://creature/motor/goal_visibility_latch.gd")
 
 const _SYSTEM_PROMPT_PATH := "res://AI_int_lib/system_prompt.txt"
 const _ARMED_HANDSHAKE_USER := "ARMED"
@@ -186,7 +187,9 @@ var _predator_obstructed_hunt_lock_by_body: Dictionary = {}
 ## Latched cardinal toward last-seen prey when live cone loses target (prevents hunt jitter).
 var _predator_memory_chase_lock_by_body: Dictionary = {}
 ## Keeps predator hunt engaged briefly when prey flickers at awareness cone edge.
-var _predator_prey_engagement_until_tick_by_id: Dictionary = {}
+var _predator_prey_engagement_by_body: Dictionary = {}
+## Consecutive physics ticks with live prey in awareness before full seek weight applies.
+var _predator_prey_visible_streak_by_body: Dictionary = {}
 var _warned_missing_creature_pack_by_id: Dictionary = {}
 
 ## Ring buffer of mob snapshots for motor memory: each entry maps motor body [code]get_instance_id()[/code] to [code]{ "position", "velocity" }[/code].
@@ -234,8 +237,13 @@ var _herbivore_prev_intent_by_body: Dictionary = {}
 var _predator_prev_intent_by_body: Dictionary = {}
 ## Rate-limit keys for [code]predator_pinch_debug_log[/code] OLog lines.
 var _predator_pinch_debug_last_by_body: Dictionary = {}
+var _predator_rim_exit_nudged_by_body: Dictionary = {}
+## No-goal patrol displacement anchor for local coverage-stall detection (mid-field oscillation).
+var _predator_patrol_anchor_by_body: Dictionary = {}
 ## Latched playfield-corner egress for prey (runs even during food seek).
 var _herbivore_corner_escape_lock_by_body: Dictionary = {}
+## Latched playfield-corner egress for carnivores during no-goal patrol.
+var _predator_corner_escape_lock_by_body: Dictionary = {}
 ## True after carnivore has had prey inside live awareness this round (gates memory chase).
 var _predator_prey_ever_seen_by_id: Dictionary = {}
 
@@ -374,6 +382,7 @@ func _explore_trail_reset() -> void:
   _explore_trail_last_cell_by_body.clear()
   _motor_stuck_ticks.clear()
   _motor_stuck_last_pos.clear()
+  _predator_patrol_anchor_by_body.clear()
   _forage_plateau_ticks_by_body.clear()
   _motor_obstacle_collect_tick = -1
 
@@ -443,13 +452,17 @@ func _motor_reset_scripted_auxiliary_states() -> void:
   _geometry_escape_lock_by_body.clear()
   _predator_obstructed_hunt_lock_by_body.clear()
   _predator_memory_chase_lock_by_body.clear()
-  _predator_prey_engagement_until_tick_by_id.clear()
+  _predator_prey_engagement_by_body.clear()
+  _predator_prey_visible_streak_by_body.clear()
   _forage_plateau_ticks_by_body.clear()
   _herbivore_food_latch_by_body.clear()
   _herbivore_prev_intent_by_body.clear()
   _predator_prev_intent_by_body.clear()
   _predator_pinch_debug_last_by_body.clear()
+  _predator_rim_exit_nudged_by_body.clear()
+  _predator_patrol_anchor_by_body.clear()
   _herbivore_corner_escape_lock_by_body.clear()
+  _predator_corner_escape_lock_by_body.clear()
   _warned_missing_creature_pack_by_id.clear()
   _goal_belief_reset_all()
   _jeopardy_egress_active_by_body.clear()
@@ -761,7 +774,7 @@ func _pick_playfield_interior_escape_cardinal(
   if prefer_world.length_squared() > 64.0:
     prefer_u = prefer_world.normalized()
   var escape_dirs: Array = _MotorOctScr.SEEK_DIRECTIONS
-  var step := _motor_cardinal_probe_step(he_xy)
+  var step := _motor_cardinal_probe_step(he_xy, motor_p)
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
   var phase := _motor_direction_phase_offset(body_id)
   var best_d := Vector3.ZERO
@@ -824,7 +837,7 @@ func _herbivore_latched_corner_escape_intent(
       if typeof(locked) == TYPE_VECTOR3 and (locked as Vector3).length_squared() > 1e-12:
         var locked_d := locked as Vector3
         if not _cardinal_step_blocked(creature_pos, he_xy, locked_d, static_obs, min_clr):
-          var step := _motor_cardinal_probe_step(he_xy)
+          var step := _motor_cardinal_probe_step(he_xy, motor_p)
           var probe := creature_pos + locked_d * step
           if (
             _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max)
@@ -842,6 +855,67 @@ func _herbivore_latched_corner_escape_intent(
     )
   if esc.length_squared() > 1e-12:
     _herbivore_corner_escape_lock_by_body[body_id] = {
+      "dir": esc,
+      "until_tick": _physics_ticks + lock_ticks,
+    }
+  return esc
+
+
+## Latched playfield-corner escape for carnivores (no-goal patrol rim egress).
+func _predator_latched_corner_escape_intent(
+  body_id: int,
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+) -> Vector3:
+  if not _creature_playfield_corner_hugging(creature_pos, he_xy, bounds_min, bounds_max, motor_p):
+    _predator_corner_escape_lock_by_body.erase(body_id)
+    return Vector3.ZERO
+  var lock_ticks := maxi(
+    14,
+    int(
+      motor_p.get(
+        "predator_corner_escape_lock_ticks",
+        motor_p.get("geometry_escape_lock_ticks", 14),
+      )
+    ),
+  )
+  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+  var rec_v: Variant = _predator_corner_escape_lock_by_body.get(body_id, null)
+  if typeof(rec_v) == TYPE_DICTIONARY:
+    var rec: Dictionary = rec_v
+    if _physics_ticks < int(rec.get("until_tick", 0)):
+      var locked: Variant = rec.get("dir", Vector3.ZERO)
+      if typeof(locked) == TYPE_VECTOR3 and (locked as Vector3).length_squared() > 1e-12:
+        var locked_d := locked as Vector3
+        if not _cardinal_step_blocked(creature_pos, he_xy, locked_d, static_obs, min_clr):
+          var step := _motor_cardinal_probe_step(he_xy, motor_p)
+          var probe := creature_pos + locked_d * step
+          if (
+            _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max)
+            and _footprint_edge_margin(probe, he_xy, bounds_min, bounds_max)
+            > _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) + 0.15
+          ):
+            return locked_d
+      _predator_corner_escape_lock_by_body.erase(body_id)
+  var center := (bounds_min + bounds_max) * 0.5
+  var prefer := Vector3(center.x, 0.0, center.y) - creature_pos
+  var esc := _pick_playfield_interior_escape_cardinal(
+    creature_pos, he_xy, static_obs, body_id, motor_p, bounds_min, bounds_max, prefer
+  )
+  if esc.length_squared() < 1e-12:
+    esc = _pick_playfield_corner_interior_cardinal(
+      creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p, body_id
+    )
+  if esc.length_squared() < 1e-12:
+    esc = _pick_stuck_escape_cardinal(
+      creature_pos, he_xy, static_obs, body_id, 2, motor_p, bounds_min, bounds_max
+    )
+  if esc.length_squared() > 1e-12:
+    _predator_corner_escape_lock_by_body[body_id] = {
       "dir": esc,
       "until_tick": _physics_ticks + lock_ticks,
     }
@@ -1419,7 +1493,7 @@ func _herbivore_locked_flee_intent(
           if not flee_step_blocked:
             var keep_locked := true
             if cornered:
-              var step_l := _motor_cardinal_probe_step(he_xy)
+              var step_l := _motor_cardinal_probe_step(he_xy, motor_p)
               var probe_l := creature_pos + (locked as Vector3) * step_l
               if not _footprint_in_bounds(probe_l, he_xy, bounds_min, bounds_max):
                 keep_locked = false
@@ -1645,7 +1719,7 @@ static func _herbivore_flee_probe_step(he_xy: Vector2, motor_p: Dictionary) -> f
   var explicit := float(motor_p.get("herbivore_flee_probe", 0.0))
   if explicit > 1.0:
     return explicit
-  var base := _motor_cardinal_probe_step(he_xy)
+  var base := _motor_cardinal_probe_step(he_xy, motor_p)
   var mul := float(motor_p.get("herbivore_flee_probe_mul", 1.45))
   return maxf(base * mul, maxf(he_xy.x, he_xy.y) * 3.8)
 
@@ -1927,8 +2001,6 @@ func _patch_predator_pinch_motor_ctx(
   ctx["predator_geometry_pinch_active"] = false
   if not body.is_in_group(&"mobs") or body.is_in_group(&"prey"):
     return
-  if bool(ctx.get("motor_has_active_goal", false)):
-    return
   var pos: Vector3 = _as_motor_vec3(ctx.get("creature_position", body.global_position))
   var he: Vector2 = ctx.get("creature_half_extents", Vector2(13.5, 30.5))
   var static_obs: Array = ctx.get("static_obstacles", []) as Array
@@ -1948,11 +2020,13 @@ func _predator_geometry_pinch_active(
 
 
 ## Nearest playfield edge inward normal and tangents for rim-slide patrol / pinch escape.
+## When two edges tie within [code]corner_tie_eps[/code], sets [code]is_corner[/code] and [code]corner_inward[/code].
 func _playfield_wall_edge_info(
   creature_pos: Vector3,
   he_xy: Vector2,
   bounds_min: Vector2,
   bounds_max: Vector2,
+  corner_tie_eps: float = 0.75,
 ) -> Dictionary:
   if not _playfield_bounds_valid(bounds_min, bounds_max):
     return {"valid": false}
@@ -1962,22 +2036,196 @@ func _playfield_wall_edge_info(
   var bottom := bounds_max.y - (creature_pos.z + he_xy.y)
   var edge_margin := minf(minf(left, right), minf(top, bottom))
   var min_side := edge_margin
+  var tight_walls: Array[Vector3] = []
+  if left <= min_side + corner_tie_eps:
+    tight_walls.append(Vector3(1.0, 0.0, 0.0))
+  if right <= min_side + corner_tie_eps:
+    tight_walls.append(Vector3(-1.0, 0.0, 0.0))
+  if top <= min_side + corner_tie_eps:
+    tight_walls.append(Vector3(0.0, 0.0, 1.0))
+  if bottom <= min_side + corner_tie_eps:
+    tight_walls.append(Vector3(0.0, 0.0, -1.0))
+  var is_corner := tight_walls.size() >= 2
   var wall_inward := Vector3.ZERO
-  if is_equal_approx(min_side, left):
-    wall_inward = Vector3(1.0, 0.0, 0.0)
-  elif is_equal_approx(min_side, right):
-    wall_inward = Vector3(-1.0, 0.0, 0.0)
-  elif is_equal_approx(min_side, top):
-    wall_inward = Vector3(0.0, 0.0, 1.0)
-  else:
-    wall_inward = Vector3(0.0, 0.0, -1.0)
+  if tight_walls.size() == 1:
+    wall_inward = tight_walls[0]
+  elif not tight_walls.is_empty():
+    wall_inward = tight_walls[0]
+  var corner_inward := Vector3.ZERO
+  if is_corner:
+    var inward_sum := Vector3.ZERO
+    for w in tight_walls:
+      inward_sum += w
+    if inward_sum.length_squared() > 1e-12:
+      corner_inward = inward_sum.normalized()
   return {
     "valid": true,
     "edge_margin": edge_margin,
     "wall_inward": wall_inward,
+    "corner_inward": corner_inward,
+    "is_corner": is_corner,
     "tangent_a": Vector3(-wall_inward.z, 0.0, wall_inward.x),
     "tangent_b": Vector3(wall_inward.z, 0.0, -wall_inward.x),
   }
+
+
+## Picks an interior diagonal at a dual-edge playfield corner (increases edge margin).
+func _pick_playfield_corner_interior_cardinal(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+  body_id: int = 0,
+) -> Vector3:
+  var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  if not bool(info.get("valid", false)) or not bool(info.get("is_corner", false)):
+    return Vector3.ZERO
+  var corner_in: Vector3 = info.get("corner_inward", Vector3.ZERO) as Vector3
+  if corner_in.length_squared() < 1e-12:
+    return Vector3.ZERO
+  var cur_edge := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+  var step := _motor_rim_probe_step(creature_pos, he_xy, motor_p, bounds_min, bounds_max)
+  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+  var candidates: Array[Vector3] = []
+  var corner_snap := _snap_seek_direction_v3(corner_in)
+  if corner_snap.length_squared() > 1e-12:
+    candidates.append(corner_snap)
+  for d in _MotorOctScr.SEEK_DIRECTIONS:
+    var c: Vector3 = d as Vector3
+    if c.length_squared() < 1e-12:
+      continue
+    if c.dot(corner_in) < 0.35:
+      continue
+    var dup := false
+    for existing in candidates:
+      if (existing as Vector3).dot(c) > 0.92:
+        dup = true
+        break
+    if not dup:
+      candidates.append(c)
+  var best_d := Vector3.ZERO
+  var best_score := -INF
+  for cand_v in candidates:
+    var c: Vector3 = cand_v as Vector3
+    if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
+      creature_pos, he_xy, c, static_obs, min_clr, motor_p
+    ):
+      continue
+    var probe := creature_pos + c * step
+    if not _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max):
+      continue
+    var probe_edge := _footprint_edge_margin(probe, he_xy, bounds_min, bounds_max)
+    if probe_edge <= cur_edge + 0.15:
+      continue
+    var score := (probe_edge - cur_edge) * 5.0 + c.dot(corner_in) * 32.0
+    score += float((body_id + int(c.x * 10.0) + int(c.z * 10.0)) % 7) * 0.01
+    if score > best_score:
+      best_score = score
+      best_d = c
+  return best_d
+
+
+## True when no-goal patrol net displacement stayed within a coverage cell for half the stall window.
+func _predator_patrol_coverage_stall_active(
+  body_id: int, pos: Vector3, motor_p: Dictionary
+) -> bool:
+  var rec_v: Variant = _predator_patrol_anchor_by_body.get(body_id, null)
+  if typeof(rec_v) != TYPE_DICTIONARY:
+    return false
+  var rec: Dictionary = rec_v
+  var anchor: Vector3 = rec.get("pos", pos) as Vector3
+  var since_tick := int(rec.get("since_tick", _physics_ticks))
+  var window := maxi(24, int(motor_p.get("predator_patrol_stall_window_ticks", 60)))
+  var radius := maxf(2.0, float(motor_p.get("explore_coverage_cell", 52.0)) * 0.65)
+  if pos.distance_to(anchor) > radius:
+    return false
+  return (_physics_ticks - since_tick) >= maxi(12, window >> 1)
+
+
+## Updates patrol displacement anchor for [_predator_patrol_coverage_stall_active].
+func _predator_update_patrol_coverage_anchor(
+  body_id: int, pos: Vector3, motor_p: Dictionary
+) -> void:
+  var window := maxi(24, int(motor_p.get("predator_patrol_stall_window_ticks", 60)))
+  var radius := maxf(2.0, float(motor_p.get("explore_coverage_cell", 52.0)) * 0.65)
+  var rec_v: Variant = _predator_patrol_anchor_by_body.get(body_id, null)
+  if typeof(rec_v) != TYPE_DICTIONARY:
+    _predator_patrol_anchor_by_body[body_id] = {"pos": pos, "since_tick": _physics_ticks}
+    return
+  var rec: Dictionary = rec_v
+  var anchor: Vector3 = rec.get("pos", pos) as Vector3
+  if pos.distance_to(anchor) > radius:
+    _predator_patrol_anchor_by_body[body_id] = {"pos": pos, "since_tick": _physics_ticks}
+    return
+  var since_tick := int(rec.get("since_tick", _physics_ticks))
+  if _physics_ticks - since_tick > window:
+    _predator_patrol_anchor_by_body[body_id] = {"pos": pos, "since_tick": _physics_ticks}
+
+
+## Picks an inward peel heading off east/west playfield rims (increases edge margin toward interior).
+func _predator_pick_rim_peel_cardinal(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  motor_p: Dictionary,
+  body_id: int = 0,
+) -> Vector3:
+  var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  if not bool(info.get("valid", false)) or bool(info.get("is_corner", false)):
+    return Vector3.ZERO
+  var wall_inward: Vector3 = info.get("wall_inward", Vector3.ZERO) as Vector3
+  if wall_inward.length_squared() < 1e-12:
+    return Vector3.ZERO
+  var inward_u := wall_inward.normalized()
+  if absf(inward_u.x) <= absf(inward_u.z):
+    return Vector3.ZERO
+  var step := _motor_rim_probe_step(creature_pos, he_xy, motor_p, bounds_min, bounds_max)
+  var cur_edge := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center_u := Vector3.ZERO
+  var to_center := Vector3(center.x, 0.0, center.y) - creature_pos
+  if to_center.length_squared() > 1e-12:
+    toward_center_u = to_center.normalized()
+  var peel_min_gain := float(motor_p.get("predator_patrol_rim_peel_min_gain", 0.35))
+  var rng := RandomNumberGenerator.new()
+  rng.seed = maxi(1, absi(body_id ^ _duel_motor_round_salt ^ _physics_ticks))
+  var best_d := Vector3.ZERO
+  var best_score := -INF
+  for cand_v in _MotorOctScr.SEEK_DIRECTIONS:
+    if typeof(cand_v) != TYPE_VECTOR3:
+      continue
+    var c := cand_v as Vector3
+    if c.length_squared() < 1e-12:
+      continue
+    var c_u := c.normalized()
+    if c_u.dot(inward_u) < 0.12:
+      continue
+    if not static_obs.is_empty() and _cardinal_step_blocked_for_edge_slide(
+      creature_pos, he_xy, c_u, static_obs, motor_p
+    ):
+      continue
+    var probe := creature_pos + c_u * step
+    if not _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max):
+      continue
+    var probe_edge := _footprint_edge_margin(probe, he_xy, bounds_min, bounds_max)
+    var edge_gain := probe_edge - cur_edge
+    if edge_gain < peel_min_gain:
+      continue
+    var score := edge_gain * 36.0 + c_u.dot(inward_u) * 42.0
+    if toward_center_u.length_squared() > 1e-12:
+      score += c_u.dot(toward_center_u) * 18.0
+    if not static_obs.is_empty():
+      var cl := float(_static_obstacle_slip_info(probe, he_xy, static_obs).get("clearance", 0.0))
+      score += maxf(0.0, cl) * 0.08
+    score += rng.randf_range(-0.35, 0.35)
+    if score > best_score:
+      best_score = score
+      best_d = c_u
+  return best_d
 
 
 ## Relaxed static probe for sliding along perimeter rocks (no near-step tighten).
@@ -1993,7 +2241,15 @@ func _cardinal_step_blocked_for_edge_slide(
   if static_obs.is_empty():
     return false
   var min_clr := float(motor_p.get("predator_edge_slide_min_clearance", 2.0))
-  return _cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clr)
+  return _cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clr, motor_p)
+
+
+func _motor_stuck_interior_edge_threshold(motor_p: Dictionary) -> float:
+  if motor_p.has("motor_stuck_interior_edge_threshold"):
+    return float(motor_p.get("motor_stuck_interior_edge_threshold", 0.0))
+  var edge_band := float(motor_p.get("predator_chase_edge_band", 110.0))
+  var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  return maxf(corner_band * 1.2, edge_band * 0.55)
 
 
 ## Picks a wall-tangent cardinal; skips axes in [param exclude_axes].
@@ -2011,22 +2267,46 @@ func _predator_pick_edge_tangent_cardinal(
   var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
   if not bool(info.get("valid", false)):
     return Vector3.ZERO
+  if bool(info.get("is_corner", false)):
+    var corner_esc := _pick_playfield_corner_interior_cardinal(
+      creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p, body_id
+    )
+    if corner_esc.length_squared() > 1e-12:
+      return corner_esc
   var wall_inward: Vector3 = info.get("wall_inward", Vector3.ZERO) as Vector3
-  var tangents: Array = [info.get("tangent_a"), info.get("tangent_b")]
   var axis_block: Array = exclude_axes.duplicate()
   if wall_inward.length_squared() > 1e-12:
-    axis_block.append(wall_inward)
-    axis_block.append(-wall_inward)
-  var step := _motor_cardinal_probe_step(he_xy)
-  var best_d := Vector3.ZERO
+    var inward_u := wall_inward.normalized()
+    axis_block.append(inward_u)
+    axis_block.append(-inward_u)
+  var step := _motor_rim_probe_step(creature_pos, he_xy, motor_p, bounds_min, bounds_max)
+  var cur_edge := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center_u := Vector3.ZERO
+  var to_center := Vector3(center.x, 0.0, center.y) - creature_pos
+  if to_center.length_squared() > 1e-12:
+    toward_center_u = to_center.normalized()
+  var prefer_u := prefer_tangent.normalized() if prefer_tangent.length_squared() > 1e-12 else Vector3.ZERO
+  var patrol_mode := exclude_axes.is_empty() and prefer_tangent.length_squared() < 1e-12
+  var exclude_axis_dot := 0.85
+  var tangent_a: Vector3 = info.get("tangent_a", Vector3.ZERO) as Vector3
+  var tangent_b: Vector3 = info.get("tangent_b", Vector3.ZERO) as Vector3
+  var ta_u := tangent_a.normalized() if tangent_a.length_squared() > 1e-12 else Vector3.ZERO
+  var tb_u := tangent_b.normalized() if tangent_b.length_squared() > 1e-12 else Vector3.ZERO
   var best_score := -INF
-  for tangent_v in tangents:
-    if typeof(tangent_v) != TYPE_VECTOR3:
+  var eps := 0.35
+  var best_dirs: Array[Vector3] = []
+  var best_dirs_all_pure_tangent := true
+  var diagonal_pool: Array[Vector3] = []
+  var rng := RandomNumberGenerator.new()
+  rng.seed = maxi(1, absi(body_id ^ _duel_motor_round_salt ^ _physics_ticks))
+  for cand_v in _MotorOctScr.SEEK_DIRECTIONS:
+    if typeof(cand_v) != TYPE_VECTOR3:
       continue
-    var tan_v := tangent_v as Vector3
-    if tan_v.length_squared() < 1e-12:
+    var c := cand_v as Vector3
+    if c.length_squared() < 1e-12:
       continue
-    var tan_u: Vector3 = tan_v.normalized()
+    var c_u := c.normalized()
     var skip_axis := false
     for ex_v in axis_block:
       if typeof(ex_v) != TYPE_VECTOR3:
@@ -2034,25 +2314,84 @@ func _predator_pick_edge_tangent_cardinal(
       var ex_u := (ex_v as Vector3).normalized()
       if ex_u.length_squared() < 1e-12:
         continue
-      if absf(tan_u.dot(ex_u)) > 0.85:
+      if absf(c_u.dot(ex_u)) > exclude_axis_dot:
         skip_axis = true
         break
     if skip_axis:
       continue
-    if _cardinal_step_blocked_for_edge_slide(creature_pos, he_xy, tan_u, static_obs, motor_p):
+    var inward_dot := c_u.dot(wall_inward.normalized())
+    var slide_score := maxf(
+      absf(c_u.dot(ta_u)) if ta_u.length_squared() > 1e-12 else 0.0,
+      absf(c_u.dot(tb_u)) if tb_u.length_squared() > 1e-12 else 0.0,
+    )
+    if not bool(info.get("is_corner", false)) and inward_dot > 0.5 and slide_score < 0.85:
+      var probe_pos_peel: Vector3 = creature_pos + c_u * step
+      if not _footprint_in_bounds(probe_pos_peel, he_xy, bounds_min, bounds_max):
+        continue
+      var peel_edge := _footprint_edge_margin(probe_pos_peel, he_xy, bounds_min, bounds_max)
+      if peel_edge <= cur_edge + 0.35:
+        continue
+    var is_diagonal := bool(Callable(_MotorOctScr, &"is_diagonal").call(c_u))
+    var along_wall := slide_score > 0.32
+    if is_diagonal and along_wall:
+      diagonal_pool.append(c_u)
+    var pure_tangent := slide_score > 0.92
+    if inward_dot < -0.18 and not (is_diagonal and along_wall):
       continue
-    var probe_pos: Vector3 = creature_pos + tan_u * step
+    if _cardinal_step_blocked_for_edge_slide(creature_pos, he_xy, c_u, static_obs, motor_p):
+      continue
+    var probe_pos: Vector3 = creature_pos + c_u * step
     if not _footprint_in_bounds(probe_pos, he_xy, bounds_min, bounds_max):
       continue
+    var probe_edge := _footprint_edge_margin(probe_pos, he_xy, bounds_min, bounds_max)
     var cl := float(_static_obstacle_slip_info(probe_pos, he_xy, static_obs).get("clearance", 0.0))
-    var score := cl
-    if prefer_tangent.length_squared() > 1e-12:
-      score += tan_u.dot(prefer_tangent.normalized()) * 48.0
-    score += float((body_id + int(tan_u.x * 10.0) + int(tan_u.z * 10.0)) % 7) * 0.01
-    if score > best_score:
+    var score := maxf(0.0, cl) * 0.05 + maxf(0.0, probe_edge - cur_edge) * 4.0
+    if slide_score > 0.92:
+      score += 48.0
+    if is_diagonal and slide_score > 0.32:
+      score += 28.0
+    if inward_dot > 0.32 and slide_score < 0.5:
+      score += 16.0
+    if prefer_u.length_squared() > 1e-12:
+      score += c_u.dot(prefer_u) * 14.0
+    if patrol_mode and toward_center_u.length_squared() > 1e-12:
+      score += c_u.dot(toward_center_u) * 16.0
+    if patrol_mode:
+      score += rng.randf_range(-0.45, 0.45)
+    if score > best_score + eps:
       best_score = score
-      best_d = tan_u
-  return best_d
+      best_dirs.clear()
+      best_dirs.append(c_u)
+      best_dirs_all_pure_tangent = pure_tangent
+    elif absf(score - best_score) <= eps:
+      best_dirs.append(c_u)
+      best_dirs_all_pure_tangent = best_dirs_all_pure_tangent and pure_tangent
+  if best_dirs.is_empty():
+    return Vector3.ZERO
+  if patrol_mode and best_dirs_all_pure_tangent and not diagonal_pool.is_empty():
+    var best_u := best_dirs[0]
+    var best_is_lateral := absf(best_u.x) > absf(best_u.z)
+    var inward_u := wall_inward.normalized() if wall_inward.length_squared() > 1e-12 else Vector3.ZERO
+    for diag_v in diagonal_pool:
+      var diag_u := (diag_v as Vector3).normalized()
+      if inward_u.length_squared() > 1e-12:
+        var peel := diag_u.dot(inward_u)
+        if peel > 0.55 or peel < -0.85:
+          continue
+      if best_is_lateral and absf(diag_u.z) > 0.45:
+        continue
+      var dup := false
+      for existing in best_dirs:
+        if (existing as Vector3).dot(diag_u) > 0.98:
+          dup = true
+          break
+      if not dup:
+        best_dirs.append(diag_u)
+  if best_dirs.size() == 1:
+    return best_dirs[0]
+  if not patrol_mode:
+    return best_dirs[0]
+  return best_dirs[rng.randi_range(0, best_dirs.size() - 1)]
 
 
 ## Latched lateral escape for carnivore edge pinches (wall/boulder corridor).
@@ -2106,6 +2445,21 @@ func _predator_edge_pinch_escape_intent(
     body_id,
   )
   if pick.length_squared() < 1e-12:
+    pick = _pick_stuck_escape_cardinal(
+      creature_pos,
+      he_xy,
+      static_obs,
+      body_id,
+      maxi(1, _stuck_n),
+      motor_p,
+      bounds_min,
+      bounds_max,
+      prefer_tangent,
+    )
+    if pick.length_squared() > 1e-12 and exclude_axis.length_squared() > 1e-12:
+      if absf(pick.normalized().dot(exclude_axis.normalized())) > 0.85:
+        pick = Vector3.ZERO
+  if pick.length_squared() < 1e-12:
     return Vector3.ZERO
   _geometry_escape_lock_by_body[body_id] = {
     "dir": pick,
@@ -2124,6 +2478,7 @@ func _predator_patrol_edge_expand_hint(
   motor_p: Dictionary,
   current_hint: Vector3,
   pinch_active: bool = false,
+  body_id: int = 0,
 ) -> Vector3:
   if not _playfield_bounds_valid(bounds_min, bounds_max):
     return Vector3.ZERO
@@ -2134,7 +2489,21 @@ func _predator_patrol_edge_expand_hint(
   var info: Dictionary = _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
   if not bool(info.get("valid", false)):
     return Vector3.ZERO
+  if bool(info.get("is_corner", false)):
+    var corner_hint := _pick_playfield_corner_interior_cardinal(
+      creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p, body_id
+    )
+    if corner_hint.length_squared() > 1e-12:
+      return corner_hint
   var wall_inward: Vector3 = info.get("wall_inward", Vector3.ZERO) as Vector3
+  if wall_inward.length_squared() > 1e-12:
+    var inward_u := wall_inward.normalized()
+    if absf(inward_u.x) > absf(inward_u.z):
+      var peel := _predator_pick_rim_peel_cardinal(
+        creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p, body_id
+      )
+      if peel.length_squared() > 1e-12:
+        return peel
   var prefer_slide := Vector3.ZERO
   if current_hint.length_squared() > 1e-12:
     var hint_u := current_hint.normalized()
@@ -2149,23 +2518,75 @@ func _predator_patrol_edge_expand_hint(
     motor_p,
     [],
     prefer_slide,
-    0,
+    body_id,
   )
   if tangent.length_squared() > 1e-12:
     return tangent
+  if not bool(info.get("is_corner", false)):
+    var ta: Vector3 = info.get("tangent_a", Vector3.ZERO) as Vector3
+    var tb: Vector3 = info.get("tangent_b", Vector3.ZERO) as Vector3
+    for tan_v in [ta, tb]:
+      if typeof(tan_v) == TYPE_VECTOR3 and (tan_v as Vector3).length_squared() > 1e-12:
+        var tan_u := (tan_v as Vector3).normalized()
+        if not _cardinal_step_blocked_for_edge_slide(creature_pos, he_xy, tan_u, static_obs, motor_p):
+          return tan_u
+    return Vector3.ZERO if pinch_active else Vector3.ZERO
   if pinch_active:
     return Vector3.ZERO
-  var center := (bounds_min + bounds_max) * 0.5
-  var toward_center := Vector3(center.x, 0.0, center.y) - creature_pos
-  var interior_hint := _snap_seek_direction_v3(toward_center)
-  if interior_hint.length_squared() < 1e-12:
-    return Vector3.ZERO
-  var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
-  if static_obs.is_empty() or not _cardinal_step_blocked_for_escape(
-    creature_pos, he_xy, interior_hint, static_obs, min_clr
-  ):
-    return interior_hint
+  if bool(info.get("is_corner", false)):
+    var center := (bounds_min + bounds_max) * 0.5
+    var toward_center := Vector3(center.x, 0.0, center.y) - creature_pos
+    var interior_hint := _snap_seek_direction_v3(toward_center)
+    if interior_hint.length_squared() < 1e-12:
+      return Vector3.ZERO
+    var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+    if static_obs.is_empty() or not _cardinal_step_blocked_for_escape(
+      creature_pos, he_xy, interior_hint, static_obs, min_clr
+    ):
+      return interior_hint
   return Vector3.ZERO
+
+
+func _predator_interior_patrol_stall_escape_intent(
+  body_id: int,
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  static_obs: Array,
+  stuck_n: int,
+  motor_p: Dictionary,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+  patrol_state: Dictionary,
+) -> Vector3:
+  var prefer_dir := Vector3.ZERO
+  if _predator_patrol_coverage_stall_active(body_id, creature_pos, motor_p):
+    if _playfield_bounds_valid(bounds_min, bounds_max):
+      var center := (bounds_min + bounds_max) * 0.5
+      prefer_dir = _snap_seek_direction_v3(
+        Vector3(center.x, 0.0, center.y) - creature_pos
+      )
+  if prefer_dir.length_squared() < 1e-12:
+    var locked_heading := Vector3.ZERO
+    if typeof(patrol_state.get("locked_intent", null)) == TYPE_VECTOR3:
+      locked_heading = patrol_state.get("locked_intent", Vector3.ZERO) as Vector3
+    if locked_heading.length_squared() > 1e-12:
+      var h_u := locked_heading.normalized()
+      var lat_a := Vector3(-h_u.z, 0.0, h_u.x)
+      var lat_b := -lat_a
+      var center := (bounds_min + bounds_max) * 0.5
+      var toward_center := Vector3(center.x, 0.0, center.y) - creature_pos
+      prefer_dir = lat_a if lat_a.dot(toward_center) >= lat_b.dot(toward_center) else lat_b
+  return _latched_stuck_escape_intent(
+    body_id,
+    creature_pos,
+    he_xy,
+    static_obs,
+    maxi(1, stuck_n),
+    motor_p,
+    bounds_min,
+    bounds_max,
+    prefer_dir,
+  )
 
 
 ## Rate-limited OLog for predator pinch / pacing-trap diagnosis ([code]predator_pinch_debug_log[/code] pack flag).
@@ -2180,7 +2601,7 @@ func _predator_pinch_debug_log(
   if _physics_ticks - last < interval:
     return
   _predator_pinch_debug_last_by_body[key] = _physics_ticks
-  OLog.debug(msg, false, "CREATURE_GOALS")
+  _OLogSafe.info(msg, false, "CREATURE_GOALS")
 
 
 ## True when [param cardinal] re-enters a remembered pinch and another escape heading exists.
@@ -2213,7 +2634,7 @@ func _stuck_escape_should_skip_backtrack(
     dot,
     creature_pos,
     he_xy,
-    _motor_cardinal_probe_step(he_xy),
+    _motor_cardinal_probe_step(he_xy, motor_p),
     static_obs,
     bounds_min,
     bounds_max,
@@ -2341,22 +2762,31 @@ func _predator_pacing_trap_active(
   motor_p: Dictionary,
 ) -> bool:
   var edge_active := false
-  if _playfield_bounds_valid(bounds_min, bounds_max):
-    var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  var edge_info := _playfield_wall_edge_info(creature_pos, he_xy, bounds_min, bounds_max)
+  var is_corner_edge := bool(edge_info.get("is_corner", false))
+  if bool(edge_info.get("is_corner", false)):
+    edge_active = true
+  elif _playfield_bounds_valid(bounds_min, bounds_max):
     edge_active = _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) < corner_band
   if stuck_n < 1 and not edge_active:
     return false
   if incumbent.length_squared() < 1e-12 or computed.length_squared() < 1e-12:
     return false
-  if incumbent.dot(computed) >= -0.15:
-    return false
   var prev_v: Variant = _predator_prev_intent_by_body.get(body_id, null)
   _predator_prev_intent_by_body[body_id] = incumbent
+  if is_corner_edge:
+    if incumbent.dot(computed) > 0.35:
+      return false
+  elif incumbent.dot(computed) >= -0.15:
+    return false
   if typeof(prev_v) != TYPE_VECTOR3:
     return false
   var prev := prev_v as Vector3
   if prev.length_squared() < 1e-12:
     return false
+  if is_corner_edge:
+    return prev.dot(incumbent) < 0.35
   return prev.dot(incumbent) < -0.85
 
 
@@ -2372,22 +2802,98 @@ func _predator_pacing_trap_break_intent(
   bounds_max: Vector2,
   oscillation_axis: Vector3,
 ) -> Vector3:
+  var edge_info: Dictionary = _playfield_wall_edge_info(
+    creature_pos, he_xy, bounds_min, bounds_max
+  )
+  var esc := Vector3.ZERO
+  if (
+    bool(edge_info.get("is_corner", false))
+    or _creature_playfield_corner_hugging(creature_pos, he_xy, bounds_min, bounds_max, motor_p)
+  ):
+    var corner_esc := _predator_latched_corner_escape_intent(
+      body_id, creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p
+    )
+    if corner_esc.length_squared() > 1e-12:
+      esc = corner_esc
+    elif corner_esc.length_squared() < 1e-12:
+      corner_esc = _pick_playfield_corner_interior_cardinal(
+      creature_pos, he_xy, static_obs, bounds_min, bounds_max, motor_p, body_id
+    )
+      if corner_esc.length_squared() > 1e-12:
+        esc = corner_esc
   var prefer := Vector3.ZERO
   if oscillation_axis.length_squared() > 1e-12:
     var ax := oscillation_axis.normalized()
     prefer = Vector3(-ax.z, 0.0, ax.x)
-  return _predator_edge_pinch_escape_intent(
-    body_id,
-    creature_pos,
-    he_xy,
-    static_obs,
-    stuck_n,
-    motor_p,
-    bounds_min,
-    bounds_max,
-    oscillation_axis,
-    prefer,
-  )
+  if esc.length_squared() < 1e-12:
+    esc = _predator_edge_pinch_escape_intent(
+      body_id,
+      creature_pos,
+      he_xy,
+      static_obs,
+      stuck_n,
+      motor_p,
+      bounds_min,
+      bounds_max,
+      oscillation_axis,
+      prefer,
+    )
+  if (
+    esc.length_squared() > 1e-12
+    and oscillation_axis.length_squared() > 1e-12
+    and absf(esc.normalized().dot(oscillation_axis.normalized())) >= 0.35
+  ):
+    var lateral := prefer
+    if lateral.length_squared() > 1e-12:
+      esc = _pick_stuck_escape_preferring(
+        creature_pos, he_xy, static_obs, body_id, stuck_n, lateral, motor_p
+      )
+      if (
+        esc.length_squared() < 1e-12
+        or absf(esc.normalized().dot(oscillation_axis.normalized())) >= 0.35
+      ):
+        esc = _pick_stuck_escape_preferring(
+          creature_pos, he_xy, static_obs, body_id, stuck_n, -lateral, motor_p
+        )
+    if (
+      esc.length_squared() < 1e-12
+      or absf(esc.normalized().dot(oscillation_axis.normalized())) >= 0.35
+    ):
+      esc = _pick_stuck_escape_cardinal(
+        creature_pos,
+        he_xy,
+        static_obs,
+        body_id,
+        stuck_n,
+        motor_p,
+        bounds_min,
+        bounds_max,
+        lateral,
+      )
+    if (
+      lateral.length_squared() > 1e-12
+      and (
+        esc.length_squared() < 1e-12
+        or absf(esc.normalized().dot(oscillation_axis.normalized())) >= 0.35
+      )
+    ):
+      var step := _motor_cardinal_probe_step(he_xy, motor_p)
+      var lateral_u := lateral.normalized()
+      var lateral_options: Array[Vector3] = [lateral_u, -lateral_u]
+      for cand in lateral_options:
+        if _cardinal_step_blocked_for_edge_slide(creature_pos, he_xy, cand, static_obs, motor_p):
+          continue
+        var probe := creature_pos + cand * step
+        if not _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max):
+          continue
+        esc = cand
+        break
+      if (
+        esc.length_squared() < 1e-12
+        or absf(esc.normalized().dot(oscillation_axis.normalized())) >= 0.35
+      ):
+        esc = lateral_u
+  return esc
 
 
 ## Sets nav detour goal on [param ctx] when patrol is stuck without an active seek target.
@@ -3171,8 +3677,26 @@ func _creature_geometry_pinched(
 
 
 ## Lookahead distance for cardinal static probes (patrol block test, stuck escape).
-static func _motor_cardinal_probe_step(he_xy: Vector2) -> float:
-  return _MOTOR.motor_cardinal_probe_step(he_xy)
+static func _motor_cardinal_probe_step(he_xy: Vector2, motor_p: Dictionary = {}) -> float:
+  var probe_min := float(motor_p.get("motor_cardinal_probe_min", 40.0))
+  return _MOTOR.motor_cardinal_probe_step(he_xy, probe_min)
+
+
+## Caps cardinal probe distance for rim/corner picks on finite playfields.
+func _motor_rim_probe_step(
+  creature_pos: Vector3,
+  he_xy: Vector2,
+  motor_p: Dictionary,
+  bounds_min: Vector2,
+  bounds_max: Vector2,
+) -> float:
+  var raw := _motor_cardinal_probe_step(he_xy, motor_p)
+  if not _playfield_bounds_valid(bounds_min, bounds_max):
+    return raw
+  var span := minf(bounds_max.x - bounds_min.x, bounds_max.y - bounds_min.y)
+  var edge_m := _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+  var cap := clampf(maxf(edge_m * 3.5 + 6.0, 8.0), 8.0, span * 0.15)
+  return minf(raw, cap)
 
 
 func _terrain_sampler_from_main() -> _GroundSampler:
@@ -3241,14 +3765,14 @@ func _pick_terrain_uphill_escape_cardinal(
   var dep: float = sampler.call(&"local_depression_score", xz)
   if dep < float(motor_p.get("terrain_depression_threshold_m", 0.5)):
     return Vector3.ZERO
-  var step := _motor_cardinal_probe_step(he_xy)
+  var step := _motor_cardinal_probe_step(he_xy, motor_p)
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
   var cur_y: float = sampler.call(&"sample_elevation", xz, creature_pos.y)
   var best_d := Vector3.ZERO
   var best_score := -INF
   for c: Vector3 in _MotorOctScr.SEEK_DIRECTIONS:
     if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
-      creature_pos, he_xy, c, static_obs, min_clr
+      creature_pos, he_xy, c, static_obs, min_clr, motor_p
     ):
       continue
     if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
@@ -3268,9 +3792,11 @@ static func _cardinal_step_blocked(
   direction: Variant,
   static_obs: Array,
   min_clearance: float,
+  motor_p: Dictionary = {},
 ) -> bool:
+  var probe_min := float(motor_p.get("motor_cardinal_probe_min", 40.0))
   return _MOTOR.cardinal_step_blocked(
-    MotorPlane.read_pos(creature_pos), he_xy, MotorPlane.read_dir(direction), static_obs, min_clearance
+    MotorPlane.read_pos(creature_pos), he_xy, MotorPlane.read_dir(direction), static_obs, min_clearance, probe_min
   )
 
 
@@ -3281,9 +3807,18 @@ static func _cardinal_step_blocked_for_escape(
   direction: Variant,
   static_obs: Array,
   min_clearance: float,
+  motor_p: Dictionary = {},
 ) -> bool:
+  var probe_min := float(motor_p.get("motor_cardinal_probe_min", 40.0))
+  var near_probe_min := float(motor_p.get("motor_cardinal_near_probe_min", 10.0))
   return _MOTOR.cardinal_step_blocked_for_escape(
-    MotorPlane.read_pos(creature_pos), he_xy, MotorPlane.read_dir(direction), static_obs, min_clearance
+    MotorPlane.read_pos(creature_pos),
+    he_xy,
+    MotorPlane.read_dir(direction),
+    static_obs,
+    min_clearance,
+    probe_min,
+    near_probe_min,
   )
 
 
@@ -3310,7 +3845,7 @@ func _pick_stuck_escape_cardinal(
   prefer_dir: Vector3 = Vector3.ZERO,
 ) -> Vector3:
   var escape_dirs: Array = _MotorOctScr.SEEK_DIRECTIONS
-  var step := _motor_cardinal_probe_step(he_xy)
+  var step := _motor_cardinal_probe_step(he_xy, motor_p)
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
   var phase := maxi(0, stuck_n) >> 3
   var start_i := (body_id + phase) % escape_dirs.size()
@@ -3318,6 +3853,12 @@ func _pick_stuck_escape_cardinal(
   var cur_edge := (
     _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) if use_bounds else 0.0
   )
+  var interior_edge_threshold := _motor_stuck_interior_edge_threshold(motor_p)
+  var toward_center_u := Vector3.ZERO
+  if use_bounds:
+    var center := (bounds_min + bounds_max) * 0.5
+    toward_center_u = _snap_seek_direction_v3(Vector3(center.x, 0.0, center.y) - creature_pos)
+  var prefer_u := prefer_dir.normalized() if prefer_dir.length_squared() > 1e-12 else Vector3.ZERO
   var best_d := Vector3.ZERO
   var best_score := -INF
   var refs := _terrain_escape_refs(body_id)
@@ -3339,7 +3880,7 @@ func _pick_stuck_escape_cardinal(
     ):
       continue
     if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
-      creature_pos, he_xy, c, static_obs, min_clr
+      creature_pos, he_xy, c, static_obs, min_clr, motor_p
     ):
       continue
     if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
@@ -3359,9 +3900,16 @@ func _pick_stuck_escape_cardinal(
       score += _TerrainMotor.elevation_escape_score(terrain_cur_y, probe_y, terrain_dep, motor_p)
     if use_bounds:
       var probe_edge := _footprint_edge_margin(probe_pos, he_xy, bounds_min, bounds_max)
-      score = (probe_edge - cur_edge) * 3.0 + cl * 0.25
-      if probe_edge <= cur_edge + 0.75:
-        continue
+      if cur_edge >= interior_edge_threshold:
+        var toward_dot := c.dot(toward_center_u) if toward_center_u.length_squared() > 1e-12 else 0.0
+        var lateral_break := (
+          1.0 - absf(c.dot(prefer_u)) if prefer_u.length_squared() > 1e-12 else 0.0
+        )
+        score = cl * 2.5 + toward_dot * 32.0 + lateral_break * 10.0
+      else:
+        score = (probe_edge - cur_edge) * 3.0 + cl * 0.25
+        if probe_edge <= cur_edge + 0.75:
+          continue
     if score > best_score:
       best_score = score
       best_d = c
@@ -3376,7 +3924,7 @@ func _pick_stuck_escape_cardinal(
         c_rel, body_id, motor_p, creature_pos, he_xy, static_obs, bounds_min, bounds_max, prefer_dir
       ):
         continue
-      if _cardinal_step_blocked_for_escape(creature_pos, he_xy, c_rel, static_obs, min_clr):
+      if _cardinal_step_blocked_for_escape(creature_pos, he_xy, c_rel, static_obs, min_clr, motor_p):
         continue
       if _terrain_cardinal_blocked(creature_pos, c_rel, step, body_id):
         continue
@@ -3420,7 +3968,7 @@ func _pick_stuck_escape_preferring(
     return _pick_stuck_escape_cardinal(creature_pos, he_xy, static_obs, body_id, stuck_n, motor_p)
   var prefer_u := prefer_dir.normalized()
   var escape_dirs: Array = _MotorOctScr.SEEK_DIRECTIONS
-  var step := _motor_cardinal_probe_step(he_xy)
+  var step := _motor_cardinal_probe_step(he_xy, motor_p)
   var min_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
   var phase := maxi(0, stuck_n) >> 3
   var start_i := (body_id + phase) % escape_dirs.size()
@@ -3433,7 +3981,7 @@ func _pick_stuck_escape_preferring(
     ):
       continue
     if not static_obs.is_empty() and _cardinal_step_blocked_for_escape(
-      creature_pos, he_xy, c, static_obs, min_clr
+      creature_pos, he_xy, c, static_obs, min_clr, motor_p
     ):
       continue
     if _terrain_cardinal_blocked(creature_pos, c, step, body_id):
@@ -3462,9 +4010,15 @@ func _latched_stuck_escape_intent(
 ) -> Vector3:
   var lock_ticks := maxi(6, int(motor_p.get("geometry_escape_lock_ticks", 14)))
   var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  var interior_threshold := _motor_stuck_interior_edge_threshold(motor_p)
+  var cur_edge := (
+    _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max)
+    if _playfield_bounds_valid(bounds_min, bounds_max)
+    else 0.0
+  )
   if (
     _playfield_bounds_valid(bounds_min, bounds_max)
-    and _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) < corner_band
+    and cur_edge < corner_band
   ):
     lock_ticks = maxi(3, lock_ticks >> 1)
   var rec_v: Variant = _geometry_escape_lock_by_body.get(body_id, null)
@@ -3481,15 +4035,16 @@ func _latched_stuck_escape_intent(
         )
         if not lock_blocked:
           if _playfield_bounds_valid(bounds_min, bounds_max):
-            var step := _motor_cardinal_probe_step(he_xy)
+            var step := _motor_cardinal_probe_step(he_xy, motor_p)
             var probe := creature_pos + (locked as Vector3) * step
             if not _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max):
               pass
-            elif _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) < corner_band:
+            elif cur_edge >= interior_threshold:
+              return locked as Vector3
+            elif cur_edge < corner_band:
               return locked as Vector3
             elif (
-              _footprint_edge_margin(probe, he_xy, bounds_min, bounds_max)
-              > _footprint_edge_margin(creature_pos, he_xy, bounds_min, bounds_max) + 0.5
+              _footprint_edge_margin(probe, he_xy, bounds_min, bounds_max) > cur_edge + 0.5
             ):
               return locked as Vector3
           else:
@@ -3550,7 +4105,7 @@ func _playfield_corner_unstick_intent(
     if _cardinal_step_blocked(creature_pos, he_xy, raw_intent, static_obs, min_clr):
       needs_escape = true
     else:
-      var step := _motor_cardinal_probe_step(he_xy)
+      var step := _motor_cardinal_probe_step(he_xy, motor_p)
       var probe := creature_pos + raw_intent.normalized() * step
       if not _footprint_in_bounds(probe, he_xy, bounds_min, bounds_max):
         needs_escape = true
@@ -3910,7 +4465,7 @@ func _predator_chase_toward_prey_blocked(
   return false
 
 
-## True when live prey is visible but static geometry blocks the direct chase toward prey.
+## True when live or remembered prey is targeted but static geometry blocks the direct chase.
 func _predator_obstructed_hunt_active(
   ctx: Dictionary,
   motor_p: Dictionary,
@@ -3918,7 +4473,7 @@ func _predator_obstructed_hunt_active(
   he: Vector2,
   stuck_n: int,
 ) -> bool:
-  if not _predator_hunt_active_in_ctx(ctx):
+  if not _predator_hunt_active_in_ctx(ctx) and not bool(ctx.get("predator_lost_visual", false)):
     return false
   var prey_pos := _nearest_prey_pos_from_ctx(creature_pos, ctx)
   if prey_pos == Vector3.ZERO:
@@ -4781,12 +5336,29 @@ func _build_motor_context(
   var is_predator_body := supports_prey_hunt
   var prey_pts: Array = motor_targets.get("prey_positions", []) as Array
   var pursuit_targets: Array = motor_targets.get("pursuit_targets", []) as Array
-  if is_predator_body and not prey_pts.is_empty():
-    var bid_eng := body.get_instance_id()
+  var bid_eng := body.get_instance_id()
+  var prey_live_now := is_predator_body and not prey_pts.is_empty()
+  if prey_live_now:
     var latch_ticks := maxi(8, int(motor_p.get("predator_prey_engagement_latch_ticks", 36)))
-    _predator_prey_engagement_until_tick_by_id[bid_eng] = _physics_ticks + latch_ticks
-  var prey_visible_in_awareness := is_predator_body and not prey_pts.is_empty()
+    _GoalVisLatch.record_engagement(
+      _predator_prey_engagement_by_body, bid_eng, _physics_ticks, latch_ticks, prey_pts
+    )
   var prey_pts_live: Array = prey_pts.duplicate()
+  var prey_engagement_latched := (
+    is_predator_body
+    and _GoalVisLatch.merge_engagement_positions(
+      _predator_prey_engagement_by_body, bid_eng, _physics_ticks, prey_pts_live
+    )
+  )
+  var prey_visible_streak_ok := false
+  if is_predator_body:
+    var vis_latch_ticks := maxi(1, int(motor_p.get("predator_prey_visible_latch_ticks", 6)))
+    prey_visible_streak_ok = _GoalVisLatch.streak_confirmed(
+      _predator_prey_visible_streak_by_body, bid_eng, prey_live_now, vis_latch_ticks
+    )
+  var prey_visible_in_awareness := is_predator_body and (
+    prey_live_now or prey_engagement_latched or prey_visible_streak_ok
+  )
   var predator_memory := {
     "active": false,
     "position": Vector3.ZERO,
@@ -4850,12 +5422,24 @@ func _build_motor_context(
       predator_memory, prey_pts_live, pursuit_targets, motor_p
     )
   var w_seek_prey := 0.0
-  if predator_hunt_motivated and not prey_pts_live.is_empty() and w_seek_prey_base > 0.0:
+  var prey_seek_weight_eligible := (
+    predator_hunt_motivated
+    and w_seek_prey_base > 0.0
+    and (
+      predator_lost_visual
+      or prey_visible_streak_ok
+      or prey_engagement_latched
+    )
+    and not prey_pts_live.is_empty()
+  )
+  if prey_seek_weight_eligible:
     var urg_p := clampf(1.0 - cr, 0.0, 1.0)
     var seek_pull := lerpf(0.28, 1.0, pow(urg_p, 0.85))
     if predator_lost_visual:
       seek_pull *= clampf(float(predator_memory.get("strength", 1.0)), 0.55, 1.0)
       seek_pull *= float(motor_p.get("predator_memory_seek_scale", 0.92))
+    elif prey_engagement_latched and not prey_live_now:
+      seek_pull *= float(motor_p.get("predator_engagement_latch_seek_scale", 0.72))
     w_seek_prey = w_seek_prey_base * seek_pull
   var w_avoid_unready := 0.0
   if not unready_food_targets.is_empty() and w_avoid_unready_base > 0.0 and cr < 0.998:
@@ -4887,7 +5471,9 @@ func _build_motor_context(
   var herbivore_forage_active := (
     body.is_in_group(&"prey") and w_seek > 0.0
   )
-  var predator_has_prey := is_predator_body and w_seek_prey > 0.0
+  var predator_has_prey := is_predator_body and (
+    w_seek_prey > 0.0 or prey_engagement_latched
+  )
   var prey_engaged := predator_has_prey
   var pursuit_urgency := 0.0
   if nearest_adv_dist < INF and ar > 1e-4:
@@ -4897,8 +5483,8 @@ func _build_motor_context(
     pursuit_urgency = maxf(pursuit_urgency, urg_floor)
   var min_blend := float(motor_p.get("exploration_blend_min_when_engaged", 0.28))
   var exploration_blend_multiplier := lerpf(1.0, min_blend, pursuit_urgency)
-  if prey_engaged or herbivore_forage_active:
-    exploration_blend_multiplier = 0.0
+  if herbivore_forage_active:
+    exploration_blend_multiplier = min_blend
   elif not motor_explore_always:
     exploration_blend_multiplier = 1.0 if food_targets.is_empty() else 0.0
   var w_idle_exp_base := float(motor_p.get("weight_explore_idle_penalty", 10.5))
@@ -4919,6 +5505,9 @@ func _build_motor_context(
       w_idle_exp = w_idle_exp_base * urg_curve3
     if w_turn_exp_base > 0.0:
       w_turn_exp = w_turn_exp_base * urg_curve3
+  elif prey_engaged and exploration_blend_multiplier > 1e-6:
+    if w_turn_exp_base > 0.0:
+      w_turn_exp = w_turn_exp_base * exploration_blend_multiplier * urg_curve3
     var w_trail_base := float(motor_p.get("weight_explore_trail_repulsion", 2.35))
     if w_trail_base > 0.0:
       w_trail_rep = w_trail_base * urg_curve3
@@ -5058,8 +5647,19 @@ func _build_motor_context(
     and prey_pts_live.is_empty()
   ):
     var pred_pinch_expand := _predator_geometry_pinch_active(pos, he_xy, geom_aabbs, motor_p)
+    var body_id_pred := body.get_instance_id()
+    if prey_pts_live.is_empty():
+      _predator_update_patrol_coverage_anchor(body_id_pred, pos, motor_p)
     var edge_expand := _predator_patrol_edge_expand_hint(
-      pos, he_xy, geom_aabbs, bounds_min, bounds_max, motor_p, expand_hint, pred_pinch_expand
+      pos,
+      he_xy,
+      geom_aabbs,
+      bounds_min,
+      bounds_max,
+      motor_p,
+      expand_hint,
+      pred_pinch_expand,
+      body_id_pred,
     )
     if edge_expand.length_squared() > 1e-12:
       expand_hint = edge_expand
@@ -5067,6 +5667,37 @@ func _build_motor_context(
         w_expand_hint_out,
         float(motor_p.get("predator_patrol_interior_expand_weight", 9.0)),
       )
+    elif (
+      prey_pts_live.is_empty()
+      and _predator_patrol_coverage_stall_active(body_id_pred, pos, motor_p)
+    ):
+      var center_stall := (bounds_min + bounds_max) * 0.5
+      var toward_center_stall := _snap_seek_direction_v3(
+        Vector3(center_stall.x, 0.0, center_stall.y) - pos
+      )
+      if toward_center_stall.length_squared() > 1e-12:
+        expand_hint = toward_center_stall
+        w_expand_hint_out = maxf(
+          w_expand_hint_out,
+          float(motor_p.get("predator_patrol_interior_expand_weight", 9.0)),
+        )
+    else:
+      var edge_band := float(motor_p.get("predator_chase_edge_band", 110.0))
+      var edge_margin := _footprint_edge_margin(pos, he_xy, bounds_min, bounds_max)
+      var body_id := body.get_instance_id()
+      if (
+        edge_margin >= edge_band
+        and not bool(_predator_rim_exit_nudged_by_body.get(body_id, false))
+      ):
+        var center := (bounds_min + bounds_max) * 0.5
+        var toward_center := _snap_seek_direction_v3(Vector3(center.x, 0.0, center.y) - pos)
+        if toward_center.length_squared() > 1e-12:
+          expand_hint = toward_center
+          _predator_rim_exit_nudged_by_body[body_id] = true
+          w_expand_hint_out = maxf(
+            w_expand_hint_out,
+            float(motor_p.get("predator_patrol_interior_expand_weight", 9.0)),
+          )
   if (
     body.is_in_group(&"mobs")
     and not body.is_in_group(&"prey")
@@ -5327,6 +5958,18 @@ func _build_motor_context(
     goal_seek_targets = goal_seek_pack["goal_seek_targets"] as Array
     w_seek_goal = float(goal_seek_pack["weight_seek_goal"])
 
+  var motor_seek_goal_pos := Vector3.ZERO
+  if motor_has_active_goal:
+    motor_seek_goal_pos = _nearest_vector_from_positions(pos, prey_seek_motor)
+    if motor_seek_goal_pos == Vector3.ZERO:
+      motor_seek_goal_pos = _nearest_vector_from_positions(pos, goal_seek_targets)
+    if motor_seek_goal_pos == Vector3.ZERO:
+      motor_seek_goal_pos = _nearest_vector_from_positions(pos, food_targets)
+  var motor_los_ctx := _MotorTargetBuilder._los_context_from_body(body, motor_p)
+  var w_seek_occlusion := 0.0
+  if motor_has_active_goal:
+    w_seek_occlusion = float(motor_p.get("motor_seek_occlusion_penalty_weight", 12.0))
+
   return {
     "creature_position": pos,
     "creature_speed": spd,
@@ -5340,6 +5983,8 @@ func _build_motor_context(
     "penalty_oob": float(motor_p.get("penalty_oob", 1e7)),
     "distance_eps": float(motor_p.get("distance_eps", 6.0)),
     "creature_half_extents": he_xy,
+    "motor_cardinal_probe_min": float(motor_p.get("motor_cardinal_probe_min", 40.0)),
+    "motor_cardinal_near_probe_min": float(motor_p.get("motor_cardinal_near_probe_min", 10.0)),
     "weight_interior": float(motor_p.get("weight_interior", 0.65)) * float(hunger_explore.get("interior_mul", 1.0)),
     "weight_edge": w_edge_out,
     "shuffle_tie_break": _motor_bool_default_true(motor_p, "shuffle_tie_break"),
@@ -5358,9 +6003,10 @@ func _build_motor_context(
     "awareness_forward_cone_only": bool(motor_p.get("awareness_forward_cone_only", false)),
     "creature_facing": facing_display,
     "creature_last_move_direction": facing_display,
-    "motor_seek_filter_wall_hits": (
-      motor_has_active_goal and body.is_in_group(&"prey") and not herbivore_flee_active
-    ),
+    "motor_seek_filter_wall_hits": motor_has_active_goal and not herbivore_flee_active,
+    "motor_los_ctx": motor_los_ctx,
+    "motor_seek_goal_pos": motor_seek_goal_pos,
+    "motor_seek_occlusion_penalty_weight": w_seek_occlusion,
     "static_obstacles": geom_aabbs,
     "weight_obstacle": weight_obstacle_ctx,
     "creature_size": csz,
@@ -5662,17 +6308,36 @@ func _physics_process(_delta: float) -> void:
         Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
         if is_pred and predator_lost_visual:
           var mem_tgt := _nearest_prey_pos_from_ctx(pred_pos, ctx)
-          raw_intent = _predator_latched_memory_chase_intent(
-            body_id,
-            pred_pos,
-            mem_tgt,
-            he_nav,
-            static_obs_nav,
-            bounds_min_nav,
-            bounds_max_nav,
-            motor_p,
-          )
-          memory_chase_override = raw_intent.length_squared() > 1e-12
+          if (
+            mem_tgt != Vector3.ZERO
+            and _predator_hunt_chase_blocked(
+              pred_pos, mem_tgt, he_nav, prey_he_nav, static_obs_nav, motor_p
+            )
+          ):
+            raw_intent = _predator_latched_obstructed_hunt_intent(
+              body_id,
+              pred_pos,
+              mem_tgt,
+              he_nav,
+              static_obs_nav,
+              ctx.get("bounds_min", Vector2.ZERO) as Vector2,
+              ctx.get("bounds_max", Vector2.ZERO) as Vector2,
+              stuck_n,
+              motor_p,
+            )
+            obstructed_hunt_override = raw_intent.length_squared() > 1e-12
+          else:
+            raw_intent = _predator_latched_memory_chase_intent(
+              body_id,
+              pred_pos,
+              mem_tgt,
+              he_nav,
+              static_obs_nav,
+              bounds_min_nav,
+              bounds_max_nav,
+              motor_p,
+            )
+            memory_chase_override = raw_intent.length_squared() > 1e-12
         elif prey_chase_blocked:
           var prey_blk := _nearest_prey_pos_from_ctx(pred_pos, ctx)
           raw_intent = _predator_latched_obstructed_hunt_intent(
@@ -5726,7 +6391,9 @@ func _physics_process(_delta: float) -> void:
           var block_cb := func(dir: Vector3) -> bool:
             if dir.length_squared() < 1e-14:
               return false
-            return _cardinal_step_blocked(pred_pos, he_nav, dir, static_obs_nav, block_clr_patrol)
+            return _cardinal_step_blocked(
+              pred_pos, he_nav, dir, static_obs_nav, block_clr_patrol, motor_p
+            )
           if is_pred and _predator_hunt_motivated_for_body(subj):
             var patrol_ex := int(motor_p.get("carnivore_explore_rotate_physics_ticks", 36))
             if patrol_ex <= 0:
@@ -5741,14 +6408,19 @@ func _physics_process(_delta: float) -> void:
             var allow_idle_patrol := (
               cr_patrol >= float(motor_p.get("seek_priority_food_ceiling", 0.80))
             )
-            raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided").call(
-              patrol_state,
-              guided_lock_sec,
-              patrol_seed,
-              expand_hint_patrol,
-              block_cb,
-              allow_idle_patrol,
-            ) as Vector3
+            raw_intent = _MOTOR.pick_best_move_intent(ctx)
+            var scorer_blocked := (
+              raw_intent.length_squared() > 1e-12 and bool(block_cb.call(raw_intent))
+            )
+            if raw_intent.length_squared() < 1e-12 or scorer_blocked:
+              raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided").call(
+                patrol_state,
+                guided_lock_sec,
+                patrol_seed,
+                expand_hint_patrol,
+                block_cb,
+                allow_idle_patrol,
+              ) as Vector3
           else:
             raw_intent = Callable(_NoGoalPatrolLockScr, &"pick_or_hold").call(
               patrol_state, patrol_lock_sec, patrol_seed, block_cb
@@ -5795,7 +6467,6 @@ func _physics_process(_delta: float) -> void:
         raw_intent = _herbivore_nudge_away_from_unready_if_idle(ctx, raw_intent, motor_p)
       if (
         hunt_active
-        and not predator_lost_visual
         and _predator_obstructed_hunt_active(ctx, motor_p, pred_pos, he_nav, stuck_n)
         and not obstructed_hunt_override
       ):
@@ -6059,6 +6730,39 @@ func _physics_process(_delta: float) -> void:
           playfield_corner_override = true
           Callable(_IntentHoldScr, &"reset_state").call(hold_state)
           Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+      if (
+        is_pred
+        and not has_active_goal
+        and not pinch_escape_override
+        and not predator_pacing_trap_override
+        and bool(ctx.get("motor_corner_hugging", false))
+      ):
+        var pred_corner_esc := _predator_latched_corner_escape_intent(
+          body_id,
+          pred_pos,
+          he_nav,
+          static_obs_nav,
+          bounds_min_nav,
+          bounds_max_nav,
+          motor_p,
+        )
+        if pred_corner_esc.length_squared() > 1e-12:
+          raw_intent = pred_corner_esc
+          playfield_corner_override = true
+          Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+          Callable(_IntentHoldScr, &"reset_state").call(hold_state)
+          Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
+          _predator_pinch_debug_log(
+            body_id,
+            motor_p,
+            "corner_esc",
+            "pred corner escape intent=(%.2f,%.2f) edge_m=%.1f"
+            % [
+              pred_corner_esc.x,
+              pred_corner_esc.z,
+              _footprint_edge_margin(pred_pos, he_nav, bounds_min_nav, bounds_max_nav),
+            ],
+          )
       if is_prey_body and _herbivore_pacing_trap_active(
         body_id,
         incumbent,
@@ -6112,7 +6816,52 @@ func _physics_process(_delta: float) -> void:
               Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
       if (
         is_pred
-        and not has_active_goal
+        and (
+          not has_active_goal
+          or bool(ctx.get("predator_geometry_pinch_active", false))
+        )
+        and (
+          stuck_n >= maxi(1, int(motor_p.get("motor_stuck_escape_ticks", 8)))
+          or _predator_patrol_coverage_stall_active(body_id, pred_pos, motor_p)
+        )
+        and _footprint_edge_margin(pred_pos, he_nav, bounds_min_nav, bounds_max_nav)
+        >= float(motor_p.get("predator_chase_edge_band", 110.0))
+      ):
+        var block_clr_interior := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+        var interior_intent_blocked := (
+          raw_intent.length_squared() > 1e-12
+          and _cardinal_step_blocked(pred_pos, he_nav, raw_intent, static_obs_nav, block_clr_interior, motor_p)
+        )
+        if interior_intent_blocked or stuck_n >= 2:
+          var interior_esc := _predator_interior_patrol_stall_escape_intent(
+            body_id,
+            pred_pos,
+            he_nav,
+            static_obs_nav,
+            stuck_n,
+            motor_p,
+            bounds_min_nav,
+            bounds_max_nav,
+            patrol_state,
+          )
+          if interior_esc.length_squared() > 1e-12:
+            raw_intent = interior_esc
+            Callable(_NoGoalPatrolLockScr, &"reset_state").call(patrol_state)
+            _predator_pinch_debug_log(
+              body_id,
+              motor_p,
+              "interior_esc",
+              "pred interior patrol escape intent=(%.2f,%.2f) edge_m=%.1f stuck=%d blocked=%s"
+              % [
+                interior_esc.x,
+                interior_esc.z,
+                _footprint_edge_margin(pred_pos, he_nav, bounds_min_nav, bounds_max_nav),
+                stuck_n,
+                str(interior_intent_blocked),
+              ],
+            )
+      if (
+        is_pred
         and bool(ctx.get("predator_geometry_pinch_active", false))
       ):
         var edge_band_pinch := float(motor_p.get("predator_chase_edge_band", 110.0))
@@ -6152,7 +6901,6 @@ func _physics_process(_delta: float) -> void:
             )
       if (
         is_pred
-        and not has_active_goal
         and _predator_pacing_trap_active(
           body_id,
           incumbent,
@@ -6304,9 +7052,6 @@ func _physics_process(_delta: float) -> void:
           ) as Vector3
           _apply_creature_facing_for_awareness(subj, Vector2(turn_face.x, turn_face.z))
           ctx["creature_facing"] = turn_face
-          if _rescan_and_patch_goal_ctx(subj, motor_p, ctx, Vector2(turn_face.x, turn_face.z)):
-            Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
-            raw_intent = _MOTOR.pick_best_move_intent(ctx)
       else:
         Callable(_SeekDirCommitScr, &"reset_state").call(seek_commit_state)
       var hold_base := float(maxi(1, int(motor_p.get("scripted_intent_hold_physics_ticks", 8))))

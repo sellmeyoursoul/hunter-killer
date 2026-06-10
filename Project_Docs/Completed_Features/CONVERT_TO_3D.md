@@ -161,7 +161,7 @@ Ordered checklist. **Status:** Done / Partial / Open.
 - **Phase B (done):** [`awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on both duel bodies; motor internals still use motor-plane `Vector2` in places (optional full `Vector3` refactor deferred).
 - **What:** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) food scans require `Node3D` positions.
 - **What:** [`terrain_motor.gd`](../../creature/motor/terrain_motor.gd) — ground conforming on sculpted playfield (**D6**); chase blocking uses XZ-projected AABB segments, not LoS rays.
-- **D7 (done):** motor/config distances use world units — no `px` in identifiers, config keys, or comments.
+- **D7 (done):** motor/config distances use world units — no `px` in identifiers, config keys, or comments. Cardinal stuck/edge escape probe floors (`motor_cardinal_probe_min`, `motor_cardinal_near_probe_min`) scale with playfield via [`MotorPlane.scale_motor_distance_params`](../../creature/motor/motor_plane.gd) (2026-06-10).
 - **Acceptance:** ENGINE duel: forage, flee, pursuit, obstacle detour. **Met.**
 
 ### 3.7 Environment grid — **Done (dev scaffold; D5 deferred)**
@@ -284,4 +284,5 @@ Resolved items are **normative**.
 | 2026-06-08 | **M2 complete:** D7 unit rename (no `px` in motor/env/creature/AI paths); `run_all.gd` migrated to 3D-only fixtures; §3.6 / §3.10 Done. |
 | 2026-06-08 | **M3 complete:** Deleted `creature_rigid_body_3d` stub; synthetic boundary AABB tests; §3.11 doc promotion (ENVIRONMENT_MODEL §6, CREATURE_MOVEMENT supersession, CREATURE_3D_ARCHITECTURE D4). |
 | 2026-06-08 | **M4 partial:** LoS combined gate (`line_of_sight.gd`), navmesh cardinal hint, footprint ≥25%, movement_impact merge, creature size↔capsule sync; D5 out of scope; crush deferred. |
+| 2026-06-10 | **D7 follow-up:** [`MotorPlane.scale_motor_distance_params`](../../creature/motor/motor_plane.gd) injects playfield-scaled cardinal probe floors for stuck/edge escape on small 3D mains; cross-link [CREATURE_MOVEMENT_V2.md §A.1.1](../Draft_Features/CREATURE_MOVEMENT_V2.md). |
 | 2026-06-09 | **Migration complete — archived.** M4 closed for migration scope; D5/crush/D8/D6 tracked in child docs/backlog. D4 rigid-stub wording fixed; §2.1 motor/LoS snapshot aligned. [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) promoted to tier III. |

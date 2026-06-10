@@ -183,6 +183,54 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 
 **LLM note:** **`mode` / inference** tying into `creature_motor` is **out of scope** for this refactor. Packs may still record `mode: "scripted"` for clarity; ENGINE implements scripted path only until LLM motor phase.
 
+#### A.1.1 Playfield distance scaling (3D `main_3d`)
+
+Legacy motor numerics in pack JSON and the spine were tuned against a **reference playfield long edge** of **1890** world units ([`MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE`](../../creature/motor/motor_plane.gd)). On smaller 3D grasslands mains (~40–120 m), distances must shrink or stuck/edge escape probes treat most cardinal steps as out-of-bounds.
+
+**Runtime path:** [`AiDriver._scale_motor_params_for_playfield`](../../AI_int_lib/ai_driver.gd) reads the creature's **`screen_size`** (from [`main_3d.gd`](../../main_3d.gd) `get_motor_playfield_size()`) and applies [`MotorPlane.scale_motor_distance_params`](../../creature/motor/motor_plane.gd):
+
+- **Scale factor:** `min(playfield.x, playfield.y) / REFERENCE_MOTOR_PLAYFIELD_EDGE` when the long edge is below 25% of reference; else **1.0**.
+- **Scaled keys:** existing suffix-matched distance keys (`*_radius`, `*_probe`, `*_band`, `awareness_radius`, etc.) — same rules as [`MotorPlane._is_distance_motor_param_key`](../../creature/motor/motor_plane.gd).
+
+**Injected keys (not pack-authored):** merged at scale time via [`MotorPlane._inject_cardinal_probe_mins`](../../creature/motor/motor_plane.gd):
+
+| Key | Baseline (scale = 1) | Consumer |
+|-----|----------------------|----------|
+| **`motor_cardinal_probe_min`** | **40** | [`cardinal_avoidance.motor_cardinal_probe_step`](../../creature/motor/cardinal_avoidance.gd) — far lookahead for patrol block tests and stuck/edge escape |
+| **`motor_cardinal_near_probe_min`** | **10** | [`cardinal_avoidance.cardinal_step_blocked_for_escape`](../../creature/motor/cardinal_avoidance.gd) — near-step tighten test |
+
+**MotorContext:** [`_build_motor_context`](../../AI_int_lib/ai_driver.gd) copies both keys onto ctx (`motor_cardinal_probe_min`, `motor_cardinal_near_probe_min`) so [`CardinalAvoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) and AiDriver escape helpers share the same scaled probes.
+
+**Predator pinch / pacing trap (2026-06-10):**
+
+- **`predator_geometry_pinch_active`** is set even when **`motor_has_active_goal`** is true (memory chase no longer suppresses pinch detection).
+- Pinch escape and pacing-trap overrides apply during active goal when wedged at an edge/boulder corridor.
+- Predator no-goal interior stalls now apply **`interior_esc`** (latched stuck escape with lateral preference from patrol lock heading) when edge margin is at/inside chase band and the current intent is blocked or repeatedly stuck.
+- Fox pack flag **`predator_pinch_debug_log`** emits at **`OLog.info`** (tag **`CREATURE_GOALS`**) — lines tagged **`pinch_esc`**, **`pacing_trap`**, **`corner_esc`**, **`interior_esc`**, **`final_intent`**.
+
+**Predator NE-corner / dual-edge rim (2026-06-10):**
+
+- [`_playfield_wall_edge_info`](../../AI_int_lib/ai_driver.gd) sets **`is_corner`** + **`corner_inward`** when two playfield edges tie within **0.75** world units.
+- [`_pick_playfield_corner_interior_cardinal`](../../AI_int_lib/ai_driver.gd) picks an interior diagonal that **increases edge margin** (used by patrol expand hint, edge tangent pick, pacing-trap break at corners).
+- [`_predator_pick_edge_tangent_cardinal`](../../AI_int_lib/ai_driver.gd) now scores all **8-way** seek headings (rim tangent slide + diagonal skim + inward peel), ignores wall-diving picks, and resolves near-ties with deterministic RNG (`body_id ^ round_salt ^ physics_tick`).
+- [`_predator_latched_corner_escape_intent`](../../AI_int_lib/ai_driver.gd) mirrors herbivore latched corner egress during **no-goal patrol** when **`motor_corner_hugging`** is true; latch TTL **`predator_corner_escape_lock_ticks`** (pack override) or **`geometry_escape_lock_ticks`**.
+- No-goal motivated predator patrol is hybrid: `_MOTOR.pick_best_move_intent(ctx)` first, fallback to guided lock patrol only when scorer returns zero or produces a blocked step.
+- **East/west rim peel (2026-06-10):** [`_predator_pick_rim_peel_cardinal`](../../AI_int_lib/ai_driver.gd) scores inward headings off vertical playfield rims; [`_predator_patrol_edge_expand_hint`](../../AI_int_lib/ai_driver.gd) prefers peel on east/west walls (wall normal **X-dominant**) while keeping N/S wall-tangent slide on north/south rims. Mid-field **coverage stall** ([`_predator_patrol_coverage_stall_active`](../../AI_int_lib/ai_driver.gd)) nudges toward center and triggers [`_predator_interior_patrol_stall_escape_intent`](../../AI_int_lib/ai_driver.gd).
+
+**Obstructed seek + cone-edge stability (2026-06-10 — fox mid-field runs 26–28):**
+
+- **`motor_seek_filter_wall_hits`** applies to **any** active seek (predator + herbivore), not prey-only — set in [`_build_motor_context`](../../AI_int_lib/ai_driver.gd) when `motor_has_active_goal` and not flee.
+- **`motor_los_ctx`** + **`motor_seek_goal_pos`** + **`motor_seek_occlusion_penalty_weight`** on MotorContext; [`cardinal_avoidance.seek_occlusion_step_cost`](../../creature/motor/cardinal_avoidance.gd) penalizes into-goal steps when direct LoS to the seek goal is blocked (>60%), rewards lateral flank headings.
+- **Goal visibility latch** — [`goal_visibility_latch.gd`](../../creature/motor/goal_visibility_latch.gd): predator **`predator_prey_visible_latch_ticks`** (consecutive live-prey ticks before full `weight_seek_prey`) + **`predator_prey_engagement_latch_ticks`** (bridges brief cone dropout). Herbivore food latch unchanged (`herbivore_food_awareness_latch_sec`).
+- **Seek turn debounce** — no `_rescan_and_patch_goal_ctx` during `seek_direction_commit` turn sweep (facing still updates for awareness).
+- **Memory chase flank** — when `predator_lost_visual` and direct path to memory position is blocked, tick path uses `_predator_latched_obstructed_hunt_intent` instead of straight memory snap.
+- **`interior_esc`** during **active goal** when `predator_geometry_pinch_active` (mid-field wedge, not only no-goal patrol).
+- **Exploration while engaged** — `exploration_blend_multiplier` honors pack **`exploration_blend_min_when_engaged`** during prey pursuit (no longer hard-zeroed).
+
+**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`.
+
+**Cross-link:** [CONVERT_TO_3D.md §3.6 / D7](../Completed_Features/CONVERT_TO_3D.md) (world-unit motor distances).
+
 ### A.2 Single intent path (herbivore + carnivore logic merged)
 
 **Principle:** There is **one** scripted motor pipeline: **`AiDriver`** builds **one** `MotorContext`; **`CardinalAvoidance.pick_best_move_intent`** scores one cost stack. Species differences are **data** (`CreatureDefinition.feeding_mode`, diet policy, trait multipliers), not parallel `if prey / if mobs` code paths scattered through `ai_driver.gd`.
@@ -284,7 +332,7 @@ Phase 1: flags may be **stubbed false** until squeeze/threat detectors land; **`
 | **Per creature** | Floors / ceilings ship as **defaults in `default_creature_motor_params()`** (spine ∪ selected **`creature_motor_profile_*`**) and **overrides** in **`pack_resources.json` → `creature_motor`** / future **`CreatureDefinition`** exports so each archetype tunes the band. |
 | **Starter thresholds** | **`calorie_ratio ≥ preserve_bias_food_floor`** (**default ~0.90**): bias **Preserve** (less seek, fewer costly detours). **`calorie_ratio < seek_priority_food_ceiling`** (**default ~0.80**): bias **Find food** (seek regains traction). **Mid band (0.80–0.90):** **smoothstep** blend; **`preserve_seek_blend_smoothness`** (**default 0.5**, range **0…1**) = blend **aggressiveness** (higher → sharper Preserve↔Seek transition). **`calorie_ratio < starvation_override_food_ceiling`** (**default 0.10**): **Find food** overrides acute threat (**§A.2.3** priority **0**). **`Avoid hostiles`** / jeopardy **override** hunger band when acute threat applies — **except** starvation priority **0**. |
 | **Motor keys** | **`preserve_bias_food_floor`**, **`seek_priority_food_ceiling`**, **`preserve_seek_blend_smoothness`**, **`starvation_override_food_ceiling`** — defaults in **`default_creature_motor_params()`** only; omit from pack **`creature_motor`** unless overriding. |
-| **No-goal patrol lock (phase-1 — resolved)** | When **`motor_has_active_goal`** is false, skip per-tick tie roulette; **[`no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)** picks a random **8-way** unit direction or **`Vector2.ZERO`**, holds for **`motor_no_goal_patrol_lock_sec`** (duel packs default **1.0** s), re-rolls when expired if still no goal. Goal surfacing clears lock and restores normal motor. Key: **`motor_no_goal_patrol_lock_sec`** (**0** = legacy explore/patrol motor). |
+| **No-goal patrol lock (phase-1 — resolved)** | When **`motor_has_active_goal`** is false, skip per-tick tie roulette; **[`no_goal_patrol_lock.gd`](../../creature/motor/no_goal_patrol_lock.gd)** picks a random **8-way** unit direction or **`Vector2.ZERO`**, holds for **`motor_no_goal_patrol_lock_sec`** (fox duel retune **0.5 s**), re-rolls when expired if still no goal. Motivated predators run scorer-first patrol and only fallback to guided lock when scorer intent is zero/blocked. Goal surfacing clears lock and restores normal motor. Key: **`motor_no_goal_patrol_lock_sec`** (**0** = legacy explore/patrol motor). |
 
 ##### Believed goal source / habitual locales (future — overlays goal memory)
 
@@ -568,6 +616,10 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-10 | **§A.1.1 Obstructed seek + cone-edge stability:** shared `motor_seek_filter_wall_hits`, `seek_occlusion_step_cost`, `goal_visibility_latch.gd`, memory-chase flank, `interior_esc` with active goal + mid-field pinch, seek-turn rescan debounce. Fox pack: `predator_prey_visible_latch_ticks`, `motor_seek_occlusion_penalty_weight`. Tests: `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`. |
+| 2026-06-10 | **East/west rim peel + mid-field stall:** `_predator_pick_rim_peel_cardinal` + coverage-stall anchor break N-S east-wall hugging and mid-field oscillation (playtest rows 22–25); fox pack keys `predator_patrol_stall_window_ticks`, `predator_patrol_rim_peel_min_gain`. Tests: `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`. |
+| 2026-06-10 | **Predator patrol stall fix:** 8-way rim tangent scoring + deterministic tie-break variance, interior stuck threshold (`motor_stuck_interior_edge_threshold` default from edge/corner bands), one-shot rim-exit interior nudge, hybrid scorer-first no-goal predator patrol fallback, and `interior_esc` debug path. Added tests: `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`. |
+| 2026-06-10 | **§A.1.1 Playfield distance scaling:** `scale_motor_distance_params` injects `motor_cardinal_probe_min` / `motor_cardinal_near_probe_min`; ctx passthrough; fixes 3D south-wall N–S pinch when legacy 40-unit cardinal probes exceeded playfield size. Predator pinch active during active goal; `predator_pinch_debug_log` → `OLog.info`. Tests: `_test_motor_cardinal_probe_scaled_for_small_playfield`. |
 | 2026-06-09 | **Phase 3 refinement pass:** 3D Vector3 food latch/plateau fix; predator pacing trap + patrol nav escape; rabbit `plant_awareness_requires_los` occluded belief sync; duel pack retune (fox chaos/geometry lock, rabbit seek/hold). |
 | 2026-06-09 | **Phase 3 playtest boost:** 2× duel body scale (rabbit/fox archetypes) + 2× `awareness_radius` / `awareness_cone_extra` in duel packs; Phase 7 cleanup to revert before doc promotion. |
 | 2026-06-09 | **Refactor phases (source of truth):** Phases 1–2 marked done; Phases 3–7 roadmap (retune, ingress, traits, goal kinds, doc promotion). **Doc lifecycle:** this file → `Completed_Features/`; GOAL_DRIVERS + MEMORY → `Definitive_Features/`. §A.2.2, §B.3, §C, §G.5, §H synced. |

@@ -11,6 +11,7 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
 const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
+const _LoS := preload("res://creature/motor/line_of_sight.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector3] = [
@@ -27,8 +28,9 @@ static var _tie_order: Array[Vector3] = [
 
 
 ## Lookahead distance for cardinal static probes (patrol block test, stuck escape, tie-break filter).
-static func motor_cardinal_probe_step(he_xy: Vector2) -> float:
-  return maxf(maxf(he_xy.x, he_xy.y) * 2.8, 40.0)
+## [param probe_min]: Playfield-scaled floor from [code]motor_cardinal_probe_min[/code] ([method MotorPlane.scale_motor_distance_params]).
+static func motor_cardinal_probe_step(he_xy: Vector2, probe_min: float = 40.0) -> float:
+  return maxf(maxf(he_xy.x, he_xy.y) * 2.8, probe_min)
 
 
 ## Horizontal zero pulled from [code]motor_plane.gd[/code] (fallback keeps migration safe if script metadata is unavailable).
@@ -103,10 +105,11 @@ static func cardinal_step_blocked(
   direction: Vector3,
   static_obs: Array,
   min_clearance: float,
+  probe_min: float = 40.0,
 ) -> bool:
   if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
-  var step := motor_cardinal_probe_step(he_xy)
+  var step := motor_cardinal_probe_step(he_xy, probe_min)
   var probe_pos := creature_pos + direction.normalized() * step
   return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance
 
@@ -118,13 +121,15 @@ static func cardinal_step_blocked_for_escape(
   direction: Vector3,
   static_obs: Array,
   min_clearance: float,
+  probe_min: float = 40.0,
+  near_probe_min: float = 10.0,
 ) -> bool:
-  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance):
+  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance, probe_min):
     return true
   if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
   var clr_now := footprint_static_clearance(creature_pos, he_xy, static_obs)
-  var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, 10.0)
+  var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, near_probe_min)
   var near_pos := creature_pos + direction.normalized() * near_step
   var clr_near := footprint_static_clearance(near_pos, he_xy, static_obs)
   if clr_near < min_clearance:
@@ -286,6 +291,7 @@ static func intent_candidate_blocked_by_geometry(
   block_min_clr: float,
   filter_seek_wall_hits: bool,
   filter_blocked_cardinals: bool,
+  probe_min: float = 40.0,
 ) -> bool:
   if d.length_squared() < 1e-14:
     return false
@@ -305,7 +311,7 @@ static func intent_candidate_blocked_by_geometry(
     return true
   return (
     filter_blocked_cardinals
-    and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
+    and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr, probe_min)
   )
 
 
@@ -516,6 +522,48 @@ static func food_seek_cost_at_prediction(
   return weight * best_d
 
 
+## Extra cost when direct LoS to [param goal_pos] is blocked: penalize into-goal steps, reward lateral flank headings.
+static func seek_occlusion_step_cost(
+  creature_pos: Vector3,
+  step_dir: Vector3,
+  goal_pos: Vector3,
+  los_ctx: Dictionary,
+  half: Vector2,
+  static_obs: Array,
+  step_length: float,
+  weight: float,
+) -> float:
+  if weight <= 0.0 or goal_pos == Vector3.ZERO or step_dir.length_squared() < 1e-12:
+    return 0.0
+  if not bool(los_ctx.get("enabled", false)):
+    return 0.0
+  var space: PhysicsDirectSpaceState3D = los_ctx.get("space_state")
+  if space == null:
+    return 0.0
+  var eye_h := float(los_ctx.get("eye_height", 1.0))
+  var exclude: Array = los_ctx.get("exclude_rids", []) as Array
+  var los_flags: Dictionary = _LoS.line_of_sight_clear(
+    space, creature_pos, eye_h, goal_pos, exclude
+  )
+  if bool(los_flags.get("line_of_sight_clear", true)):
+    return 0.0
+  var toward := goal_pos - creature_pos
+  toward.y = 0.0
+  if toward.length_squared() < 1e-12:
+    return 0.0
+  var goal_u := toward.normalized()
+  var step_u := step_dir.normalized()
+  var cost := weight * maxf(0.0, step_u.dot(goal_u)) * 92.0
+  var flank_u := Vector3(-goal_u.z, 0.0, goal_u.x)
+  cost -= weight * absf(step_u.dot(flank_u)) * 42.0
+  if step_length > 0.0 and not static_obs.is_empty():
+    var predicted := creature_pos + step_u * step_length
+    var clr_now := footprint_static_clearance(creature_pos, half, static_obs)
+    var clr_pred := footprint_static_clearance(predicted, half, static_obs)
+    cost -= weight * maxf(0.0, clr_pred - clr_now) * 18.0
+  return cost
+
+
 ## Unified goal seek linear pull ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); same math as [method food_seek_cost_at_prediction].
 static func goal_seek_cost_at_prediction(
   predicted: Vector3,
@@ -688,6 +736,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     if typeof(half_ext_raw) != TYPE_VECTOR2
     else half_ext_raw as Vector2
   )
+  var cardinal_probe_min := float(ctx.get("motor_cardinal_probe_min", 40.0))
   var awareness_r: float = float(ctx.get("awareness_radius", 0.0))
   var cone_extra: float = float(ctx.get("awareness_cone_extra", 0.0))
   var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
@@ -822,6 +871,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
             block_min_clr,
             filter_seek_wall_hits,
             filter_blocked_cardinals,
+            cardinal_probe_min,
           ):
             var agent_r := float(ctx.get("nav_agent_radius", maxf(footprint_half.x, footprint_half.y)))
             nav_bias_dir = _NavHint.unit_direction_to_next_waypoint(
@@ -833,6 +883,13 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   var terrain_body: CharacterBody3D = ctx.get("terrain_physics_body")
   var terrain_sampler = ctx.get("terrain_sampler")
   var terrain_motor_p: Dictionary = ctx.get("terrain_motor_params", {})
+  var los_ctx: Dictionary = ctx.get("motor_los_ctx", {}) as Dictionary
+  var seek_goal_pos: Vector3 = _motor_read_pos(ctx.get("motor_seek_goal_pos", _motor_horizontal_zero()))
+  var w_seek_occlusion := float(ctx.get("motor_seek_occlusion_penalty_weight", 0.0))
+  if seek_goal_pos == Vector3.ZERO and has_active_goal:
+    seek_goal_pos = _nearest_vector3_target(creature_pos, goal_seek_targets)
+    if seek_goal_pos == Vector3.ZERO:
+      seek_goal_pos = _nearest_vector3_target(creature_pos, prey_seek_targets)
 
   var order := evaluation_order_from_ctx(ctx)
   var skip_backtrack := (
@@ -859,7 +916,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   for d in order:
     if d.length_squared() > 1e-14:
       if terrain_active and terrain_space != null and terrain_body != null:
-        var terrain_probe := motor_cardinal_probe_step(footprint_half)
+        var terrain_probe := motor_cardinal_probe_step(footprint_half, cardinal_probe_min)
         if _TerrainMotor.cardinal_blocked_by_terrain(
           terrain_space, terrain_body, creature_pos, d, terrain_probe
         ):
@@ -875,6 +932,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         block_min_clr,
         filter_seek_wall_hits,
         filter_blocked_cardinals,
+        cardinal_probe_min,
       ):
         continue
       if (
@@ -957,6 +1015,17 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
     cost += believed_goal_step_cost(d, ctx)
+    if w_seek_occlusion > 0.0 and seek_goal_pos != Vector3.ZERO and d.length_squared() > 1e-14:
+      cost += seek_occlusion_step_cost(
+        creature_pos,
+        d,
+        seek_goal_pos,
+        los_ctx,
+        footprint_half,
+        static_obs,
+        step_len,
+        w_seek_occlusion,
+      )
     if w_blocked_backtrack > 1e-8 and filter_blocked_approach and d.length_squared() > 1e-14:
       cost += blocked_approach_step_cost(
         d, blocked_approach_v, w_blocked_backtrack, backtrack_dot
@@ -985,7 +1054,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
             &"elevation_at_cardinal_probe",
             creature_pos,
             d,
-            motor_cardinal_probe_step(footprint_half),
+            motor_cardinal_probe_step(footprint_half, cardinal_probe_min),
           )
         )
         cost += _TerrainMotor.elevation_cost_delta(
@@ -1016,7 +1085,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       if dir_v.length_squared() < 1e-14:
         continue
       if filter_blocked_cardinals and cardinal_step_blocked(
-        creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+        creature_pos, footprint_half, dir_v, static_obs, block_min_clr, cardinal_probe_min
       ):
         continue
       tied_dirs.append(dir_v)
@@ -1025,7 +1094,15 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     if tied_dirs.size() == 1:
       return tied_dirs[0]
   if hunt_active and best_d.length_squared() < 1e-14:
-    return _best_non_idle_from_scored(scored, creature_pos, footprint_half, static_obs, block_min_clr, filter_blocked_cardinals)
+    return _best_non_idle_from_scored(
+      scored,
+      creature_pos,
+      footprint_half,
+      static_obs,
+      block_min_clr,
+      filter_blocked_cardinals,
+      cardinal_probe_min,
+    )
   return best_d
 
 
@@ -1045,6 +1122,7 @@ static func _best_non_idle_from_scored(
   static_obs: Array,
   block_min_clr: float,
   filter_blocked_cardinals: bool,
+  probe_min: float = 40.0,
 ) -> Vector3:
   var alt_cost := INF
   var alt_d := _motor_horizontal_zero()
@@ -1059,7 +1137,7 @@ static func _best_non_idle_from_scored(
     if dir_v.length_squared() < 1e-14:
       continue
     if filter_blocked_cardinals and cardinal_step_blocked(
-      creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+      creature_pos, footprint_half, dir_v, static_obs, block_min_clr, probe_min
     ):
       continue
     if c_cost < alt_cost:

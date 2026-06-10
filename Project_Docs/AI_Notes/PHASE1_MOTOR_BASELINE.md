@@ -1,6 +1,6 @@
 # Motor play baseline (Phase 1 → Phase 3)
 
-**Last updated:** 2026-05-22  
+**Last updated:** 2026-06-10  
 **Regression anchor:** `godot --path . --headless -s res://tests/run_all.gd` (Godot 4.6.2 steam tools).
 
 **Duel species packs:** Herbivore **rabbit** → `res://assets/creatures/rabbit/pack_resources.json` ([`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres) on Player). Carnivore **fox** → `res://assets/creatures/fox/pack_resources.json` ([`fox_archetype.tres`](../../creature/species/fox_archetype.tres) on Mob). Editor default stays **dev** profile; pack overlays restore seek/prey and zero chaos for playtest (`resolver_smoke` remains headless-only).
@@ -31,6 +31,7 @@
 | **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs follow expand sweep (segment-aligned lock); phase_seed still varies spawn offset. Chase leg stays directed once prey in cone. |
 | **3. Jeopardy flee** | Fox enters rabbit **awareness cone** (not omni); panic flee only inside `herbivore_flee_panic_radius_px` footprint distance | No flee while fox is off-cone/behind; alert band keeps partial forage seek. |
 | **4. Hunt corner escape** | Fox chasing prey, pinned on shrub AABB | After one tick with intent but no displacement, hunt forces clearance **8-way** step or rotating explore heading (`predator_hunt_stuck_rotate_ticks`). |
+| **5. Predator NE-corner patrol** | Fox no-goal patrol hugging NE playfield rim (~100 m mains) | **`motor_corner_hugging`** arms latched interior escape (`_predator_latched_corner_escape_intent`); patrol expand hint prefers interior diagonal over perpetual rim slide; pacing-trap break uses corner egress at wall-only corners. Watch OLog **`corner_esc`**. |
 
 ## Automated verification (headless)
 
@@ -45,6 +46,9 @@
 | Predator chase without explore | `_test_predator_chase_motor_ctx` |
 | No-goal patrol lock | `_test_no_goal_patrol_lock` |
 | No-goal guided patrol (fox) | `_test_no_goal_patrol_lock_guided`, `_test_predator_patrol_expanding_coverage` |
+| Predator south-wall pinch escape | `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_pacing_trap_break` |
+| Predator NE-corner interior escape | `_test_predator_northeast_corner_interior_escape` |
+| 3D playfield-scaled cardinal probes | `_test_motor_cardinal_probe_scaled_for_small_playfield` |
 | Expand hint cardinal | `_test_expanding_cardinal_explore` (UP vs idle) |
 
 ## After memory (Phase 2 + Phase 3 retune)

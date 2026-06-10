@@ -13,7 +13,7 @@
     "motor_no_goal_chaos_mul": 3.4,
     "motor_goal_sight_chaos_mul": 0.2,
     "motor_tie_cost_epsilon": 0.55,
-    "motor_no_goal_patrol_lock_sec": 0.65,
+    "motor_no_goal_patrol_lock_sec": 0.5,
     "weight_seek_ready_food": 0.0,
     "weight_seek_prey": 22.0,
     "weight_pursuit_dist": 0.55,
@@ -62,7 +62,9 @@
     "expanding_explore_base_physics_ticks": 48,
     "weight_expanding_explore_hint": 1.8,
     "predator_patrol_explore_mul": 3.2,
-    "predator_patrol_interior_expand_weight": 11.0,
+    "predator_patrol_interior_expand_weight": 8.0,
+    "predator_patrol_stall_window_ticks": 60,
+    "predator_patrol_rim_peel_min_gain": 0.35,
     "predator_edge_slide_min_clearance": 2.0,
     "predator_pinch_debug_log": true,
     "predator_pinch_debug_interval_ticks": 30,
@@ -74,7 +76,11 @@
     "predator_memory_seek_scale": 0.92,
     "predator_memory_chase_lock_ticks": 24,
     "predator_memory_chaos_mul": 0.12,
-    "predator_memory_expand_mul": 1.2
+    "predator_memory_expand_mul": 1.2,
+    "predator_prey_visible_latch_ticks": 6,
+    "predator_prey_engagement_latch_ticks": 36,
+    "predator_engagement_latch_seek_scale": 0.72,
+    "motor_seek_occlusion_penalty_weight": 14.0
   },
   "strategy_class_tags": {
     "extra_modalities": []
