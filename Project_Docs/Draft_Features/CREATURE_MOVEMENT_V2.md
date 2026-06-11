@@ -1,6 +1,6 @@
 # Hunter Killer — Creature movement V2 / unified motor (draft)
 
-> **Purpose:** **Maintainer roadmap and technical spec** for the **movement + motivation refactor**. This file is the **source of truth for refactor phasing** (§**Refactor phases** below). **Sibling contracts:** motivation tree, traits, habitual replay — **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; belief tiers, locale priors, **`goal_*`** keys — **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)**. **This file** owns pack-scoped **`creature_motor`**, unified **`SeekCandidate`** ingress, **`MotorContext`** / scorer wiring, awareness/LoS, and **phase exit criteria** (§G).
+> **Purpose:** **Maintainer roadmap and technical spec** for the **movement + motivation refactor**. This file is the **source of truth for refactor phasing** (§**Refactor phases** below). **Sibling contracts:** motivation tree, traits, habitual replay — **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)**; belief tiers, locale priors, **`goal_*`** keys — **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)**; navigation / seek-cycle planner — **[POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md)** (Phase **4.5**). **This file** owns pack-scoped **`creature_motor`**, unified **`SeekCandidate`** ingress, **`MotorContext`** / scorer wiring, awareness/LoS, and **phase exit criteria** (§G).
 >
 > **Tier:** Draft (tier II) — **3D production motor is live** on [`main_3d.tscn`](../../main_3d.tscn). Supersedes branching in [Definitive_Features/CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) for **active** design; the definitive inventory doc retains **2D historical** fork detail until Phase 7 trim.
 >
@@ -16,7 +16,7 @@
 
 ## Refactor phases (source of truth)
 
-**Phases 1–2 are shipped** (§G.1–G.4 `[x]`). **Phases 3–7** are the remaining work, in dependency order. Cross-cutting backlog items live in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
+**Phases 1–2 are shipped** (§G.1–G.4 `[x]`). **Phases 3–7** and **Phase 4.5 (POST_LOS)** are the remaining work, in dependency order. Cross-cutting backlog items live in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md).
 
 ### Phase status
 
@@ -26,6 +26,7 @@
 | **2** | Generalized goal-memory | **Done** | §G.4 — `_goal_belief`, `LocalePriorMap`, salient writes, replay |
 | **3** | Retune and ship baseline | **Next** | Playable duel; real **`creature_motor_profile_ship`**; pack tuning |
 | **4** | Ingress cleanup | Pending | One `SeekCandidate[]` at scorer; **`weight_seek_remembered_goal`** per target |
+| **4.5** | POST_LOS navigation planner | **Pilot** | Obstructed-seek step goals via navmesh; goal table + explore/backtrack deferred — **[POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md)** |
 | **5** | Personality depth | Pending | Non-stub trait Tier-2; full Slot B **`current_fit`** |
 | **6** | New goal kinds and backends | Pending | **`shelter`** writes; mate/combat/ring when systems land |
 | **7** | Doc promotion | Pending | Sibling docs → tier III; **this file** → tier A snapshot |
@@ -36,12 +37,14 @@ flowchart LR
   p2[Phase2_Memory]
   p3[Phase3_Retune]
   p4[Phase4_Ingress]
+  p45[Phase4_5_POST_LOS]
   p5[Phase5_Traits]
   p6[Phase6_GoalKinds]
   p7[Phase7_Docs]
   p1 --> p2 --> p3
   p3 --> p4
-  p4 --> p5
+  p4 --> p45
+  p45 --> p5
   p5 --> p6 --> p7
 ```
 
@@ -81,6 +84,39 @@ flowchart LR
 4. Extend [`tests/run_all.gd`](../../tests/run_all.gd) — remembered-bush pull via **`goal_seek_targets`**.
 
 **Primary files:** [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`goal_seek.gd`](../../creature/motor/goal_seek.gd), [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd), [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd).
+
+### Phase 4.5 — POST_LOS navigation planner
+
+**Goal:** Add the **planning layer** between goals and cardinal execution so stuck/path decisions consolidate into one seek cycle instead of growing `ai_driver` escape overrides. **Authoritative design:** **[POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md)**. **Does not replace** [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) — execution substrate unchanged.
+
+**Dependency:** Phase **4** ingress cleanup should land first (single `goal_seek_targets` ingress clarifies ultimate vs step goal). Phase 4.5 **pilot (4.5a)** may proceed in parallel where ingress gaps do not block obstructed-seek wiring.
+
+**Architecture (three layers):**
+
+| Layer | Module | Cadence |
+|-------|--------|---------|
+| Motivation | `tier2_dominance`, `goal_seek` | Slow loop (every **n** ticks — full table deferred) + per-tick weights today |
+| POST_LOS planner | [`seek_planner.gd`](../../creature/motor/seek_planner.gd) | Path replan when obstructed; step goal every tick |
+| Execution | `cardinal_avoidance` + kinematic body | Every physics tick |
+| Fast path | flee / jeopardy | Every tick — bypasses planner |
+
+**Phase 4.5 sub-phases:**
+
+| Sub-phase | Scope | Status |
+|-----------|-------|--------|
+| **4.5a** | Obstructed active seek → navmesh first waypoint as `motor_seek_goal_pos`; pack flag `post_los_seek_planner_enabled` | **Pilot** |
+| **4.5b** | Active goal table + Observation replan interval **n** | Deferred — resolve POST_LOS §2 `<<Question>>` |
+| **4.5c** | Explore / backtrack seek-cycle branches | Deferred |
+| **4.5d** | Retire `ai_driver` escape overrides incrementally | Deferred until playtest green |
+
+**Pilot wiring:**
+
+1. [`seek_planner.gd`](../../creature/motor/seek_planner.gd) — `direct_path_clear` (LoS), `resolve_step_goal` (navmesh step).
+2. [`nav_path_hint.gd`](../../environment/nav_path_hint.gd) — `first_waypoint_world`.
+3. [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_build_motor_context` — when `post_los_seek_planner_enabled` and active seek, set `motor_seek_ultimate_goal` + step `motor_seek_goal_pos`.
+4. Duel fox pack enables pilot flag for playtest rows.
+
+**Primary files:** [`seek_planner.gd`](../../creature/motor/seek_planner.gd), [`nav_path_hint.gd`](../../environment/nav_path_hint.gd), [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd), [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd), [`tests/run_all.gd`](../../tests/run_all.gd).
 
 ### Phase 5 — Personality depth
 
@@ -201,12 +237,27 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 
 **MotorContext:** [`_build_motor_context`](../../AI_int_lib/ai_driver.gd) copies both keys onto ctx (`motor_cardinal_probe_min`, `motor_cardinal_near_probe_min`) so [`CardinalAvoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) and AiDriver escape helpers share the same scaled probes.
 
+**Duel awareness compensation (2026-06-10 — playtest rows 31–33):**
+
+- On active CREATURE_GOALS duel rounds ([`AiDriver._duel_round_active`](../../AI_int_lib/ai_driver.gd)), [`MotorPlane.compensate_duel_awareness_params`](../../creature/motor/motor_plane.gd) multiplies [`DUEL_AWARENESS_UNSCALE_KEYS`](../../creature/motor/motor_plane.gd) by `1 / dist_scale` after [`scale_motor_distance_params`](../../creature/motor/motor_plane.gd) so pack **`awareness_radius` / `awareness_cone_extra`** (Phase 3 **2× playtest** values) apply as **world meters** on ~105 m grasslands mains — capped at **`DUEL_AWARENESS_CAP_PLAYFIELD_MUL` (1.25)** × playfield long edge.
+- **Without** compensation, opposite-rim duel spawns stay outside `prey_pts_live` for the whole timeout (fox never arms pursuit).
+
+**No-prey predator patrol coverage (2026-06-10 — playtest rows 31–33):**
+
+- Hunt-motivated carnivore with empty `prey_pts_live` now wires **`weight_explore_trail_repulsion`** + `explore_trail_centers` (pack optional **`predator_patrol_trail_repulsion_mul`**, default **1.0**).
+- **`_predator_coverage_seek_hint`** biases `expanding_explore_hint` toward least-visited coverage cells when rim peel is inactive.
+- **`_predator_patrol_lock_retread_active`** resets guided patrol lock when the latched heading re-enters a trail cell.
+- Rim band: **`predator_chase_edge_band_frac`** (fox pack **0.12**) ∪ scaled **`predator_chase_edge_band`** via [`_predator_chase_edge_band_m`](../../AI_int_lib/ai_driver.gd).
+- East/west no-prey patrol lowers pure-tangent score bonus and boosts inward/SW peel in [`_predator_pick_edge_tangent_cardinal`](../../AI_int_lib/ai_driver.gd) / [`_predator_pick_rim_peel_cardinal`](../../AI_int_lib/ai_driver.gd).
+- **`predator_patrol_debug`** on MotorContext; **`final_intent`** OLog (`CREATURE_GOALS`) includes `prey_live`, `prey_dist`, `awareness_eff`, `w_seek_prey`, `edge_m`, `expand`, `trail_rep`.
+
 **Predator pinch / pacing trap (2026-06-10):**
 
 - **`predator_geometry_pinch_active`** is set even when **`motor_has_active_goal`** is true (memory chase no longer suppresses pinch detection).
 - Pinch escape and pacing-trap overrides apply during active goal when wedged at an edge/boulder corridor.
-- Predator no-goal interior stalls now apply **`interior_esc`** (latched stuck escape with lateral preference from patrol lock heading) when edge margin is at/inside chase band and the current intent is blocked or repeatedly stuck.
-- Fox pack flag **`predator_pinch_debug_log`** emits at **`OLog.info`** (tag **`CREATURE_GOALS`**) — lines tagged **`pinch_esc`**, **`pacing_trap`**, **`corner_esc`**, **`interior_esc`**, **`final_intent`**.
+- Predator no-goal interior stalls apply **`interior_esc`** when edge margin is interior (≥ chase band) and **coverage stall**, **mid-field pinch**, blocked intent, or **`stuck_n ≥ 2`** — no longer requires blocked step when stall/pinch already active (playtest rows 29–30).
+- **`_predator_interior_pinch_escape_intent`** — mid-field boulder wedge at **`stuck_n ≥ 1`** (away-dir + latched stuck escape); symmetric to herbivore pinch at interior, distinct from rim **`pinch_esc`**.
+- Fox pack flag **`predator_pinch_debug_log`** emits at **`OLog.info`** (tag **`CREATURE_GOALS`**) — lines tagged **`pinch_esc`**, **`interior_pinch_esc`**, **`pacing_trap`**, **`corner_esc`**, **`interior_esc`**, **`stall_skip`**, **`final_intent`**.
 
 **Predator NE-corner / dual-edge rim (2026-06-10):**
 
@@ -227,7 +278,15 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 - **`interior_esc`** during **active goal** when `predator_geometry_pinch_active` (mid-field wedge, not only no-goal patrol).
 - **Exploration while engaged** — `exploration_blend_multiplier` honors pack **`exploration_blend_min_when_engaged`** during prey pursuit (no longer hard-zeroed).
 
-**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`.
+**No-goal patrol occlusion (2026-06-10 — playtest rows 27–30):**
+
+- **`motor_patrol_occlusion_active`** + **`motor_patrol_occlusion_penalty_weight`** on MotorContext when carnivore is hunt-motivated, has no active goal, and **`predator_geometry_pinch_active`** ([`_patch_predator_pinch_motor_ctx`](../../AI_int_lib/ai_driver.gd) + [`_build_motor_context`](../../AI_int_lib/ai_driver.gd)).
+- [`cardinal_avoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) applies **`seek_occlusion_step_cost`** toward **`expanding_explore_hint`** (synthetic goal along locked patrol heading) so no-goal guided patrol penalizes steps into boulder-occluded explore directions.
+- **`predator_patrol_blocked_backtrack_mul`** (default **1.25**) boosts **`weight_blocked_approach_backtrack`** while patrol occlusion is active.
+
+**Duel spawn settlement (2026-06-10):** [`playfield_bounds_3d.settle_creature_spawn_on_floor`](../../environment/playfield_bounds_3d.gd) re-raycasts + nudges creature root down until **`is_on_floor`**; [`main_3d.gd`](../../main_3d.gd) uses it after snap and on deferred settle (12-step default).
+
+**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`, `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`, `_test_predator_midfield_stall_escape_scaled_playfield`, `_test_duel_scaled_awareness_compensated`, `_test_duel_scaled_awareness_reaches_opposite_rim`, `_test_predator_no_prey_patrol_trail_repulsion`, `_test_east_rim_patrol_heading_mix_scaled`.
 
 **Cross-link:** [CONVERT_TO_3D.md §3.6 / D7](../Completed_Features/CONVERT_TO_3D.md) (world-unit motor distances).
 
@@ -578,6 +637,25 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 - [ ] **`cardinal_avoidance.gd`** scores **`goal_seek_targets`** only — **`food_seek_targets`** / **`pursuit_targets`** deprecated at scorer boundary.
 - [ ] [`tests/run_all.gd`](../../tests/run_all.gd) regression for remembered-bush **`goal_seek`** pull.
 
+#### G.5.2.5 Phase 4.5 — POST_LOS navigation planner
+
+**Full design:** [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md). Resolve doc `<<Question>>` items before 4.5b–d.
+
+**4.5a — Obstructed-seek pilot:**
+
+- [x] [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) expanded with data structures, algorithms, code map, first-round `<<Question>>` / `<<Comment>>`.
+- [x] [`seek_planner.gd`](../../creature/motor/seek_planner.gd) + [`nav_path_hint.gd`](../../environment/nav_path_hint.gd) `first_waypoint_world` shipped.
+- [x] [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) wires `motor_seek_ultimate_goal`, step `motor_seek_goal_pos`, `motor_seek_planner_mode` when `post_los_seek_planner_enabled`.
+- [x] Headless tests: `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`.
+- [x] Fox duel pack enables `post_los_seek_planner_enabled`.
+- [ ] Playtest row logged in [CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md) — re-run duel in-editor.
+
+**4.5b–d — Deferred:**
+
+- [ ] Active goal table + Observation replan **n** ([CREATURE_ATTRIBUTES_USAGE.md §3.5](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)).
+- [ ] Explore / backtrack seek-cycle branches.
+- [ ] Incremental retirement of `ai_driver` escape overrides (pinch, obstructed hunt latch, etc.).
+
 #### G.5.3 Phase 5 — Personality depth
 
 - [ ] **`trait_tier2_mapper.gd`** applies non-zero urgency deltas ([CREATURE_GOAL_DRIVERS.md §3.3.1](CREATURE_GOAL_DRIVERS.md)).
@@ -609,6 +687,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 - [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) — field catalog; traits.
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) — must stay consistent (**heredity out of scope** here; genome doc may evolve separately).
 - [ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
+- [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) — navigation / seek-cycle planner (Phase **4.5**); Observation replan hook.
 
 ---
 
@@ -616,6 +695,8 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-10 | **Phase 4.5 POST_LOS:** navigation planner phase added (depends Phase 4); [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) as sibling contract; §G.5.2.5 checklist; pilot `seek_planner.gd` + `post_los_seek_planner_enabled` pack gate. |
+| 2026-06-10 | **§A.1.1 Mid-field stall regression (rows 29–30):** relaxed `interior_esc` gate; `_predator_interior_pinch_escape_intent`; no-goal **`motor_patrol_occlusion_active`** + explore-hint occlusion in scorer; `stall_skip` debug; duel **`settle_creature_spawn_on_floor`**. Test: `_test_predator_midfield_stall_escape_scaled_playfield`. |
 | 2026-06-10 | **§A.1.1 Obstructed seek + cone-edge stability:** shared `motor_seek_filter_wall_hits`, `seek_occlusion_step_cost`, `goal_visibility_latch.gd`, memory-chase flank, `interior_esc` with active goal + mid-field pinch, seek-turn rescan debounce. Fox pack: `predator_prey_visible_latch_ticks`, `motor_seek_occlusion_penalty_weight`. Tests: `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`. |
 | 2026-06-10 | **East/west rim peel + mid-field stall:** `_predator_pick_rim_peel_cardinal` + coverage-stall anchor break N-S east-wall hugging and mid-field oscillation (playtest rows 22–25); fox pack keys `predator_patrol_stall_window_ticks`, `predator_patrol_rim_peel_min_gain`. Tests: `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`. |
 | 2026-06-10 | **Predator patrol stall fix:** 8-way rim tangent scoring + deterministic tie-break variance, interior stuck threshold (`motor_stuck_interior_edge_threshold` default from edge/corner bands), one-shot rim-exit interior nudge, hybrid scorer-first no-goal predator patrol fallback, and `interior_esc` debug path. Added tests: `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`. |

@@ -1026,6 +1026,26 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         step_len,
         w_seek_occlusion,
       )
+    var w_patrol_occlusion := float(ctx.get("motor_patrol_occlusion_penalty_weight", 0.0))
+    if (
+      bool(ctx.get("motor_patrol_occlusion_active", false))
+      and w_patrol_occlusion > 0.0
+      and d.length_squared() > 1e-14
+    ):
+      var patrol_hint_raw: Variant = ctx.get("expanding_explore_hint", _motor_horizontal_zero())
+      var patrol_hint := _motor_read_pos(patrol_hint_raw)
+      if patrol_hint.length_squared() > 1e-12:
+        var patrol_goal := creature_pos + patrol_hint.normalized() * maxf(step_len * 6.0, 12.0)
+        cost += seek_occlusion_step_cost(
+          creature_pos,
+          d,
+          patrol_goal,
+          los_ctx,
+          footprint_half,
+          static_obs,
+          step_len,
+          w_patrol_occlusion,
+        )
     if w_blocked_backtrack > 1e-8 and filter_blocked_approach and d.length_squared() > 1e-14:
       cost += blocked_approach_step_cost(
         d, blocked_approach_v, w_blocked_backtrack, backtrack_dot

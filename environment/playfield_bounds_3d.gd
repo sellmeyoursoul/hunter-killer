@@ -270,11 +270,11 @@ static func snap_creature_root_to_ground(
 ## Runs zero-intent [method CharacterBody3D.move_and_slide] steps so [method CharacterBody3D.is_on_floor] stabilizes after snap.
 ## Params:
 ## - body: Duel creature [code]Body[/code] already in the scene tree.
-## - steps: Physics iterations (default 6).
+## - steps: Physics iterations (default 12).
 ## - step_sec: Fixed timestep per iteration (default 1/60 s).
 static func settle_character_body_on_floor(
   body: CharacterBody3D,
-  steps: int = 6,
+  steps: int = 12,
   step_sec: float = 1.0 / 60.0,
 ) -> void:
   if body == null:
@@ -290,6 +290,41 @@ static func settle_character_body_on_floor(
     else:
       body.velocity.y -= grav * step_sec
     body.move_and_slide()
+
+
+## Re-snaps duel spawn root to ground and settles until [method CharacterBody3D.is_on_floor] or nudge budget exhausted.
+## Params:
+## - creature_root: Creature root [code]Node3D[/code] parent of [param body].
+## - body: Duel [code]Body[/code] already in the scene tree.
+## - space: Active [PhysicsDirectSpaceState3D].
+## - hint_y: Floor hint from playfield bounds.
+## Returns:
+## - True when [param body] reports on-floor after settlement.
+static func settle_creature_spawn_on_floor(
+  creature_root: Node3D,
+  body: CharacterBody3D,
+  space: PhysicsDirectSpaceState3D,
+  hint_y: float,
+  settle_steps: int = 12,
+) -> bool:
+  if creature_root == null or body == null:
+    return false
+  settle_character_body_on_floor(body, settle_steps)
+  if body.is_on_floor():
+    return true
+  for _nudge in 8:
+    var xz := Vector2(creature_root.global_position.x, creature_root.global_position.z)
+    var ground: Dictionary = raycast_ground_surface(space, xz, hint_y)
+    if bool(ground.get("hit", false)):
+      creature_root.global_position.y = root_global_y_for_surface(
+        body, float(ground.get("surface_y", hint_y))
+      )
+    else:
+      creature_root.global_position.y -= 0.12
+    settle_character_body_on_floor(body, 4)
+    if body.is_on_floor():
+      return true
+  return body.is_on_floor()
 
 
 ## Lowest mesh point in [param prop_root] local space (for grounding imported props).

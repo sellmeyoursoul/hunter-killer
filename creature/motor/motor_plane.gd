@@ -8,6 +8,18 @@ const _DefScript := preload("res://creature/definition/creature_definition.gd")
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
 
+## Distance keys restored to pack world meters during CREATURE_GOALS duel ([CREATURE_MOVEMENT_V2.md §A.1.1](Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
+const DUEL_AWARENESS_UNSCALE_KEYS: Array[String] = [
+  "awareness_radius",
+  "awareness_cone_extra",
+  "predator_prey_awareness_cone_extra",
+  "predator_prey_memory_forget_radius",
+  "goal_memory_forget_radius",
+]
+
+## Cap compensated duel awareness radii at this multiple of playfield long edge.
+const DUEL_AWARENESS_CAP_PLAYFIELD_MUL := 1.25
+
 ## Idle intent on the horizontal motor plane.
 const HORIZONTAL_ZERO := Vector3.ZERO
 ## World +X (motor "right" / east).
@@ -127,6 +139,33 @@ static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Di
       if _is_distance_motor_param_key(key):
         out[key] = float(out[key]) * scale
   _inject_cardinal_probe_mins(out, scale)
+  return out
+
+
+## Undoes [method scale_motor_distance_params] shrink on prey/food awareness keys during active duel rounds.
+## Params:
+## - motor_p: Already playfield-scaled motor dict.
+## - dist_scale: Factor from [method motor_distance_scale_for_main] (typically < 1 on small 3D mains).
+## - playfield_size: Creature [code]screen_size[/code] for cap ([member DUEL_AWARENESS_CAP_PLAYFIELD_MUL] × long edge).
+## Returns:
+## - Same dict with compensated awareness keys (capped).
+static func compensate_duel_awareness_params(
+  motor_p: Dictionary, dist_scale: float, playfield_size: Vector2
+) -> Dictionary:
+  if dist_scale <= 1e-8 or is_equal_approx(dist_scale, 1.0):
+    return motor_p
+  var out := motor_p
+  var compensate := 1.0 / dist_scale
+  var cap := 0.0
+  if playfield_size.x > 0.0 and playfield_size.y > 0.0:
+    cap = maxf(playfield_size.x, playfield_size.y) * DUEL_AWARENESS_CAP_PLAYFIELD_MUL
+  for key in DUEL_AWARENESS_UNSCALE_KEYS:
+    if not out.has(key):
+      continue
+    var v := float(out[key]) * compensate
+    if cap > 0.0:
+      v = minf(v, cap)
+    out[key] = v
   return out
 
 

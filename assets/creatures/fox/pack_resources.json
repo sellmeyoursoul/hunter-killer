@@ -41,6 +41,8 @@
     "predator_stalemate_starvation_mul": 2.2,
     "predator_stalemate_obstacle_mul": 0.2,
     "predator_chase_edge_band": 130.0,
+    "predator_chase_edge_band_frac": 0.12,
+    "predator_patrol_trail_repulsion_mul": 1.0,
     "predator_chase_edge_weight_mul": 0.12,
     "predator_chase_pin_scale": 0.15,
     "predator_obstacle_probe": 280.0,
@@ -80,7 +82,9 @@
     "predator_prey_visible_latch_ticks": 6,
     "predator_prey_engagement_latch_ticks": 36,
     "predator_engagement_latch_seek_scale": 0.72,
-    "motor_seek_occlusion_penalty_weight": 14.0
+    "motor_seek_occlusion_penalty_weight": 14.0,
+    "post_los_seek_planner_enabled": true,
+    "post_los_replan_base_ticks": 8
   },
   "strategy_class_tags": {
     "extra_modalities": []

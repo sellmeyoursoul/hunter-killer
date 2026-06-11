@@ -629,6 +629,21 @@ func _spawn_duel_pair() -> void:
       carn_frac = spawn_fracs[1] as Vector2
   var hpos := _spawn_position("HerbivoreSpawn", herb_frac)
   var cpos := _spawn_position("CarnivoreSpawn", carn_frac)
+  var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
+  if _ground_sampler != null and _ground_sampler.is_valid():
+    OLog.info(
+      "Main3D duel spawn: herb_frac=(%.2f,%.2f) carn_frac=(%.2f,%.2f) herb_elev=%.2f carn_elev=%.2f"
+      % [
+        herb_frac.x,
+        herb_frac.y,
+        carn_frac.x,
+        carn_frac.y,
+        _ground_sampler.sample_elevation(Vector2(hpos.x, hpos.z), hint_y),
+        _ground_sampler.sample_elevation(Vector2(cpos.x, cpos.z), hint_y),
+      ],
+      false,
+      "Main3D",
+    )
   _herbivore_root = _HerbScene.instantiate() as Node3D
   _herbivore_root.set("definition", _RabbitArchetype)
   add_child(_herbivore_root)
@@ -686,15 +701,34 @@ func _snap_creature_to_ground(
       true,
       "Main3D",
     )
-  _Bounds3D.settle_character_body_on_floor(body)
+  if space != null and creature_root is Node3D:
+    PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root, body, space, hint_y)
+  else:
+    _Bounds3D.settle_character_body_on_floor(body)
 
 
 func _settle_spawned_creature_bodies() -> void:
   await get_tree().physics_frame
+  var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
+  var space := get_world_3d().direct_space_state if get_world_3d() != null else null
   for body in [_herb_body, _carn_body]:
     if body == null or not is_instance_valid(body):
       continue
-    _Bounds3D.settle_character_body_on_floor(body)
+    var creature_root: Node = body.get_parent()
+    if space != null and creature_root is Node3D:
+      PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root as Node3D, body, space, hint_y)
+    else:
+      _Bounds3D.settle_character_body_on_floor(body)
+  await get_tree().physics_frame
+  if space != null:
+    for body in [_herb_body, _carn_body]:
+      if body == null or not is_instance_valid(body):
+        continue
+      if body.is_on_floor():
+        continue
+      var creature_root_retry: Node = body.get_parent()
+      if creature_root_retry is Node3D:
+        PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root_retry as Node3D, body, space, hint_y)
   call_deferred("_log_spawn_floor_contact")
 
 

@@ -75,6 +75,19 @@ W 0:00:04:218   olog.gd:423 @ _mirror_to_editor_impl(): Main3D spawn: Body pos=(
 26 |  6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south and got stuck mid-field. |
 27 |  6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south and jittered mid-field, facing south and southwest over and over. <<Question: Why would seek push forward at an edge where LOS is obstructed once the Cone of awareness encounters the obstruction. SHouldn't it at least veer away to try and find open space?>> |
 28 |  6/10 | main_3d | none | timeout | 0 | 0 | Fox moved west and east a few times, shimmied north, reset and repeted until the creatures starved |
+29 | 6/10 | main_3d | none | end_ai | 0 | 0 | Fox moved south and got stuck mid-field. |
+30 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south and got stuck mid-field. |
+31 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south, with east wall within the zone of awareness. Along it's path it would angle south west occasionally, but not fundamentally move more than a few ticks west. It would also stop and jitter in wide arcs at various points before continuing on it's southern path. |
+32 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south with occasional steps west. Around midfield (also when zone of awareness left east wall) it turned east for several ticks and then moved south and got stuck in what looked like a squeeze between the south wall and a boulder to the north northwest. 
+
+0:3:42.161 | Main3D: Body not on floor after spawn — check playfield collision layer 1 (world_static)
+0:3:42.161 | Main3D: Body not on floor after spawn — check playfield collision layer 1 (world_static)
+0:3:42.167 | Main3D spawn: Body pos=(-15.60, 3.94, -1.34) is_on_floor=false
+0:3:42.167 | Main3D spawn: Body pos=(90.60, 2.72, -90.43) is_on_floor=false
+|
+33 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south until not just the cone, but also the awreness radius crossed the southern wall and then it danced around in the souther corner. |
+34 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox got stuck in the NW corner. |
+
 
 
 
