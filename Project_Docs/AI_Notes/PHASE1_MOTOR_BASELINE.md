@@ -1,11 +1,23 @@
 # Motor play baseline (Phase 1 → Phase 3)
 
-**Last updated:** 2026-06-10  
+**Last updated:** 2026-06-12  
 **Regression anchor:** `godot --path . --headless -s res://tests/run_all.gd` (Godot 4.6.2 steam tools).
 
 **Duel species packs:** Herbivore **rabbit** → `res://assets/creatures/rabbit/pack_resources.json` ([`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres) on Player). Carnivore **fox** → `res://assets/creatures/fox/pack_resources.json` ([`fox_archetype.tres`](../../creature/species/fox_archetype.tres) on Mob). Editor default stays **dev** profile; pack overlays restore seek/prey and zero chaos for playtest (`resolver_smoke` remains headless-only).
 
 **Round end:** Duels end on **starvation** or **predation** only — no wall-clock round timer ([`main.gd`](../../main.gd)).
+
+## Phase 3 duel gates (tier 1 — before Phase 4)
+
+Authoritative spec: [CREATURE_MOVEMENT_V2.md §Phase 3 — exit tiers and gates](../Draft_Features/CREATURE_MOVEMENT_V2.md).
+
+| Gate | Pass |
+|------|------|
+| **Advance** | ≥1 `predation_carn_win` (fox) **and** ≥1 `starvation_carn_herb_win` (rabbit) on `main_3d` with 2× playtest boost |
+| **Ship viability** | ≥1 win (either species) with `hunter_killer_debug/use_ship_motor_profile = true` |
+| **Dev negative** | Default dev profile: no sustained seek / obvious aberrant loop; `_test_creature_motor_v2_profiles` green |
+
+Log rows in [CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md). Re-run all three gates after **major** motor merge / profile / duel-pack changes.
 
 ## How to run QA profile (editor)
 

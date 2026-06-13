@@ -205,8 +205,7 @@ func _run_all() -> void:
   _test_predator_patrol_coverage_stall_escape()
   _test_motor_cardinal_probe_scaled_for_small_playfield()
   _test_predator_midfield_stall_escape_scaled_playfield()
-  _test_duel_scaled_awareness_compensated()
-  _test_duel_scaled_awareness_reaches_opposite_rim()
+  _test_duel_scaled_awareness_stays_playfield_scaled()
   _test_predator_no_prey_patrol_trail_repulsion()
   _test_east_rim_patrol_heading_mix_scaled()
   _test_seek_stationary_look()
@@ -4987,7 +4986,7 @@ func _test_predator_midfield_stall_escape_scaled_playfield() -> void:
   main.queue_free()
 
 
-func _test_duel_scaled_awareness_compensated() -> void:
+func _test_duel_scaled_awareness_stays_playfield_scaled() -> void:
   var playfield := Vector2(105.0, 105.0)
   var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
   var base := {
@@ -4998,27 +4997,15 @@ func _test_duel_scaled_awareness_compensated() -> void:
   var scaled: Dictionary = _MotorPlane.scale_motor_distance_params(base, scale)
   _assert(
     float(scaled.get("awareness_radius", 0.0)) < 20.0,
-    "scaled awareness shrinks on ~105m playfield before duel compensation",
-  )
-  var compensated: Dictionary = _MotorPlane.compensate_duel_awareness_params(
-    scaled, scale, playfield
+    "scaled awareness shrinks on ~105m playfield",
   )
   _assert(
-    float(compensated.get("awareness_radius", 0.0)) > 100.0,
-    "duel awareness compensation restores pack radius in world meters",
+    float(scaled.get("awareness_cone_extra", 0.0)) < 50.0,
+    "scaled awareness cone extra shrinks on ~105m playfield",
   )
-  _assert(
-    float(compensated.get("awareness_radius", 0.0))
-    <= playfield.x * _MotorPlane.DUEL_AWARENESS_CAP_PLAYFIELD_MUL + 0.01,
-    "duel awareness radius capped at 1.25× playfield long edge",
-  )
-
-
-func _test_duel_scaled_awareness_reaches_opposite_rim() -> void:
   if not _ai_driver_can_instantiate():
     push_warning("skip duel opposite-rim awareness test — AiDriver script did not compile")
     return
-  var playfield := Vector2(105.0, 105.0)
   var main := Node3D.new()
   root.add_child(main)
   var fox := _spawn_carnivore_body(main, Vector3(90.0, 0.0, 52.0))
@@ -5035,7 +5022,7 @@ func _test_duel_scaled_awareness_reaches_opposite_rim() -> void:
   driver.call("set_duel_round_active", true)
   driver.call("_creature_motor_params_for_body", fox)
   var prey: Array = driver.call("_prey_positions_for_predator_motor", fox) as Array
-  _assert(not prey.is_empty(), "duel-compensated fox awareness includes opposite-rim rabbit")
+  _assert(prey.is_empty(), "opposite-rim duel spawns stay outside scaled fox awareness at round start")
   driver.queue_free()
   main.queue_free()
 

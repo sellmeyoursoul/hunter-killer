@@ -72,6 +72,71 @@ flowchart LR
 
 **Primary files:** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), `assets/creatures/*/pack_resources.json`, duel archetypes above.
 
+### Phase 3 — exit tiers and gates (resolved)
+
+**Do not conflate three tiers:**
+
+| Tier | Name | Blocks | Summary |
+|------|------|--------|---------|
+| **1** | **Advance gate** (Phase 3 → 4 / 4.5) | Starting structural ingress / POST_LOS expansion | Both duel species win at least once under valid playtest setup (below). |
+| **2** | **Phase 3 close** (§G.5.1) | Marking Phase 3 done | Advance gate **plus** `creature_motor_profile_ship` finalized (§A.1 key ownership) and duel pack deltas tuned. |
+| **3** | **Product balance** | Release polish only | ~50% win share per [CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md) — **not** a phase gate. |
+
+**Advance gate (tier 1 — confirmed):**
+
+1. ≥1 logged **fox** win — cause tag **`predation_carn_win`**.
+2. ≥1 logged **rabbit** win — cause tag **`starvation_carn_herb_win`**.
+3. Rows on **`main_3d`** duel with Phase 3 **2× playtest boost** active (table above).
+4. Playtest preconditions: `hunter_killer_debug/use_ship_motor_profile = true` **or** pack overlays that restore seek ([PHASE1_MOTOR_BASELINE.md](../AI_Notes/PHASE1_MOTOR_BASELINE.md)); each row in [CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md).
+
+Structural phases (4 / 4.5) may unblock retune dead-ends that weight tweaks cannot — but **do not replace** this gate; **both sides must win at least once before Phase 3 closes** (tier 2).
+
+**Ship-profile viability gate (tier 1 — confirmed):** ≥1 logged duel win (**fox or rabbit**, either cause tag above) with **`use_ship_motor_profile()`** active (`hunter_killer_debug/use_ship_motor_profile = true` or export feature **`creature_motor_ship`**). Proves the ship profile merge is a viable default, not only pack overlays on dev. **2× playtest boost** satisfies this gate for tier 1 **and** tier 2 — **no** ship-baseline body scale / awareness smoke row required before Phase 3 close (later phases will tune max calories per creature and food density per area; Phase 7 reverts playtest boost).
+
+**Dev-profile negative gate (tier 1 — confirmed):** With **dev** profile active (default editor, setting off) and duel packs loaded, duel behavior must remain **obviously misconfigured** — e.g. no sustained food/prey seek, aberrant looping — per [PHASE1_MOTOR_BASELINE.md](../AI_Notes/PHASE1_MOTOR_BASELINE.md). **CI:** `_test_creature_motor_v2_profiles` (merge keys — zero seek + high chaos) is **sufficient**; a headless duel aberrance harness is **not** required before Phase 3 close. **Manual:** live editor duel under dev profile remains the acceptance path for *visible* aberrance — the gate’s purpose is human-observable misconfiguration, not automated locomotion replay.
+
+**Regression policy (confirmed):** Any **major** motor merge / profile / duel-pack change in this area must re-run **advance gate**, **ship viability**, and **dev negative** before merge — same checklist as §G.5.1 tier-1 rows.
+
+**Endless-retune signals** (watch during Phase 3 retune):
+
+| Signal | Meaning |
+|--------|---------|
+| **Stuck motif** | ≥5 consecutive log rows with the same failure pattern (e.g. fox east-wall hug, 0 cal both sides) and no new cause tags after a tuning change |
+| **Test/playtest split** | Headless scenario matrix green ([PHASE1_MOTOR_BASELINE.md](../AI_Notes/PHASE1_MOTOR_BASELINE.md) scenarios 1–5) but duel still 100% `timeout` / `end_ai` |
+| **Knob-only loop** | ≥2 retune PRs that only change pack weights/chaos with no change in failure motif |
+
+**Pivot rule:** When **test/playtest split** or **knob-only loop** applies to the **same motif**, **stop pack numerics** and treat Phase **4** (ingress — `weight_seek_remembered_goal`, single `goal_seek_targets` path) or Phase **4.5b–d** (POST_LOS goal table, explore/backtrack, retire `ai_driver` escape overrides) as the next lever — **even if advance gate not yet met**, but **only after** confirming playtest setup (ship profile, spawn settlement) is valid. Checklist: §G.5.1.
+
+```mermaid
+flowchart TD
+  playtest[Duel_playtest_row]
+  advanceGate{Advance_gate_met?}
+  endlessRetune{Endless_retune_signal?}
+  packTune[Pack_weight_retune]
+  phase4[Phase_4_ingress]
+  phase45[Phase_4_5_POST_LOS]
+  phase3Close[Phase_3_close_ship_profile]
+  playtest --> advanceGate
+  advanceGate -->|no| endlessRetune
+  endlessRetune -->|knob_only_or_test_split| phase4
+  endlessRetune -->|no_structural_signal| packTune
+  advanceGate -->|yes| phase3Close
+  phase4 --> phase45
+```
+
+**Occlusion at cone edge (playtest row 27) — resolved (§A.1.1):** Seek and patrol scoring should **maximize visible open terrain** within the zone of awareness. When LoS to the active seek goal or synthetic explore hint is blocked, cardinal steps **into** the occluded heading are penalized; lateral / flank headings that **increase unobstructed awareness coverage** are rewarded (`seek_occlusion_step_cost`, `motor_patrol_occlusion_active`). Applies to **active seek** and **no-goal patrol** when hunt-motivated and occlusion context is armed — not gated on `stuck_n`.
+
+**Patrol occlusion residual — rows 27–34 (resolved):**
+
+| Decision | Policy |
+|----------|--------|
+| **Phase 3 close gate** | **Not** blocked on Phase **4.5c** explore/backtrack owning patrol occlusion. |
+| **First lever** | Phase 3 **pack tuning** — `motor_patrol_occlusion_penalty_weight`, `predator_patrol_blocked_backtrack_mul`, related patrol keys (§A.1.1). |
+| **Escalation** | If south-facing jitter persists after tuning and blocks advance gate / duel wins, pull **no-goal patrol explore/backtrack** (today scoped to **4.5c** in [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md)) into **Phase 3 playtest scope** *before* Phase 3 close — **not** deferred behind 4.5c. Maintainer approved forward pull when tuning alone fails. |
+| **4.5c remainder** | Full seek-cycle explore/backtrack tree + incremental `ai_driver` override retirement stays **4.5c–d** after ingress (Phase 4) and **4.5b** goal table land. |
+
+<<Question: Pre-emptive pull — should we implement no-goal patrol explore/backtrack **now** (before advance-gate wins) given rows 27–34, or **tune-first** and only pull forward if endless-retune / pivot signals fire? Reasons to defer pre-emptive pull: (1) **4.5c** design assumes **4.5b** active goal table + Observation replan **n**; patrol-only subset may duplicate `ai_driver` escape pickers we retire in **4.5d**; (2) current `seek_occlusion_step_cost` + pack weights may suffice; (3) scope creep delays advance gate. Reasons to pull now: jitter may mask predation wins and invalidate pack retune.>><<Comment: let's keep the design unchanged for now. If we do 100 tests and still don't even have predator chase, then we should recosider since that is evidence we are stuck in an endless tune-loop>>
+
 ### Phase 4 — Ingress cleanup (§A.2.2)
 
 **Goal:** Finish unified **`SeekCandidate`** ingress; remove parallel legacy scorer lists.
@@ -105,7 +170,7 @@ flowchart LR
 | Sub-phase | Scope | Status |
 |-----------|-------|--------|
 | **4.5a** | Obstructed active seek → navmesh first waypoint as `motor_seek_goal_pos`; pack flag `post_los_seek_planner_enabled` | **Pilot** |
-| **4.5b** | Active goal table + Observation replan interval **n** | Deferred — resolve POST_LOS §2 `<<Question>>` |
+| **4.5b** | Active goal table + Observation replan interval **n** | **Next** (POST_LOS design round 4 resolved — [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) §§2–4) |
 | **4.5c** | Explore / backtrack seek-cycle branches | Deferred |
 | **4.5d** | Retire `ai_driver` escape overrides incrementally | Deferred until playtest green |
 
@@ -164,9 +229,9 @@ flowchart LR
 
 ### Suggested immediate sprint
 
-**Highest leverage:** Phase 4 ingress cleanup — closes spec/code gap on **`weight_seek_remembered_goal`** and reduces `ai_driver` / cardinal fork surface.
-
-**Parallel (low risk):** Phase 3 ship profile numerics for duel packs only — keys already in [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md).
+1. **Phase 3 retune** until **tier-1 gates** met (advance + ship viability + dev negative — **Phase 3 — exit tiers and gates**).
+2. **Phase 3 close** — finalize **`creature_motor_profile_ship`** per §A.1 key ownership tables; packs **retain** explicit keys until Phase 7 (dedup at doc promotion).
+3. **Phase 4 ingress** in parallel only when **endless-retune pivot** fires — **`weight_seek_remembered_goal`**, single `goal_seek_targets` path; **4.5b** unblocked per [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md).
 
 ---
 
@@ -208,7 +273,44 @@ If **all or part** of **`creature_motor`** is absent in the pack file, **missing
 | Locked id | Audience | Behavioral intent |
 |-----------|----------|-------------------|
 | **`creature_motor_profile_dev`** | Editor, CI, builds **without** the ship feature tag below | **Aberrant probe profile:** tune weights/speed/explore/hold toward **extreme ends of each knob's spectrum** so effective behavior **clearly deviates** from acceptable ship norms — e.g. **tight looping / small circles**, excessive idle spin, or other obviously wrong locomotion. Purpose: **detect wiring regressions** (missing pack overlay, broken merge, absent seek/threat builder) — **not** approximate real creature behavior. Per-key guidance: when unsure, pick the **opposite extreme** from the intended ship midpoint for that scalar. |
-| **`creature_motor_profile_ship`** | **Ship / release exports** when export feature **`creature_motor_ship`** is enabled | **Stub only until gameplay baseline exists:** ship numerics are **guesswork** today. Implement as **empty overlay** (spine-only) or placeholder dict with **`<<Comment: FINALIZE BEFORE SHIP>>`** on every intended override key. **Do not** treat stub values as release tuning. Finalize after playtest baseline establishes neutral species curve. |
+| **`creature_motor_profile_ship`** | **Ship / release exports** when export feature **`creature_motor_ship`** is enabled | **Partial overlay until Phase 3 close:** finalize per **key ownership** below after advance gate + baseline playtest. **Do not** treat current values as release tuning. |
+
+**Key ownership — `creature_motor_profile_ship` vs pack `creature_motor` (resolved — Phase 3 close task):**
+
+1. **Identical in fox and rabbit packs** → move to **`creature_motor_profile_ship`** at Phase 3 close (species-agnostic duel defaults). Today (2026-06-12, 2× playtest boost values in packs):
+
+| Key | Shared value (playtest) | Measures |
+|-----|-------------------------|----------|
+| `awareness_radius` | **150** | Base omnidirectional awareness reach (§E.1); **75** at ship baseline before Phase 7 revert |
+| `awareness_cone_extra` | **400** | Forward-cone awareness extension (§E.1); **200** at ship baseline |
+| `awareness_forward_cone_only` | **false** | Hybrid rear disk + forward wedge (default posture §E.1) |
+| `explore_coverage_cell` | **52** | Explore-grid cell size for coverage / trail repulsion |
+| `explore_trail_max_cells` | **96** | Trail-repulsion memory cap |
+| `geometry_escape_lock_ticks` | **14** | Latched geometry / corner escape hold |
+| `motor_playfield_corner_band` | **84** | Playfield corner detection band |
+| `motor_stuck_escape_ticks` | **1** | Stuck counter before forced escape intent |
+| `motor_tie_cost_epsilon` | **0.55** | Cardinal tie-break noise |
+| `weight_explore_trail_repulsion` | **2.35** | Repulsion from recently visited explore cells |
+| `weight_stuck_escape_explore` | **2.2** | Explore bias during stuck escape |
+
+2. **Present in both packs but different values** → at Phase 3 close, set **ship default = numeric midpoint** (scalar keys only); document what each measures; species packs keep **deltas** from ship. Tune via playtest focused on that axis:
+
+| Key | Fox | Rabbit | Ship midpoint | Measures / test focus |
+|-----|-----|--------|---------------|------------------------|
+| `expanding_explore_base_physics_ticks` | 48 | 36 | **42** | Expand-hint segment hold duration |
+| `motor_goal_sight_chaos_mul` | 0.2 | 0.25 | **0.225** | Chaos reduction when goal in sight |
+| `motor_intent_cost_chaos` | 3.8 | 2.8 | **3.3** | Intent roulette noise (ship overlay may stay **0** until close — see below) |
+| `motor_no_goal_chaos_mul` | 3.4 | 2.6 | **3.0** | Patrol chaos multiplier |
+| `motor_no_goal_patrol_lock_sec` | 0.5 | 0.65 | **0.575** | No-goal patrol heading lock TTL |
+| `weight_expanding_explore_hint` | 1.8 | 0.12 | **0.96** | Pull toward expanding explore hint |
+| `weight_explore_turn_bias` | 0.04 | 0.14 | **0.09** | Explore turn preference |
+| `weight_obstacle_shield_prey` | 28 | 32 | **30** | Prey uses static obstacle as shield vs threat |
+
+3. **Species-only keys** (fox-only carnivore / rabbit-only herbivore blocks) → **remain in pack** `creature_motor` only — never ship. Examples: `weight_seek_prey`, `weight_seek_ready_food`, flee / pursuit / pinch packs.
+
+4. **Species-divergent boolean keys** — **`motor_exploration_always_enabled`** (**fox true**, **rabbit false**) stays **pack-only** (not promoted to ship). Key may change or be removed when all creatures share a single code path.
+
+**Pack dedup after Phase 3 close (resolved):** When shared keys move into **`creature_motor_profile_ship`**, fox/rabbit packs **retain explicit duplicated values** until **Phase 7** — packs stay diff-visible for tuning variance; Phase 7 cleanup drops duplicates and reverts playtest boost (see **Phase 7 — revert Phase 3 playtest boost**).
 
 **Profile selection (build flag — defaults to dev):**
 
@@ -237,10 +339,9 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 
 **MotorContext:** [`_build_motor_context`](../../AI_int_lib/ai_driver.gd) copies both keys onto ctx (`motor_cardinal_probe_min`, `motor_cardinal_near_probe_min`) so [`CardinalAvoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) and AiDriver escape helpers share the same scaled probes.
 
-**Duel awareness compensation (2026-06-10 — playtest rows 31–33):**
+**Duel awareness (playfield-scaled — reverted 2026-06-12):**
 
-- On active CREATURE_GOALS duel rounds ([`AiDriver._duel_round_active`](../../AI_int_lib/ai_driver.gd)), [`MotorPlane.compensate_duel_awareness_params`](../../creature/motor/motor_plane.gd) multiplies [`DUEL_AWARENESS_UNSCALE_KEYS`](../../creature/motor/motor_plane.gd) by `1 / dist_scale` after [`scale_motor_distance_params`](../../creature/motor/motor_plane.gd) so pack **`awareness_radius` / `awareness_cone_extra`** (Phase 3 **2× playtest** values) apply as **world meters** on ~105 m grasslands mains — capped at **`DUEL_AWARENESS_CAP_PLAYFIELD_MUL` (1.25)** × playfield long edge.
-- **Without** compensation, opposite-rim duel spawns stay outside `prey_pts_live` for the whole timeout (fox never arms pursuit).
+- Pack **`awareness_radius` / `awareness_cone_extra`** (Phase 3 **2× playtest** values) scale with [`scale_motor_distance_params`](../../creature/motor/motor_plane.gd) on ~105 m grasslands mains like other distance keys — **no** duel-round unscale. Opposite-rim spawns start outside `prey_pts_live`; fox patrols until prey enters cone (PHASE1 scenario 2 / 3).
 
 **No-prey predator patrol coverage (2026-06-10 — playtest rows 31–33):**
 
@@ -283,10 +384,11 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 - **`motor_patrol_occlusion_active`** + **`motor_patrol_occlusion_penalty_weight`** on MotorContext when carnivore is hunt-motivated, has no active goal, and **`predator_geometry_pinch_active`** ([`_patch_predator_pinch_motor_ctx`](../../AI_int_lib/ai_driver.gd) + [`_build_motor_context`](../../AI_int_lib/ai_driver.gd)).
 - [`cardinal_avoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) applies **`seek_occlusion_step_cost`** toward **`expanding_explore_hint`** (synthetic goal along locked patrol heading) so no-goal guided patrol penalizes steps into boulder-occluded explore directions.
 - **`predator_patrol_blocked_backtrack_mul`** (default **1.25**) boosts **`weight_blocked_approach_backtrack`** while patrol occlusion is active.
+- **Occlusion normative behavior:** §**Phase 3 — exit tiers** (playtest row 27) + `seek_occlusion_step_cost` — maximize open terrain in awareness zone; penalize into-blocked LoS steps.
 
 **Duel spawn settlement (2026-06-10):** [`playfield_bounds_3d.settle_creature_spawn_on_floor`](../../environment/playfield_bounds_3d.gd) re-raycasts + nudges creature root down until **`is_on_floor`**; [`main_3d.gd`](../../main_3d.gd) uses it after snap and on deferred settle (12-step default).
 
-**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`, `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`, `_test_predator_midfield_stall_escape_scaled_playfield`, `_test_duel_scaled_awareness_compensated`, `_test_duel_scaled_awareness_reaches_opposite_rim`, `_test_predator_no_prey_patrol_trail_repulsion`, `_test_east_rim_patrol_heading_mix_scaled`.
+**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`, `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`, `_test_predator_midfield_stall_escape_scaled_playfield`, `_test_duel_scaled_awareness_stays_playfield_scaled`, `_test_predator_no_prey_patrol_trail_repulsion`, `_test_east_rim_patrol_heading_mix_scaled`.
 
 **Cross-link:** [CONVERT_TO_3D.md §3.6 / D7](../Completed_Features/CONVERT_TO_3D.md) (world-unit motor distances).
 
@@ -343,7 +445,7 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 - **Herbivore body to a carnivore** → **`food_candidate = true`** for that species**, **`consumable_now`** subject to gameplay rules (alive, in range, etc.).
 - **Rival predator** → **`hostile = true`** (Tier 2 *Avoid hostiles*) — never “food,” separate channel from seek.
 
-<<Comment: `DietRegistry` / `FoodIntakePolicy` should classify **interaction** (“can bite bush”); motor should classify **salience** (“target appears in seekers or hostiles”). Split keeps eating code from routing code.>>
+**Interaction vs salience (resolved):** [`DietRegistry`](../../creature/capabilities/diet_registry.gd) / [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) classify **interaction** — whether a target is bite-eligible for that species. [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) + dominant Tier-2 leaf classify **salience** — whether the target appears in **`SeekCandidate[]`** or **`ThreatSample[]`** this tick. Eating / calorie resolution stays on policy; motor routing stays on builder + scorer. Do not fold diet rules into cardinal scoring.
 
 #### A.2.1 `MotorContext` tactic classifier flags (phase-1 — salient write)
 
@@ -415,9 +517,7 @@ for s in 0..7:
 - **Hotspot / escalate:** adjust **`weight_seek_ready_food`** and Preserve/Find thresholds above — **not** the vector lines.
 - **Precise remembered bushes** stay in **`food_seek_targets`** only — **do not** append centroid to seek lists.
 
-Implementation slots: **`believed_goal_source_bias`** populated by **`goal_source_memory.project_believed_goal_bias(...)`**; keys **`weight_believed_goal_pull`**, **`believed_goal_hotspot_near_radius_px`** in **`creature_motor`** (**MEMORY §10**). Trait replay obeys **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**. **Stub zero bias** acceptable until memory PR lands.
-
-<<Comment: First implementation may omit `believed_goal_*`; document keys in **`creature_motor`** packs when wired. Nutritional hotspots may be the first consumer — still keyed generically so mates/shelter/evasion stacks without renames later.>>
+**Shipped (Phase 2):** **`believed_goal_source_bias`** populated by **`goal_source_memory.project_believed_goal_bias(...)`**; rabbit duel pack authors **`weight_believed_goal_pull`**, hotspot / escalate radii, and locale-prior keys in **`creature_motor`** (**[CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)**). Trait replay obeys **[CREATURE_GOAL_DRIVERS.md §3](CREATURE_GOAL_DRIVERS.md)**. Keys remain **goal-generic** (`believed_goal_*`, not `food_*`) so mates / shelter / evasion reuse the same façade in Phase 6.
 
 ### A.4 Motivation traits (`CreatureDefinition`)
 
@@ -626,9 +726,18 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 #### G.5.1 Phase 3 — Retune and ship baseline
 
-- [ ] Duel playtest rows logged ([CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)) — note **2× playtest boost** active (Phase 3 table).
-- [ ] **`creature_motor_profile_ship`** has real numerics (not stub/empty overlay).
-- [ ] Duel rabbit/fox **`pack_resources.json`** tuned for forage / flee / memory (Preserve/Find band, awareness, belief radii).
+**Tier 1 (advance to Phase 4 / 4.5 structural work):**
+
+- [ ] **Advance gate** — ≥1 `predation_carn_win` + ≥1 `starvation_carn_herb_win` logged (2× boost; **Phase 3 — exit tiers and gates**).
+- [ ] **Ship-profile viability** — ≥1 duel win (either species) with `use_ship_motor_profile()` active (**2× playtest boost** OK; ship-baseline scale not required).
+- [ ] **Dev-profile negative** — `_test_creature_motor_v2_profiles` green on dev merge keys; manual dev-profile duel confirms visible aberrance (headless duel harness not required).
+- [ ] Duel playtest rows logged ([CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md)) **including at least one row per win side** — note **2× playtest boost** active (Phase 3 table).
+- [ ] **Endless-retune check** — if pivot rule triggered, log which structural phase (4 / 4.5) was chosen and link playtest row.
+
+**Tier 2 (Phase 3 close):**
+
+- [ ] **`creature_motor_profile_ship`** finalized per §A.1 key ownership (shared + midpoint keys); not stub-only overlay.
+- [ ] Duel rabbit/fox **`pack_resources.json`** species-only deltas tuned (forage / flee / pursuit / memory).
 - [ ] Ship executable CI strategy (**B-10**) documented or implemented ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)).
 
 #### G.5.2 Phase 4 — Ingress cleanup
@@ -639,7 +748,7 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 #### G.5.2.5 Phase 4.5 — POST_LOS navigation planner
 
-**Full design:** [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md). Resolve doc `<<Question>>` items before 4.5b–d.
+**Full design:** [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md). Design round 4 resolved §§2–4 — **4.5b** ready; **4.5c–d** follow playtest.
 
 **4.5a — Obstructed-seek pilot:**
 
@@ -695,6 +804,10 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-12 | **Duel awareness revert:** removed `compensate_duel_awareness_params` — pack `awareness_radius` / `awareness_cone_extra` stay playfield-scaled on ~105 m mains so opposite-rim spawns start outside cone (PHASE1 scenarios 2/3). Test: `_test_duel_scaled_awareness_stays_playfield_scaled`. |
+| 2026-06-12 | **Comment resolution pass (2):** ship viability = 2× boost only (no Phase 7 smoke before close); dev negative = merge test sufficient for CI + manual aberrance; `motor_exploration_always_enabled` pack-only; pack dedup deferred to Phase 7; patrol occlusion residual = tune-first, 4.5c not a Phase 3 close blocker, forward-pull if tuning fails; open question on pre-emptive vs tune-first explore/backtrack pull. |
+| 2026-06-12 | **Comment resolution pass:** Phase 3 exit tiers + advance/ship/dev gates; occlusion normative (awareness coverage); §A.1 ship-vs-pack key ownership tables; interaction vs salience; Phase 2 `believed_goal_*` shipped note; 4.5b unblocked (POST_LOS round 4); §G.5.1 tier 1/2 split; new open questions for ship-baseline smoke, dev CI, boolean keys, pack dedup, occlusion tuning vs 4.5c. |
+| 2026-06-12 | **Phase 3 open questions:** advance gate (`predation_carn_win` + `starvation_carn_herb_win`), endless-retune / pivot-to-Phase-4 signals, occlusion row 27, ship-vs-pack key ownership; §G.5.1 + sprint note synced. |
 | 2026-06-10 | **Phase 4.5 POST_LOS:** navigation planner phase added (depends Phase 4); [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) as sibling contract; §G.5.2.5 checklist; pilot `seek_planner.gd` + `post_los_seek_planner_enabled` pack gate. |
 | 2026-06-10 | **§A.1.1 Mid-field stall regression (rows 29–30):** relaxed `interior_esc` gate; `_predator_interior_pinch_escape_intent`; no-goal **`motor_patrol_occlusion_active`** + explore-hint occlusion in scorer; `stall_skip` debug; duel **`settle_creature_spawn_on_floor`**. Test: `_test_predator_midfield_stall_escape_scaled_playfield`. |
 | 2026-06-10 | **§A.1.1 Obstructed seek + cone-edge stability:** shared `motor_seek_filter_wall_hits`, `seek_occlusion_step_cost`, `goal_visibility_latch.gd`, memory-chase flank, `interior_esc` with active goal + mid-field pinch, seek-turn rescan debounce. Fox pack: `predator_prey_visible_latch_ticks`, `motor_seek_occlusion_penalty_weight`. Tests: `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`. |

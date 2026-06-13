@@ -358,10 +358,7 @@ func _scale_motor_params_for_playfield(body: Node, motor_p: Dictionary) -> Dicti
   if playfield == Vector2.ZERO:
     playfield = _viewport_playfield_size(body)
   var dist_scale := _MotorPlane.motor_distance_scale_for_main(_main, playfield)
-  var scaled := _MotorPlane.scale_motor_distance_params(motor_p, dist_scale)
-  if _duel_round_active and dist_scale < 1.0 - 1e-6:
-    scaled = _MotorPlane.compensate_duel_awareness_params(scaled, dist_scale, playfield)
-  return scaled
+  return _MotorPlane.scale_motor_distance_params(motor_p, dist_scale)
 
 
 ## Returns merged [code]perception[/code] dict (same fallback pattern as [_live_creature_motor_params]).

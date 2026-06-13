@@ -8,18 +8,6 @@ const _DefScript := preload("res://creature/definition/creature_definition.gd")
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
 
-## Distance keys restored to pack world meters during CREATURE_GOALS duel ([CREATURE_MOVEMENT_V2.md §A.1.1](Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-const DUEL_AWARENESS_UNSCALE_KEYS: Array[String] = [
-  "awareness_radius",
-  "awareness_cone_extra",
-  "predator_prey_awareness_cone_extra",
-  "predator_prey_memory_forget_radius",
-  "goal_memory_forget_radius",
-]
-
-## Cap compensated duel awareness radii at this multiple of playfield long edge.
-const DUEL_AWARENESS_CAP_PLAYFIELD_MUL := 1.25
-
 ## Idle intent on the horizontal motor plane.
 const HORIZONTAL_ZERO := Vector3.ZERO
 ## World +X (motor "right" / east).
