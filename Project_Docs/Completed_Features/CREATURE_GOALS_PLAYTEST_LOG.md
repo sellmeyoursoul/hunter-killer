@@ -87,8 +87,16 @@ W 0:00:04:218   olog.gd:423 @ _mirror_to_editor_impl(): Main3D spawn: Body pos=(
 |
 33 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox moved south until not just the cone, but also the awreness radius crossed the southern wall and then it danced around in the souther corner. |
 34 | 6/10 | main_3d | none | timeout | 0 | 0 | Fox got stuck in the NW corner. |
-
-
+35 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox moved south almost right away and didn't even look away from that direction until he was almost on the southern edge at which point he seemed to circle. <<Question: Why is South scoring so much higher than all other directions? >>
+36 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox still moved south, skirting the east wall, with it still in its zone of awareness. Once slightly south east of a boulder by the valley, it appeared to get stuck, trying to turn north, seeing a boulter up there and then just circling. |
+37 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox moved south following the same pattern as 36.|
+38 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox moved south, veering slightly inward. It got stuck between a couple of boulders and the east wall for about 20 seconds, before moving south again and starving. |
+39 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox moved sounth got beyond the boulders it got stuck on in 38, and then turned north as it approached the south wall and got stuck on those boulders. |
+40 | 6/13 | main_3d | none | end_ai | 10 | 10 | Fox moved south and occasionally west. Managed to get south of the first boulder, after appearing to get stuck for a couple of seconds. When it was about east of the next boulder, moved east toward the wall, turned back and then got stuck for about 30 seconds before I ended the test. |
+41 | 6/13 | main_3d | none | end_ai | 15 | 15 | Same pattern as 20 |
+42 | 6/13 | main_3d | none | timeout | 0 | 0 | Fox moved south, danced a bit around the boulder squeeze where it got stuck, but managed to get past. Appeeared to get stuck again near the south wall for a few seconds before moving west. Had a similar problem on a shrub and then spun back and forth near the valley edge. <<question: is a drop/no clear ground treated as open ground or a blocker? If neither how is it weighted?>> |
+43 | 6/13 |main_3d | none | timeout | 0 | 0 | Fox moved south and only stuttered a couple of times moving past the boulders. There were a few mroe seconds of stuck in the southeast corner, before moving west. It got stuck there with the bush to the northeast the south wall nearby, and the east wall visible when it turned. The zone of awareness never reached the valley's edge. |
+44 |6/13 |main_3d | none | timeout | 0 | 0 | Fox moved south, smoothly past the first boulder, with it to the west and the wall to the east. A few units before being east of the next boulder (so still slightly north), the fox got stuck and spent the next ~30 seconds in rapid oscilation before spending another 10-15 seconds in slow turns, but still stuck, until the timer ran out.
 
 
 **Cause tags:** `predation_carn_win` | `starvation_herb` | `starvation_carn_herb_win` | `timeout` | `end_ai`

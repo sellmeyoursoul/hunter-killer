@@ -17,4 +17,5 @@ asset_pack_root = "res://assets/creatures/rabbit"
 creature_size = 1.7
 collision_capsule_radius = 0.6
 collision_capsule_height = 2.0
+caloric_needs = 60
 locomotion_profile = SubResource("sub_loco")

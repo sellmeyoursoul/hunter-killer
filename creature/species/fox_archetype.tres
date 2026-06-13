@@ -17,4 +17,5 @@ feeding_mode = 1
 creature_size = 2.0
 collision_capsule_radius = 0.7
 collision_capsule_height = 2.2
+caloric_needs = 60
 locomotion_profile = SubResource("sub_loco")

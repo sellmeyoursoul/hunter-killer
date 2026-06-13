@@ -46,6 +46,10 @@ static func creature_motor_spine() -> Dictionary:
     "awareness_memory_weight": 0.35,
     "awareness_memory_horizon_sec": 0.0,
     "weight_obstacle": 1.25,
+    ## Off-path observed static AABB repulsion scale (full weight on step corridor / squeeze).
+    "weight_obstacle_peripheral_mul": 0.2,
+    ## Extra attenuation when obstacle is only in forward wedge beyond [code]awareness_radius[/code].
+    "weight_obstacle_cone_edge_mul": 0.5,
     ## Prey ENGINE: strip merged shrub static AABBs this close to current [code]food_seek_targets[/code] so grazing can beat repulsion.
     "vegetation_blocking_forage_clearance": 92.0,
     ## Multiply base [code]weight_obstacle[/code] for carnivores (shrub footprints + pursuit balance).
@@ -109,6 +113,8 @@ static func creature_motor_spine() -> Dictionary:
     "weight_terrain_uphill": 4.0,
     "terrain_depression_threshold_m": 0.5,
     "terrain_stuck_min_uphill_m": 0.15,
+    "terrain_drop_block_m": 0.35,
+    "weight_terrain_drop": 40.0,
     "motor_stuck_turn_bias_scale": 0.25,
     "motor_stuck_idle_penalty_scale": 2.5,
     "motor_stuck_prey_expand_floor": 0.95,

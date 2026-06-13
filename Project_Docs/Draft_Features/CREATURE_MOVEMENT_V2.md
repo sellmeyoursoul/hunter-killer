@@ -69,6 +69,7 @@ flowchart LR
 | same — `collision_capsule_radius` / `height` | **0.35** / **1.1** | **0.7** / **2.2** |
 | [`rabbit/pack_resources.json`](../../assets/creatures/rabbit/pack_resources.json) + [`fox/pack_resources.json`](../../assets/creatures/fox/pack_resources.json) — `awareness_radius` | **75** | **150** |
 | same — `awareness_cone_extra` (§E.1 hybrid zone) | **200** | **400** |
+| [`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres) + [`fox_archetype.tres`](../../creature/species/fox_archetype.tres) — `caloric_needs` (start + max pool) | **30** | **60** |
 
 **Primary files:** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), `assets/creatures/*/pack_resources.json`, duel archetypes above.
 
@@ -135,7 +136,51 @@ flowchart TD
 | **Escalation** | If south-facing jitter persists after tuning and blocks advance gate / duel wins, pull **no-goal patrol explore/backtrack** (today scoped to **4.5c** in [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md)) into **Phase 3 playtest scope** *before* Phase 3 close — **not** deferred behind 4.5c. Maintainer approved forward pull when tuning alone fails. |
 | **4.5c remainder** | Full seek-cycle explore/backtrack tree + incremental `ai_driver` override retirement stays **4.5c–d** after ingress (Phase 4) and **4.5b** goal table land. |
 
-<<Question: Pre-emptive pull — should we implement no-goal patrol explore/backtrack **now** (before advance-gate wins) given rows 27–34, or **tune-first** and only pull forward if endless-retune / pivot signals fire? Reasons to defer pre-emptive pull: (1) **4.5c** design assumes **4.5b** active goal table + Observation replan **n**; patrol-only subset may duplicate `ai_driver` escape pickers we retire in **4.5d**; (2) current `seek_occlusion_step_cost` + pack weights may suffice; (3) scope creep delays advance gate. Reasons to pull now: jitter may mask predation wins and invalidate pack retune.>><<Comment: let's keep the design unchanged for now. If we do 100 tests and still don't even have predator chase, then we should recosider since that is evidence we are stuck in an endless tune-loop>>
+<<Question: Pre-emptive pull — should we implement no-goal patrol explore/backtrack **now** (before advance-gate wins) given rows 27–34, or **tune-first** and only pull forward if endless-retune / pivot signals fire?>>**Resolved (2026-06-13 — rows 35–36):** Ship **open-ground no-prey patrol** first ([`_predator_open_ground_patrol_hint`](../../AI_int_lib/ai_driver.gd), [`_predator_compose_no_prey_expand_hint`](../../AI_int_lib/ai_driver.gd), expanding **8-way segment** rotation, wall-in-awareness **`motor_patrol_occlusion_active`**, weak duel prey-sector prior). Phase **4.5c** explore/backtrack pull remains escalation if rows **37+** still show endless south lock after this pass.
+
+**Playtest row 35/36 — why South wins (not a constant):** No hardcoded south default. At duel start the fox is usually on the **east rim** with empty `prey_pts_live`. [`_predator_patrol_edge_expand_hint`](../../AI_int_lib/ai_driver.gd) sets a heavy **`expanding_explore_hint`** (fox pack **`predator_patrol_interior_expand_weight`: 8.0). East-wall **rim peel** often fails **`predator_patrol_rim_peel_min_gain`**, so **N/S wall tangents** win; from the **north half** of the east wall, **`toward_center`** favors **South (+Z)**. **`Explore.pick_cardinal`** was previously wired only when **`prey_engaged`**, so no-prey patrol lacked **8-way segment rotation**. Chaos (~13 no-goal) cannot break a stable hint at weight **8** plus **`motor_no_goal_patrol_lock_sec`** (0.5 s). **`motor_patrol_occlusion_active`** was pinch-only, not **wall-in-awareness**.
+
+**Open-ground no-prey patrol (2026-06-13 — rows 35–36 fix):**
+
+| Priority | Mechanism |
+|----------|-----------|
+| **Primary** | [`_predator_open_ground_patrol_hint`](../../AI_int_lib/ai_driver.gd) — 8-way score: edge-margin gain, static clearance, playfield center, wall-inward peel; segment RNG (`body_id ^ round_salt ^ segment_index`). |
+| **Variance** | [`_predator_compose_no_prey_expand_hint`](../../AI_int_lib/ai_driver.gd) blends **segment** [`Explore.pick_cardinal`](../../creature/motor/expanding_cardinal_explore.gd), open-ground, rim peel, and demotes **pure E/W tangents** when wall is in awareness. |
+| **Occlusion** | **`motor_patrol_occlusion_active`** also when hunt-motivated, no active goal, and **playfield edge within awareness** ([`_predator_patrol_wall_in_awareness`](../../AI_int_lib/ai_driver.gd)); synthetic patrol goal on **`motor_seek_goal_pos`** for [`seek_occlusion_step_cost`](../../creature/motor/cardinal_avoidance.gd). |
+| **Secondary** | Weak duel bias: [`_predator_duel_prey_sector_hint`](../../AI_int_lib/ai_driver.gd) toward registered prey / remembered centroid — **`predator_duel_patrol_prey_prior_weight`**, **`predator_duel_patrol_prior_blend`**. |
+| **Patrol lock** | Guided lock resets when latched heading is **pure wall tangent** but open-ground offers better interior heading on E/W rim. |
+
+**Fox pack keys (2026-06-13):** **`predator_patrol_open_ground_weight`** (7.5), **`motor_patrol_wall_occlusion_penalty_weight`** (14.0), **`predator_duel_patrol_prey_prior_weight`** (2.2), **`predator_duel_patrol_prior_blend`** (0.28); **`predator_patrol_rim_peel_min_gain`** retuned (0.30; toward-center peel keeps full threshold during no-prey patrol).
+
+**South-lock retune (2026-06-13 — rows 35–37, post open-ground pass):** Row **37** confirmed south wall-slide persisted. Second pass: **pack** lowers **`predator_patrol_interior_expand_weight`** (8.0 → **4.5**), raises no-goal **chaos** (`motor_intent_cost_chaos` **4.4**, `motor_no_goal_chaos_mul` **4.0**), shortens **`motor_no_goal_patrol_lock_sec`** (**0.35**), strengthens open/occlusion weights; **code** makes open-ground scoring **rim-aware** (pack keys below), decouples expand weight from **`interior_expand`** when wall-in-awareness, sets patrol **`motor_seek_goal_pos`** to **wall-inward** (not expand-hint tangent) when rim is in awareness, and adds **`motor_patrol_edge_margin_gain_weight`** rim reward in [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd). **Escalation:** if row **38+** still south-locks, pull Phase **4.5c** no-goal explore/backtrack.
+
+| Priority | Mechanism |
+|----------|-----------|
+| **Open-ground scorer** | Pack-driven **`predator_patrol_open_*`** weights; when **`wall_in_aware`**: halve toward-center on E/W rim, double wall-inward, penalize pure wall tangents (`predator_patrol_open_rim_tangent_penalty`). |
+| **Compose weight** | When wall-in-awareness: **`w_out`** from **`predator_patrol_open_ground_weight`** + segment blend — not **`interior_expand`**. Segment hint blended when it disagrees with open hint. |
+| **Occlusion goal** | Wall-in-awareness: **`motor_seek_goal_pos = pos + wall_inward × max(ar×0.65, 18)`** (fallback: playfield center). Pinch path unchanged (expand-hint goal). |
+| **Execution rim term** | **`motor_patrol_edge_margin_gain_weight`** (fox **6.0**): subtract cost for steps that increase footprint edge margin while patrol occlusion active. |
+
+**Fox pack keys (2026-06-13 retune):**
+
+| Key | Value | Measures |
+|-----|-------|----------|
+| `predator_patrol_interior_expand_weight` | **4.5** | Mid-field / coverage expand fallback (was 8.0 — south lock lever) |
+| `predator_patrol_open_ground_weight` | **11.0** | Expand pull when open-ground hint wins |
+| `predator_patrol_open_toward_center_weight` | **10.0** | Open-ground center pull (halved on E/W rim when wall-in-awareness) |
+| `predator_patrol_open_wall_inward_weight` | **28.0** | Open-ground inward peel bonus |
+| `predator_patrol_open_edge_gain_weight` | **14.0** | Open-ground edge-margin gain |
+| `predator_patrol_open_rim_tangent_penalty` | **12.0** | Open-ground pure tangent penalty when wall-in-awareness |
+| `motor_patrol_wall_occlusion_penalty_weight` | **22.0** | Patrol occlusion step cost amplitude |
+| `motor_patrol_edge_margin_gain_weight` | **6.0** | Cardinal rim-peel reward during patrol occlusion |
+| `predator_patrol_blocked_backtrack_mul` | **1.6** | Backtrack boost while patrol occlusion active |
+| `predator_patrol_rim_peel_min_gain` | **0.22** | Rim peel threshold (was 0.30) |
+| `motor_intent_cost_chaos` | **4.4** | Intent roulette noise |
+| `motor_no_goal_chaos_mul` | **4.0** | No-goal chaos multiplier (~17.6 effective) |
+| `motor_no_goal_patrol_lock_sec` | **0.35** | Patrol heading lock TTL |
+| `weight_expanding_explore_hint` | **2.4** | Segment rotation pull |
+
+**Regression:** `_test_predator_open_ground_patrol_east_rim`, `_test_predator_no_prey_expanding_explore_segments`, `_test_predator_patrol_wall_occlusion_active`, `_test_predator_no_prey_patrol_heading_spread`, `_test_predator_duel_weak_prey_prior` ([`tests/run_all.gd`](../../tests/run_all.gd)).
 
 ### Phase 4 — Ingress cleanup (§A.2.2)
 
@@ -223,7 +268,7 @@ flowchart TD
 | [CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md) | *(stay tier III)* | Update §5 deferred table as Phase 5 ships |
 | [CREATURE_MOVEMENT.md](../Definitive_Features/CREATURE_MOVEMENT.md) | *(stay tier III)* | Trim 2D fork detail superseded by [CREATURE_3D_ARCHITECTURE.md](../Definitive_Features/CREATURE_3D_ARCHITECTURE.md) |
 
-**Phase 7 cleanup — revert Phase 3 playtest boost:** Restore duel **ship-baseline** body scale and awareness (table under **Phase 3 — playtest boost**): [`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres), [`fox_archetype.tres`](../../creature/species/fox_archetype.tres), and **`awareness_radius` / `awareness_cone_extra`** in [`rabbit/pack_resources.json`](../../assets/creatures/rabbit/pack_resources.json) + [`fox/pack_resources.json`](../../assets/creatures/fox/pack_resources.json). Remove playtest notes from pack `notes` fields. Re-run headless tests + one ship-profile duel smoke after revert.
+**Phase 7 cleanup — revert Phase 3 playtest boost:** Restore duel **ship-baseline** body scale, **`caloric_needs`**, and awareness (table under **Phase 3 — playtest boost**): [`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres), [`fox_archetype.tres`](../../creature/species/fox_archetype.tres), and **`awareness_radius` / `awareness_cone_extra`** in [`rabbit/pack_resources.json`](../../assets/creatures/rabbit/pack_resources.json) + [`fox/pack_resources.json`](../../assets/creatures/fox/pack_resources.json). Remove playtest notes from pack `notes` fields. Re-run headless tests + one ship-profile duel smoke after revert.
 
 **Out of scope until ENGINE solid:** LLM motor mode (§scope note below); trait heredity / experience-driven drift ([CREATURE_GOAL_DRIVERS.md §3.4](CREATURE_GOAL_DRIVERS.md)).
 
@@ -358,7 +403,19 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 - Pinch escape and pacing-trap overrides apply during active goal when wedged at an edge/boulder corridor.
 - Predator no-goal interior stalls apply **`interior_esc`** when edge margin is interior (≥ chase band) and **coverage stall**, **mid-field pinch**, blocked intent, or **`stuck_n ≥ 2`** — no longer requires blocked step when stall/pinch already active (playtest rows 29–30).
 - **`_predator_interior_pinch_escape_intent`** — mid-field boulder wedge at **`stuck_n ≥ 1`** (away-dir + latched stuck escape); symmetric to herbivore pinch at interior, distinct from rim **`pinch_esc`**.
+- **Rim boulder wedge (2026-06-13 — playtest rows 40–41):** [`_predator_rim_boulder_wedge_escape_intent`](../../AI_int_lib/ai_driver.gd) runs when **`predator_geometry_pinch_active`** + rim band + **`stuck_n ≥ 1`** — prefers [`_predator_open_ground_patrol_hint`](../../AI_int_lib/ai_driver.gd) inward peel (NW/SW off east rim) before [`_predator_edge_pinch_escape_intent`](../../AI_int_lib/ai_driver.gd) wall-tangent slide. **`motor_filter_blocked_cardinals`** set while pinch active; no-goal patrol replaces **blocked** expand hints with open-ground detour; patrol lock drops held headings that become blocked. Test: `_test_predator_east_rim_boulder_wedge_escape`.
+- **E/W corridor escape unification (2026-06-13 — playtest rows 42–44):** Patrol occlusion keys off **wall-in-awareness**; escape overrides previously split on **`pred_interior`** (`edge_m ≥ edge_band`) only — after 1–2 cells west along the east rim, **`_predator_interior_pinch_escape_intent`** N/S tangents could override west peel (~30 s oscillation, row 44). **Fix:** [`_predator_wall_aware_east_west_corridor_pinch`](../../AI_int_lib/ai_driver.gd) — E/W rim + pinch + (wall in awareness **or** `edge_m ≤ 1.5 × edge_band`); routes **`pinch_esc` / rim boulder wedge** even when interior-classified; suppresses interior pinch on that path. **Backtrack v1:** escape overrides filtered by [`_predator_filter_backtrack_escape`](../../AI_int_lib/ai_driver.gd); coverage stall + blocked-approach memory resets guided patrol lock. Rim wedge fallback uses static **away-dir** (shrub/boulder footprints from [`motor_obstacle_geometry.gd`](../../creature/motor/motor_obstacle_geometry.gd) `collect_from_scene_tree`). Test: `_test_predator_east_corridor_wall_aware_interior_escape`.
 - Fox pack flag **`predator_pinch_debug_log`** emits at **`OLog.info`** (tag **`CREATURE_GOALS`**) — lines tagged **`pinch_esc`**, **`interior_pinch_esc`**, **`pacing_trap`**, **`corner_esc`**, **`interior_esc`**, **`stall_skip`**, **`final_intent`**.
+
+**Terrain drop / valley rim (2026-06-13 — playtest row 42 question):**
+
+| Mechanism | Behavior |
+|-----------|----------|
+| Normal patrol / open-ground hint | Static AABB + playfield bounds; **plus** [`_terrain_cardinal_blocked`](../../AI_int_lib/ai_driver.gd) (physics cliff ray) and [`_terrain_probe_drop_blocked`](../../AI_int_lib/ai_driver.gd) when probe Y drops ≥ **`terrain_drop_block_m`** (ship default **0.35 m**) |
+| [`CardinalAvoidance` terrain term](../../creature/motor/cardinal_avoidance.gd) | Depression: uphill bonus via [`TerrainMotor.elevation_cost_delta`](../../creature/motor/terrain_motor.gd); **drop penalty** via **`elevation_drop_cost`** (`weight_terrain_drop`, default **40**) — independent of depression threshold |
+| Playfield bounds | OOB = huge `penalty_oob` — flat XZ rect only |
+
+**Phase 4.5c escalation (rows 42–44):** Row **38+** south-lock / corridor oscillation persisted after open-ground + rim-wedge passes — **minimal backtrack v1** shipped (blocked-approach TTL + patrol lock reset on coverage stall). Full seek-cycle explore/backtrack tree remains **4.5c** scope.
 
 **Predator NE-corner / dual-edge rim (2026-06-10):**
 
@@ -379,16 +436,25 @@ Legacy motor numerics in pack JSON and the spine were tuned against a **referenc
 - **`interior_esc`** during **active goal** when `predator_geometry_pinch_active` (mid-field wedge, not only no-goal patrol).
 - **Exploration while engaged** — `exploration_blend_multiplier` honors pack **`exploration_blend_min_when_engaged`** during prey pursuit (no longer hard-zeroed).
 
-**No-goal patrol occlusion (2026-06-10 — playtest rows 27–30):**
+**No-goal patrol occlusion (2026-06-10 — playtest rows 27–30; wall band 2026-06-13):**
 
-- **`motor_patrol_occlusion_active`** + **`motor_patrol_occlusion_penalty_weight`** on MotorContext when carnivore is hunt-motivated, has no active goal, and **`predator_geometry_pinch_active`** ([`_patch_predator_pinch_motor_ctx`](../../AI_int_lib/ai_driver.gd) + [`_build_motor_context`](../../AI_int_lib/ai_driver.gd)).
+- **`motor_patrol_occlusion_active`** + **`motor_patrol_occlusion_penalty_weight`** / **`motor_patrol_wall_occlusion_penalty_weight`** on MotorContext when carnivore is hunt-motivated, has no active goal, and **`predator_geometry_pinch_active`** **or** **playfield edge in awareness** ([`_predator_patrol_wall_in_awareness`](../../AI_int_lib/ai_driver.gd) + [`_patch_predator_pinch_motor_ctx`](../../AI_int_lib/ai_driver.gd) + [`_build_motor_context`](../../AI_int_lib/ai_driver.gd)).
 - [`cardinal_avoidance.pick_best_move_intent`](../../creature/motor/cardinal_avoidance.gd) applies **`seek_occlusion_step_cost`** toward **`expanding_explore_hint`** (synthetic goal along locked patrol heading) so no-goal guided patrol penalizes steps into boulder-occluded explore directions.
 - **`predator_patrol_blocked_backtrack_mul`** (default **1.25**) boosts **`weight_blocked_approach_backtrack`** while patrol occlusion is active.
 - **Occlusion normative behavior:** §**Phase 3 — exit tiers** (playtest row 27) + `seek_occlusion_step_cost` — maximize open terrain in awareness zone; penalize into-blocked LoS steps.
 
+**Static obstacle corridor gating (2026-06-13 — playtest rows 35–39):**
+
+- [`static_obstacle_step_cost`](../../creature/motor/cardinal_avoidance.gd) replaces blunt full-map repulsion when `pick_best_move_intent` passes a step direction. Each AABB is **awareness-gated** (same `effective_awareness_reach` as mobs).
+- **Off-path / peripheral:** observed solids not on the step corridor use **`weight_obstacle × weight_obstacle_peripheral_mul`** (default **0.2**).
+- **On-path / squeeze:** full **`weight_obstacle`** when segment `creature → predicted` intersects the padded AABB, predicted clearance is below **`motor_cardinal_block_min_clearance`**, or clearance tightens by ≥ **0.35** (mirrors [`cardinal_step_blocked_for_escape`](../../creature/motor/cardinal_avoidance.gd)).
+- **Cone rim:** obstacles only in the forward wedge beyond **`awareness_radius`** multiply peripheral weight by **`weight_obstacle_cone_edge_mul`** (default **0.5**).
+- Legacy **`cost_at_prediction`** callers without `step_direction` keep full-weight repulsion (headless regression compatibility).
+- MotorContext keys: **`weight_obstacle_peripheral_mul`**, **`weight_obstacle_cone_edge_mul`** (defaults in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)).
+
 **Duel spawn settlement (2026-06-10):** [`playfield_bounds_3d.settle_creature_spawn_on_floor`](../../environment/playfield_bounds_3d.gd) re-raycasts + nudges creature root down until **`is_on_floor`**; [`main_3d.gd`](../../main_3d.gd) uses it after snap and on deferred settle (12-step default).
 
-**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`, `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`, `_test_predator_midfield_stall_escape_scaled_playfield`, `_test_duel_scaled_awareness_stays_playfield_scaled`, `_test_predator_no_prey_patrol_trail_repulsion`, `_test_east_rim_patrol_heading_mix_scaled`.
+**Regression:** [`tests/run_all.gd`](../../tests/run_all.gd) — `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los`, `_test_nav_path_hint_first_waypoint_invalid_map`, `_test_motor_cardinal_probe_scaled_for_small_playfield`, `_test_static_obstacle_awareness_gated`, `_test_static_obstacle_peripheral_vs_corridor`, `_test_static_obstacle_off_axis_does_not_block_peel`, `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_northeast_corner_interior_escape`, `_test_predator_rim_patrol_eight_way`, `_test_predator_interior_stuck_escape_midfield`, `_test_goal_visibility_latch_streak_and_engagement`, `_test_seek_occlusion_step_cost_no_los_ctx`, `_test_predator_obstructed_hunt_active_lost_visual`, `_test_predator_east_rim_to_interior_patrol`, `_test_predator_patrol_heading_variance`, `_test_predator_east_rim_peel_prefers_inward`, `_test_predator_patrol_coverage_stall_escape`, `_test_predator_midfield_stall_escape_scaled_playfield`, `_test_predator_east_rim_boulder_wedge_escape`, `_test_predator_east_corridor_wall_aware_interior_escape`, `_test_duel_scaled_awareness_stays_playfield_scaled`, `_test_predator_no_prey_patrol_trail_repulsion`, `_test_east_rim_patrol_heading_mix_scaled`, `_test_predator_open_ground_patrol_east_rim`, `_test_predator_no_prey_expanding_explore_segments`, `_test_predator_patrol_wall_occlusion_active`, `_test_predator_duel_weak_prey_prior`.
 
 **Cross-link:** [CONVERT_TO_3D.md §3.6 / D7](../Completed_Features/CONVERT_TO_3D.md) (world-unit motor distances).
 
@@ -804,6 +870,9 @@ Motor unification (Phase 4) may proceed in parallel with Phase 3 playtest retune
 
 | Date | Change |
 |------|--------|
+| 2026-06-13 | **§A.1.1 Rows 42–44 corridor + terrain:** `_predator_wall_aware_east_west_corridor_pinch` unifies rim wedge vs interior pinch when E/W wall corridor + pinch (incl. soft band `edge_m ≤ 1.5×edge_band`); `_predator_filter_backtrack_escape`; coverage-stall patrol lock reset; terrain drop block/penalty (`terrain_drop_block_m`, `weight_terrain_drop`); open-ground hint filters terrain ray + drop. Test: `_test_predator_east_corridor_wall_aware_interior_escape`. Minimal 4.5c backtrack v1 shipped. |
+| 2026-06-13 | **§A.1.1 Rim boulder wedge (rows 40–41):** `_predator_rim_boulder_wedge_escape_intent` peels inward/open-ground off east-rim boulder pinch before wall-tangent `pinch_esc`; pinch sets `motor_filter_blocked_cardinals`; blocked expand-hint detour + patrol lock invalidates blocked holds. Test: `_test_predator_east_rim_boulder_wedge_escape`. |
+| 2026-06-13 | **§A.1.1 Static obstacle corridor gating:** `static_obstacle_step_cost` — awareness-gated repulsion, low peripheral weight off step corridor, full weight on squeeze/collision path; `weight_obstacle_peripheral_mul` / `weight_obstacle_cone_edge_mul` in ship defaults + MotorContext. Tests: `_test_static_obstacle_awareness_gated`, `_test_static_obstacle_peripheral_vs_corridor`, `_test_static_obstacle_off_axis_does_not_block_peel` (playtest rows 35–39). |
 | 2026-06-12 | **Duel awareness revert:** removed `compensate_duel_awareness_params` — pack `awareness_radius` / `awareness_cone_extra` stay playfield-scaled on ~105 m mains so opposite-rim spawns start outside cone (PHASE1 scenarios 2/3). Test: `_test_duel_scaled_awareness_stays_playfield_scaled`. |
 | 2026-06-12 | **Comment resolution pass (2):** ship viability = 2× boost only (no Phase 7 smoke before close); dev negative = merge test sufficient for CI + manual aberrance; `motor_exploration_always_enabled` pack-only; pack dedup deferred to Phase 7; patrol occlusion residual = tune-first, 4.5c not a Phase 3 close blocker, forward-pull if tuning fails; open question on pre-emptive vs tune-first explore/backtrack pull. |
 | 2026-06-12 | **Comment resolution pass:** Phase 3 exit tiers + advance/ship/dev gates; occlusion normative (awareness coverage); §A.1 ship-vs-pack key ownership tables; interaction vs salience; Phase 2 `believed_goal_*` shipped note; 4.5b unblocked (POST_LOS round 4); §G.5.1 tier 1/2 split; new open questions for ship-baseline smoke, dev CI, boolean keys, pack dedup, occlusion tuning vs 4.5c. |

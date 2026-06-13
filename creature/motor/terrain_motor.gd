@@ -47,6 +47,29 @@ static func elevation_escape_score(
   return gain * float(motor_p.get("weight_terrain_uphill", 4.0))
 
 
+## True when probe elevation drops more than [code]terrain_drop_block_m[/code] below current (cliff / valley lip).
+static func elevation_drop_blocked(
+  current_y: float, probe_y: float, motor_p: Dictionary
+) -> bool:
+  if not bool(motor_p.get("terrain_elevation_motor_active", true)):
+    return false
+  var drop := current_y - probe_y
+  return drop >= float(motor_p.get("terrain_drop_block_m", 0.35))
+
+
+## Additive cost for steps toward a terrain drop (independent of depression threshold).
+static func elevation_drop_cost(
+  current_y: float, probe_y: float, motor_p: Dictionary
+) -> float:
+  if not bool(motor_p.get("terrain_elevation_motor_active", true)):
+    return 0.0
+  var drop := current_y - probe_y
+  var thresh := float(motor_p.get("terrain_drop_block_m", 0.35))
+  if drop < thresh:
+    return 0.0
+  return drop * float(motor_p.get("weight_terrain_drop", 40.0))
+
+
 ## True when a horizontal ray from [param body] hits [code]world_static[/code] before [param step] distance.
 ## Params:
 ## - space: Active physics space.

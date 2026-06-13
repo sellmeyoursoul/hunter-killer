@@ -207,6 +207,14 @@ static func pick_forced_turn(
   if candidates.is_empty():
     return Vector3(-straight.z, 0.0, straight.x)
 
+  var block_min_clr := float(ctx.get("motor_cardinal_block_min_clearance", 4.0))
+  var obstacle_corridor_p := {
+    "peripheral_mul": float(ctx.get("weight_obstacle_peripheral_mul", 0.2)),
+    "cone_edge_mul": float(ctx.get("weight_obstacle_cone_edge_mul", 0.5)),
+    "block_min_clearance": block_min_clr,
+  }
+  var forward_cone_only := bool(ctx.get("awareness_forward_cone_only", false))
+
   var best_cost := INF
   var scored: Array = []
   for d in candidates:
@@ -241,6 +249,20 @@ static func pick_forced_turn(
       imminent_r,
       unready_food,
       w_avoid_unready,
+      [],
+      0.0,
+      0.0,
+      0.0,
+      PackedVector3Array(),
+      Vector3.ZERO,
+      Vector3.ZERO,
+      0.0,
+      0.0,
+      [],
+      0.0,
+      forward_cone_only,
+      d,
+      obstacle_corridor_p,
     )
     scored.append({"dir": d, "cost": cost})
     if cost < best_cost:

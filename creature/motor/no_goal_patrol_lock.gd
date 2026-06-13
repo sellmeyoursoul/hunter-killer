@@ -46,7 +46,12 @@ static func pick_or_hold_guided(
   var locked_until: int = int(io_state.get("locked_until_ms", -1))
   var locked_intent: Variant = io_state.get("locked_intent", null)
   if typeof(locked_intent) == TYPE_VECTOR3 and locked_until > now_ms:
-    return locked_intent as Vector3
+    var held := locked_intent as Vector3
+    if is_blocked.is_valid() and held.length_squared() > 1e-12 and bool(is_blocked.call(held)):
+      io_state.erase("locked_until_ms")
+      io_state.erase("locked_intent")
+    else:
+      return held
 
   var reroll := int(io_state.get("reroll_count", 0)) + 1
   io_state["reroll_count"] = reroll
