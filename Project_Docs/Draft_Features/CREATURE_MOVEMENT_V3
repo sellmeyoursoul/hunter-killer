@@ -1,0 +1,137 @@
+1. start with defining a goal based on a *.json file defined in assets/goals/ Moving goals externally will allow us to add them as needed without needing to update code
+Starting goal list and high level intention
+	- Rest : Do nothing. Preserve callories
+	- Eat : Replenish callories
+	- Mate : Produce the next generation
+	- Flight : Avoid sources of danger 
+	- Fight : Stub until combat is implemented
+2. For active goal break it down into steps with objectives. These are defined in the *.json file and should be actions that a human player could take.
+	- Review applicable skills (stub until skill feature lands)
+	- Identify step with the highest weight
+3. If the current step objective requires movement follow the below movement tree.
+
+### Top-level movement tree
+
+```
+      -------------------
+      | Is objective    |
+      | location known? |
+      -------------------
+          no |  | Yes
+          ___    ___
+          |        |
+          V        V
+      --------  ----------------
+      | Seek |  | Is there  a  |
+      --------  | clear path   |
+                | to the goal? |
+                ----------------
+                  yes | | no
+                ______   ______
+                |              |
+                V              V
+          ------------    -----------------
+          | move to  |    | Calculate     |
+          | the goal |    | optimal steps |
+          ------------    -----------------
+                                  |
+                                  V
+                            ------------------
+                            | Make the first |
+                            | step the new   |
+                            | objective.     |
+                            ------------------
+```
+
+
+### Seek cycle tree
+
+```
+          --------
+          | Seek |
+          --------
+              |
+              V
+      -----------------
+      | Is this seek  |
+      | part of an    |
+      | objective?    |
+      -----------------
+        yes|    | no
+        ----    -------------------------
+        |                               |
+        V                               |
+    -------------                       |
+    | Is the    |                       |
+    | objective |                       |
+    | in sight? |                       |
+    -------------                       |
+    yes|      | No                      |
+    ---       -------------------       |
+    |                            |      |
+    V                            V      V
+  -----------               -----------------------
+  | Is the  |               | Is there a visible  |
+  | path    | <----------   | pattern that        |
+  | clear?  |           |   | matches believed    |
+  -----------           |   | objective?          |
+  yes|     | No         |   -----------------------
+  ----     ----------   |     yes |     | no
+  |                 |   -----------     ---------
+  V                 V                           |
+------------  -------------------               V
+| Go there |  | Is there enough |         -------------------------
+------------  | information to  |         | Are there unexplored  |
+              | calculate a     |         | locations in the      |
+              | multistep clear |         | zone of awareness     |
+              | path?           |         | with a clear path?    |
+              -------------------         -------------------------
+                yes |         | no                yes |         | no
+                -----         --------                V         -------------
+                |                     |             ---------------         |
+                V                     V             | Go there    |         V
+      ---------------------   -------------------   | and restart |   ---------------------
+      | Generate the      |   | Pick path with  |   | Seek cycle  |   | Is there an area  |
+      | path. Make first  |   | highest weight  |   ---------------   | behind that opens |
+      | step the          |   | for getting     |                     | clear paths to    |
+      | active objective. |   | around blocker. |                     | unexplored areas? |
+      ---------------------   -------------------                     --------------------
+                |                      |                                 yes |      | no
+                V                      V                                ------      -------
+          ------------          ---------------                         |                 |
+          | Go there |          | Go there    |                         V                 V
+          ------------          | and restart |                   ---------------   ---------------
+                                | Seek cycle  |                   | Go there    |   | backtrack   |
+                                ---------------                   | and restart |   | and restart |
+                                                                  | Seek cycle  |   | Seek cycle  |
+                                                                  ---------------   ---------------
+```
+
+### Movement Weighing Tree
+
+```
+
+						-----------------------
+						| Is there a clear 	  |
+						| LoS ray and Capsule |
+						| / corridor sweep?   |
+						-----------------------
+						  Yes |      | No
+						  -----		   --------	
+						  |					        |
+						  V				      	  V
+					---------------   ---------------
+					| follow that |   | Identify all |
+					| Path.		    |   | unobstructed |
+					---------------   | paths to the |
+                            | Objective.   |
+                            | Is the count |
+                            | > 0?         |
+                            ---------------
+
+
+
+```
+
+4. Once the objective is accomplished, review the goal to see if there are further steps. If so make that the current objective and return to 3.
+	- If the objective is met, calculate a new objective.
