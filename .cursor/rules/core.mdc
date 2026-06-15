@@ -77,6 +77,18 @@ Auto-attach when matching files are open (see each `.mdc` body):
 | `agentic-runtime-ai.mdc` | In-game LLM (not IDE agents) |
 | `assets.mdc` | `res://assets/`, `pack_resources.json` |
 | `project-docs.mdc` | `Project_Docs/**` draft markers + code ↔ doc sync playbook |
+| `subagent-governance.mdc` | Hub-and-spoke orchestration (agent-requested before cross-domain impl) |
+| `subagent-provisioning.mdc` | `.cursor/agents/**` specialist template + frontmatter |
+
+## Subagent routing
+
+**Applies when:** Primary orchestrator chat is about to create, refactor, or implement code (not question-only or doc-only work).
+
+- Hub-and-spoke: delegate domain work to [`.cursor/agents/`](../agents/) specialists; do not implement cross-domain edits in the orchestrator thread.
+- Before substantial implementation, follow [`subagent-governance.mdc`](./subagent-governance.mdc) (scope check, provisioning, handoff).
+- Registry: [`AGENTS.md`](./AGENTS.md).
+
+Does not apply when the user is in question/review-only mode, when `feature-designer` scope is doc-only, or when a domain subagent is already executing.
 
 **Feature hub (not a Cursor rule):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — movement in [CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md), memory in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md).
 

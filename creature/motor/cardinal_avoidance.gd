@@ -502,6 +502,25 @@ static func effective_awareness_reach(
   return reach
 
 
+## Pinch influence by awareness gate distance: 1 at [param full_weight_dist], 0 at [param eff_reach].
+static func pinch_obstacle_influence_weight(
+  gate_dist: float,
+  eff_reach: float,
+  full_weight_dist: float,
+  eps: float = 1.0,
+) -> float:
+  if eff_reach <= eps:
+    return 1.0
+  if gate_dist >= eff_reach:
+    return 0.0
+  if gate_dist <= full_weight_dist:
+    return 1.0
+  var span := eff_reach - full_weight_dist
+  if span <= eps:
+    return 0.0
+  return clampf((eff_reach - gate_dist) / span, 0.0, 1.0)
+
+
 ## Builds evaluation order: fixed [member _tie_order] or **shuffled** 8-way directions + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
 ## Params:
 ## - ctx: Motor context; reads [code]shuffle_tie_break[/code] (default [code]true[/code]), [code]deterministic_tie_order[/code], [code]tie_shuffle_seed[/code], [code]creature_position[/code].

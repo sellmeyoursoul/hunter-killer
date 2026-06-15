@@ -518,6 +518,23 @@ func apply_horizontal_move_intent(intent: Vector3, delta: float) -> void:
   move_and_slide()
 
 
+## Snaps world XZ inside playfield AABB after movement (row 55 safety net).
+func _clamp_playfield_position() -> void:
+  var half := _footprint_half_for_clamp()
+  var pos2 := _MotorPlane.from_vec3(global_position)
+  var bounds: Dictionary = _playfield_bounds_for_clamp()
+  var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
+  var bmax: Vector2 = bounds.get("max", screen_size)
+  if bmax == Vector2.ZERO or (bmax.x <= bmin.x and bmax.y <= bmin.y):
+    return
+  var pos2_local := pos2 - bmin
+  var bmax_local := bmax - bmin
+  var clamped_local := _PlayfieldClamp.clamp_position(pos2_local, half, bmax_local, Vector2.ZERO)
+  var clamped_world := clamped_local + bmin
+  if not pos2.is_equal_approx(clamped_world):
+    global_position = Vector3(clamped_world.x, global_position.y, clamped_world.y)
+
+
 func apply_jump_if_floor() -> void:
   var loco: Variant = _resolve_locomotion()
   var jv := float(loco.get("jump_velocity"))
@@ -613,6 +630,8 @@ func _physics_process(delta: float) -> void:
   if control_mode == _ControlMode.engine_as_int() or control_mode == _ControlMode.ai_as_int():
     intent = _engine_heading_with_wall_slide(intent)
   apply_horizontal_move_intent(intent, delta)
+  if control_mode == _ControlMode.engine_as_int() or control_mode == _ControlMode.ai_as_int():
+    _clamp_playfield_position()
   _apply_facing_after_horizontal_move(pos_before, intent)
   _sync_visual_facing()
   _sync_calories_from_vitals()

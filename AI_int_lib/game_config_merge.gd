@@ -134,6 +134,9 @@ static func creature_motor_spine() -> Dictionary:
     ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
     "weight_obstacle_shield_prey": 28.0,
     "weight_obstacle_pin_predator": 22.0,
+    ## Pinch detection / escape: full influence within this gate distance; linear falloff to zero at awareness max reach.
+    "pinch_obstacle_full_weight_dist_m": 12.0,
+    "pinch_obstacle_min_influence": 0.12,
     "predator_chase_edge_band": 110.0,
     "predator_chase_edge_weight_mul": 0.12,
     "predator_chase_pin_scale": 0.15,
