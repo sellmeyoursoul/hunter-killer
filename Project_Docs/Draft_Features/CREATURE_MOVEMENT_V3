@@ -1,18 +1,51 @@
-Purpose: Working Spec
+Purpose: Working Spec for a movement and goal refactor to fix the current overly complex implementation. This is specifically for the Engine logic and not for a creature controlled by an LLM or by a Human. Once the spec is refined, it will be converted to an .md file for agentic coder implementation.
 
+Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/motor/` design. Sibling docs ([CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md), [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) are refactored separately — V3 defines the **planner interface** memory and goal drivers must satisfy, not their storage schemas.
 
+<<Comment: On promotion to `.md`, retire [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) and [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) to `Completed_Features/` with abandonment banners; register this file in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).>>
 
-1. start with defining an active goal based on the follow. (structure this in a hub and spoke design, so that a single function can be called. This will allow future goals to be added if necessary without massive refactor.)
-	- Rest : Do nothing. Preserve calories
-	- Eat : Replenish calories
-	- Flight : Avoid sources of danger 
-	- Mate : Produce the next generation
-	- Fight : Stub until combat is implemented
-  NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.)
-2. For active goal break it down into steps with objectives. These are defined in the *.json file and should be actions that a human player could take.
-	- Review applicable skills (stub until skill feature lands)
-	- Identify step with the highest weight
-3. If the current step objective requires movement follow the below movement tree.
+---
+
+## 1. Goal hub (hub-and-spoke)
+
+Start with defining an active goal based on the following. Structure this in a hub-and-spoke design so that a **single entry function** can be called — future goals added without massive refactor.
+
+| Goal | Summary |
+|------|---------|
+| **Rest** | Do nothing. Preserve calories. |
+| **Eat** | Replenish calories. |
+| **Flight** | Avoid sources of danger. |
+| **Mate** | Produce the next generation. |
+| **Fight** | Stub until combat is implemented. |
+
+NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.)
+
+<<Question: Hub function contract — what are the inputs (vitals, threat samples, awareness snapshot, belief/locale-prior façade, trait scalars) and outputs (single winning goal vs full scored goal table)? Which module owns the call (`creature/motor/` path TBD)?>>
+
+<<Question: Goal scoring formula — how do urgency and ease of accomplishment combine (weighted sum, product, max-with-tie-break)? What numeric inputs feed each V3 goal (e.g. `calorie_ratio`, danger proximity, mate availability)?>>
+
+<<Question: V3 goal ↔ [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) Tier-2 ↔ `GoalKind` wire id — authoritative routing table (Rest → Preserve calories? Flight → `avoid_hostiles` / `shelter`? Eat → `find_food`?) for salient writes and memory keys.>>
+
+---
+
+## 2. Steps and objectives
+
+For the active goal, break it down into **steps** with **objectives**. These should be actions a human player could potentially take.
+
+- Review applicable skills (stub until skill feature lands).
+- Identify step with the highest weight.
+
+<<Question: Define **step** vs **objective** vs **action** — types, completion predicates, and per-goal default step chains (e.g. Eat: approach → consume; Flight: reach shelter → hold).>>
+
+<<Question: `ActiveGoal` schema — fields for goal table (`goal_kind` or V3 id, `weight`, `ultimate_pos`, `step_chain`, `step_index`, `source`: live / belief / locale_prior / explore / backtrack)?>>
+
+<<Question: “Set finding location as goal” (Rest/Eat flows) — is this a Seek sub-mode, a dedicated goal type, or an objective without a fixed position until Seek resolves it?>>
+
+---
+
+## 3. Movement (when objective requires movement)
+
+If the current step objective requires movement, follow the movement trees below.
 
 ### Top-level movement tree
 
@@ -47,6 +80,7 @@ Purpose: Working Spec
                                 ------------------
 ```
 
+<<Question: “Objective location known?” — precise instance belief, live sighting only, locale-prior centroid, or any of the above by tier?>>
 
 ### Seek cycle tree
 
@@ -111,10 +145,19 @@ Purpose: Working Spec
                                                                       ---------------   ---------------
 ```
 
+<<Question: “Pattern that matches believed objective” — instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse sector bias, or combined precedence?>>
+
+<<Question: “Unexplored locations” — coverage-cell marking, explore trail, or other contract? Reuse `explore_coverage_cell_px` from memory config or new V3 keys?>>
+
+<<Question: “Pick path with highest weight” around blocker — scoring inputs (distance, threat, replay_weight, terrain)? Navmesh-first vs static detour fallback (adopt POST_LOS intent without V2 code paths)?>>
+
+<<Question: Multistep path generation — navmesh first waypoint, corridor graph, or other? Headless test requirements when physics `space_state` is absent?>>
+
+<<Comment: Backtrack branch — POST_LOS resolved v1 as **approach-heading TTL memory** (no position stack). Confirm for V3 or specify alternative.>>
+
 ### Movement Weighing Tree
 
 ```
-
 						-----------------------
 						| Is there a clear 	  |
 						| LoS ray and Capsule |
@@ -148,7 +191,7 @@ Purpose: Working Spec
                   |               |                   V                   V
                   V               V               ----------------    -----------------------
             ---------------   ------------------  | recalculate  |    | Do any unobstructed |
-            | MOVE alongt |   | Weigh the      |  | active goals |    | points at the edge  |
+            | MOVE along  |   | Weigh the      |  | active goals |    | points at the edge  |
             | that path.  |   | shortest paths |  ----------------    | of the zone of      |
             ---------------   | and MOVE down  |                      | awareness lead to   |
                               |the winner.     |                      | known dead-ends?    |
@@ -176,16 +219,42 @@ Purpose: Working Spec
                                                                                   | make it the      |
                                                                                   | active objective |
                                                                                   --------------------
+```
 
+<<Question: Clear-path test — LoS occlusion threshold (e.g. >60% blocked), capsule/corridor AABB sweep, squeeze skill-check hook, and headless fallback when raycast unavailable?>>
+
+<<Question: “Secondary objectives in zone of awareness” — candidate set (all live goal targets, belief merges, alternate goal kinds only)?>>
+
+<<Question: “Known dead-ends” — storage schema, TTL, eviction, and who writes (planner on failed approach vs memory tier)?>>
+
+<<Comment: Precise-tier movement (Pathmapping) skips LoS/capsule for remembered coords — confirm this tree applies only when objective is **live in awareness** or always for precise beliefs.>>
+
+---
+
+## 4. Non-movement actions
+
+If the objective does not require movement, take an action toward the objective.
+
+<<Question: Outcome hooks — which completed actions trigger [CREATURE_MEMORY.md](CREATURE_MEMORY.md) §14 salient writes (`find_food` on EAT, `avoid_hostiles` on jeopardy clear, etc.)?>>
+
+---
+
+## 5. Goal completion loop
+
+Once the objective is accomplished, review the goal for further steps.
+
+- If so, make the next step the new current objective and return to §3.
+- If the goal is met, calculate a new goal (§1 hub).
+
+---
+
+## 6. Goal logic flows
+
+NOTE: Overlap with the top-level movement flow is intentional — shows how goal-specific flows connect to the movement trees.
+
+### 6.1 Rest
 
 ```
-4. If the objective does not require movement, take an action toward the objective.
-5. Once the objective is accomplished, review the goal to see if there are further steps. 
-  - If so make the next step the new current objective and return to 3.
-	- If the goal is met, calculate a new goal.
-
-#Goal Logic flows and additional information NOTE: There is overlap with these flows and the start of the top level movement flow. This is intentional to show clearly how they connect.
-1. Rest 
         ------------------
         | Is the current |
         | location safe? |
@@ -208,11 +277,16 @@ Purpose: Working Spec
               | as next      |    | location as |
               | objective    |    | goal.       |
               ----------------    ---------------
-                                  
+```
 
-  - REST is an action to aide in calorie preservation and healing. To be implemented with combat. For stub, creature makes no movement.
+- REST aids calorie preservation and healing. Stub until combat — creature makes no movement.
+- **Criteria:** calories >= 95%, no danger.
 
-2. Eat 
+<<Question: “Safe location” — `shelter` GoalKind beliefs, threat-free zone, or squeeze-fit estimate per [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)?>>
+
+### 6.2 Eat
+
+```
                 --------------
                 | Is food    |
                 | available? |
@@ -234,9 +308,17 @@ Purpose: Working Spec
                   | as next      |    | location as |
                   | objective    |    | goal.       |
                   ----------------    ---------------
-  - EAT is an action that consumes calories from a food resource. Each food resource has an available_calories value, which defines the maximum number of calories the creature can gain from consuming the food, and consumption_time, which defines the number of physics ticks it takes for the creature to consume the food. During that time, the creature will remain stationary. 
+```
 
-3. Flight  
+- EAT consumes from a food resource: `available_calories` (max gain) and `consumption_time` (physics ticks, stationary).
+- **Criteria:** calories < 95%.
+- **Urgency:** increases as calories decrease.
+
+<<Comment: Hook to [`bush_food.gd`](../../assets/plants/bush_food.gd) `current_calories` / `instance_id` at implementation — align with refactored MEMORY instance-belief sync.>>
+
+### 6.3 Flight
+
+```
                 --------------
                 | Is danger  |
                 | present?   |
@@ -281,7 +363,7 @@ Purpose: Working Spec
           |             |       | as active    |    | in erratic movement |
           |             |       | objective    |    | with frequent       |
           |             |       ----------------    | reevaluation for    |
-          |             |              |            | potential opentings |
+          |             |              |            | potential openings  |
           |             |              |            -----------------------
           |             |              |                 |
           |             V              v                 v
@@ -303,8 +385,170 @@ Purpose: Working Spec
                             | take the MOVE |
                             | action        |
                             -----------------
-  - MOVE is the action a creature takes when it physically goes from one location to another over a number of physics ticks.
+```
 
+- MOVE: physically relocate over physics ticks.
+- **Criteria:** danger in zone of awareness; creature not in squeeze believed inaccessible to danger source.
+- **Squeeze tradeoff:** weigh danger distance vs calorie count when boxed in — separate from starvation override in GOAL_DRIVERS (anticipatory, not dominance flip).
+- **Urgency:** increases with proximity to danger.
 
-4. Mate : Defined when implmented
-5. Fight : Defined when implemented
+<<Question: Flight fast-path **exit** — when does acute Flight release and trigger full goal consideration (rear-arc rescan + no hostile in awareness/panic footprint, distance threshold, TTL, or consideration-tick only)?>>
+
+<<Question: Goal-table freeze during Flight — preserve weights, `step_chain`, `step_index` until exit; confirm contract matches combat fast-path below.>>
+
+### 6.4 Mate
+
+<<Comment: Stub — define steps, criteria, urgency, and `find_mate` memory hooks when mating systems land.>>
+
+### 6.5 Fight
+
+<<Comment: Stub — define engagement criteria and interaction with Flight fast-path until combat ships.>>
+
+---
+
+## 7. Execution layer (MOVE)
+
+MOVE is the physics/locomotion contract below the planner.
+
+<<Question: Execution model — step-goal per tick (planner sets target position/direction), path following, or discrete 8-way (or N-way) weighted step selection? Greenfield: do not presuppose retired `cardinal_avoidance.gd` unless explicitly re-adopted.>>
+
+<<Question: Locomotion owner — new module path under `creature/motor/`, inputs (step_goal, urgency, terrain/squeeze), calorie burn per distance, and 3D body integration (`CreatureKinematicBody3D`).>>
+
+---
+
+## 8. Pathmapping and memory interface
+
+V3 planner **reads** memory; authoritative storage tiers remain in refactored [CREATURE_MEMORY.md](CREATURE_MEMORY.md).
+
+### 8.1 Zone of awareness
+
+- Complete set of locations and objects within the zone.
+- Limited by line of sight; occluded objects inferred via ghost mapping if previously seen in-zone with LoS and ghost has not left the zone.
+- Stub: capsule/corridor sweep reliability varies by attributes/skills once skill feature lands.
+- Level of absolute clarity stays in sync with the zone; everything else is a different tier.
+
+<<Question: Awareness geometry — hybrid radius disk + forward cone, omni threat mode, and parity with refactored GOAL_DRIVERS threat ingest?>>
+
+<<Comment: Ghost mapping — link to mover belief fields (`last_velocity`, ghost horizon) in MEMORY §5.5 when MEMORY refactor lands.>>
+
+### 8.2 Precise tier
+
+Instance-anchored beliefs for past observed objects of interest within `goal_memory_precise_radius` (pack or creature default, world units). Holds real-world location; may omit obstacles — pathing decisions apply once the creature re-enters awareness.
+
+- Moving toward objectives on **precise** remembered targets **does not** use LoS ray + capsule/corridor sweep (straight seek / shortest path).
+- Prefer shortest path unless known obstacles in awareness — then closest unobstructed point becomes primary objective.
+
+<<Comment: Wording fix — precise tier is **instance beliefs** (exact/`instance_id` rows), not “hashed aggregates” (those are `LocalePriorMap` patch habits). Resolve in MEMORY sibling refactor.>>
+
+### 8.3 Coarse tier
+
+For objects outside precise envelope but within `goal_memory_forget_radius`, preserve general direction only.
+
+Prioritize shortest unobstructed path in that direction until:
+
+1. Objective enters zone of awareness.
+2. Suitable alternative enters zone of awareness.
+3. Another goal takes precedence.
+4. Creature travels `goal_memory_forget_radius + 10%` — then Seek takes priority.
+
+<<Question: Coarse locomotion vs [CREATURE_MEMORY.md §5.2](CREATURE_MEMORY.md) eight-way **sector_weights** — does V3 path-in-direction replace sector bias, combine both, or delegate sector channel to execution weights only?>>
+
+<<Question: Coarse expiry — V3 travel-distance rule (forget_radius + 10%) vs MEMORY `goal_memory_coarse_ttl_sec` and LRU — single policy or both apply?>>
+
+### 8.4 Planner consumption (sibling MEMORY section)
+
+<<Comment: Add matching **§V3 planner consumption** in CREATURE_MEMORY when promoting — dead-ends, explore marks, precise/coarse read rules, salient-write gates unchanged unless V3 goal ids change.>>
+
+---
+
+## 9. Goal seek exceptions
+
+If the objective is inaccessible (shrub out of reach, creature in squeeze), evaluate `change_stability`, past experience, alternate goal locations, and an element of chaos to decide: persist, switch target, or enter Seek.
+
+<<Question: “Past experience” — `LocalePriorMap` / `replay_rank_score`, instance belief yield, or both? Config key for chaos magnitude (`creature_motor` vs new V3 namespace)?>>
+
+---
+
+## 10. Goal consideration cadence
+
+Every **n** physics ticks, re-evaluate zone of awareness and run **goal consideration** on new observations.
+
+- **n** from **Observation** attribute — higher Observation ⇒ more frequent replans ([CREATURE_ATTRIBUTES_USAGE.md §3.5](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)).
+- Maintain an **active goal table** (goals + weights). Empty table ⇒ no movement / rest.
+- Goal consideration weighs all candidates. When a goal decomposes into steps, earliest unaccomplished step is **primary**. If another goal’s weight exceeds incumbent, discard incumbent step chain.
+
+**Fast-path bypass (every tick):** Flight. **Combat (future):** attack action triggers fight/flight immediately — planner and frozen goal table do not compete with acute response.
+
+**Combat fast-path signal:** dedicated flag — do **not** infer from damage intake, ambient threat, or generic hostile-in-awareness alone.
+
+- **Set:** creature **takes an attack action** (combat state machine). Not implemented until combat lands.
+- **Clear:** defined with combat; release triggers same post-response goal-consideration contract as Flight exit.
+
+**Goal-table contract (Flight / combat fast-path):** freeze active goal table during acute response (`weight`, `step_chain`, `step_index` preserved — not cleared). On release, run a **full goal-consideration round** before resuming step execution; frozen incumbent may no longer be valid.
+
+<<Question: Observation → **n** ticks — piecewise curve (neutral stat = base interval, sub-10 clamp until stat pools land)? Default `n` at Observation = 10?>>
+
+<<Question: Between replan ticks, do execution weights reflect **incumbent goal** from last consideration round (POST_LOS intent) or re-score every tick?>>
+
+---
+
+## 11. Adopted decisions (from POST_LOS — intent only)
+
+<<Comment: Re-validate these without V2 code paths before implementation. Expand rows as decisions close.>>
+
+| Decision | V3 section | Notes |
+|----------|------------|-------|
+| Three layers: goals → planner → execution | §1–3, §7 | Greenfield modules |
+| Slow replan vs fast-path Flight/combat | §10 | Every tick bypass for acute response |
+| Clear path = LoS + corridor sweep | Movement Weighing tree | Thresholds TBD |
+| Navmesh-first, detour fallback when blocked | Seek cycle | API TBD |
+| Approach-heading backtrack TTL (v1) | Seek cycle | No position stack v1 |
+| Freeze goal table during Flight/combat | §10 | Full consideration after release |
+
+---
+
+## 12. Implementation phases
+
+1. **Kick off refactor**
+   - Create `Goal_Movement_RefactorV3` branch.
+   - Convert this file to `.md` and reformat.
+   - Retirement banners on superseded docs → `Completed_Features/`.
+   - `PROJECT_DOC_INDEX` row.
+2. Review and document existing code — all references to removed/changed modules.
+3. Remove code from step 2; empty stubs for new implementation.
+4. Address linter errors.
+5. Run game — no creature movement expected; fix errors.
+6. Implement code changes.
+7. Address linter errors.
+8. Review code against design for gaps, inconsistencies, sibling-doc conflicts.
+9. Address issues found.
+10. Begin test/bug-fix cycle.
+
+Repeat 6–10 if implementation is broken into sub-phases.
+
+<<Question: Step 2 inventory template — module path, consumers, tests to delete/port per row?>>
+
+<<Question: Implementation sub-phases inside step 6 (hub → planner → execution → memory adapter) with acceptance criteria per sub-phase?>>
+
+<<Question: Config namespace — retain `creature_motor` / `goal_*` keys from MEMORY §10 or introduce V3-prefixed keys for greenfield merge?>>
+
+<<Comment: Headless test matrix and duel playtest gates — define when step 6 sub-phases close; do not inherit V2 Phase 3 advance-gate checklist unless re-adopted explicitly.>>
+
+---
+
+## 13. Outstanding decisions index
+
+| Topic | Marker location | Blocker for impl plan? |
+|-------|-----------------|----------------------|
+| Hub API + goal scoring | §1 | Yes |
+| V3 ↔ GoalKind routing | §1 | Yes |
+| Step / objective / ActiveGoal schema | §2 | Yes |
+| Clear-path + multistep algorithms | §3 | Yes |
+| Dead-ends + explore marks | §3, §8 | Yes |
+| Execution layer (MOVE) | §7 | Yes |
+| Precise vs coarse vs MEMORY | §8 | Yes |
+| Flight exit + table freeze | §6.3, §10 | Yes |
+| Observation → n formula | §10 | Medium |
+| Outcome → salient writes | §4 | Medium |
+| Mate / Fight | §6.4–6.5 | Deferred |
+| Acceptance + sub-phases | §12 | Yes |
