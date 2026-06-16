@@ -1,10 +1,14 @@
-1. start with defining a goal based on a *.json file defined in assets/goals/ Moving goals externally will allow us to add them as needed without needing to update code
-Starting goal list and high level intention
-	- Rest : Do nothing. Preserve callories
-	- Eat : Replenish callories
-	- Mate : Produce the next generation
+Purpose: Working Spec
+
+
+
+1. start with defining an active goal based on the follow. (structure this in a hub and spoke design, so that a single function can be called. This will allow future goals to be added if necessary without massive refactor.)
+	- Rest : Do nothing. Preserve calories
+	- Eat : Replenish calories
 	- Flight : Avoid sources of danger 
+	- Mate : Produce the next generation
 	- Fight : Stub until combat is implemented
+  NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.)
 2. For active goal break it down into steps with objectives. These are defined in the *.json file and should be actions that a human player could take.
 	- Review applicable skills (stub until skill feature lands)
 	- Identify step with the highest weight
@@ -17,30 +21,30 @@ Starting goal list and high level intention
       | Is objective    |
       | location known? |
       -------------------
-          no |  | Yes
-          ___    ___
-          |        |
-          V        V
-      --------  ----------------
-      | Seek |  | Is there  a  |
-      --------  | clear path   |
-                | to the goal? |
-                ----------------
-                  yes | | no
-                ______   ______
-                |              |
-                V              V
-          ------------    -----------------
-          | move to  |    | Calculate     |
-          | the goal |    | optimal steps |
-          ------------    -----------------
-                                  |
-                                  V
-                            ------------------
-                            | Make the first |
-                            | step the new   |
-                            | objective.     |
-                            ------------------
+          no |      | Yes
+          ___        ___
+          |             |
+          V             V
+      --------      ----------------
+      | Seek |      | Is there  a  |
+      --------      | clear path   |
+                    | to the goal? |
+                    ----------------
+                     yes |   | no
+                    ______   ______
+                    |              |
+                    V              V
+              ------------    -----------------
+              | MOVE to  |    | Calculate     |
+              | the goal |    | optimal steps |
+              ------------    -----------------
+                                      |
+                                      V
+                                ------------------
+                                | Make the first |
+                                | step the new   |
+                                | objective.     |
+                                ------------------
 ```
 
 
@@ -76,35 +80,35 @@ Starting goal list and high level intention
   | clear?  |           |   | matches believed    |
   -----------           |   | objective?          |
   yes|     | No         |   -----------------------
-  ----     ----------   |     yes |     | no
-  |                 |   -----------     ---------
-  V                 V                           |
-------------  -------------------               V
-| Go there |  | Is there enough |         -------------------------
-------------  | information to  |         | Are there unexplored  |
-              | calculate a     |         | locations in the      |
-              | multistep clear |         | zone of awareness     |
-              | path?           |         | with a clear path?    |
-              -------------------         -------------------------
-                yes |         | no                yes |         | no
-                -----         --------                V         -------------
-                |                     |             ---------------         |
-                V                     V             | Go there    |         V
-      ---------------------   -------------------   | and restart |   ---------------------
-      | Generate the      |   | Pick path with  |   | Seek cycle  |   | Is there an area  |
-      | path. Make first  |   | highest weight  |   ---------------   | behind that opens |
-      | step the          |   | for getting     |                     | clear paths to    |
-      | active objective. |   | around blocker. |                     | unexplored areas? |
-      ---------------------   -------------------                     --------------------
-                |                      |                                 yes |      | no
-                V                      V                                ------      -------
-          ------------          ---------------                         |                 |
-          | Go there |          | Go there    |                         V                 V
-          ------------          | and restart |                   ---------------   ---------------
-                                | Seek cycle  |                   | Go there    |   | backtrack   |
-                                ---------------                   | and restart |   | and restart |
-                                                                  | Seek cycle  |   | Seek cycle  |
-                                                                  ---------------   ---------------
+  ----     ----------   |     yes |       | no
+  |                 |   -----------       ---------
+  V                 V                             |
+--------------  -------------------               V
+| MOVE there |  | Is there enough |         -------------------------
+--------------  | information to  |         | Are there unexplored  |
+                | calculate a     |         | locations in the      |
+                | multistep clear |         | zone of awareness     |
+                | path?           |         | with a clear path?    |
+                -------------------         -------------------------
+                  yes |         | no                yes |         | no
+                  -----         --------                V         -------------
+                  |                     |             ---------------         |
+                  V                     V             | MOVE there  |         V
+        ---------------------   -------------------   | and restart |   ---------------------
+        | Generate the      |   | Pick path with  |   | Seek cycle  |   | Is there an area  |
+        | path. Make first  |   | highest weight  |   ---------------   | behind that opens |
+        | step the          |   | for getting     |                     | clear paths to    |
+        | active objective. |   | around blocker. |                     | unexplored areas? |
+        ---------------------   -------------------                     --------------------
+                  |                      |                                 yes |      | no
+                  V                      V                                ------      -------
+            --------------          ---------------                         |                 |
+            | MOVE there |          | MOVE there  |                         V                 V
+            --------------          | and restart |                   ---------------   ---------------
+                                    | Seek cycle  |                   | MOVE there  |   | MOVE there  |
+                                    ---------------                   | and restart |   | and restart |
+                                                                      | Seek cycle  |   | Seek cycle  |
+                                                                      ---------------   ---------------
 ```
 
 ### Movement Weighing Tree
@@ -114,24 +118,193 @@ Starting goal list and high level intention
 						-----------------------
 						| Is there a clear 	  |
 						| LoS ray and Capsule |
-						| / corridor sweep?   |
+						| / corridor sweep    |
+            | to the objective?   |
 						-----------------------
 						  Yes |      | No
-						  -----		   --------	
-						  |					        |
-						  V				      	  V
-					---------------   ---------------
-					| follow that |   | Identify all |
-					| Path.		    |   | unobstructed |
-					---------------   | paths to the |
-                            | Objective.   |
-                            | Is the count |
-                            | > 0?         |
-                            ---------------
-
+						  -----		   ------------	
+						  |					            |
+						  V				      	      V
+					---------------       ---------------
+					| MOVE along  |       | Identify all |
+					| that Path.	|       | unobstructed |
+					---------------       | paths to the |
+                                | Objective.   |
+                                | Is the count |
+                                | > 0?         |
+                                ---------------
+                                 yes |   | no
+                          ------------   ------------
+                          |                         |
+                          V                         V
+                    ---------------             -----------------------
+                    | Is one path |             | Are there secondary |
+                    | shorter     |             | Objectives in the   |
+                    | than the    |             | zone of awareness?  |
+                    | others?     |             ----------------------- 
+                    ---------------                   yes |     | no
+                    yes |   | no                      -----     -----------
+                  -------   -------                   |                   |
+                  |               |                   V                   V
+                  V               V               ----------------    -----------------------
+            ---------------   ------------------  | recalculate  |    | Do any unobstructed |
+            | MOVE alongt |   | Weigh the      |  | active goals |    | points at the edge  |
+            | that path.  |   | shortest paths |  ----------------    | of the zone of      |
+            ---------------   | and MOVE down  |                      | awareness lead to   |
+                              |the winner.     |                      | known dead-ends?    |
+                              ------------------                      -----------------------
+                                                                           yes |          | no
+                                                                          ------          |
+                                                                          |               |
+                                                                          V               |
+                                                                ----------------------    |
+                                                                | Remove them        |    |
+                                                                | from consideration |    V
+                                                                ----------------------  ----------------------  
+                                                                          |             | Are there any      |
+                                                                          ------------->| remaining paths    |
+                                                                                        | that don't involve |
+                                                                                        | backtracking?      |
+                                                                                        ----------------------
+                                                                                          yes |         | no
+                                                                                        -------         -------
+                                                                                        |                     |
+                                                                                        V                     V
+                                                                                  --------------------    --------
+                                                                                  | Select the most  |    | Seek |
+                                                                                  | direct path and  |    --------
+                                                                                  | make it the      |
+                                                                                  | active objective |
+                                                                                  --------------------
 
 
 ```
+4. If the objective does not require movement, take an action toward the objective.
+5. Once the objective is accomplished, review the goal to see if there are further steps. 
+  - If so make the next step the new current objective and return to 3.
+	- If the goal is met, calculate a new goal.
 
-4. Once the objective is accomplished, review the goal to see if there are further steps. If so make that the current objective and return to 3.
-	- If the objective is met, calculate a new objective.
+#Goal Logic flows and additional information NOTE: There is overlap with these flows and the start of the top level movement flow. This is intentional to show clearly how they connect.
+1. Rest 
+        ------------------
+        | Is the current |
+        | location safe? |
+        ------------------
+        yes |       | no
+        -----       -------
+        |                 |
+        V                 V
+    ------------    -----------------
+    | Take the |    | Is a believed |
+    | action:  |    | safe location |
+    | REST     |    | known?        |
+    ------------    -----------------
+                     yes |       | no
+                     -----       ------
+                     |                |
+                     V                V
+              ----------------    ---------------
+              | Set location |    | Set finding |
+              | as next      |    | location as |
+              | objective    |    | goal.       |
+              ----------------    ---------------
+                                  
+
+  - REST is an action to aide in calorie preservation and healing. To be implemented with combat. For stub, creature makes no movement.
+
+2. Eat 
+                --------------
+                | Is food    |
+                | available? |
+                --------------
+                yes |   | no
+                -----   -------
+                |             |
+                V             V
+          ------------    ------------------
+          | Take the |    | Is location of |
+          | action:  |    | food known?    |
+          | EAT      |    ------------------
+          ------------     yes |       | no
+                          -----       ------
+                          |                |
+                          V                V
+                  ----------------    ---------------
+                  | Set location |    | Set finding |
+                  | as next      |    | location as |
+                  | objective    |    | goal.       |
+                  ----------------    ---------------
+  - EAT is an action that consumes calories from a food resource. Each food resource has an available_calories value, which defines the maximum number of calories the creature can gain from consuming the food, and consumption_time, which defines the number of physics ticks it takes for the creature to consume the food. During that time, the creature will remain stationary. 
+
+3. Flight  
+                --------------
+                | Is danger  |
+                | present?   |
+                --------------
+                yes |     | no
+                -----     -----
+                |             |
+                V             V
+          ------------    -------------
+          | Is there |    | Calculate |
+          | a known  |    | new goal. |
+          | shelter  |    -------------
+          | nearby?  |
+          ------------
+          Yes |    | no
+          -----    -----------------
+          |                       |
+          V                       V
+    --------------    --------------------------
+    | Set going  |    | Remove known dead ends |
+    | as active  |    | as options. Are there  |
+    | objective  |    | any remaining spaces   |
+    --------------    | away from the danger?  |
+          |            --------------------------
+          |              yes |         | no
+          |              -----         ------
+          |              |                  |
+          |              V                  V
+          |    --------------------    -----------------------
+          |    | Set farthest one |    | Is there a possible | 
+          |    | from danger as   |    | path that requires  |
+          |    | active objective |    | moving towards the  |
+          |    --------------------    | danger?             |
+          |             |               -----------------------
+          |             |               yes |         | no
+          |             |               -----         -------
+          |             |               |                   |
+          |             |               V                   V
+          |             |       ----------------    -----------------------
+          |             |       | Set location |    | Set nearby location |
+          |             |       | on that path |    | that would result   |
+          |             |       | as active    |    | in erratic movement |
+          |             |       | objective    |    | with frequent       |
+          |             |       ----------------    | reevaluation for    |
+          |             |              |            | potential opentings |
+          |             |              |            -----------------------
+          |             |              |                 |
+          |             V              v                 v
+          |         ---------------------------------------
+          --------->| Are any viable actions available that|
+                    | might aide in the escape (slow the   |
+                    | dangerdown, push it away, etc)?      |
+                    ----------------------------------------
+                        yes |             | no
+                        -----             |
+                        |                 |
+                        V                 |
+                  -------------------     |
+                  | take the action |     |
+                  -------------------     |
+                              |           |
+                              V           V
+                            -----------------
+                            | take the MOVE |
+                            | action        |
+                            -----------------
+  - MOVE is the action a creature takes when it physically goes from one location to another over a number of physics ticks.
+
+
+4. Mate : Defined when implmented
+5. Fight : Defined when implemented
