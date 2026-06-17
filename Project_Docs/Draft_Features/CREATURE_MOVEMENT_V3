@@ -4,6 +4,19 @@ Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/mot
 
 <<Comment: On promotion to `.md`, retire [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) and [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) to `Completed_Features/` with abandonment banners; register this file in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).>>
 
+# Definitions
+
+1. **Safety** — **State** (not an action): `safety_time` consecutive goal-consideration cycles with no danger in the **full** zone of awareness (cone + area — §8.1; default `safety_time` = 5; tune in playtest). Required before the **`REST` action** may begin (§6.1). When Safety state ends, **`REST` requirements are no longer met** — hub stops emitting `REST` each tick (§6.1, §7.2). Distinct from **`STAY`** (Definitions §5).
+2. **Clear path** — LoS ray **and** capsule/corridor sweep both pass (see §3 Movement Weighing tree).
+3. **Step** — A discrete sub-task toward an active goal (e.g. Eat: move past boulder → move to shrub → EAT). **Completion:** all objectives for the step are satisfied.
+4. **Objective** — Exit criteria for the active step (world position or non-movement action target). **Completion:** creature reaches the position (within arrival tolerance) or completes the bound action.
+5. **Action** — One atomic unit per physics tick (`MOVE_*`, `TURN_*`, `EAT`, `REST`, `STAY`, etc.). **ENGINE** creatures emit at most **one** action per tick (see §7). **`STAY`** — no movement, full awareness, baseline metabolism (§7.5); empty goal table (§10) or Rest pending Safety (§6.1). **`REST`** — deliberate recovery under Rest goal + §6.1 only; half baseline; cone off while selected (§8.1). Human-player input mapping is **deferred** — working cadence assumptions in §7.
+6. **Cone of awareness** — Forward-facing observation cone, limited by line of sight.
+7. **Area of awareness** — Circular observation radius near the creature, limited by line of sight.
+8. **Zone of awareness** — Cone of awareness + area of awareness (§8.1).
+9. **Unexplored** — A coarse- or precise-tier region with no observed objects within **50%** of the area-of-awareness radius (world units).
+10. **Default step chains (per goal)** — Eat: approach → consume; Flight: reach shelter or flee position → hold until safe; Rest: reach candidate safe location → **STAY** until Safety state (§1) → **REST**; Mate/Fight: stub until those systems land.
+
 ---
 
 ## 1. Goal hub (hub-and-spoke)
@@ -12,7 +25,7 @@ Start with defining an active goal based on the following. Structure this in a h
 
 | Goal | GoalKind Wire ID | Summary |
 |------|------------------|---------|
-| **Rest** | - | Do nothing. Preserve calories. |
+| **Rest** | - | Recover at a safe site: **STAY** until Safety (§1), then **`REST` action** (§6.1). Sustained until another goal wins or Safety ends. |
 | **Eat** | find_food | Replenish calories. |
 | **Flight** | avoid_hostiles &/or shelter | Avoid sources of danger. |
 | **Mate** | find_mate &/or shelter | Produce the next generation. |
@@ -20,11 +33,11 @@ Start with defining an active goal based on the following. Structure this in a h
 
 NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.)
 
-<<Question: Hub function contract — what are the inputs (vitals, threat samples, awareness snapshot, belief/locale-prior façade, trait scalars) and outputs (single winning goal vs full scored goal table)? Which module owns the call (`creature/motor/` path TBD)?>><<Comment: The function should have no explicit inputs. When called it should evalutate the creatures current state and surroundings and determine the best action to take. The output would be an action that the creature will take for that physics tick. The function should be part of `creature/motor/`>>
+**Resolved — hub entry contract:** Single entry function under `creature/motor/`. **No explicit parameters** — reads the creature's current state and surroundings internally. **Output:** one **action** for the current physics tick. Goal consideration (§10) and step decomposition run inside this pipeline on the Observation cadence.
 
-<<Question: Goal scoring formula — how do urgency and ease of accomplishment combine (weighted sum, product, max-with-tie-break)? What numeric inputs feed each V3 goal (e.g. `calorie_ratio`, danger proximity, mate availability)?>>
+**Resolved — V3 goal ↔ `GoalKind`:** Wire through [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) per the table above. Rest has no salient `GoalKind` (preserve-calories behavior only). Flight and Mate may resolve to `avoid_hostiles`, `shelter`, or `find_mate` depending on context; salient writes use the active wire id at outcome.
 
-<<Question: V3 goal ↔ [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) Tier-2 ↔ `GoalKind` wire id — authoritative routing table (Rest → Preserve calories? Flight → `avoid_hostiles` / `shelter`? Eat → `find_food`?) for salient writes and memory keys.>><<Comment: This should be wired to GoalKind. I've updated the table to detail the mapping.>>
+**Resolved — goal scoring:** At each consideration cycle, each candidate goal computes weight = base × urgency × (feasibility_floor + feasibility). Urgency is continuous 0…1 from vitals/threat proximity (piecewise calorie bands; inverse distance for Flight). Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). Hard overrides: calorie_ratio < starvation_override_food_ceiling forces Eat dominance; acute Flight uses fast-path (§10) and does not compete via weight. Trait channels and replay_weight apply multiplicatively after base score. Dominant leaf derivation 1 gates eligibility and memory consult, not the urgency/feasibility curves themselves.
 
 ---
 
@@ -35,11 +48,11 @@ For the active goal, break it down into **steps** with **objectives**. These sho
 - Review applicable skills (stub until skill feature lands).
 - Identify step with the highest weight.
 
-<<Question: Define **step** vs **objective** vs **action** — types, completion predicates, and per-goal default step chains (e.g. Eat: approach → consume; Flight: reach shelter → hold).>><<Comment: A **step** is a goal broken down into discrete elements. For example, Eat might require move past boulder, move to shrub, take the EAT action. And **objective** is the exit criteria for an active step. So in the given example, if the creature needs to move northeast three meters to get around the boulder, the Objective would be the point three meters away. Once there, the first step is resolved and the next objective would be to MOVE to the shrub four meters to the north and one to the west. An **action** is a single atomic unit that  can be done per physics tick. A creature only gets one action per physics tick. For a human player this would translate to a key press or button click. >>
+**Resolved — step / objective / action:** See Definitions §3–5 and §10 default step chains.
 
-<<Question: `ActiveGoal` schema — fields for goal table (`goal_kind` or V3 id, `weight`, `ultimate_pos`, `step_chain`, `step_index`, `source`: live / belief / locale_prior / explore / backtrack)?>> <<If goal_kind returnsan active goal that can be broken down into steps, objectives, and actions, then we should use the existing code. If it is incompatible, help me understand the incompatablilities.>>
+**Resolved — `ActiveGoal` schema:** Adopt [POST_LOS_MOVEMENT.md §3.1](POST_LOS_MOVEMENT.md) fields: `goal_kind`, `weight`, `ultimate_pos`, `step_chain`, `step_index`, `source` (`live` | `belief` | `locale_prior` | `explore` | `backtrack`). **Legacy incompatibility:** shipped motor scatters goal state across `MotorContext` keys (`motor_has_active_goal`, `motor_seek_goal_pos`, per-goal weights) rather than a typed goal table — V3 greenfield replaces this with an explicit active goal table (§10).
 
-<<Question: “Set finding location as goal” (Rest/Eat flows) — is this a Seek sub-mode, a dedicated goal type, or an objective without a fixed position until Seek resolves it?>><<Comment: This is asking "is the goal in the zone of awareness (8.1), the  Precise tier (8.2), or the Coarse tier (83.)?" If yes, the goal should be broken down as outlined into steps, and objectives. If not Seek will be required.>>
+**Resolved — “Set finding location as goal”:** Not a separate goal type. If the target is already known — live in zone of awareness (§8.1), precise tier (§8.2), or coarse tier (§8.3) — decompose into steps and objectives. If not known at any tier, enter **Seek** (§3).
 
 ---
 
@@ -80,7 +93,7 @@ If the current step objective requires movement, follow the movement trees below
                                 ------------------
 ```
 
-<<Question: “Objective location known?” — precise instance belief, live sighting only, locale-prior centroid, or any of the above by tier?>><<Comment: Any of the above, though the specific response varies based on which it is. >>
+**Resolved — “Objective location known?”:** Any of live sighting, precise instance belief, locale-prior centroid, or coarse direction — **tier determines planner behavior** (§8.1 live trees vs §8.2 pathmapping vs §8.3 direction seek).
 
 ### Seek cycle tree
 
@@ -145,15 +158,13 @@ If the current step objective requires movement, follow the movement trees below
                                                                       ---------------   ---------------
 ```
 
-<<Question: “Pattern that matches believed objective” — instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse sector bias, or combined precedence?>> <<Comment: I think combined precedence is what we want since any of these that results in an objective producing match should be considered.>>
+**Resolved — “Pattern that matches believed objective”:** **Combined precedence** — any source that yields an objective-producing match counts: instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse sector bias.
 
-<<Question: “Unexplored locations” — coverage-cell marking, explore trail, or other contract? Reuse `explore_coverage_cell_px` from memory config or new V3 keys?>>
+**Resolved — “Unexplored locations”:** See Definitions §9 (coarse/precise tier, 50% area-of-awareness object-density rule). Does not reuse `explore_coverage_cell_px` as the primary contract.
 
-<<Question: “Pick path with highest weight” around blocker — scoring inputs (distance, threat, replay_weight, terrain)? Navmesh-first vs static detour fallback (adopt POST_LOS intent without V2 code paths)?>>
+**Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional `post_los_detour_score_competition` (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID.
 
-<<Question: Multistep path generation — navmesh first waypoint, corridor graph, or other? Headless test requirements when physics `space_state` is absent?>>
-
-<<Comment: Backtrack branch — POST_LOS resolved v1 as **approach-heading TTL memory** (no position stack). Confirm for V3 or specify alternative.>>
+**Resolved — backtrack v1:** **Approach-heading TTL memory** only ([`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) pattern) — no position stack in v1.
 
 ### Movement Weighing Tree
 
@@ -221,13 +232,13 @@ If the current step objective requires movement, follow the movement trees below
                                                                                   --------------------
 ```
 
-<<Question: Clear-path test — LoS occlusion threshold (e.g. >60% blocked), capsule/corridor AABB sweep, squeeze skill-check hook, and headless fallback when raycast unavailable?>>
+**Resolved — clear-path test:** LoS ray **>80%** occluded = blocked; plus capsule/corridor AABB sweep; squeeze skill-check hook (stub until skills land); headless: corridor sweep still runs when raycast unavailable (POST_LOS §4.1 intent).
 
-<<Question: “Secondary objectives in zone of awareness” — candidate set (all live goal targets, belief merges, alternate goal kinds only)?>>
+**Resolved — “Secondary objectives in zone of awareness”:** Consider **all live goal targets**. Also consider a secondary target for the primary goal when the original is blocked and the alternate is optimal, or when an opportunistic detour (e.g. food while seeking a mate) does not materially reduce primary success likelihood.
 
-<<Question: “Known dead-ends” — storage schema, TTL, eviction, and who writes (planner on failed approach vs memory tier)?>>
+**Partial — known dead-ends:** Stored in the **memory tier** (not planner-only ephemeral state). Full schema (TTL, eviction, geographic feature types such as dead-ends and hazardous paths) deferred to MEMORY sibling refactor (§8.4). Planner writes on failed approach; memory tier owns retention.
 
-<<Comment: Precise-tier movement (Pathmapping) skips LoS/capsule for remembered coords — confirm this tree applies only when objective is **live in awareness** or always for precise beliefs.>>
+**Resolved — Movement Weighing tree scope:** Applies when the objective is **live in zone of awareness**. Precise-tier pathmapping (§8.2) skips LoS/capsule for remembered coords outside awareness. After movement, when the objective enters the zone, recalculation may use pathmapping for the remainder.
 
 ---
 
@@ -235,7 +246,7 @@ If the current step objective requires movement, follow the movement trees below
 
 If the objective does not require movement, take an action toward the objective.
 
-<<Question: Outcome hooks — which completed actions trigger [CREATURE_MEMORY.md](CREATURE_MEMORY.md) §14 salient writes (`find_food` on EAT, `avoid_hostiles` on jeopardy clear, etc.)?>>
+**Resolved — outcome / salient writes:** Each **action type** carries its own outcome hook in the action definition (which `GoalKind` salient write fires on completion). See per-goal flows in §6 (e.g. EAT → `find_food`; Flight clear → `avoid_hostiles` / `shelter`).
 
 ---
 
@@ -246,6 +257,8 @@ Once the objective is accomplished, review the goal for further steps.
 - If so, make the next step the new current objective and return to §3.
 - If the goal is met, calculate a new goal (§1 hub).
 
+**Resolved — Rest goal completion:** Rest is **sustained** — it does not “complete” like Eat consume. The creature remains on Rest until another goal wins on consideration, Safety state ends, or `REST` is interrupted (§6.1).
+
 ---
 
 ## 6. Goal logic flows
@@ -254,35 +267,53 @@ NOTE: Overlap with the top-level movement flow is intentional — shows how goal
 
 ### 6.1 Rest
 
+**Resolved — Rest goal phase machine:**
+
+| Phase | Condition | Action emitted |
+|-------|-----------|----------------|
+| **Approach** | Not at a candidate safe site | `MOVE_*` / `TURN_*` per §3 |
+| **Pending Safety** | At a site that **might be safe**; Safety state (§1) not yet achieved | **`STAY`** (full zone, baseline cal — §7.5) |
+| **Recover** | Safety state met + §6.1 criteria below | **`REST`** (area-only perception, half baseline — §7.5, §8.1) |
+
+If Safety is already true on arrival and other criteria pass, skip Pending Safety and enter Recover immediately.
+
 ```
         ------------------
-        | Is the current |
-        | location safe? |
+        | At a candidate |
+        | safe location? |
         ------------------
-        yes |       | no
-        -----       -------
-        |                 |
-        V                 V
-    ------------    -----------------
-    | Take the |    | Is a believed |
-    | action:  |    | safe location |
-    | REST     |    | known?        |
-    ------------    -----------------
-                     yes |       | no
-                     -----       ------
-                     |                |
-                     V                V
-              ----------------    ---------------
-              | Set location |    | Set finding |
-              | as next      |    | location as |
-              | objective    |    | goal.       |
-              ----------------    ---------------
+         no |         | yes
+        ----           ----
+        |                  |
+        V                  V
+  ----------------    ------------------
+  | Believed safe|    | Safety state   |
+  | site known?  |    | achieved (§1)? |
+  ----------------    ------------------
+   yes |    | no        yes |       | no
+   ----    ----          -----       -------
+   |          |           |                 |
+   V          V           V                 V
+  --------  -------   ------------    ------------
+  | MOVE   | | Seek | | action:    |  | action:    |
+  | toward | | /    | | REST       |  | STAY       |
+  | site   | | find | ------------    | (until     |
+  --------  -------                   | Safety)    |
+                                      ------------
 ```
 
-- REST aids calorie preservation and healing. Stub until combat — creature makes no movement.
-- **Criteria:** calories >= 95%, no danger.
+- **`REST`** aids calorie preservation and healing. Stub until combat — no movement. Calorie: §7.5 (half baseline).
+- **`STAY` (Rest pending):** Expected while waiting for Safety at a candidate site — **not** a broken-goal fallback (§7.2).
+- **Criteria to emit `REST`:** Rest goal incumbent; calories ≥ 95%; **Safety state** (§1); safe location (full zone check — §8.1); pre-engage uses **full** zone of awareness.
+- **Outcome Hook:** `REST` action (sustained; no single-tick completion).
 
-<<Question: “Safe location” — `shelter` GoalKind beliefs, threat-free zone, or squeeze-fit estimate per [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)?>>
+**Resolved — Safety state vs `REST` action:** **Safety** is a **state** (Definitions §1). **`REST`** is an **action**. Entering `REST` requires Safety state. While `REST` is active, danger is checked **per tick** against **area of awareness only** (§8.1). When Safety state ends or `REST` criteria fail, the hub **stops selecting `REST`** on each physics tick and emits another action instead (e.g. Flight fast-path if danger entered area — §6.3, §10).
+
+**Resolved — `REST` interrupt:** Per-tick area danger check while `REST` is selected. Hostile in **area** ⇒ end `REST` same tick ⇒ **Flight fast-path** (§6.3). Cone of awareness **re-engages** on the first tick where `REST` is not the selected action (§8.1). Goal supersession on consideration (e.g. Eat as calories drift) ends `REST` without restoring cone mid-tick beyond that rule. Replanning does **not** temporarily restore the cone.
+
+**Resolved — “Safe location”:** All three signals contribute with **equal default weight**: `shelter` GoalKind beliefs, threat-free zone (Safety state — §1), and squeeze-fit estimate per [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md). Experience refines what counts as safe over time. <<Comment: Rest in a squeeze may yield more ticks before shelter beliefs match reality (LoS limits for predator and prey) — tune in playtest.>>
+
+**Resolved — believed safe location unknown:** Set finding location as objective (§2); do not emit `STAY` or `REST` until at a candidate site.
 
 ### 6.2 Eat
 
@@ -313,6 +344,7 @@ NOTE: Overlap with the top-level movement flow is intentional — shows how goal
 - EAT consumes from a food resource: `available_calories` (max gain) and `consumption_time` (physics ticks, stationary).
 - **Criteria:** calories < 95%.
 - **Urgency:** increases as calories decrease.
+- Outcome Hook: EAT action
 
 <<Comment: Hook to [`bush_food.gd`](../../assets/plants/bush_food.gd) `current_calories` / `instance_id` at implementation — align with refactored MEMORY instance-belief sync.>>
 
@@ -391,10 +423,11 @@ NOTE: Overlap with the top-level movement flow is intentional — shows how goal
 - **Criteria:** danger in zone of awareness; creature not in squeeze believed inaccessible to danger source.
 - **Squeeze tradeoff:** weigh danger distance vs calorie count when boxed in — separate from starvation override in GOAL_DRIVERS (anticipatory, not dominance flip).
 - **Urgency:** increases with proximity to danger.
+- Outcome Hook: danger no longer in the zone of awareness for X ticks of the Goal consideration cadence, where X is the value safety_time (default 5, number to be tuned in playtesting.)
 
-<<Question: Flight fast-path **exit** — when does acute Flight release and trigger full goal consideration (rear-arc rescan + no hostile in awareness/panic footprint, distance threshold, TTL, or consideration-tick only)?>>
+**Resolved — Flight fast-path exit:** Release when danger is absent from the zone of awareness for **`safety_time`** goal-consideration cycles (same as Outcome Hook above). Then run full goal consideration per §10.
 
-<<Question: Goal-table freeze during Flight — preserve weights, `step_chain`, `step_index` until exit; confirm contract matches combat fast-path below.>>
+**Resolved — goal-table freeze during Flight:** Matches §10 combat fast-path contract — freeze `weight`, `step_chain`, `step_index` during acute response; full consideration round on release.
 
 ### 6.4 Mate
 
@@ -410,9 +443,103 @@ NOTE: Overlap with the top-level movement flow is intentional — shows how goal
 
 MOVE is the physics/locomotion contract below the planner.
 
-<<Question: Execution model — step-goal per tick (planner sets target position/direction), path following, or discrete 8-way (or N-way) weighted step selection? Greenfield: do not presuppose retired `cardinal_avoidance.gd` unless explicitly re-adopted.>>
+**Resolved — execution model (greenfield):** Facing-relative locomotion — turn on one tick, move forward or backward on another (mirrors planned human-player controls). Do **not** presuppose retired `cardinal_avoidance.gd` eight-way selection unless explicitly re-adopted.
 
-<<Question: Locomotion owner — new module path under `creature/motor/`, inputs (step_goal, urgency, terrain/squeeze), calorie burn per distance, and 3D body integration (`CreatureKinematicBody3D`).>>
+**Resolved — MOVE tick semantics:** One physics tick carries **one** action. A tick is either **turn-only** (facing adjusts; **no** displacement) **or** **move-only** (forward/back along current facing; **no** facing change that tick) — never both in the same tick. Turn-only ticks impose a deliberate cost for large facing changes (180° = **8** turn ticks at 22.5° — §7.3). The same one-action-per-tick rule extends to future non-locomotion actions (shove, attack) when those systems land.
+
+**Resolved — human vs engine ordering:** **Execution layer first; human input adapter deferred.** V3 implements facing-relative `MOVE` through the shared locomotion module (below). Human and LLM adapters are **out of V3 scope** but **must** emit the same `Action` types when they land. Key-to-action mapping is not a V3 concern.
+
+**Resolved — locomotion owner:** Single module under `creature/motor/` applies `Action` values to [`CreatureKinematicBody3D`](../../creature/capabilities/creature_kinematic_body_3d.gd). The ENGINE planner calls it directly; human/LLM adapters call it later via the same contract.
+
+### 7.1 Layer split (planner → executor → body)
+
+Three layers; **world targets and urgency stop at the planner**:
+
+| Layer | Location | Inputs | Output |
+|-------|----------|--------|--------|
+| **Planner** | `creature/motor/` hub | Creature state, zone of awareness, memory tiers, `step_goal`, urgency, terrain/squeeze **beliefs** | One `Action` per physics tick |
+| **Executor** | `creature/motor/` locomotion module | `Action` only (+ `delta`) | `ActionOutcome` (displacement, blocked) |
+| **Body** | [`CreatureKinematicBody3D`](../../creature/capabilities/creature_kinematic_body_3d.gd) | Called by executor | Physics, facing state, vitals |
+
+The executor **never** receives `step_goal`, `ultimate_pos`, or urgency. The planner uses those internally (e.g. emit `TURN_LEFT` until facing aligns with `step_goal`, then `MOVE_FORWARD`). Human input (deferred) maps keys to the same `Action` values and calls the same executor entry point.
+
+**Resolved — urgency vs speed:** Urgency affects **which action** the planner chooses (goal scoring, §1). Per-tick locomotion speed is unchanged by urgency ([`LocomotionProfile`](../../creature/definition/locomotion_profile.gd) `max_speed` / accel). Future **`SPRINT`** action may move faster at a higher calorie cost — out of V3 scope.
+
+**Resolved — terrain / squeeze at execution:** The executor **only applies** the chosen action. No terrain scoring, wall-slide steering, or squeeze affordance logic in the executor. If `MOVE_FORWARD` into a squeeze (or any block) fails in physics, displacement is negligible and `ActionOutcome` reports blocked; **memory / planner** update beliefs to match observed reality on the next observation or consideration cycle — not inside the executor.
+
+### 7.2 Executor contract
+
+**Entry point (greenfield):** `apply_action(body, action, delta) -> ActionOutcome`
+
+| `Action` | Executor behavior |
+|----------|-------------------|
+| `TURN_LEFT` / `TURN_RIGHT` | Rotate facing by turn increment (§7.3); **no** displacement |
+| `MOVE_FORWARD` / `MOVE_BACKWARD` | Displace along ±facing for one move tick via `move_and_slide` |
+| `STAY` | No turn, no displacement; full awareness (§8.1) |
+| `REST` | No turn, no displacement; cone off while selected (§8.1) |
+| `EAT` / others | No locomotion; interaction hooks per §4 |
+
+Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engine `set_creature_move_intent(Vector3)` and distance-based [`_apply_calorie_drain_and_starvation`](../../creature/capabilities/creature_kinematic_body_3d.gd) — calorie burn lives on the action definition.
+
+**Resolved — `STAY` vs broken goals:** **`STAY` is an action**, not evidence of planner failure. Two valid planner contexts emit `STAY`: (1) **idle** — empty goal table (§10), should be uncommon; a healthy creature is usually pursuing a goal or in Rest phase machine §6.1; (2) **Rest pending Safety** — Rest goal active at a candidate safe site, waiting for Safety state (§1). Do **not** conflate either with “goals are broken.” Optional dev log for excessive consecutive `STAY` ticks if playtest warrants — no CI alarm in v1.
+
+**Resolved — empty goal table:** When the hub has **no active goals** (§10), emit **`STAY`** each tick (baseline metabolism, full awareness) — not `REST`. `REST` requires Rest goal + §6.1 criteria only.
+
+### 7.3 Facing and turn increment
+
+**Resolved — authoritative facing:** Horizontal facing is **body state** (`last_move_direction` or renamed `facing`), not derived from post-move velocity. Turn actions mutate facing; move actions consume it. [`Visual`](../../creature/capabilities/creature_kinematic_body_3d.gd) yaw syncs from facing (awareness cone, §8.1).
+
+**Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). Planner picks left vs right by shorter arc to `step_goal`.
+
+### 7.4 Body integration
+
+**Stays on `CreatureKinematicBody3D`:** `CharacterBody3D` capsule, `move_and_slide`, gravity, [`LocomotionProfile`](../../creature/definition/locomotion_profile.gd), playfield clamp (safety net), vitals sync, defeat / hitbox.
+
+**Moves to executor / deprecates on body:** world-space intent vector, `_engine_heading_with_wall_slide` for engine mode, facing-from-velocity after move, per-frame distance calorie integration.
+
+**Tick order (engine):** motor hub selects `Action` → executor `apply_action` → body completes physics step. One action, one application, one calorie debit.
+
+### 7.5 Action calorie costs
+
+**Resolved — per-action burn:** Each `Action` carries `calorie_cost` computed at apply time from `delta` (physics step seconds). Refactor replaces legacy `calorie_cost_per_unit_moved` × distance with this model; other action types get values **relative to MOVE** (author fills in).
+
+| Action | Cost formula (per tick) | Notes |
+|--------|-------------------------|-------|
+| `MOVE_FORWARD`, `MOVE_BACKWARD` | `move_calorie_per_sec × delta` | Anchor |
+| `TURN_LEFT`, `TURN_RIGHT` | Same as `MOVE_FORWARD` | Exertion without displacement |
+| `STAY` | `calorie_baseline_drain_per_sec × delta` | Full baseline; idle or Rest-pending Safety |
+| `REST` | `calorie_baseline_drain_per_sec × rest_baseline_multiplier × delta` | Half baseline; Rest goal + §6.1 only |
+| `EAT`, future `SPRINT`, etc. | TBD relative to MOVE | Author supplies values |
+
+**Resolved — MOVE anchor:** Continuous `MOVE_FORWARD` for **one second** costs **1 calorie** total:
+
+```text
+move_calorie_per_sec = 1.0
+move_cost(action, delta) = move_calorie_per_sec × delta
+```
+
+**Resolved — `REST`:** **Half** baseline metabolism (not half of MOVE):
+
+```text
+rest_baseline_multiplier = 0.5
+rest_cost(action, delta) = calorie_baseline_drain_per_sec × rest_baseline_multiplier × delta
+```
+
+**Resolved — `STAY`:** Full baseline metabolism:
+
+```text
+stay_cost(action, delta) = calorie_baseline_drain_per_sec × delta
+```
+
+Default `calorie_baseline_drain_per_sec` from `creature_motor` is **1.0** ⇒ `STAY` ≈ **1.0 cal/s**, `REST` ≈ **0.5 cal/s** at default config. No separate passive drain path in the body — every tick debits exactly one action’s cost.
+
+**Config keys (greenfield, `creature_motor` or V3 namespace at implementation):** `move_calorie_per_sec` (default **1.0**), `rest_baseline_multiplier` (default **0.5**). Retire `calorie_cost_per_unit_moved` once action costs ship.
+
+### 7.6 Failure and beliefs
+
+Executor returns `ActionOutcome` with observed displacement and blocked flag. Belief updates (squeeze misjudgement, dead-ends, passibility) are **planner / memory** responsibilities (§3, §8.4, [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) — triggered when outcome contradicts planner expectation, not inside `apply_action`.
+
+<<Comment: Human control cadence (deferred) — until human controls ship, working assumption: players may hold **multiple keys simultaneously** and emit **more than one action per physics tick**; they also idle (hands off keys) across **multiple** physics ticks. Reconcile with ENGINE one-action-per-tick (Definitions §5) when human-control implementation starts; may require §5 amendment.>>
 
 ---
 
@@ -427,7 +554,17 @@ V3 planner **reads** memory; authoritative storage tiers remain in refactored [C
 - Stub: capsule/corridor sweep reliability varies by attributes/skills once skill feature lands.
 - Level of absolute clarity stays in sync with the zone; everything else is a different tier.
 
-<<Question: Awareness geometry — hybrid radius disk + forward cone, omni threat mode, and parity with refactored GOAL_DRIVERS threat ingest?>>
+**Resolved — perception by context (Safety state vs `REST` action):**
+
+| Context | Zone used | Cone of awareness |
+|---------|-----------|-------------------|
+| Safety state counting (§1); `STAY` pending Safety; pre-`REST` eligibility | **Full** zone (area + cone) | **On** |
+| Default (`MOVE`, `TURN`, `STAY` idle, `EAT`, …) | **Full** zone | **On** |
+| While **`REST` is the selected action** | **Area of awareness only** | **Off** |
+
+**Resolved — cone disengagement:** Cone disengages on the **first tick `REST` is selected**; re-engages on the **first tick `REST` is not** the selected action (danger interrupt, Safety ends, goal supersession, etc.). Only **`REST`** disables the cone in v1. Implemented in **perception / zone build** (not the executor — §7.1).
+
+**Resolved — danger during `REST`:** Per-tick hostile check uses **area only**. Hostile in area ⇒ end `REST` ⇒ Flight fast-path (§6.1, §6.3). Area radius tuning deferred until combat and skills land (may modify effective area). <<Comment: Sync non-REST hybrid disk + cone geometry with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest on promotion.>>
 
 <<Comment: Ghost mapping — link to mover belief fields (`last_velocity`, ghost horizon) in MEMORY §5.5 when MEMORY refactor lands.>>
 
@@ -451,13 +588,18 @@ Prioritize shortest unobstructed path in that direction until:
 3. Another goal takes precedence.
 4. Creature travels `goal_memory_forget_radius + 10%` — then Seek takes priority.
 
-<<Question: Coarse locomotion vs [CREATURE_MEMORY.md §5.2](CREATURE_MEMORY.md) eight-way **sector_weights** — does V3 path-in-direction replace sector bias, combine both, or delegate sector channel to execution weights only?>>
+**Resolved — coarse expiry (two policies):**
 
-<<Question: Coarse expiry — V3 travel-distance rule (forget_radius + 10%) vs MEMORY `goal_memory_coarse_ttl_sec` and LRU — single policy or both apply?>>
+| Policy | Scope |
+|--------|--------|
+| `goal_memory_coarse_ttl_sec` + LRU | How long a belief **remains in coarse-tier memory** |
+| V3 travel-distance rule (`forget_radius + 10%`) | Locomotion: creature reached the general area but objective never entered zone of awareness → generic **Seek** takes over |
+
+<<Question: Coarse locomotion vs [CREATURE_MEMORY.md §5.2](CREATURE_MEMORY.md) eight-way **sector_weights** — does V3 path-in-direction replace sector bias, combine both, or delegate sector channel to execution weights only?>>
 
 ### 8.4 Planner consumption (sibling MEMORY section)
 
-<<Comment: Add matching **§V3 planner consumption** in CREATURE_MEMORY when promoting — dead-ends, explore marks, precise/coarse read rules, salient-write gates unchanged unless V3 goal ids change.>>
+<<Comment: Add matching **§V3 planner consumption** in CREATURE_MEMORY when promoting — dead-ends, explore marks, precise/coarse read rules, salient-write gates unchanged unless V3 goal ids change. Sync `STAY`/`REST` awareness rules with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest.>>
 
 ---
 
@@ -474,7 +616,7 @@ If the objective is inaccessible (shrub out of reach, creature in squeeze), eval
 Every **n** physics ticks, re-evaluate zone of awareness and run **goal consideration** on new observations.
 
 - **n** from **Observation** attribute — higher Observation ⇒ more frequent replans ([CREATURE_ATTRIBUTES_USAGE.md §3.5](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)).
-- Maintain an **active goal table** (goals + weights). Empty table ⇒ no movement / rest.
+- Maintain an **active goal table** (goals + weights). Empty table ⇒ **`STAY` action** each tick (§7.2, §7.5).
 - Goal consideration weighs all candidates. When a goal decomposes into steps, earliest unaccomplished step is **primary**. If another goal’s weight exceeds incumbent, discard incumbent step chain.
 
 **Fast-path bypass (every tick):** Flight. **Combat (future):** attack action triggers fight/flight immediately — planner and frozen goal table do not compete with acute response.
@@ -486,9 +628,9 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 
 **Goal-table contract (Flight / combat fast-path):** freeze active goal table during acute response (`weight`, `step_chain`, `step_index` preserved — not cleared). On release, run a **full goal-consideration round** before resuming step execution; frozen incumbent may no longer be valid.
 
-<<Question: Observation → **n** ticks — piecewise curve (neutral stat = base interval, sub-10 clamp until stat pools land)? Default `n` at Observation = 10?>>
+**Resolved — Observation → n ticks:** Adopt [POST_LOS_MOVEMENT.md §3.3](POST_LOS_MOVEMENT.md) piecewise curve — **10 = neutral** (scale 1.0). `stat_observation ≤ 10`: scale `lerp(2.0, 1.0, stat/10)`; `> 10`: scale `lerp(1.0, 0.5, (stat−10)/90)`; `n = max(1, round(base_ticks × scale))`. Pilot clamp: minimum **10** for curve input until observation pools land. Default base interval when `stat_observation = 10`: align with `post_los_replan_base_ticks` (default **8**) unless V3 retunes.
 
-<<Question: Between replan ticks, do execution weights reflect **incumbent goal** from last consideration round (POST_LOS intent) or re-score every tick?>>
+**Resolved — between replan ticks:** Execution follows the **incumbent goal** from the last consideration round (weights frozen; step chain advances on objective completion). Fast-path Flight/combat may override every tick (§10). No per-tick full re-score between consideration cycles.
 
 ---
 
@@ -499,11 +641,27 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 | Decision | V3 section | Notes |
 |----------|------------|-------|
 | Three layers: goals → planner → execution | §1–3, §7 | Greenfield modules |
+| Hub: no explicit inputs; one action per tick | §1 | `creature/motor/` |
+| V3 ↔ `GoalKind` routing | §1 table | Via `goal_kind_registry.gd` |
+| `ActiveGoal` schema | §2 | POST_LOS §3.1 fields |
 | Slow replan vs fast-path Flight/combat | §10 | Every tick bypass for acute response |
-| Clear path = LoS + corridor sweep | Movement Weighing tree | Thresholds TBD |
-| Navmesh-first, detour fallback when blocked | Seek cycle | API TBD |
-| Approach-heading backtrack TTL (v1) | Seek cycle | No position stack v1 |
+| Clear path = LoS (>80% blocked) + corridor sweep | §3 | Squeeze hook stub |
+| Navmesh-first, detour fallback when blocked | §3 Seek cycle | `post_los_detour_score_competition` optional |
+| Unexplored = coarse/precise low object density | Definitions §9 | 50% area-of-awareness rule |
+| Approach-heading backtrack TTL (v1) | §3 Seek cycle | No position stack v1 |
 | Freeze goal table during Flight/combat | §10 | Full consideration after release |
+| Flight exit = `safety_time` cycles safe | §6.3 | Matches Outcome Hook |
+| Coarse TTL vs travel-distance Seek handoff | §8.3 | Separate policies |
+| Facing-relative forward/back MOVE | §7 | Greenfield; not cardinal_avoidance |
+| Turn-only vs move-only (one action per tick) | §7 | 180° and future shove/attack cost |
+| Execution-first; human adapter deferred | §7 | Shared `Action` contract |
+| Locomotion owner under `creature/motor/` | §7 | ENGINE + future adapters |
+| Executor sees `Action` only (not `step_goal`) | §7.1–7.2 | Planner owns world targets |
+| Urgency → planner only; fixed speed until `SPRINT` | §7.1 | `LocomotionProfile` |
+| Turn increment 22.5° / 8 ticks per 180° | §7.3 | Facing-relative |
+| Per-action calorie; MOVE = 1 cal/s; STAY = baseline; REST = half baseline | §7.5 | Retire distance burn |
+| `STAY` vs `REST`; Rest phase machine; cone off during `REST` only | §6.1, §7.2, §8.1 | Safety state gates `REST` |
+| Physics failure → beliefs (not executor) | §7.6 | Memory sibling |
 
 ---
 
@@ -538,17 +696,17 @@ Repeat 6–10 if implementation is broken into sub-phases.
 
 ## 13. Outstanding decisions index
 
-| Topic | Marker location | Blocker for impl plan? |
-|-------|-----------------|----------------------|
-| Hub API + goal scoring | §1 | Yes |
-| V3 ↔ GoalKind routing | §1 | Yes |
-| Step / objective / ActiveGoal schema | §2 | Yes |
-| Clear-path + multistep algorithms | §3 | Yes |
-| Dead-ends + explore marks | §3, §8 | Yes |
-| Execution layer (MOVE) | §7 | Yes |
-| Precise vs coarse vs MEMORY | §8 | Yes |
-| Flight exit + table freeze | §6.3, §10 | Yes |
-| Observation → n formula | §10 | Medium |
-| Outcome → salient writes | §4 | Medium |
-| Mate / Fight | §6.4–6.5 | Deferred |
-| Acceptance + sub-phases | §12 | Yes |
+| Topic | Marker location | Blocker for impl plan? | Status |
+|-------|-----------------|------------------------|--------|
+| Goal scoring formula | §1 | Yes | Open |
+| Locomotion module inputs + body integration | §7 | Yes | **Closed** |
+| Human control cadence vs ENGINE one-action-per-tick | §7, Definitions §5 | No | Deferred |
+| Awareness geometry + GOAL_DRIVERS parity | §8.1 | Medium | Partial — REST cone rule closed; hybrid geometry open |
+| Coarse `sector_weights` vs path-in-direction | §8.3 | Medium | Open |
+| Dead-end / geographic memory schema | §3, §8.4 | Yes | Partial — MEMORY sibling |
+| Past experience + chaos config | §9 | Medium | Open |
+| Mate / Fight flows | §6.4–6.5 | No | Deferred |
+| Implementation inventory + sub-phases + config namespace | §12 | Yes | Open |
+| Headless test matrix + playtest gates | §12 | Medium | Open |
+
+**Recently closed (no longer blockers):** hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, safe location, Flight exit + table freeze, Observation → n formula, incumbent between replans, coarse expiry split, MOVE turn-only tick semantics, human-vs-engine ordering (execution-first), locomotion owner path (`creature/motor/`), executor `Action`-only contract + body integration (§7.1–7.4), turn increment 22.5°, per-action calorie (MOVE 1 cal/s, STAY baseline, REST half baseline, TURN = MOVE), physics failure → beliefs (§7.5–7.6), `STAY` vs `REST` + Rest phase machine + Safety state vs `REST` action + cone disengagement during `REST` (§6.1, §7.2, §8.1).
