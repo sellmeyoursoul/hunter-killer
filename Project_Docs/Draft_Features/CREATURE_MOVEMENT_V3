@@ -2,7 +2,7 @@ Purpose: Working Spec for a movement and goal refactor to fix the current overly
 
 Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/motor/` design. Sibling docs ([CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md), [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) are refactored separately — V3 defines the **planner interface** memory and goal drivers must satisfy, not their storage schemas.
 
-<<Comment: On promotion to `.md`, retire [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) and [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) to `Completed_Features/` with abandonment banners; register this file in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).>>
+<<Comment: On promotion to `.md` — **Deferred** process (§12 step 1, §13): retire [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) and [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) to `Completed_Features/` with abandonment banners; register this file in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md). Does not block spec completion.>>
 
 # Definitions
 
@@ -15,7 +15,7 @@ Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/mot
 7. **Area of awareness** — Circular observation radius near the creature, limited by line of sight.
 8. **Zone of awareness** — Cone of awareness + area of awareness (§8.1).
 9. **Unexplored** — A coarse- or precise-tier region with no observed objects within **50%** of the area-of-awareness radius (world units).
-10. **Default step chains (per goal)** — Eat: approach → consume; Flight: reach shelter or flee position → hold until safe; Rest: reach candidate safe location → **STAY** until Safety state (§1) → **REST**; Mate/Fight: stub until those systems land.
+10. **Default step chains (per goal)** — Eat: approach → consume; **Find shelter:** approach candidate → **STAY** evaluate (Safety + fit) → belief write (§6.4); Flight: reach shelter or flee position → hold until safe; Rest: reach candidate safe location → **STAY** until Safety state (§1) → **REST**; Mate/Fight: stub until those systems land.
 
 ---
 
@@ -27,17 +27,54 @@ Start with defining an active goal based on the following. Structure this in a h
 |------|------------------|---------|
 | **Rest** | - | Recover at a safe site: **STAY** until Safety (§1), then **`REST` action** (§6.1). Sustained until another goal wins or Safety ends. |
 | **Eat** | find_food | Replenish calories. |
-| **Flight** | avoid_hostiles &/or shelter | Avoid sources of danger. |
-| **Mate** | find_mate &/or shelter | Produce the next generation. |
-| **Fight** | Not Defined yet | Stub until combat is implemented. |
+| **Find shelter** | shelter | Proactively map bolt-holes / squeeze refuges (§6.4). Feeds Rest safe sites and Flight retreat options. |
+| **Flight** | avoid_hostiles | Avoid sources of danger. **Consumes** `shelter` beliefs during flee (§6.3); does not replace Find shelter mapping. |
+| **Mate** | find_mate | Produce the next generation. **Deferred** (§6.5). |
+| **Fight** | Not Defined yet | Stub until combat is implemented (§6.6). |
 
 NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.)
 
 **Resolved — hub entry contract:** Single entry function under `creature/motor/`. **No explicit parameters** — reads the creature's current state and surroundings internally. **Output:** one **action** for the current physics tick. Goal consideration (§10) and step decomposition run inside this pipeline on the Observation cadence.
 
-**Resolved — V3 goal ↔ `GoalKind`:** Wire through [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) per the table above. Rest has no salient `GoalKind` (preserve-calories behavior only). Flight and Mate may resolve to `avoid_hostiles`, `shelter`, or `find_mate` depending on context; salient writes use the active wire id at outcome.
+**Resolved — V3 goal ↔ `GoalKind`:** Wire through [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) per the table above. Rest has no salient `GoalKind` (preserve-calories behavior only). **Find shelter** uses wire id **`shelter`** ([GOAL_DRIVERS §4.1](CREATURE_GOAL_DRIVERS.md)). Flight uses **`avoid_hostiles`**; Mate uses **`find_mate`** when enabled. Salient writes use the active wire id at outcome.
 
-**Resolved — goal scoring:** At each consideration cycle, each candidate goal computes weight = base × urgency × (feasibility_floor + feasibility). Urgency is continuous 0…1 from vitals/threat proximity (piecewise calorie bands; inverse distance for Flight). Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). Hard overrides: calorie_ratio < starvation_override_food_ceiling forces Eat dominance; acute Flight uses fast-path (§10) and does not compete via weight. Trait channels and replay_weight apply multiplicatively after base score. Dominant leaf derivation 1 gates eligibility and memory consult, not the urgency/feasibility curves themselves.
+**Resolved — goal scoring (architecture):** At each consideration cycle, each candidate goal computes `weight = effective_base × urgency × (feasibility_floor + feasibility)`. **`effective_base`** = `goal_base_<wire_id>` for most goals; **Find shelter** uses §1 shelter base formula. Urgency is continuous 0…1 from vitals/threat proximity. Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). Hard overrides: `calorie_ratio < starvation_override_food_ceiling` forces Eat dominance; acute Flight fast-path (§10) suppresses normal consideration — **Find shelter excluded entirely** during acute threat. Trait channels and `replay_weight` apply multiplicatively after base score. Tier-2 dominance ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)) gates eligibility and memory consult, not the urgency/feasibility curves themselves.
+
+**Resolved — per-goal `base` (`creature_motor_v3`):** Temperament multiplier (typical range **0…2**; ship profile uses **~0.5–1.0**). **Not** V2 `weight_seek_*` cardinal keys. Species packs may override.
+
+| Hub goal | Config key | Ship default |
+|----------|------------|--------------|
+| Eat | `goal_base_find_food` | **1.0** |
+| Flight | `goal_base_avoid_hostiles` | **1.0** |
+| Rest | `goal_base_rest` | **0.85** |
+| Find shelter | `goal_base_shelter` | **0.5** |
+| Mate | `goal_base_find_mate` | **0.0** (disabled until §6.5) |
+
+**Resolved — Find shelter effective base:**
+
+```text
+effective_base_shelter = goal_base_shelter × food_map_confidence
+```
+
+**Resolved — `food_map_confidence`:** `∈ [0, 1]` — how well the creature knows **nearby food**. Take the **best** of: live ready food in zone of awareness; precise/coarse **`find_food`** instance belief within `goal_memory_forget_radius`; strongest **`find_food`** locale-prior `stored_strength` within `believed_goal_hotspot_near_radius_px` ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)). Low confidence ⇒ shelter mapping deprioritized (focus food first); high confidence ⇒ full `goal_base_shelter` applies. Tunable blend weights — **deferred** (v1: `max` of signals).
+
+**Resolved — Find shelter eligibility (consideration):** Candidate enters the goal table only when **`calorie_ratio ≥ seek_priority_food_ceiling`** (default **0.80** — same key as Eat urgency bands; tune in playtest). **Not** eligible under starvation override band (Eat dominates). **Fully suppressed** during acute threat / Flight fast-path (§6.3, §10) — no parallel Find shelter row competes with flee.
+
+**Resolved — Find shelter vs Flight:** Proactive **mapping** (Find shelter) vs reactive **flee** (Flight). When Flight runs, **nearby believed `shelter`** rows (instance + locale) **bias flee objectives** — prefer retreat toward known bolt-holes when fit estimates pass ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)). Find shelter does not run during fast-path; it **produces** beliefs Flight **consumes**.
+
+<<Question: Goal scoring — `feasibility_floor` default and semantics? (Minimum feasibility when no target exists — 0 vs small epsilon to allow seek-only goals?)>>
+
+<<Question: Goal scoring — Eat urgency piecewise calorie bands? Adopt V2 numerics into `creature_motor_v3` (`preserve_bias_food_floor` **0.90**, `seek_priority_food_ceiling` **0.80**, `preserve_seek_blend_smoothness` **0.5**, `starvation_override_food_ceiling` **0.10**) or retune defaults?>>
+
+<<Question: Goal scoring — Flight urgency curve? (`1 / distance`, clamped range, threat jeopardy multiplier — cite GOAL_DRIVERS / pack keys for `creature_motor_v3`.)>>
+
+<<Question: Goal scoring — Rest goal `base` and urgency? (Calorie band for Rest eligibility vs Eat — §6.1 uses calories ≥ 95%; how does Rest compete when calories drift 80–95%?)>>
+
+<<Question: Goal scoring — Mate vs Eat tradeoff (§1 NOTE)? Explicit formula when `find_mate` target live vs hunger urgency — or Mate **Deferred** until §6.5 lands?>>
+
+<<Question: Goal scoring — Tier-2 dominance at consideration? Reuse [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) + GOAL_DRIVERS priority table, or greenfield V3 module reading same rules?>>
+
+<<Question: Goal scoring — trait Tier-2 channels in V3 v1? **Stub zero deltas** (phase-1 parity with shipped `trait_tier2_mapper`) vs wire non-zero coefficients in `creature_motor_v3`?>>
 
 ---
 
@@ -158,11 +195,11 @@ If the current step objective requires movement, follow the movement trees below
                                                                       ---------------   ---------------
 ```
 
-**Resolved — “Pattern that matches believed objective”:** **Combined precedence** — any source that yields an objective-producing match counts: instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse sector bias.
+**Resolved — “Pattern that matches believed objective”:** **Combined precedence** — any source that yields an objective-producing match counts: instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse belief bearing (§8.3).
 
 **Resolved — “Unexplored locations”:** See Definitions §9 (coarse/precise tier, 50% area-of-awareness object-density rule). Does not reuse `explore_coverage_cell_px` as the primary contract.
 
-**Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional `post_los_detour_score_competition` (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID.
+**Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional **`creature_motor_v3.detour_score_competition`** (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID.
 
 **Resolved — backtrack v1:** **Approach-heading TTL memory** only ([`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) pattern) — no position stack in v1.
 
@@ -232,11 +269,15 @@ If the current step objective requires movement, follow the movement trees below
                                                                                   --------------------
 ```
 
-**Resolved — clear-path test:** LoS ray **>80%** occluded = blocked; plus capsule/corridor AABB sweep; squeeze skill-check hook (stub until skills land); headless: corridor sweep still runs when raycast unavailable (POST_LOS §4.1 intent).
+**Resolved — clear-path test:** LoS ray **>80%** occluded = blocked; plus capsule/corridor AABB sweep; headless: corridor sweep still runs when raycast unavailable (POST_LOS §4.1 intent).
 
-**Resolved — “Secondary objectives in zone of awareness”:** Consider **all live goal targets**. Also consider a secondary target for the primary goal when the original is blocked and the alternate is optimal, or when an opportunistic detour (e.g. food while seeking a mate) does not materially reduce primary success likelihood.
+**Deferred — squeeze skill-check on clear-path:** varies by attributes/skills once skill feature lands (§8.1).
 
-**Partial — known dead-ends:** Stored in the **memory tier** (not planner-only ephemeral state). Full schema (TTL, eviction, geographic feature types such as dead-ends and hazardous paths) deferred to MEMORY sibling refactor (§8.4). Planner writes on failed approach; memory tier owns retention.
+**Resolved — “Secondary objectives in zone of awareness”:** Consider **all live goal targets**. A candidate **B** that does **not** replace the incumbent (§8.3 cross-instance table) routes here: less-desirable but suitable same-goal alternates, different-goal opportunistic detours (e.g. food while seeking a mate), or blocked-primary alternates — when the detour does not materially reduce primary success likelihood.
+
+**Partial — known dead-ends:** Stored in the **memory tier** (not planner-only ephemeral state). Planner writes on failed approach; memory tier owns retention.
+
+<<Question: Dead-end geographic memory — minimal V3 row schema for planner write/read? Fields (`world_pos`, `approach_heading`, `goal_kind`, `instance_id`?, `expires_ms`), TTL, max entries, eviction (LRU vs TTL)? Owner: V3 adapter interface + [CREATURE_MEMORY.md](CREATURE_MEMORY.md) storage contract — or ephemeral planner-only for v1?>>
 
 **Resolved — Movement Weighing tree scope:** Applies when the objective is **live in zone of awareness**. Precise-tier pathmapping (§8.2) skips LoS/capsule for remembered coords outside awareness. After movement, when the objective enters the zone, recalculation may use pathmapping for the remainder.
 
@@ -311,7 +352,11 @@ If Safety is already true on arrival and other criteria pass, skip Pending Safet
 
 **Resolved — `REST` interrupt:** Per-tick area danger check while `REST` is selected. Hostile in **area** ⇒ end `REST` same tick ⇒ **Flight fast-path** (§6.3). Cone of awareness **re-engages** on the first tick where `REST` is not the selected action (§8.1). Goal supersession on consideration (e.g. Eat as calories drift) ends `REST` without restoring cone mid-tick beyond that rule. Replanning does **not** temporarily restore the cone.
 
-**Resolved — “Safe location”:** All three signals contribute with **equal default weight**: `shelter` GoalKind beliefs, threat-free zone (Safety state — §1), and squeeze-fit estimate per [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md). Experience refines what counts as safe over time. <<Comment: Rest in a squeeze may yield more ticks before shelter beliefs match reality (LoS limits for predator and prey) — tune in playtest.>>
+**Resolved — “Safe location”:** All three signals contribute: `shelter` GoalKind beliefs, threat-free zone (Safety state — §1), and squeeze-fit estimate per [CREATURE_MEMORY.md §7](CREATURE_MEMORY.md). Experience refines what counts as safe over time.
+
+<<Question: Safe location scoring — equal default weight for the three signals, or `creature_motor_v3` weights (`safe_site_weight_shelter_belief`, `safe_site_weight_threat_free`, `safe_site_weight_squeeze_fit`)? Defaults if weighted?>>
+
+<<Comment: Rest in a squeeze may yield more ticks before shelter beliefs match reality (LoS limits for predator and prey) — tune in playtest after weights resolve.>>
 
 **Resolved — believed safe location unknown:** Set finding location as objective (§2); do not emit `STAY` or `REST` until at a candidate site.
 
@@ -346,7 +391,7 @@ If Safety is already true on arrival and other criteria pass, skip Pending Safet
 - **Urgency:** increases as calories decrease.
 - Outcome Hook: EAT action
 
-<<Comment: Hook to [`bush_food.gd`](../../assets/plants/bush_food.gd) `current_calories` / `instance_id` at implementation — align with refactored MEMORY instance-belief sync.>>
+<<Question: Eat — awareness ingest contract for `anticipated_calories` and `instance_id`? Align [`bush_food.gd`](../../assets/plants/bush_food.gd) `current_calories` / stable instance id with MEMORY §5.5 sync at live sighting and on EAT outcome — which module owns the call (hub, planner, memory adapter)?>>
 
 ### 6.3 Flight
 
@@ -429,13 +474,60 @@ If Safety is already true on arrival and other criteria pass, skip Pending Safet
 
 **Resolved — goal-table freeze during Flight:** Matches §10 combat fast-path contract — freeze `weight`, `step_chain`, `step_index` during acute response; full consideration round on release.
 
-### 6.4 Mate
+**Resolved — Flight + believed shelter:** On fast-path flee, rank retreat objectives using **`avoid_hostiles`** urgency plus **nearby `shelter` beliefs** (instance precise/coarse rows + locale priors within consult radius). Prefer known bolt-holes that pass squeeze-fit vs estimated threat ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)) over generic flee headings when available. **Find shelter** hub goal is **not** active during fast-path — only this **consume** path runs.
 
-<<Comment: Stub — define steps, criteria, urgency, and `find_mate` memory hooks when mating systems land.>>
+### 6.4 Find shelter
 
-### 6.5 Fight
+**Purpose:** Proactively discover and validate refuges (bolt-holes, squeeze pockets) so **Rest** (§6.1), **Flight** (§6.3), and future **Mate** nesting have shelter beliefs to use.
 
-<<Comment: Stub — define engagement criteria and interaction with Flight fast-path until combat ships.>>
+```
+        ----------------------
+        | Shelter candidate  |
+        | known or visible?  |
+        ----------------------
+         no |           | yes
+        ----             ----
+        |                    |
+        V                    V
+  ----------------    ------------------
+  | Seek / explore |  | MOVE toward    |
+  | (§3)           |  | candidate      |
+  ----------------    ------------------
+                              |
+                              V
+                      ------------------
+                      | At entrance:   |
+                      | STAY — evaluate|
+                      | Safety (§1) +  |
+                      | squeeze fit    |
+                      | (MEMORY §7)    |
+                      ------------------
+                         pass |    | fail
+                         ----      -----
+                         |            |
+                         V            V
+                   ------------   ----------------
+                   | Write /    | | Mark low conf|
+                   | update     | | or dead-end  |
+                   | shelter    | | (§3)         |
+                   | belief     | ----------------
+                   ------------
+```
+
+- **Wire id:** **`shelter`** ([`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd)).
+- **Actions:** **`MOVE_*` / `TURN_*`** to approach; **`STAY`** at candidate to evaluate — **not** `REST` (no cone-off / half-calorie recovery during probe).
+- **Eligibility (consideration):** §1 — `calorie_ratio ≥ seek_priority_food_ceiling`; **not** during acute threat / Flight fast-path.
+- **Weight:** `effective_base_shelter = goal_base_shelter × food_map_confidence` (§1).
+- **Outcome hook:** Successful STAY probe → instance **`shelter`** belief (+ locale salient write when MEMORY enables `shelter` writes). Failed fit → planner dead-end mark (§3 question).
+- **v1 scope:** Live squeeze/passage candidates in awareness + belief tiers per §8; full squeeze fingerprint `context_hash` deferred ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)).
+
+### 6.5 Mate
+
+**Deferred** until mating systems land. <<Comment: Stub — define steps, criteria, urgency, and `find_mate` memory hooks when mating systems land.>>
+
+### 6.6 Fight
+
+**Deferred** until combat ships. <<Comment: Stub — define engagement criteria and interaction with Flight fast-path until combat ships.>>
 
 ---
 
@@ -447,13 +539,13 @@ MOVE is the physics/locomotion contract below the planner.
 
 **Resolved — MOVE tick semantics:** One physics tick carries **one** action. A tick is either **turn-only** (facing adjusts; **no** displacement) **or** **move-only** (forward/back along current facing; **no** facing change that tick) — never both in the same tick. Turn-only ticks impose a deliberate cost for large facing changes (180° = **8** turn ticks at 22.5° — §7.3). The same one-action-per-tick rule extends to future non-locomotion actions (shove, attack) when those systems land.
 
-**Resolved — human vs engine ordering:** **Execution layer first; human input adapter deferred.** V3 implements facing-relative `MOVE` through the shared locomotion module (below). Human and LLM adapters are **out of V3 scope** but **must** emit the same `Action` types when they land. Key-to-action mapping is not a V3 concern.
+**Resolved — human vs engine ordering:** **Execution layer first; human input adapter deferred.** V3 implements facing-relative `MOVE` through the shared locomotion module (below). Human and LLM adapters are **out of V3 scope** but **must** emit the same `Action` types when they land. Key-to-action mapping is not a V3 concern. **Implementation build order:** §12.2 **6a** (execution before hub/planner) — same principle, different axis than human deferral.
 
 **Resolved — locomotion owner:** Single module under `creature/motor/` applies `Action` values to [`CreatureKinematicBody3D`](../../creature/capabilities/creature_kinematic_body_3d.gd). The ENGINE planner calls it directly; human/LLM adapters call it later via the same contract.
 
 ### 7.1 Layer split (planner → executor → body)
 
-Three layers; **world targets and urgency stop at the planner**:
+Three layers; **world targets and urgency stop at the planner**. <<Comment: Table lists **runtime** data flow (planner → executor). **Step 6 build order** is execution (6a) before planner (6c) — see §12.2.>>
 
 | Layer | Location | Inputs | Output |
 |-------|----------|--------|--------|
@@ -509,7 +601,11 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 | `TURN_LEFT`, `TURN_RIGHT` | Same as `MOVE_FORWARD` | Exertion without displacement |
 | `STAY` | `calorie_baseline_drain_per_sec × delta` | Full baseline; idle or Rest-pending Safety |
 | `REST` | `calorie_baseline_drain_per_sec × rest_baseline_multiplier × delta` | Half baseline; Rest goal + §6.1 only |
-| `EAT`, future `SPRINT`, etc. | TBD relative to MOVE | Author supplies values |
+| `EAT`, future `SPRINT`, etc. | TBD relative to MOVE | See §7.5 question below |
+
+<<Question: `EAT` action calorie cost per tick — `0` (paid via food gain only), equal to `MOVE_FORWARD`, or `creature_motor_v3.eat_calorie_per_sec` default?>>
+
+**Deferred — `SPRINT`:** calorie cost relative to MOVE when sprint action lands (out of V3 v1 scope).
 
 **Resolved — MOVE anchor:** Continuous `MOVE_FORWARD` for **one second** costs **1 calorie** total:
 
@@ -531,15 +627,15 @@ rest_cost(action, delta) = calorie_baseline_drain_per_sec × rest_baseline_multi
 stay_cost(action, delta) = calorie_baseline_drain_per_sec × delta
 ```
 
-Default `calorie_baseline_drain_per_sec` from `creature_motor` is **1.0** ⇒ `STAY` ≈ **1.0 cal/s**, `REST` ≈ **0.5 cal/s** at default config. No separate passive drain path in the body — every tick debits exactly one action’s cost.
+Default `calorie_baseline_drain_per_sec` from **`creature_motor_v3`** is **1.0** ⇒ `STAY` ≈ **1.0 cal/s**, `REST` ≈ **0.5 cal/s** at default config. No separate passive drain path in the body — every tick debits exactly one action’s cost.
 
-**Config keys (greenfield, `creature_motor` or V3 namespace at implementation):** `move_calorie_per_sec` (default **1.0**), `rest_baseline_multiplier` (default **0.5**). Retire `calorie_cost_per_unit_moved` once action costs ship.
+**Config keys (`creature_motor_v3` — see §12):** `calorie_baseline_drain_per_sec` (default **1.0**), `move_calorie_per_sec` (default **1.0**), `rest_baseline_multiplier` (default **0.5**). V3 does not read legacy `creature_motor` or `calorie_cost_per_unit_moved`.
 
 ### 7.6 Failure and beliefs
 
 Executor returns `ActionOutcome` with observed displacement and blocked flag. Belief updates (squeeze misjudgement, dead-ends, passibility) are **planner / memory** responsibilities (§3, §8.4, [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) — triggered when outcome contradicts planner expectation, not inside `apply_action`.
 
-<<Comment: Human control cadence (deferred) — until human controls ship, working assumption: players may hold **multiple keys simultaneously** and emit **more than one action per physics tick**; they also idle (hands off keys) across **multiple** physics ticks. Reconcile with ENGINE one-action-per-tick (Definitions §5) when human-control implementation starts; may require §5 amendment.>>
+**Deferred — human control cadence:** Until human controls ship, ENGINE remains one-action-per-tick (Definitions §5). <<Comment: Players may hold multiple keys and emit more than one action per physics tick when human control lands — reconcile with ENGINE contract then; may require Definitions §5 amendment.>>
 
 ---
 
@@ -564,9 +660,11 @@ V3 planner **reads** memory; authoritative storage tiers remain in refactored [C
 
 **Resolved — cone disengagement:** Cone disengages on the **first tick `REST` is selected**; re-engages on the **first tick `REST` is not** the selected action (danger interrupt, Safety ends, goal supersession, etc.). Only **`REST`** disables the cone in v1. Implemented in **perception / zone build** (not the executor — §7.1).
 
-**Resolved — danger during `REST`:** Per-tick hostile check uses **area only**. Hostile in area ⇒ end `REST` ⇒ Flight fast-path (§6.1, §6.3). Area radius tuning deferred until combat and skills land (may modify effective area). <<Comment: Sync non-REST hybrid disk + cone geometry with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest on promotion.>>
+**Resolved — danger during `REST`:** Per-tick hostile check uses **area only**. Hostile in area ⇒ end `REST` ⇒ Flight fast-path (§6.1, §6.3). Area radius tuning deferred until combat and skills land (may modify effective area).
 
-<<Comment: Ghost mapping — link to mover belief fields (`last_velocity`, ghost horizon) in MEMORY §5.5 when MEMORY refactor lands.>>
+<<Question: Default (non-`REST`) zone geometry — hybrid **disk + forward cone** for threat/awareness ingest? Adopt shipped pack keys (`awareness_radius`, `awareness_cone_extra`, `awareness_forward_cone_only`) as-is, or V3-only `creature_motor_v3` awareness keys? Sync rule with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest.>>
+
+<<Question: Ghost mapping for occluded in-zone objects — V3 contract? Link mover/static ghost fields to [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) (`last_velocity`, `goal_memory_ghost_horizon_sec`) vs ephemeral planner-only until MEMORY refactor lands.>>
 
 ### 8.2 Precise tier
 
@@ -575,7 +673,7 @@ Instance-anchored beliefs for past observed objects of interest within `goal_mem
 - Moving toward objectives on **precise** remembered targets **does not** use LoS ray + capsule/corridor sweep (straight seek / shortest path).
 - Prefer shortest path unless known obstacles in awareness — then closest unobstructed point becomes primary objective.
 
-<<Comment: Wording fix — precise tier is **instance beliefs** (exact/`instance_id` rows), not “hashed aggregates” (those are `LocalePriorMap` patch habits). Resolve in MEMORY sibling refactor.>>
+<<Comment: Precise tier = **instance beliefs** (`instance_id` rows), not `LocalePriorMap` aggregates — wording synced; storage authority remains [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md).>>
 
 ### 8.3 Coarse tier
 
@@ -584,7 +682,7 @@ For objects outside precise envelope but within `goal_memory_forget_radius`, pre
 Prioritize shortest unobstructed path in that direction until:
 
 1. Objective enters zone of awareness.
-2. Suitable alternative enters zone of awareness.
+2. Another belief **B** enters zone of awareness — route per **cross-instance table** below (replace vs secondary).
 3. Another goal takes precedence.
 4. Creature travels `goal_memory_forget_radius + 10%` — then Seek takes priority.
 
@@ -595,19 +693,55 @@ Prioritize shortest unobstructed path in that direction until:
 | `goal_memory_coarse_ttl_sec` + LRU | How long a belief **remains in coarse-tier memory** |
 | V3 travel-distance rule (`forget_radius + 10%`) | Locomotion: creature reached the general area but objective never entered zone of awareness → generic **Seek** takes over |
 
-<<Question: Coarse locomotion vs [CREATURE_MEMORY.md §5.2](CREATURE_MEMORY.md) eight-way **sector_weights** — does V3 path-in-direction replace sector bias, combine both, or delegate sector channel to execution weights only?>>
+**Resolved — coarse locomotion (replaces eight-way `sector_weights`):** V3 **path-in-direction** is the sole coarse locomotion contract. **[CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)** belief rows are **unchanged** (`last_world_pos`, `tier`, TTL/LRU) — imprecision is enforced at **read time**, not by changing stored geometry.
+
+- **Planner read:** For `tier == COARSE`, derive **bearing** = `normalize(last_world_pos − creature_pos)`. Emit shortest unobstructed path **in that direction** (§3 Movement Weighing / detour trees). **Do not** set `ultimate_pos = last_world_pos` or precise GPS seek while coarse.
+- **Retired for V3 locomotion:** [`believed_goal_source_bias.sector_weights`](CREATURE_MEMORY.md) eight-way merge and **`weight_coarse_sector_goal_bias`** cardinal costs ([MEMORY §14.1](CREATURE_MEMORY.md)). MEMORY merge may simplify on promotion; non-motor consumers (LLM, debug) are out of V3 scope.
+- **Re-find not guaranteed:** tier downgrade, pathing/detours, coarse TTL, forget radius, and travel-distance Seek handoff (above) — not compass-sector storage.
+
+**Resolved — competing coarse beliefs (incumbent selection):** When multiple `COARSE` rows match the active `goal_kind`, pick the locomotion bearing in order:
+
+1. Belief tied to the **active step’s `instance_id`** (if any).
+2. Else highest **goal weight × feasibility** among coarse candidates.
+3. Tie-break: newest **`last_observed_ms`** (recency — not distance; proximity feeds feasibility in §1, not this tie-break).
+
+**Resolved — cross-instance awareness (B while seeking coarse A):** When belief **B** enters awareness (live or re-awareness → `PRECISE`) while the incumbent step targets coarse **A** (`instance_id` ≠ B):
+
+| Condition | Routing |
+|-----------|---------|
+| **B like-for-like with A** (same `GoalKind`, same step intent — e.g. bush for bush) | **Replace** incumbent objective with B |
+| **B superior same-goal option** (e.g. higher `anticipated_calories` / known yield) | **Replace** incumbent objective with B |
+| **B less desirable but potentially suitable** (same goal, lower yield) | **Secondary objective** (§3) — opportunistic detour only if primary success likelihood not materially reduced |
+| **B different goal** than A (e.g. shrub sought, mate available) | **Secondary objective** (§3) |
+
+Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)** — snap A to `PRECISE`; no separate cross-instance rule.
+
+**Deferred — neighbor search refinement (skills stub):** While seeking coarse A, a precise/live **B** *may* narrow ephemeral planner search geometry (bearing cone toward A, not GPS lock). **Out of V3 v1 scope** until skills land. <<Comment: Skill band gates cone width and refinement strength — stub until skill feature lands; no implementation in V3 phase 1.>> **Excluded:** stored spatial relations between instances (no pairwise layout memory, no triangulation graph).
 
 ### 8.4 Planner consumption (sibling MEMORY section)
 
-<<Comment: Add matching **§V3 planner consumption** in CREATURE_MEMORY when promoting — dead-ends, explore marks, precise/coarse read rules, salient-write gates unchanged unless V3 goal ids change. Sync `STAY`/`REST` awareness rules with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest.>>
+<<Question: MEMORY sibling split — V3 defines **adapter read API** (precise/coarse/locale/dead-end consult) in this doc; [CREATURE_MEMORY.md](CREATURE_MEMORY.md) owns **row schema, TTL, salient-write gates**? Confirm §8.4 planner-consumption section is added to MEMORY on promotion with matching anchors.>>
 
 ---
 
 ## 9. Goal seek exceptions
 
-If the objective is inaccessible (shrub out of reach, creature in squeeze), evaluate `change_stability`, past experience, alternate goal locations, and an element of chaos to decide: persist, switch target, or enter Seek.
+If the objective is inaccessible (shrub out of reach, creature in squeeze), evaluate past experience (both memory layers below), alternate goal locations, and an element of chaos to decide: persist, switch target, or enter Seek.
 
-<<Question: “Past experience” — `LocalePriorMap` / `replay_rank_score`, instance belief yield, or both? Config key for chaos magnitude (`creature_motor` vs new V3 namespace)?>>
+**Resolved — past experience (dual layers):**
+
+| Layer | Source | Role in §9 |
+|-------|--------|------------|
+| **Tactic / area** | **`LocalePriorMap`** / **`replay_rank_score`** for active `(GoalKind, context_hash, modality)` | High score → favor **persist** on current approach; low score → favor **switch** or **Seek** |
+| **Target / instance** | **`_goal_belief`** row for incumbent **`instance_id`** — `anticipated_calories`, `consumable_now`, future dead-end marks ([CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)) | Low yield, not consumable, or passibility contradiction → favor **switch**; other instance beliefs supply **alternate goal locations** |
+
+**Combine:** **Persist** only when **both** layers support staying on the incumbent. Either layer failing pushes toward **switch** (ranked alternates: other instance beliefs, then locale hotspots via **`replay_rank_score`**, then live awareness per §8.3 cross-instance table) then **Seek** if no viable alternate.
+
+**Resolved — `change_stability` (single path):** Factored **once** — inside **`replay_rank_score`** trait rank bias ([CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)). **Not** a separate §9 multiplier or second “past experience” input.
+
+**Resolved — chaos on close calls:** When persist / switch / seek scores tie after the above, break symmetry with RNG. Key **`blocked_objective_chaos`** under pack **`creature_motor_v3`** — **not** legacy `motor_intent_cost_chaos` or other V2 `creature_motor` keys.
+
+<<Question: `blocked_objective_chaos` default magnitude in `creature_motor_v3`? (Suggest starting range for persist/switch/seek score jitter — e.g. **0.0** disables, **0.15** light, ship per species in pack.)>>
 
 ---
 
@@ -619,7 +753,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 - Maintain an **active goal table** (goals + weights). Empty table ⇒ **`STAY` action** each tick (§7.2, §7.5).
 - Goal consideration weighs all candidates. When a goal decomposes into steps, earliest unaccomplished step is **primary**. If another goal’s weight exceeds incumbent, discard incumbent step chain.
 
-**Fast-path bypass (every tick):** Flight. **Combat (future):** attack action triggers fight/flight immediately — planner and frozen goal table do not compete with acute response.
+**Fast-path bypass (every tick):** Flight. **Find shelter** is **fully suppressed** — not scored on the goal table during acute threat (§1, §6.4). Flight **consumes** nearby **`shelter`** beliefs for retreat bias (§6.3). **Combat (future):** attack action triggers fight/flight immediately — planner and frozen goal table do not compete with acute response.
 
 **Combat fast-path signal:** dedicated flag — do **not** infer from damage intake, ambient threat, or generic hostile-in-awareness alone.
 
@@ -628,7 +762,9 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 
 **Goal-table contract (Flight / combat fast-path):** freeze active goal table during acute response (`weight`, `step_chain`, `step_index` preserved — not cleared). On release, run a **full goal-consideration round** before resuming step execution; frozen incumbent may no longer be valid.
 
-**Resolved — Observation → n ticks:** Adopt [POST_LOS_MOVEMENT.md §3.3](POST_LOS_MOVEMENT.md) piecewise curve — **10 = neutral** (scale 1.0). `stat_observation ≤ 10`: scale `lerp(2.0, 1.0, stat/10)`; `> 10`: scale `lerp(1.0, 0.5, (stat−10)/90)`; `n = max(1, round(base_ticks × scale))`. Pilot clamp: minimum **10** for curve input until observation pools land. Default base interval when `stat_observation = 10`: align with `post_los_replan_base_ticks` (default **8**) unless V3 retunes.
+**Resolved — Observation → n ticks:** Adopt [POST_LOS_MOVEMENT.md §3.3](POST_LOS_MOVEMENT.md) piecewise curve — **10 = neutral** (scale 1.0). `stat_observation ≤ 10`: scale `lerp(2.0, 1.0, stat/10)`; `> 10`: scale `lerp(1.0, 0.5, (stat−10)/90)`; `n = max(1, round(base_ticks × scale))`. Pilot clamp: minimum **10** for curve input until observation pools land.
+
+<<Question: Goal consideration replan base ticks — `creature_motor_v3.goal_replan_base_ticks` default? Adopt POST_LOS **`post_los_replan_base_ticks` = 8** or V3 retune? (At `stat_observation = 10`, `n = goal_replan_base_ticks`.)>>
 
 **Resolved — between replan ticks:** Execution follows the **incumbent goal** from the last consideration round (weights frozen; step chain advances on objective completion). Fast-path Flight/combat may override every tick (§10). No per-tick full re-score between consideration cycles.
 
@@ -636,22 +772,28 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 
 ## 11. Adopted decisions (from POST_LOS — intent only)
 
-<<Comment: Re-validate these without V2 code paths before implementation. Expand rows as decisions close.>>
+<<Question: §11 POST_LOS adoption — at implementation kickoff, which rows still assume V2 modules (`cardinal_avoidance`, `MotorContext`) and need amendment vs stand as V3 intent-only?>>
+
+<<Comment: Expand table rows as decisions close; resolved questions remove corresponding §13 Open rows.>>
 
 | Decision | V3 section | Notes |
 |----------|------------|-------|
-| Three layers: goals → planner → execution | §1–3, §7 | Greenfield modules |
+| Three layers: goals → planner → execution | §1–3, §7 | Runtime **call** order; **build** order §12.2 (execution first) |
 | Hub: no explicit inputs; one action per tick | §1 | `creature/motor/` |
 | V3 ↔ `GoalKind` routing | §1 table | Via `goal_kind_registry.gd` |
 | `ActiveGoal` schema | §2 | POST_LOS §3.1 fields |
 | Slow replan vs fast-path Flight/combat | §10 | Every tick bypass for acute response |
-| Clear path = LoS (>80% blocked) + corridor sweep | §3 | Squeeze hook stub |
-| Navmesh-first, detour fallback when blocked | §3 Seek cycle | `post_los_detour_score_competition` optional |
+| Clear path = LoS (>80% blocked) + corridor sweep | §3 | Squeeze skill-check **Deferred** (skills) |
+| Navmesh-first, detour fallback when blocked | §3 Seek cycle | `creature_motor_v3.detour_score_competition` optional |
 | Unexplored = coarse/precise low object density | Definitions §9 | 50% area-of-awareness rule |
 | Approach-heading backtrack TTL (v1) | §3 Seek cycle | No position stack v1 |
 | Freeze goal table during Flight/combat | §10 | Full consideration after release |
 | Flight exit = `safety_time` cycles safe | §6.3 | Matches Outcome Hook |
 | Coarse TTL vs travel-distance Seek handoff | §8.3 | Separate policies |
+| Coarse path-in-direction; `sector_weights` retired for locomotion | §8.3 | MEMORY schema unchanged |
+| Coarse incumbent: recency tie-break (`last_observed_ms`) | §8.3 | Not distance |
+| Cross-instance B-vs-A: replace vs secondary-objective | §8.3 | Circumstantial table |
+| Neighbor search refinement | §8.3 | Deferred — skills stub; no stored spatial relations |
 | Facing-relative forward/back MOVE | §7 | Greenfield; not cardinal_avoidance |
 | Turn-only vs move-only (one action per tick) | §7 | 180° and future shove/attack cost |
 | Execution-first; human adapter deferred | §7 | Shared `Action` contract |
@@ -662,6 +804,13 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 | Per-action calorie; MOVE = 1 cal/s; STAY = baseline; REST = half baseline | §7.5 | Retire distance burn |
 | `STAY` vs `REST`; Rest phase machine; cone off during `REST` only | §6.1, §7.2, §8.1 | Safety state gates `REST` |
 | Physics failure → beliefs (not executor) | §7.6 | Memory sibling |
+| Past experience: locale + instance layers; `change_stability` once | §9 | Via `replay_rank_score` only |
+| Config namespace `creature_motor_v3` | §7.5, §9, §12 | No legacy `creature_motor` merge |
+| Blocked-objective chaos | §9 | `blocked_objective_chaos` in `creature_motor_v3` |
+| Step 2 inventory template (§12.1) | §12 | Disposition + consumers + tests columns |
+| Step 6 sub-phases 6a→6d (§12.2) | §12 | Execution → hub → live planner → memory |
+| Per-goal `base` + Find shelter scoring | §1, §6.4 | `goal_base_*`, `food_map_confidence` |
+| Find shelter hub goal | §6.4 | Wire `shelter`; MOVE + STAY probe |
 
 ---
 
@@ -672,41 +821,243 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
    - Convert this file to `.md` and reformat.
    - Retirement banners on superseded docs → `Completed_Features/`.
    - `PROJECT_DOC_INDEX` row.
-2. Review and document existing code — all references to removed/changed modules.
-3. Remove code from step 2; empty stubs for new implementation.
+2. **Inventory (§12.1)** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
+3. Remove code per §12.1 dispositions; empty stubs where noted.
 4. Address linter errors.
 5. Run game — no creature movement expected; fix errors.
-6. Implement code changes.
+6. Implement code changes per **§12.2** sub-phases (6a → 6b → 6c → 6d); repeat 6–10 after each sub-phase closes.
 7. Address linter errors.
 8. Review code against design for gaps, inconsistencies, sibling-doc conflicts.
 9. Address issues found.
 10. Begin test/bug-fix cycle.
 
-Repeat 6–10 if implementation is broken into sub-phases.
+Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (not only at the end of Step 6).
 
-<<Question: Step 2 inventory template — module path, consumers, tests to delete/port per row?>>
+### 12.1 Step 2 inventory template
 
-<<Question: Implementation sub-phases inside step 6 (hub → planner → execution → memory adapter) with acceptance criteria per sub-phase?>>
+**Resolved — artifact:** Before Step 3 deletion, maintain a table on the **`Goal_Movement_RefactorV3`** branch (appendix below or sibling `V3_MOTOR_INVENTORY.md` on that branch — register in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) only if promoted to a standalone doc). **One row per `.gd` file** under review, or per **logical subsystem** when a single file spans unrelated concerns (e.g. `ai_driver.gd` motor pipeline — one row, bullet consumers/tests).
 
-<<Question: Config namespace — retain `creature_motor` / `goal_*` keys from MEMORY §10 or introduce V3-prefixed keys for greenfield merge?>>
+**Scope (Step 2 grep):**
 
-<<Comment: Headless test matrix and duel playtest gates — define when step 6 sub-phases close; do not inherit V2 Phase 3 advance-gate checklist unless re-adopted explicitly.>>
+| Area | Paths |
+|------|--------|
+| Motor scripts | `creature/motor/**/*.gd` |
+| Orchestrator | `AI_int_lib/ai_driver.gd` (motor pipeline sections) |
+| Config merge | `AI_int_lib/game_config_merge.gd` (`creature_motor`, future `creature_motor_v3`) |
+| Pack authoring | `assets/creatures/**/pack_resources.json` (`creature_motor` blocks) |
+| Body integration | `creature/creature_root_3d.gd`, `creature/capabilities/*.gd` (motor hooks) |
+| Tests | `tests/run_all.gd`, `tests/debug_motor_pick.gd` |
+| Debug / HUD | `creature/awareness_debug_overlay_3d.gd`, `hud.gd` (motor readouts only) |
+
+**Disposition values:**
+
+| Value | Step 3 action |
+|-------|----------------|
+| **delete** | Remove file or motor block; no V3 replacement at same path |
+| **stub** | Empty/minimal placeholder so compile survives until Step 6 |
+| **keep** | Retain as utility; V3 calls directly (e.g. geometry helpers) |
+| **adapter** | Retain storage/consult logic; replace V2 **`MotorContext`** merge API with V3 memory adapter (§8.4) |
+
+**Required columns (fill every row):**
+
+| Column | Content |
+|--------|---------|
+| **Module path** | `res://…` script or named `ai_driver` subsection |
+| **Disposition** | `delete` \| `stub` \| `keep` \| `adapter` |
+| **Consumers** | Preloaders, callers, scenes, config keys — blast radius for Step 3 |
+| **Tests** | Per test: **delete** (V2-only), **port** (reuse under V3), or **replace** (new name TBD in Step 6) |
+| **V3 owner / notes** | Target module or § anchor; Step 6 sub-phase if blocked on adapter |
+
+**Alignment:** Inventory **adapter** rows must map to **§12.2 sub-phase 6d**. **delete** rows must have no remaining consumers after Step 3. **keep** rows typically land in **6a** (execution) or **6c** (planner).
+
+**Seed examples (illustrative — complete the table on branch):**
+
+| Module path | Disposition | Consumers | Tests | V3 owner / notes |
+|-------------|-------------|-----------|-------|------------------|
+| `creature/motor/cardinal_avoidance.gd` | delete | `ai_driver.gd`, `tests/run_all.gd`, `tests/debug_motor_pick.gd` | delete: `_test_cardinal_avoidance`, `_test_cardinal_interior_env_grid`, `_test_explore_trail_repulsion_motor`, … | §12.2 **6a** — facing-relative MOVE |
+| `creature/motor/goal_seek.gd` | delete | `ai_driver.gd`, `motor_target_builder.gd` | delete: `_test_goal_seek_resolve_and_cost`, `_test_food_seek_motor`; replace in **6c** | §12.2 **6c** planner |
+| `creature/motor/seek_planner.gd` | delete | `ai_driver.gd` | delete: `_test_seek_planner_*`; replace per §10 in **6b**/**6c** | §12.2 **6b** cadence |
+| `creature/motor/goal_source_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §14](CREATURE_MEMORY.md) | port: locale-prior consult; delete V2 `MotorContext` projection tests | §12.2 **6d** |
+| `creature/motor/goal_belief_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) | port: instance belief read; delete V2 merge tests | §12.2 **6d** |
+| `creature/motor/line_of_sight.gd` | keep | planner consumers TBD | port LoS helpers | §12.2 **6c** |
+| `creature/motor/blocked_approach_memory.gd` | keep | `ai_driver.gd` | port: `_test_*` backtrack if behavior matches §3 | §12.2 **6c** |
+| `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d`, creature bodies, HUD | delete: escape-cardinal / V2 intent tests; keep registry smoke | §12.2 **6b** hub entry |
+| `AI_int_lib/game_config_merge.gd` | keep + extend | packs, tests | port profile tests to `creature_motor_v3` when wired | §12.2 **6a**+ (`creature_motor_v3`) |
+
+### 12.2 Step 6 implementation sub-phases
+
+**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6d Memory adapter.** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline.
+
+<<Comment: **Alternative order (not adopted):** top-down **hub → planner → execution → memory adapter** matches §1→§3→§7 **document section** flow and the three-layer narrative in §11 (“goals → planner → execution”). **Downside:** hub/planner emit `Action`s long before `apply_action` exists — Step 5 “run game” stays broken; facing-relative turn-then-move and `ActionOutcome` → belief loops (§7.6) integrate in one late risky pass. **Memory adapter last** is the same in both orderings.>>
+
+**Per sub-phase:** ship **vertical slices** (smallest end-to-end path first), then expand scope. Close the **acceptance checklist** before starting the next sub-phase.
+
+**Cross-cutting gates (every sub-phase):** linter clean; `tests/run_all.gd` green for tests in scope; §12.1 inventory rows for touched modules updated.
+
+---
+
+#### 6a — Execution
+
+**Entry:** Step 3 stubs compile; `creature_motor_v3` merge block exists (calorie keys minimum).
+
+**In scope:** §7 — `Action` types, `apply_action`, facing (§7.3), calorie debit (§7.5), `ActionOutcome`, body integration (§7.4). Deprecate engine `set_creature_move_intent` / distance calorie on body.
+
+**Out of scope:** Goal table, pathing, memory, Flight/Rest flows.
+
+**Vertical slices:**
+
+1. `TURN_LEFT` / `TURN_RIGHT` only — facing mutates, zero displacement.
+2. `MOVE_FORWARD` / `MOVE_BACKWARD` along facing.
+3. `STAY` — no motion; baseline calorie debit.
+4. `ActionOutcome.blocked` when `MOVE_FORWARD` hits geometry (squeeze/block).
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | Step 5 complete (game launches; movement may be absent) |
+| Headless **required** | Sequenced actions → expected facing, displacement, `blocked` flag; calorie debit per §7.5 |
+| Headless **required** | Body no longer applies distance-based calorie burn |
+| Manual | Optional — debug harness drives `apply_action` on duel scene |
+| Inventory | `cardinal_avoidance` etc. **delete**d; locomotion module **keep**/new under `creature/motor/` |
+| Out of scope | Hub, planner, memory adapter |
+
+---
+
+#### 6b — Hub shell
+
+**Entry:** 6a acceptance closed.
+
+**In scope:** §1 hub entry, §10 cadence shell, `ActiveGoal` table, empty-table → `STAY` (§7.2), wire `ai_driver` tick: **hub → executor → body** (§7.4). Flight fast-path **stub** (flag only). Goal consideration requires **§1 goal-scoring questions resolved** (per-goal `base` **closed**; remaining §1 `<<Question>>` markers per §13).
+
+**Out of scope:** Movement toward objectives, memory tiers, full Rest/Flight/Mate (§6), trait/replay scoring beyond §1 answers.
+
+**Vertical slices:**
+
+1. Hub always returns `STAY`; tick loop wired end-to-end.
+2. Empty goal table → `STAY` each tick (§7.2).
+3. Observation cadence fires consideration; table can hold one stub `find_food` goal (no locomotion yet).
+4. Flight fast-path flag preempts table (no-op or `STAY` until 6c/6d).
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | 6a closed |
+| Headless **required** | Hub entry returns exactly one `Action`/call; empty table → `STAY` |
+| Headless **required** | Consideration cadence advances on tick count (§10 formula or stub `n`) |
+| Manual **smoke** | Duel creatures idle (`STAY`); no crash; calories drain at baseline |
+| Inventory | `ai_driver` motor pipeline **stub → replace** with hub call |
+| Blocker note | Remaining §1 `<<Question>>` markers per §13 must be **Closed** before slice 3 leaves stub mode |
+
+---
+
+#### 6c — Planner (live tier)
+
+**Entry:** 6b acceptance closed.
+
+**In scope:** §3 movement + seek trees, §8.1 live zone / movement weighing (objective **in awareness**). Reuse **keep** utilities: `line_of_sight.gd`, `blocked_approach_memory.gd`, navmesh detour (§3). **Live targets only** — no `_goal_belief` / `LocalePriorMap` reads.
+
+**Out of scope:** Precise/coarse remembered targets (§8.2–8.3), locale prior hotspots, §9 blocked-objective memory layers, Rest phase machine, full Flight exit, **Find shelter** belief tiers (§6.4 → **6d**).
+
+**Vertical slices:**
+
+1. **Eat + live bush only** — turn toward visible food, `MOVE_FORWARD` when aligned.
+2. Clear-path LoS + corridor sweep (§3); blocked → detour or backtrack TTL.
+3. No live food → generic **Seek** (unexplored heuristic §3 / Definitions §9).
+4. `ActionOutcome.blocked` → planner notes failure (§7.6); no memory persist yet — ephemeral only.
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | 6b closed |
+| Headless **required** | Live target fixture → planner emits turn/move sequence toward objective |
+| Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) |
+| Headless **required** | Seek when no live objective (no memory consult) |
+| Manual **smoke** | Duel herbivore seeks **visible** shrub; predator movement plausible with live prey only |
+| Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; planner modules added per §3 |
+| Out of scope | Remembered food, coarse bearing, §9 exceptions |
+
+---
+
+#### 6d — Memory adapter
+
+**Entry:** 6c acceptance closed; live planner is baseline.
+
+**In scope:** §8.2 precise, §8.3 coarse path-in-direction, `LocalePriorMap` / `replay_rank_score` consult (§3, §161), §8.4 adapter API (no V2 `MotorContext` merge). §9 blocked-objective persist/switch/seek. **`shelter`** instance beliefs + Find shelter probe outcomes (§6.4). Salient writes unchanged — planner reads via adapter. Dead-end schema follows MEMORY sibling when available (§3 partial).
+
+**Out of scope:** `sector_weights` locomotion (retired §8.3), neighbor-search refinement (skills), Mate/Fight (§6.5–6.6). Trait Tier-2 scoring follows §1 trait-channel question.
+
+**Vertical slices:**
+
+1. **Precise** instance belief — seek remembered bush outside awareness (§8.2).
+2. **Coarse** bearing — path-in-direction when precise envelope lost (§8.3).
+3. **Locale prior** — pattern / hotspot consult in seek cycle (§3, §161).
+4. **§9** — inaccessible objective uses dual memory layers + `blocked_objective_chaos`.
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | 6c closed |
+| Headless **required** | Precise belief fixture → movement without live LoS to remembered coords |
+| Headless **required** | Coarse tier → bearing-only locomotion (not GPS `ultimate_pos`) |
+| Headless **required** | Locale prior row → seek bias / alternate target ranking |
+| Headless **required** | §9 branch: persist vs switch vs seek with stub memory fixtures |
+| Manual **smoke** | Duel remembered-food seek; no V2 cardinal regression |
+| Inventory | `goal_belief_memory`, `goal_source_memory` → **adapter**; V2 merge tests **delete**d |
+| Sibling | [CREATURE_MEMORY.md §8.4](CREATURE_MEMORY.md) planner-consumption section updated when promoting |
+
+<<Comment: Headless test matrix — sub-phase checklists above are v1 gates; expand species rows after §1 scoring closes. Do not inherit V2 Phase 3 advance-gate checklist unless re-adopted explicitly.>>
+
+**Resolved — config namespace (`creature_motor_v3`):** All V3 movement, planner, locomotion, and exception tuning keys live in a **new** pack-root inline object **`creature_motor_v3`** (same authoring pattern as V2 `creature_motor`, **separate merge block**). V3 runtime **does not** merge or alias legacy **`creature_motor`**, V2 **`MotorContext`** key names, or POST_LOS-prefixed motor keys — greenfield modules read **`creature_motor_v3` only** so old cardinal / tier-2 paths are not implied dependencies.
+
+- **V3-owned examples:** §7.5 calorie keys, §9 **`blocked_objective_chaos`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent), replan base ticks when V3 retunes Observation cadence.
+- **Memory storage keys** (`goal_*`, `believed_goal_*` — [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)) remain the **MEMORY sibling** contract for belief / locale-prior **storage and TTL**; V3 consumes them through the **memory adapter** (§8.4) in **§12.2 6d**, not by reusing V2 motor merge codepaths or V2 pack motor weights.
 
 ---
 
 ## 13. Outstanding decisions index
 
-| Topic | Marker location | Blocker for impl plan? | Status |
-|-------|-----------------|------------------------|--------|
-| Goal scoring formula | §1 | Yes | Open |
-| Locomotion module inputs + body integration | §7 | Yes | **Closed** |
-| Human control cadence vs ENGINE one-action-per-tick | §7, Definitions §5 | No | Deferred |
-| Awareness geometry + GOAL_DRIVERS parity | §8.1 | Medium | Partial — REST cone rule closed; hybrid geometry open |
-| Coarse `sector_weights` vs path-in-direction | §8.3 | Medium | Open |
-| Dead-end / geographic memory schema | §3, §8.4 | Yes | Partial — MEMORY sibling |
-| Past experience + chaos config | §9 | Medium | Open |
-| Mate / Fight flows | §6.4–6.5 | No | Deferred |
-| Implementation inventory + sub-phases + config namespace | §12 | Yes | Open |
-| Headless test matrix + playtest gates | §12 | Medium | Open |
+**Spec-complete rule:** Every row below is **Closed** or **Deferred**; **Open** rows block implementation kickoff (Step 1). Resolve inline `<<Question: …>>` markers; remove each question when resolved and flip the matching §13 row to **Closed**. Deferred rows are intentional out-of-scope for V3 v1 — no `<<Question>>` required.
 
-**Recently closed (no longer blockers):** hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, safe location, Flight exit + table freeze, Observation → n formula, incumbent between replans, coarse expiry split, MOVE turn-only tick semantics, human-vs-engine ordering (execution-first), locomotion owner path (`creature/motor/`), executor `Action`-only contract + body integration (§7.1–7.4), turn increment 22.5°, per-action calorie (MOVE 1 cal/s, STAY baseline, REST half baseline, TURN = MOVE), physics failure → beliefs (§7.5–7.6), `STAY` vs `REST` + Rest phase machine + Safety state vs `REST` action + cone disengagement during `REST` (§6.1, §7.2, §8.1).
+| Topic | Marker location | Blocker? | Status |
+|-------|-----------------|----------|--------|
+| Goal scoring — per-goal `base` | §1 | — | **Closed** |
+| Find shelter goal + scoring | §1, §6.4 | — | **Closed** |
+| Goal scoring — `feasibility_floor` | §1 | Yes | Open |
+| Goal scoring — Eat urgency bands | §1 | Yes | Open |
+| Goal scoring — Flight urgency | §1 | Yes | Open |
+| Goal scoring — Rest weights | §1 | Yes | Open |
+| Goal scoring — Mate vs Eat | §1 | No | Open |
+| Goal scoring — Tier-2 dominance wire | §1 | Yes | Open |
+| Goal scoring — trait channels v1 | §1 | Medium | Open |
+| Dead-end geographic memory schema | §3 | Yes | Open |
+| Safe location signal weights | §6.1 | Medium | Open |
+| Eat — `bush_food` / instance sync | §6.2 | Medium | Open |
+| `EAT` calorie cost | §7.5 | Medium | Open |
+| Awareness hybrid disk + cone | §8.1 | Medium | Open |
+| Ghost mapping contract | §8.1 | Medium | Open |
+| MEMORY adapter vs storage split | §8.4 | Yes | Open |
+| `blocked_objective_chaos` default | §9 | Medium | Open |
+| `goal_replan_base_ticks` default | §10 | Medium | Open |
+| §11 POST_LOS row re-validation | §11 | Medium | Open |
+| Locomotion / executor contract | §7 | — | **Closed** |
+| Past experience + chaos namespace | §9 | — | **Closed** |
+| Coarse path-in-direction | §8.3 | — | **Closed** |
+| Step 2 inventory template | §12.1 | — | **Closed** |
+| Step 6 sub-phases | §12.2 | — | **Closed** |
+| Config namespace `creature_motor_v3` | §12 | — | **Closed** |
+| Headless / playtest gates | §12.2 | — | **Closed** (per sub-phase) |
+| Doc promotion (.md, index, archive V2) | header, §12 step 1 | No | **Deferred** (process) |
+| Human control cadence | §7.6 | No | **Deferred** |
+| Mate goal flow | §6.5 | No | **Deferred** |
+| Fight goal flow | §6.6 | No | **Deferred** |
+| Neighbor search refinement (skills) | §8.3 | No | **Deferred** |
+| Clear-path squeeze skill-check | §3 | No | **Deferred** |
+| `SPRINT` calorie cost | §7.5 | No | **Deferred** |
+| Combat fast-path / attack action | §10 | No | **Deferred** |
+| REST healing (combat) | §6.1 | No | **Deferred** |
+
+**Recently closed (architecture — numerics may still have §13 Open rows):** hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, goal scoring **formula shape** (§1), **per-goal `base` keys + ship defaults**, **Find shelter** hub (`shelter` wire id, `goal_base_shelter`, `food_map_confidence` effective base, eligibility, Flight suppression + flee consume), clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, safe location **three-signal model**, Flight exit + table freeze + **believed shelter in flee**, Observation → n **curve**, incumbent between replans, coarse expiry split, coarse path-in-direction + cross-instance rules, MOVE turn-only semantics, execution-first build order, locomotion owner, executor `Action`-only contract, per-action calorie anchor (MOVE/STAY/REST), physics failure → beliefs, `STAY`/`REST` phase machine, §9 dual memory layers, `creature_motor_v3` namespace, §12.1 inventory, §12.2 sub-phases.
