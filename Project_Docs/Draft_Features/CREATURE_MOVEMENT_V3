@@ -6,14 +6,14 @@ Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/mot
 
 # Definitions
 
-1. **Safety** — **State** (not an action): `safety_time` consecutive goal-consideration cycles with no danger in the **full** zone of awareness (cone + area — §8.1; default `safety_time` = 5; tune in playtest). Required before the **`REST` action** may begin (§6.1). When Safety state ends, **`REST` requirements are no longer met** — hub stops emitting `REST` each tick (§6.1, §7.2). Distinct from **`STAY`** (Definitions §5).
+1. **Safety** — **State** (not an action): `safety_time` consecutive goal-consideration cycles with no danger in the **full** zone of awareness (cone + area — §8.1; default `safety_time` = 5; tune in playtest). **Danger** = **live** hostile in zone (LoS clear) **or** valid **threat ghost** (§8.1). Required before the **`REST` action** may begin (§6.1). When Safety state ends, **`REST` requirements are no longer met** — hub stops emitting `REST` each tick (§6.1, §7.2). Distinct from **`STAY`** (Definitions §5).
 2. **Clear path** — LoS ray **and** capsule/corridor sweep both pass (see §3 Movement Weighing tree).
 3. **Step** — A discrete sub-task toward an active goal (e.g. Eat: move past boulder → move to shrub → EAT). **Completion:** all objectives for the step are satisfied.
 4. **Objective** — Exit criteria for the active step (world position or non-movement action target). **Completion:** creature reaches the position (within arrival tolerance) or completes the bound action.
 5. **Action** — One atomic unit per physics tick (`MOVE_*`, `TURN_*`, `EAT`, `REST`, `STAY`, etc.). **ENGINE** creatures emit at most **one** action per tick (see §7). **`STAY`** — no movement, full awareness, baseline metabolism (§7.5); empty goal table (§10) or Rest pending Safety (§6.1). **`REST`** — deliberate recovery under Rest goal + §6.1 only; half baseline; cone off while selected (§8.1). Human-player input mapping is **deferred** — working cadence assumptions in §7.
-6. **Cone of awareness** — Forward-facing observation cone, limited by line of sight.
-7. **Area of awareness** — Circular observation radius near the creature, limited by line of sight.
-8. **Zone of awareness** — Cone of awareness + area of awareness (§8.1).
+6. **Cone of awareness** — Forward-facing **3D** observation cone from the eye ray origin (§8.1), limited by line of sight — no seeing through solids.
+7. **Area of awareness** — **Spherical** observation radius around the creature (§8.1), limited by line of sight — no seeing through solids.
+8. **Zone of awareness** — **Union** of cone of awareness + area of awareness (§8.1); both geometric membership **and** clear LoS required for **live** ingest. **Threat ghosts** (§8.1) extend remembered hostile presence when LoS-blocked but still in zone.
 9. **Unexplored** — A coarse- or precise-tier region with no observed objects within **50%** of the area-of-awareness radius (world units).
 10. **Default step chains (per goal)** — Eat: approach → consume; **Find shelter:** approach candidate → **STAY** evaluate (Safety + fit) → belief write (§6.4); Flight: reach shelter or flee position → hold until safe; Rest: reach candidate safe location → **STAY** until Safety state (§1) → **REST**; Mate/Fight: stub until those systems land.
 
@@ -95,8 +95,8 @@ urgency_flight = clamp(urgency_dist × kind_threat × threat_disposition_mod × 
 **Geometry (`urgency_dist`) — per nearest in-zone threat sample** (footprint **`gate_dist`** from [`threat_sample.gd`](../../creature/motor/threat_sample.gd) / awareness ingest; **`max`** over samples):
 
 ```text
-eff_reach   = effective awareness reach to that threat (disk + forward cone — §8.1 awareness keys)
-area_radius = area-of-awareness radius (inner disk; default alias `awareness_radius` unless pack overrides)
+eff_reach   = effective awareness reach to that threat (sphere ∪ forward 3D cone — §8.1; LoS-clear only)
+area_radius = area-of-awareness radius (inner sphere; `creature_motor_v3.awareness_radius` unless pack overrides)
 t           = clamp((eff_reach - gate_dist) / max(flight_urgency_dist_floor, eff_reach - area_radius), 0, 1)
 urgency_dist = lerp(flight_urgency_far_floor, 1.0, t)
 ```
@@ -105,9 +105,9 @@ urgency_dist = lerp(flight_urgency_far_floor, 1.0, t)
 |--------|-------------|----------------|
 | Far edge of zone (`eff_reach`) | ≈ `eff_reach` | **`flight_urgency_far_floor`** (default **0.5**) — Flight competes but does not fully override other goals |
 | Area-of-awareness boundary | ≈ `area_radius` | **1.0** — flee / fight (when combat lands) treated as unavoidable |
-| Inside area disk | `< area_radius` | **1.0** (clamped) |
+| Inside area sphere | `< area_radius` | **1.0** (clamped) |
 
-Curve is **scale-invariant**: `eff_reach` and `area_radius` come from the same awareness geometry as threat ingest — widening cone/disk moves eligibility and urgency ramp together.
+Curve is **scale-invariant**: `eff_reach` and `area_radius` come from the same awareness geometry as threat ingest — widening cone/sphere moves eligibility and urgency ramp together.
 
 **Creature-global disposition (`threat_disposition_mod`) — not locale-prior rows:** Per-creature **confidence / skittishness** scalar (not `LocalePriorMap` / grid-cell memory). General temperament toward threat — **not** spatial (“this boulder” / “this shrub”). Hub reads at consideration; **§12.2 6b** stubs **`1.0`** until **6d** wires read/write.
 
@@ -127,7 +127,7 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 | Key | Ship default | Role |
 |-----|--------------|------|
 | `flight_urgency_far_floor` | **0.5** | `urgency_dist` at far awareness edge |
-| `flight_urgency_area_radius` | alias **`awareness_radius`** | Inner disk → `urgency_dist` **1.0** |
+| `flight_urgency_area_radius` | alias **`awareness_radius`** (`creature_motor_v3`) | Inner sphere → `urgency_dist` **1.0** |
 | `flight_urgency_dist_floor` | **1.0** | `eps` for normalization denominator (world units) |
 | `flight_disposition_mod_min` | **0.4** | Floor on `threat_disposition_mod` |
 | `flight_disposition_mod_max` | **1.2** | Ceiling on `threat_disposition_mod` |
@@ -546,7 +546,7 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 
 **Resolved — three memory layers (Eat):** **Instance** (`_goal_belief` §5.5) = **where** — “I know an apple tree is *there*.” **Kind** (`_kind_profile` §5.7) = **what type is worth how much** — “apple trees beat strawberry plants on yield.” **Locale** (`LocalePriorMap` §14) = **patch / tactic habit** — “foraging *here* worked.” Layers compose; none replaces another.
 
-**Resolved — awareness ingest contract (live food entry):** Reuse [`motor_target_builder.scan_food_plants_in_awareness`](../../creature/motor/motor_target_builder.gd) shape; V3 adds **`stimulus_kind_id`** (pack-stable plant type — omniscient at ingest in v1). Per entry:
+**Resolved — awareness ingest contract (live food entry):** V3 **greenfield zone builder** (§8.1) — **not** legacy [`motor_target_builder._in_awareness_zone`](../../creature/motor/motor_target_builder.gd) (diet forks retired). Output shape matches prior **`scan_food_plants_in_awareness`** lists; V3 adds **`stimulus_kind_id`** (pack-stable plant type — omniscient at ingest in v1). Per entry:
 
 | Field | Required | Source | Role |
 |-------|----------|--------|------|
@@ -554,7 +554,7 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 | `instance_id` | yes | Godot `Node.get_instance_id()` | **Runtime target handle** for this tick’s EAT + instance belief key — **not** the learning key for yield |
 | `stimulus_kind_id` | yes (V3) | `@export` / pack id on plant scene ([`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) until `plant_kind_id` lands) | **Kind profile** key (`nutrition_yield` facet) |
 | `consumable_now` | yes | `ready` vs `unready` list | Instance `consumable_now` freeze |
-| `line_of_sight_clear`, `occluded`, … | optional | existing LoS flags | Planner trees unchanged |
+| `line_of_sight_clear`, `occluded`, `occlusion_fraction` | yes | §8.1 zone builder + [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd) | Live ingest only when LoS clear; occluded targets excluded (ghost path §8.1) |
 
 `food_split` = `{ "ready": […], "unready": […] }`. Entries with `instance_id == 0` skip instance sync (phase-1 rule). **Do not** use per-instance **`anticipated_calories`** as the V3 learning field — yield lives on **kind** facets ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)).
 
@@ -831,8 +831,8 @@ V3 planner **reads** memory; authoritative storage tiers remain in refactored [C
 
 ### 8.1 Zone of awareness
 
-- Complete set of locations and objects within the zone.
-- Limited by line of sight; occluded objects inferred via ghost mapping if previously seen in-zone with LoS and ghost has not left the zone.
+- Complete set of locations and objects within the zone **with clear line of sight** — geometrically inside the sphere and/or forward cone is **necessary but not sufficient**; occluded targets are **not** live ingest (no x-ray vision through `world_static` solids).
+- **Occluded-in-zone ghosts** — read-time projection from **`_goal_belief`** (§8.1 below; storage [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)). **6c:** none (live + LoS only). **6d:** full adapter contract.
 - Stub: capsule/corridor sweep reliability varies by attributes/skills once skill feature lands.
 - Level of absolute clarity stays in sync with the zone; everything else is a different tier.
 
@@ -846,11 +846,63 @@ V3 planner **reads** memory; authoritative storage tiers remain in refactored [C
 
 **Resolved — cone disengagement:** Cone disengages on the **first tick `REST` is selected**; re-engages on the **first tick `REST` is not** the selected action (danger interrupt, Safety ends, goal supersession, etc.). Only **`REST`** disables the cone in v1. Implemented in **perception / zone build** (not the executor — §7.1).
 
-**Resolved — danger during `REST`:** Per-tick hostile check uses **area only**. Hostile in area ⇒ end `REST` ⇒ Flight fast-path (§6.1, §6.3). Area radius tuning deferred until combat and skills land (may modify effective area).
+**Resolved — danger during `REST`:** Per-tick hostile check uses **area sphere only** (cone off). **Live** hostiles require clear LoS (no x-ray). **Threat ghosts** (§8.1 — hostile `_goal_belief` rows projected while occluded-in-zone) count as present in area **without** live LoS until ghost expiry. Hostile in area (live LoS **or** threat ghost) ⇒ end `REST` ⇒ Flight fast-path (§6.1, §6.3). Area radius tuning deferred until combat and skills land (may modify effective area).
 
-<<Question: Default (non-`REST`) zone geometry — hybrid **disk + forward cone** for threat/awareness ingest? Adopt shipped pack keys (`awareness_radius`, `awareness_cone_extra`, `awareness_forward_cone_only`) as-is, or V3-only `creature_motor_v3` awareness keys? Sync rule with [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) threat ingest.>>
+**Resolved — default zone geometry (non-`REST`):** **Zone of awareness** = **union** of **area sphere** + **forward 3D cone**, both gated by **line of sight**. No diet-specific awareness forks; no “cone-only” or “sphere-only” posture toggles.
 
-<<Question: Ghost mapping for occluded in-zone objects — V3 contract? Link mover/static ghost fields to [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) (`last_velocity`, `goal_memory_ghost_horizon_sec`) vs ephemeral planner-only until MEMORY refactor lands.>>
+| Volume | Geometry | Membership |
+|--------|----------|------------|
+| **Area of awareness** | **Sphere** radius **`awareness_radius`** (world units) about creature body; gate distance to target footprint when half-extents apply | Target within sphere reach |
+| **Cone of awareness** | **3D cone** apex at **eye ray origin** (`los_eye_height` or default **0.9 × collision capsule height** — [`get_los_eye_height()`](../../creature/capabilities/creature_kinematic_body_3d.gd)); half-angle **`awareness_cone_half_angle_deg`** about horizontal **facing**; forward reach **`awareness_radius + awareness_cone_extra`** along cone axis | Target within forward cone reach |
+| **Zone (default)** | **Union** — in area **or** in forward cone | Either row above |
+
+While **`REST` is selected:** **area sphere only**; cone **off** (table above). All other contexts use the **full union**.
+
+**Resolved — line of sight (mandatory for live ingest):** After geometric zone test, require **clear LoS** via [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd) (`LineOfSight3D`): physics-ray segments eye → target against **`world_static`** mask; **`>60%` occluded** ⇒ blocked (M4 policy — same as V2 §E.2). Targets inside the sphere or cone but **behind solids do not count as live** — no x-ray vision. Reuse **`line_of_sight.gd`**; **do not** reuse legacy [`CardinalAvoidance.effective_awareness_reach`](../../creature/motor/cardinal_avoidance.gd) (horizontal 2D wedge + body-center distance). V3 ships a **greenfield zone builder** module that composes 3D sphere + eye-anchored cone + LoS.
+
+**Resolved — config (`creature_motor_v3`):** Neutral keys under pack **`creature_motor_v3`** (copy ship values from duel packs on migration — V3 runtime does **not** read legacy **`creature_motor`**):
+
+| Key | Role |
+|-----|------|
+| `awareness_radius` | Area-of-awareness **sphere** radius |
+| `awareness_cone_extra` | Extra forward reach along cone axis (forward zone reach = radius + extra) |
+| `awareness_cone_half_angle_deg` | Forward cone half-angle (degrees); facing = body **`last_move_direction`** (§7) |
+| `los_eye_height` | Optional eye ray origin Y offset; default **0.9 × capsule height** on body |
+| `awareness_requires_los` | When **true** (ship default), LoS gate applies to all live ingest (food, threats, mobs). When **false**, distance+geometry only — **debug / test only**; not ship profile |
+
+**Retired — not in V3 packs or zone builder:** `awareness_forward_cone_only`, `herbivore_threat_awareness_omni`, `predator_prey_awareness_omni`, `predator_prey_awareness_cone_extra` (legacy diet / posture forks).
+
+**Resolved — single consumer contract:** One zone builder feeds **live** ingest for **threat** ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)), **food** (§6.2), **memory re-awareness** ([CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)), **Flight `urgency_dist` / `eff_reach`** (§1), **Safety** checks (§1, §6.1), and debug overlay. Same geometry + LoS rule every tick. **6d:** occluded-in-zone **ghost layer** (below) merges threat ghosts into the same threat / danger consumers.
+
+**Resolved — occluded-in-zone ghost mapping (Option A — `_goal_belief` / MEMORY §5.5):**
+
+| Principle | Rule |
+|-----------|------|
+| **Storage** | **`_goal_belief`** rows via memory adapter — **not** planner-only ephemeral state, **not** legacy **`_mob_hist`** / **`awareness_memory_*`** (retire in V3 — §12.1) |
+| **Tier** | Existing **`PRECISE`** row unchanged; ghost = **read-time ingest overlay** when LoS fails but row + zone rules pass — **no third tier** |
+| **Eligibility** | Row exists from prior **live** in-zone sighting with clear LoS; target is **geometrically in zone** this tick but **LoS blocked**; dedupe: live sample wins when LoS clears |
+| **Phasing** | **6c:** **no ghosts** — live + LoS only. **6d:** adapter read API emits ghost samples |
+
+**Movers** (`is_moving = true` — hostiles, prey, relocating mobs):
+
+- **Believed position** for zone membership: **`last_world_pos`**; optional intercept hint **`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`** (default **0.4 s** — MEMORY §5.5) for pursuit / Flight geometry only.
+- **Persist while:** **`last_world_pos`** (and intercept when used for reach-cap test) remains inside **geometric zone** (full union; **area sphere only** while `REST` selected — same posture table as live ingest).
+- **Also drop when (reach cap — formula A):** **`gate_dist(creature, believed_pos) > awareness_radius + awareness_cone_extra`**, where **`believed_pos`** is **`last_world_pos`** or extrapolated intercept — prevents stale chase of targets that have **believed** to have moved beyond max zone reach even if last observed point still sits behind cover in the rear sphere.
+- **Fields:** reuse MEMORY §5.5 — **`last_velocity`**, **`ghost_strength`** (age decay within mover TTL optional; zone exit + reach cap are primary evictors).
+
+**Statics** (bushes, props — `is_moving = false`):
+
+- **Non-threat / not noteworthy:** **No occluded-in-zone ghost** unless the instance already has a **`_goal_belief`** row from another memory path (precise/coarse outside zone — §8.2–8.3). If only held as a transient occluded-in-zone ghost with **no** persistent row, **forget when `last_world_pos` leaves geometric zone** — do not clog memory.
+- **Threat statics** (if any): same zone-based ghost as movers **without** velocity extrapolation.
+
+**Threat ghosts — danger consumers (yes):**
+
+- Valid threat ghosts count as **nearby danger** for **Safety state**, **Flight** urgency / fast-path eligibility, **`REST` area interrupt**, and threat ingest — until ghost expiry (zone exit or mover reach cap).
+- **Non-threat** ghosts (food, neutral props): **do not** affect Safety / Flight danger; **forget when out of zone** unless promoted to persistent **`_goal_belief`** / coarse / precise tiers via normal adapter writes (§8.2–8.3).
+
+**Ingest shape (6d):** ghost entries mirror live samples with **`source: ghost`**, **`line_of_sight_clear: false`**, position from **`last_world_pos`** (movers: optional intercept in pursuit hints only). Threat ghosts feed **`ThreatSample`** / **`gate_dist`** like live samples.
+
+**Sibling doc — [CREATURE_MEMORY.md](CREATURE_MEMORY.md) delta (apply in §12 phase 3):** §5.4 re-awareness zone = V3 §8.1 (sphere ∪ cone + LoS); §5.5 occluded-in-zone ghost projection + mover reach-cap + static non-threat zone-only expiry; retire **`_mob_hist`** / **`awareness_memory_*`** narrative; **`Vector3`** façade on `last_world_pos` / `last_velocity`; §8.4 planner-consumption ghost consult row. Full adapter behavior still lands in **§12.2 6d**.
 
 ### 8.2 Precise tier
 
@@ -918,6 +970,7 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 | **Dead-end filter** | `_dead_end_marks_by_body` | §3 Movement Weighing edge-waypoint filter; §6.3 Flight spatial option removal |
 | **Instance passibility** | `_goal_belief.passibility_fail_count` | §9 switch bias; shelter / Flight consume blocked instances |
 | **Kind yield / threat** | `_kind_profile` facets ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)) | §6.2 live ranking; §8.3 replace; §9 switch; §1 `kind_threat` |
+| **Occluded-in-zone ghost** | `_goal_belief` read projection (§8.1) | Threat ghosts → danger / Flight / Safety / REST; non-threat food ghosts → goal targeting only; **6d** |
 
 **Resolved — memory adapter write API (6d):**
 
@@ -930,7 +983,7 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 | Failed approach / shelter probe | `_goal_belief` increment `passibility_fail_count` (+ optional geographic row §3 **B**) |
 | Successful traverse of marked cul-de-sac | Remove matching `_dead_end_marks_by_body` rows |
 
-**6c:** adapter stubs return empty / no-op for instance belief, locale, kind EWMA writes, and dead-end consults — live awareness + kind read with **neutral** priors + `blocked_approach_memory.gd` only.
+**6c:** adapter stubs return empty / no-op for instance belief, locale, kind EWMA writes, dead-end consults, and **ghost projection** — live awareness + LoS only + kind read with **neutral** priors + `blocked_approach_memory.gd` only.
 
 ---
 
@@ -1045,7 +1098,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
    - Retirement banners on superseded docs → `Completed_Features/`.
    - `PROJECT_DOC_INDEX` row.
 2. **Inventory (§12.1)** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
-3. Remove code per §12.1 dispositions; empty stubs where noted.
+3. Remove code per §12.1 dispositions; empty stubs where noted. **Update [CREATURE_MEMORY.md](CREATURE_MEMORY.md)** per §8.1 **Sibling doc — CREATURE_MEMORY delta** (ghost projection, reach cap, retire `_mob_hist` / `awareness_memory_*`, §5.4 zone cross-link) — schema and narrative sync only; adapter implementation remains **§12.2 6d**.
 4. Address linter errors.
 5. Run game — no creature movement expected; fix errors.
 6. Implement code changes per **§12.2** sub-phases (6a → 6b → 6c → 6d); repeat 6–10 after each sub-phase closes.
@@ -1111,7 +1164,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/motor/tier2_dominance.gd` | keep | V2 `ai_driver.gd`, `goal_seek.gd`, `trait_tier2_mapper.gd` | port: dominance + `preserve_find_food_seek_scale` tests | §12.2 **6b** hub eligibility + memory consult |
 | `creature/motor/trait_tier2_mapper.gd` | keep | V2 `ai_driver.gd` (telemetry only today) | port: stub zero-delta test | §12.2 **6b** — `trait_goal_mul` **1.0**; tactic style deferred |
 | `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d`, creature bodies, HUD | delete: escape-cardinal / V2 intent tests; keep registry smoke | §12.2 **6b** hub entry |
-| `AI_int_lib/game_config_merge.gd` | keep + extend | packs, tests | port profile tests to `creature_motor_v3` when wired | §12.2 **6a**+ (`creature_motor_v3`) |
+| `AI_int_lib/ai_driver.gd` — `_mob_hist`, `_mob_ids_ever_observed`, `awareness_memory_*` ghost path | delete | `_motor_mobs_array`, overlay | delete: mob ghost / gated-live tests tied to ring buffer | Retired — §8.1 ghosts via **`_goal_belief`** adapter **6d** |
+| `AI_int_lib/game_config_merge.gd` | keep + extend | packs, tests | port profile tests to `creature_motor_v3` when wired | §12.2 **6a**+ (`creature_motor_v3`); drop unused **`awareness_memory_*`** defaults when inventory confirms |
 
 ### 12.2 Step 6 implementation sub-phases
 
@@ -1185,7 +1239,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Entry:** 6b acceptance closed.
 
-**In scope:** §3 movement + seek trees, §8.1 live zone / movement weighing (objective **in awareness**). Reuse **keep** utilities: `line_of_sight.gd`, `blocked_approach_memory.gd`, navmesh detour (§3). **Live targets only** — no `_goal_belief` / `LocalePriorMap` / kind EWMA writes. **§6.2:** awareness ingest includes **`stimulus_kind_id`**; live food ranking uses kind consult with **neutral** priors.
+**In scope:** §3 movement + seek trees, §8.1 **live** zone / movement weighing (objective **in awareness** with LoS). Reuse **keep** utility [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd); **greenfield** §8.1 zone builder (sphere + cone + LoS). Also reuse `blocked_approach_memory.gd`, navmesh detour (§3). **Live targets only** — **no occluded-in-zone ghosts**, no `_goal_belief` / `LocalePriorMap` / kind EWMA writes. **§6.2:** awareness ingest includes **`stimulus_kind_id`**; live food ranking uses kind consult with **neutral** priors.
 
 **Out of scope:** Precise/coarse remembered targets (§8.2–8.3), locale prior hotspots, §9 blocked-objective memory layers, Rest phase machine, full Flight exit, **Find shelter** belief tiers (§6.4 → **6d**).
 
@@ -1205,9 +1259,9 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | Live target fixture → planner emits turn/move sequence toward objective |
 | Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) |
 | Headless **required** | Seek when no live objective (no memory consult) |
-| Manual **smoke** | Duel herbivore seeks **visible** shrub; predator movement plausible with live prey only |
+| Manual **smoke** | Duel creature seeks **LoS-visible** shrub; pursuit movement plausible with live prey in zone only |
 | Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; planner modules added per §3 |
-| Out of scope | Remembered food, coarse bearing, §9 exceptions |
+| Out of scope | Remembered food, coarse bearing, §9 exceptions, **occluded-in-zone ghosts** |
 
 ---
 
@@ -1215,7 +1269,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Entry:** 6c acceptance closed; live planner is baseline.
 
-**In scope:** §8.2 precise, §8.3 coarse path-in-direction, `LocalePriorMap` / `replay_rank_score` consult (§3, §9), §8.4 adapter API (no V2 `MotorContext` merge). §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers). **`_kind_profile`** + **`record_observation`** + learn-topic registry ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)) — `nutrition_yield` on EAT, `threat_danger` on Flight episodes. **`shelter`** instance beliefs + Find shelter probe outcomes (§6.4). **`threat_disposition_mod`** read/write on benign vs evade events (§1 — per-creature, not locale rows). Salient writes unchanged — planner reads via adapter. **Dead-end geographic marks** (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3, [CREATURE_MEMORY.md §5.6](CREATURE_MEMORY.md)).
+**In scope:** §8.1 **occluded-in-zone ghost** read projection (§8.4), §8.2 precise, §8.3 coarse path-in-direction, `LocalePriorMap` / `replay_rank_score` consult (§3, §9), §8.4 adapter API (no V2 `MotorContext` merge). §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers). **`_kind_profile`** + **`record_observation`** + learn-topic registry ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)) — `nutrition_yield` on EAT, `threat_danger` on Flight episodes. **`shelter`** instance beliefs + Find shelter probe outcomes (§6.4). **`threat_disposition_mod`** read/write on benign vs evade events (§1 — per-creature, not locale rows). Salient writes unchanged — planner reads via adapter. **Dead-end geographic marks** (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3, [CREATURE_MEMORY.md §5.6](CREATURE_MEMORY.md)). **Retire** legacy **`_mob_hist`** / **`awareness_memory_*`** mob ghost path.
 
 **Out of scope:** `sector_weights` locomotion (retired §8.3), neighbor-search refinement (skills), Mate/Fight (§6.5–6.6). Trait tactic style (§1 deferred); **`replay_weight`** consult only.
 
@@ -1228,6 +1282,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 5. **Dead-end consult** — geographic filter on edge waypoints (§3); instance `passibility_fail_count` on switch (§9).
 6. **Kind profile** — EAT updates `nutrition_yield`; live ranking + §8.3 replace consult (§6.2).
 7. **Flight disposition + kind threat** — benign-exposure vs evade nudges to `threat_disposition_mod`; `kind_threat` on samples (§1).
+8. **Occluded-in-zone ghosts** — threat ghosts affect Safety / Flight / REST; mover reach cap; static non-threat zone-only expiry (§8.1).
 
 **Acceptance checklist:**
 
@@ -1240,7 +1295,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | §9 branch: persist vs switch vs seek with stub memory fixtures (locale + instance + kind) |
 | Headless **required** | Kind profile EWMA: EAT observation updates `nutrition_yield`; consult changes live ranking |
 | Headless **required** | Dead-end mark → edge waypoint filtered; `passibility_fail_count` → switch bias |
-| Manual **smoke** | Duel remembered-food seek; no V2 cardinal regression |
+| Headless **required** | Occluded-in-zone **threat ghost** fixture → Safety / Flight / REST danger without live LoS; mover reach-cap eviction |
+| Manual **smoke** | Duel remembered-food seek; occluded threat behind cover still blocks Safety / REST when ghost active |
 | Inventory | `goal_belief_memory`, `goal_source_memory` → **adapter**; V2 merge tests **delete**d |
 | Sibling | [CREATURE_MEMORY.md §8.4](CREATURE_MEMORY.md) planner-consumption section (storage split) |
 
@@ -1248,7 +1304,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Resolved — config namespace (`creature_motor_v3`):** All V3 movement, planner, locomotion, and exception tuning keys live in a **new** pack-root inline object **`creature_motor_v3`** (same authoring pattern as V2 `creature_motor`, **separate merge block**). V3 runtime **does not** merge or alias legacy **`creature_motor`**, V2 **`MotorContext`** key names, or POST_LOS-prefixed motor keys — greenfield modules read **`creature_motor_v3` only** so old cardinal / tier-2 paths are not implied dependencies.
 
-- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency band keys + **Flight urgency / disposition / `kind_threat` clamp keys**, §6.1 **`safe_site_*`** rest-site scoring keys, §9 **`blocked_objective_chaos`**, §6.2 **`unknown_kind_multiplier`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent), replan base ticks when V3 retunes Observation cadence.
+- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency band keys + **Flight urgency / disposition / `kind_threat` clamp keys**, §8.1 **`awareness_radius` / `awareness_cone_extra` / `awareness_cone_half_angle_deg` / `los_eye_height` / `awareness_requires_los`**, §6.1 **`safe_site_*`** rest-site scoring keys, §9 **`blocked_objective_chaos`**, §6.2 **`unknown_kind_multiplier`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent), replan base ticks when V3 retunes Observation cadence.
 - **Memory storage keys** (`goal_*`, `believed_goal_*`, **`kind_profile_*`** — [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)) remain the **MEMORY sibling** contract for belief / locale-prior / **kind-profile** **storage and TTL**; V3 consumes them through the **memory adapter** (§8.4) in **§12.2 6d**, not by reusing V2 motor merge codepaths or V2 pack motor weights.
 
 ---
@@ -1274,8 +1330,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Kind memory — trait confidence modulation | §6.2, §1 | No | **Deferred** |
 | EAT variable bite / pool / sharing | §6.2 | No | **Deferred** (plants) |
 | `EAT` calorie cost | §7.5 | — | **Closed** |
-| Awareness hybrid disk + cone | §8.1 | Medium | Open |
-| Ghost mapping contract | §8.1 | Medium | Open |
+| Awareness sphere + 3D cone + LoS | §8.1 | — | **Closed** |
+| Ghost mapping contract | §8.1 | — | **Closed** |
 | MEMORY adapter vs storage split | §8.4 | — | **Closed** |
 | `blocked_objective_chaos` default | §9 | Medium | Open |
 | `goal_replan_base_ticks` default | §10 | Medium | Open |
@@ -1299,4 +1355,4 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Flight `relative_threat_mod` (opponent matchup) | §1, §6.6 | No | **Deferred** |
 | Trait tactic style (implementation) | §1 | No | **Deferred** |
 
-**Recently closed (architecture — numerics may still have §13 Open rows):** hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, goal scoring **formula shape** (§1), **per-goal `base` keys + ship defaults**, **`goal_feasibility_floor_*` epsilon defaults**, **Eat urgency V2 calorie bands**, **Flight urgency** (`gate_dist` curve, far floor **0.5**, **`kind_threat` × `threat_disposition_mod`** — **6d** wiring), **Tier-2 dominance reuse** (`tier2_dominance.gd` — consideration eligibility + memory consult), **trait channels v1 stub** (`trait_goal_mul` / `trait_tactic_mul` **1.0**; tactic style deferred), **Rest loses 80–95% band** (wound urgency deferred), **`EAT` per-tick cost = `STAY`**, **Find shelter** hub (`shelter` wire id, `goal_base_shelter`, `food_map_confidence` effective base, eligibility, Flight suppression + flee consume), clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, **safe location scoring** (`safe_site_weight_*` **0.70 / 0.20 / 0.10**, squeeze anti-double-count, Safety state hard gate), Flight exit + table freeze + **believed shelter in flee**, Observation → n **curve**, incumbent between replans, coarse expiry split, coarse path-in-direction + cross-instance rules, MOVE turn-only semantics, execution-first build order, locomotion owner, executor `Action`-only contract, per-action calorie anchor (MOVE/STAY/REST/EAT), physics failure → beliefs, `STAY`/`REST` phase machine, §9 **three** memory layers (locale + instance + kind), `creature_motor_v3` namespace, §12.1 inventory, §12.2 sub-phases, **dead-end memory three-way split** (backtrack / geographic §5.6 / instance passibility), **MEMORY adapter read-write API** (§8.4), dead-end config defaults (`dead_end_*`, `passibility_fail_switch_threshold`), **Eat kind vs instance memory** (`stimulus_kind_id`, `record_observation`, learn-topic registry §5.7, neutral unseen, `unknown_kind_multiplier` **1.0**).
+**Recently closed (architecture — numerics may still have §13 Open rows):** hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, goal scoring **formula shape** (§1), **per-goal `base` keys + ship defaults**, **`goal_feasibility_floor_*` epsilon defaults**, **Eat urgency V2 calorie bands**, **Flight urgency** (`gate_dist` curve, far floor **0.5**, **`kind_threat` × `threat_disposition_mod`** — **6d** wiring), **Tier-2 dominance reuse** (`tier2_dominance.gd` — consideration eligibility + memory consult), **trait channels v1 stub** (`trait_goal_mul` / `trait_tactic_mul` **1.0**; tactic style deferred), **Rest loses 80–95% band** (wound urgency deferred), **`EAT` per-tick cost = `STAY`**, **Find shelter** hub (`shelter` wire id, `goal_base_shelter`, `food_map_confidence` effective base, eligibility, Flight suppression + flee consume), clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, **safe location scoring** (`safe_site_weight_*` **0.70 / 0.20 / 0.10**, squeeze anti-double-count, Safety state hard gate), Flight exit + table freeze + **believed shelter in flee**, Observation → n **curve**, incumbent between replans, coarse expiry split, coarse path-in-direction + cross-instance rules, MOVE turn-only semantics, execution-first build order, locomotion owner, executor `Action`-only contract, per-action calorie anchor (MOVE/STAY/REST/EAT), physics failure → beliefs, `STAY`/`REST` phase machine, §9 **three** memory layers (locale + instance + kind), `creature_motor_v3` namespace, §12.1 inventory, §12.2 sub-phases, **dead-end memory three-way split** (backtrack / geographic §5.6 / instance passibility), **MEMORY adapter read-write API** (§8.4), dead-end config defaults (`dead_end_*`, `passibility_fail_switch_threshold`), **Eat kind vs instance memory** (`stimulus_kind_id`, `record_observation`, learn-topic registry §5.7, neutral unseen, `unknown_kind_multiplier` **1.0**), **§8.1 awareness** (sphere ∪ eye-anchored 3D cone, mandatory LoS, `creature_motor_v3` keys, diet/posture forks retired), **§8.1 occluded-in-zone ghosts** (`_goal_belief` Option A, threat danger yes, mover reach cap A, static non-threat zone-only, 6c none / 6d full, retire `_mob_hist`).
