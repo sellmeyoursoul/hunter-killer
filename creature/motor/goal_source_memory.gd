@@ -2,7 +2,6 @@
 extends RefCounted
 class_name GoalSourceMemoryStore
 
-const _SectorScr := preload("res://creature/motor/believed_goal_sector.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
@@ -65,6 +64,25 @@ const _POLE_AXIS_ORDER: Array[StringName] = [
 ]
 
 const _RANK_WEIGHTS: Array[float] = [1.0, 0.2, 0.2]
+
+
+## Unit step direction [param d] → sector index 0..7 (N, NE, E, SE, S, SW, W, NW; **−Z = N**).
+static func sector_index_for_step(d: Vector3) -> int:
+  if d.length_squared() < 1e-8:
+    return 0
+  var u := d.normalized()
+  var angle := atan2(u.x, -u.z)
+  if angle < 0.0:
+    angle += TAU
+  return int(floor((angle + PI / 8.0) / (PI / 4.0))) % 8
+
+
+## Phase-1 align: **1.0** if [param d] falls in [param sector_s]'s 45° arc, else **0.0**.
+static func align_step_with_sector(d: Vector3, sector_s: int) -> float:
+  if sector_s < 0 or sector_s > 7:
+    return 0.0
+  return 1.0 if sector_index_for_step(d) == sector_s else 0.0
+
 
 var _rows: Dictionary = {}
 var _writes_this_sec: int = 0
@@ -882,6 +900,3 @@ func consult_threat_response(
     "consult_context_hash": ctx_hash,
   }
 
-
-static func align_step_with_sector(d: Vector3, sector_s: int) -> float:
-  return _SectorScr.align_step_with_sector(d, sector_s)

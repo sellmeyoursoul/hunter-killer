@@ -1256,6 +1256,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
    - [x] `PROJECT_DOC_INDEX` row.
 2. **Inventory (§12.1)** — **Step 2 closed 2026-06-20** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
 3. Remove code per §12.1 dispositions; empty stubs where noted. **Sibling doc pass (same step):** execute **§12.3.1** + **§12.3.3** checklists; set matching **§13 Tracking** rows to **Done** when sibling files land. Adapter code remains **§12.2 6d**.
+   - [x] **Step 3 closed 2026-06-20** — V2 motor modules deleted; `ai_driver.gd` motor stub; `run_all.gd` pruned; sibling sync **§12.3.1** + **§12.3.3**.
 4. Address linter errors.
 5. Run game — **§12 Step 3–5 QA contract** below; no intelligent creature movement expected; fix **non-motor** launch/crash errors only.
 6. Implement code changes per **§12.2** sub-phases (**6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**); repeat 6–10 after each sub-phase closes.
@@ -1811,9 +1812,9 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | `goal_replan_base_ticks` default | §10 | — | **Closed** |
 | §11 POST_LOS row re-validation | §11 | — | **Closed** |
 | `_goal_belief` LRU — deprecate `merge_use_count` | §8.4, §12.3.1 | — | **Closed** — cap eviction = lowest `last_observed_ms`; no consult-frequency retention v1 |
-| MEMORY sibling sync (Step 3) | §12.3.1 | Step 3 | **Tracking** — apply checklist when executing §12 step 3 |
+| MEMORY sibling sync (Step 3) | §12.3.1 | Step 3 | **Done** — 2026-06-20 Step 3 pass |
 | MEMORY sibling sync (6d) | §12.3.2 | 6d.3 | **Tracking** — apply before 6d.3 acceptance closes |
-| GOAL_DRIVERS sibling sync (Step 3) | §12.3.3 | Step 3 | **Tracking** — apply checklist when executing §12 step 3 |
+| GOAL_DRIVERS sibling sync (Step 3) | §12.3.3 | Step 3 | **Done** — 2026-06-20 Step 3 pass |
 | GOAL_DRIVERS sibling sync (6d) | §12.3.4 | 6d.3 | **Tracking** — apply before 6d.3 acceptance closes |
 | §15 V2 cleanup backlog | §15 | §12 step 11 | **Tracking** — all rows **done** or backlog-deferred before promotion |
 | Shared `_goal_belief` consult filters | §8.4 | — | **Closed** |

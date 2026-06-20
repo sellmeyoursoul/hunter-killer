@@ -2,8 +2,25 @@
 extends Object
 class_name BlockedApproachMemory
 
-const _BelievedSector := preload("res://creature/motor/believed_goal_sector.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
+
+## Unit step direction [param d] → sector index 0..7 (N, NE, E, SE, S, SW, W, NW; **−Z = N**).
+static func sector_index_for_step(d: Vector3) -> int:
+  if d.length_squared() < 1e-8:
+    return 0
+  var u := d.normalized()
+  var angle := atan2(u.x, -u.z)
+  if angle < 0.0:
+    angle += TAU
+  return int(floor((angle + PI / 8.0) / (PI / 4.0))) % 8
+
+
+## Phase-1 align: **1.0** if [param d] falls in [param sector_s]'s 45° arc, else **0.0**.
+static func align_step_with_sector(d: Vector3, sector_s: int) -> float:
+  if sector_s < 0 or sector_s > 7:
+    return 0.0
+  return 1.0 if sector_index_for_step(d) == sector_s else 0.0
 
 
 ## True when [param step_dir] continues along [param approach_dir] (re-entering the blocked corridor).
@@ -42,7 +59,7 @@ static func record(io_state: Dictionary, approach_dir: Vector3, physics_tick: in
     return
   var u := approach_dir.normalized()
   io_state["dir"] = u
-  io_state["sector"] = _BelievedSector.sector_index_for_step(u)
+  io_state["sector"] = sector_index_for_step(u)
   io_state["until_tick"] = physics_tick + maxi(1, ttl_ticks)
 
 

@@ -4,10 +4,26 @@ extends Object
 const TIER_PRECISE := &"PRECISE"
 const TIER_COARSE := &"COARSE"
 
-const _SectorScr := preload("res://creature/motor/believed_goal_sector.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
-const _SeekCand := preload("res://creature/motor/seek_candidate.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
+
+## Unit step direction [param d] → sector index 0..7 (N, NE, E, SE, S, SW, W, NW; **−Z = N**).
+static func sector_index_for_step(d: Vector3) -> int:
+  if d.length_squared() < 1e-8:
+    return 0
+  var u := d.normalized()
+  var angle := atan2(u.x, -u.z)
+  if angle < 0.0:
+    angle += TAU
+  return int(floor((angle + PI / 8.0) / (PI / 4.0))) % 8
+
+
+## Phase-1 align: **1.0** if [param d] falls in [param sector_s]'s 45° arc, else **0.0**.
+static func align_step_with_sector(d: Vector3, sector_s: int) -> float:
+  if sector_s < 0 or sector_s > 7:
+    return 0.0
+  return 1.0 if sector_index_for_step(d) == sector_s else 0.0
 
 
 static func _read_pos_v3(v: Variant) -> Vector3:
@@ -408,7 +424,6 @@ static func merge_into_motor_context(
   if w_remember > 0.0:
     var food_targets: Array = ctx.get("food_seek_targets", []) as Array
     var unready_targets: Array = ctx.get("unready_food_avoid_targets", []) as Array
-    var seek_candidates: Array = ctx.get("seek_candidates", []) as Array
     for iid in beliefs.keys():
       if live_ids.has(iid):
         continue
@@ -430,16 +445,6 @@ static func merge_into_motor_context(
           continue
         var _vel: Vector3 = _read_vel_v3(row.get("last_velocity", Vector3.ZERO))
         var strength := _memory_strength(age_ms, ttl_ms)
-        seek_candidates.append(
-          Callable(_SeekCand, &"make").call(
-            last_pos,
-            _GkReg.GK_FIND_FOOD,
-            true,
-            true,
-            int(iid),
-            _SeekCand.SOURCE_MEMORY_MOVING,
-          )
-        )
         row["ghost_strength"] = strength
       elif not is_moving and gk == _GkReg.GK_FIND_FOOD:
         var consumable: bool = bool(row.get("consumable_now", true))
@@ -447,23 +452,12 @@ static func merge_into_motor_context(
           food_targets.append(last_pos)
         else:
           unready_targets.append(last_pos)
-        seek_candidates.append(
-          Callable(_SeekCand, &"make").call(
-            last_pos,
-            _GkReg.GK_FIND_FOOD,
-            consumable,
-            false,
-            int(iid),
-            _SeekCand.SOURCE_MEMORY_PRECISE,
-          )
-        )
       row["merge_use_count"] = int(row.get("merge_use_count", 0)) + 1
       row["last_merged_ms"] = now_ms
       beliefs[iid] = row
       merged_n += 1
     ctx["food_seek_targets"] = food_targets
     ctx["unready_food_avoid_targets"] = unready_targets
-    ctx["seek_candidates"] = seek_candidates
     if merged_n > 0:
       var w_live := float(ctx.get("weight_seek_ready_food", 0.0))
       if w_live > 0.0:
@@ -481,7 +475,7 @@ static func merge_into_motor_context(
       var delta := last_c - creature_pos
       if delta.length_squared() < 1e-8:
         continue
-      var s := _SectorScr.sector_index_for_step(delta)
+      var s := sector_index_for_step(delta)
       sector_acc[s] = float(sector_acc[s]) + 1.0
       row_c["merge_use_count"] = int(row_c.get("merge_use_count", 0)) + 1
       row_c["last_merged_ms"] = now_ms

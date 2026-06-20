@@ -11,7 +11,6 @@ const _DefScript := _CreatureDefinition
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
-const _SlidePickScr := preload("res://creature/motor/wall_slide_pick.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
@@ -41,7 +40,6 @@ var _starvation_fired: bool = false
 var _calorie_baseline_drain_per_sec: float = 1.0
 var _calorie_cost_per_unit_moved: float = 0.002
 var _defeat_hidden: bool = false
-var _wall_slide_pick: RefCounted
 var _wall_slide_away_hint: Vector3 = Vector3.ZERO
 
 
@@ -52,7 +50,6 @@ func _ready() -> void:
   _refresh_calorie_burn_params()
   _apply_physics_layers()
   _connect_mob_hitbox()
-  _wall_slide_pick = _SlidePickScr.new()
 
 
 func _resolve_definition() -> Variant:
@@ -352,125 +349,11 @@ func _playfield_bounds_for_clamp() -> Dictionary:
   return {"min": playfield_bounds_min, "max": bmax}
 
 
-## Port of [method Player._engine_heading_with_wall_slide] for 3D physics + playfield edges.
+## V3 Step 3 pass-through until §12.2 **6a** restores wall-slide pick ([CREATURE_MOVEMENT_V3.md](Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 func _engine_heading_with_wall_slide(heading: Vector3) -> Vector3:
   if heading.length_squared() < 1e-8:
     return heading
-  var inc := Vector3(heading.x, 0.0, heading.z).normalized()
-  var half := _footprint_half_for_clamp()
-  var pos2 := _MotorPlane.from_vec3(global_position)
-  var bounds: Dictionary = _playfield_bounds_for_clamp()
-  var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
-  var bmax: Vector2 = bounds.get("max", screen_size)
-  # Playfield clamp helpers expect a zero-origin AABB; translate world XZ into that space.
-  var pos2_local := pos2 - bmin
-  var bmax_local := bmax - bmin
-  var dist_scale := _motor_distance_scale()
-  var lookahead := maxf(obstacle_lookahead, 48.0) * dist_scale
-  if _wall_slide_pick == null:
-    return _MotorPlane.to_horizontal_vec3(
-      _PlayfieldClamp.slide_heading_along_edge(
-        _MotorPlane.from_vec3(inc),
-        pos2_local,
-        half,
-        bmax_local,
-        lookahead,
-        _wall_slide_pick,
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  var space := get_world_3d().direct_space_state
-  if space == null:
-    return _MotorPlane.to_horizontal_vec3(
-      _PlayfieldClamp.slide_heading_along_edge(
-        _MotorPlane.from_vec3(inc),
-        pos2_local,
-        half,
-        bmax_local,
-        lookahead,
-        _wall_slide_pick,
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  var origin := global_position
-  var target := origin + inc * lookahead
-  var query := PhysicsRayQueryParameters3D.create(origin, target)
-  query.collision_mask = collision_mask
-  query.exclude = [get_rid()]
-  var ray_hit: Dictionary = space.intersect_ray(query)
-  if ray_hit.is_empty():
-    return _MotorPlane.to_horizontal_vec3(
-      _PlayfieldClamp.slide_heading_along_edge(
-        _MotorPlane.from_vec3(inc),
-        pos2_local,
-        half,
-        bmax_local,
-        lookahead,
-        _wall_slide_pick,
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  var normal_v: Variant = ray_hit.get("normal", Vector3.ZERO)
-  if typeof(normal_v) != TYPE_VECTOR3:
-    return _MotorPlane.to_horizontal_vec3(
-      _PlayfieldClamp.slide_heading_along_edge(
-        _MotorPlane.from_vec3(inc),
-        pos2_local,
-        half,
-        bmax_local,
-        lookahead,
-        _wall_slide_pick,
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  var n_raw := normal_v as Vector3
-  var n_flat := Vector3(n_raw.x, 0.0, n_raw.z)
-  var n := Vector3.ZERO
-  if n_flat.length_squared() > 1e-8:
-    n = n_flat.normalized()
-  elif absf(n_raw.y) > 0.08:
-    var ramp := Vector3(n_raw.x, 0.0, n_raw.z)
-    if ramp.length_squared() > 1e-8:
-      n = ramp.normalized()
-  if n.length_squared() < 1e-12:
-    return _MotorPlane.to_horizontal_vec3(
-      _PlayfieldClamp.slide_heading_along_edge(
-        _MotorPlane.from_vec3(inc),
-        pos2_local,
-        half,
-        bmax_local,
-        lookahead,
-        _wall_slide_pick,
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  n = n.normalized()
-  if _wall_slide_away_hint.length_squared() > 1e-12:
-    inc = _MotorPlane.to_horizontal_vec3(
-      _wall_slide_pick.pick_tangent_away_from(
-        _MotorPlane.from_vec3(inc),
-        _MotorPlane.from_vec3(n),
-        _MotorPlane.from_vec3(_wall_slide_away_hint),
-      )
-    )
-  else:
-    inc = _MotorPlane.to_horizontal_vec3(
-      _wall_slide_pick.pick_tangent_closer(
-        _MotorPlane.from_vec3(inc),
-        _MotorPlane.from_vec3(n),
-      )
-    )
-  return _MotorPlane.to_horizontal_vec3(
-    _PlayfieldClamp.slide_heading_along_edge(
-      _MotorPlane.from_vec3(inc),
-      pos2_local,
-      half,
-      bmax_local,
-      lookahead,
-      _wall_slide_pick,
-      _MotorPlane.from_vec3(_wall_slide_away_hint),
-    )
-  )
+  return Vector3(heading.x, 0.0, heading.z).normalized()
 
 
 ## World-space HUMAN intent from motor-plane input ([code](right−left, down−up)[/code] action strengths).

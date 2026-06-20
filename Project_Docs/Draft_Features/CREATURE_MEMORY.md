@@ -2,7 +2,9 @@
 
 > **Purpose:** **Authoritative working spec** for **creature memory** — what an agent **stores** and **updates** so it can pursue [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) **goals** (survival, reproduction, trait-shaped priorities). Memory is **not** a telemetry dump of every seen object.
 
-> **Motor / motivation alignment (read first):** **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree Tier-1/2, **`GoalKind`** registry (**§4.1**), **`CreatureDefinition`** traits, habitual **`believed_goal_*`** modulation (**§5.1** strategy-class tags — **Actions 1–3 Resolved**). **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** — unified scripted motor, **`SeekCandidate`** ingress, **`creature_motor`** + **`strategy_class_tags`** + **`goal_kinds`** pack merge (**§A.1**), **Preserve vs Find** thresholds (**§A.3.1**), phasing (ENGINE movement Foundations **before** full memory wiring). **This doc:** **what** to remember and how beliefs / locale priors feed **`MotorContext`** (**§§2, 10**).
+> **Motor / motivation alignment (read first):** **[CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md)** — ENGINE scripted motor authority (V3 hub → planner → execution); **§8.4** memory adapter consult (not per-tick **`MotorContext`** merge). **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** — motivation tree, **`GoalKind`** registry (**§4.1**), trait replay math (**§5.1**). **[CREATURE_MOVEMENT_V2.md](../Completed_Features/CREATURE_MOVEMENT_V2.md)** — archived V2 context only. **This doc:** **what** to remember; storage + salient-write gates; consult via V3 **memory adapter** (**§8.4** in MOVEMENT_V3).
+>
+> **V3 Step 3 sibling sync (2026-06-20):** Retired V2-primary consume paths (`MotorContext` merge, `sector_weights` locomotion, `_mob_hist` ghosts). Full **§12.3.2** rewrite deferred to **6d**.
 
 **Location:** `Draft_Features/` while design stabilizes; **promote** to `Definitive_Features/` when contract vs code (see [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md)). **Live code notes:** [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) (**`_goal_belief`** design block), [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd).
 
@@ -12,9 +14,9 @@
 
 **Phase name:** Creature memory (**goal-generalized** beliefs + success patterns)
 
-**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** + [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md), **successful outcome patterns** (**§2.1**) projecting into **`MotorContext`** **`believed_goal_*`** (CREATURE_MOVEMENT_V2 §A.3.1) with **trait-scaled replay** (**§2.2** → **GOAL_DRIVERS §5**). **LocalePriorMap** contract — **§14** (row schema **§14.2**, projection **§14.1**, threat pass **§14.3**).
+**One-line objective:** Specify **salient world beliefs** (§2) that reuse **one** memory schema for multiple **goals** (food, mates, **finding shelter**, etc.), with **precise** vs **coarse** tiers, **TTL-based coarse eviction**, **re-awareness promotion** to precise, optional **goal-type payloads** (§5–6), hooks that **modulate Tier-2 behavior** consistently with **[CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md)** + V3 hub scoring (**[CREATURE_MOVEMENT_V3.md §1](CREATURE_MOVEMENT_V3.md)**), **successful outcome patterns** (**§2.1**) consumed via **V3 memory adapter** (**§8.4** in MOVEMENT_V3) with **trait-scaled replay** (**§2.2** → **GOAL_DRIVERS §5**). **LocalePriorMap** contract — **§14** (row schema **§14.2**, consult **§14.1**, threat pass **§14.3**).
 
-**Explicit non-authority:** **Which** entities count as **`SeekCandidate` / consumable_now / food_candidate** vs **friend/foe** is governed by **`CreatureDefinition`** + ingestion policy ([CREATURE_MOVEMENT_V2.md §A.2 — `feeding_mode` / DietRegistry posture](CREATURE_MOVEMENT_V2.md)). **Memory** stores **belief records** keyed by stable instance ids **where applicable** and **does not** restate predator/omnivore/herbivore branching.
+**Explicit non-authority:** Live ingest and locomotion consult use **V3 §8.1** zone + **mandatory LoS** — not V2 cardinal merge. **Memory** stores belief records; **does not** restate diet branching (**`CreatureDefinition`** + DietRegistry).
 
 **Phase-1 scope (resolved — May 2026):**
 
@@ -819,6 +821,7 @@ for s in 0..7:
 
 | Date | Change |
 |------|--------|
+| 2026-06-20 | **V3 Step 3 sibling sync (§12.3.1):** Header authority → [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); retire V2 **`MotorContext`** consume as primary story; Step 3 code deletes V2 motor modules; full §14.1 adapter rewrite → **§12.3.2** at **6d**. |
 | 2026-06-20 | **V3 ghost consult filters:** §8.4 row — occluded-in-zone projection + **`consult_danger_samples`**, **`consult_food_targets`**, **`consult_shelter_beliefs`**, **`consult_goal_beliefs`** — aligned with [CREATURE_MOVEMENT_V3.md §8.4](CREATURE_MOVEMENT_V3.md) (closes §14.4.6). |
 | 2026-06-18 | **V3 kind memory:** §5.7 **`_kind_profile`** + learn-topic registry (`nutrition_yield`, `threat_danger`); §5.5 reframed as instance/**where** only; §6 / §8.4 adapter `record_observation`; §10 **`kind_profile_*`** + **`unknown_kind_multiplier`** — aligned with [CREATURE_MOVEMENT_V3.md §6.2](CREATURE_MOVEMENT_V3.md). |
 | 2026-06-18 | **V3 dead-end memory:** §5.6 **`_dead_end_marks_by_body`** geographic cul-de-sac schema; §5.5 **`passibility_fail_count`** / **`last_passibility_fail_ms`**; §8.3–8.4 V3 adapter split; §10 **`dead_end_*`** + **`passibility_fail_switch_threshold`** defaults — aligned with [CREATURE_MOVEMENT_V3.md §3](CREATURE_MOVEMENT_V3.md). |

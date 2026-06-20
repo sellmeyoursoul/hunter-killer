@@ -1,10 +1,12 @@
 # Hunter Killer — Creature goal drivers (draft)
 
-> **Purpose:** **Canonical hub** for **runtime goal semantics** shared by motor and memory: **motivation tree** (Tier-1 / Tier-2), **`GoalKind` registry** (**§4.1**), **`CreatureDefinition` motivation traits** (−100…+100), category rollup to Tier-2 leaves, and **trait × strategy-class** habitual replay modulation (`believed_goal_*`). This file does **not** specify cardinal scorer math, **`creature_motor`** pack merge keys, or belief TTL/schema — those stay in **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** and **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** respectively.
+> **Purpose:** **Canonical hub** for **runtime goal semantics** shared by motor and memory: **motivation tree** (Tier-1 / Tier-2), **`GoalKind` registry** (**§4.1**), **`CreatureDefinition` motivation traits** (−100…+100), category rollup to Tier-2 leaves, and **trait × strategy-class** habitual replay modulation (`believed_goal_*`). Motor integration authority = **[CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md)**; storage = **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)**.
 >
 > **Tier:** Draft (tier II) — promote when stable alongside sibling drafts.
 >
-> **Read order:** **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)** (field catalog, motivational priorities) → **this file** (drivers) → **[CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md)** (tier III — **where code** reads traits) → **[CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md)** (pipeline, `SeekCandidate`, phasing) → **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** (storage, `goal_*` / `believed_goal_*` identifiers, **§14** backends).
+> **Read order:** **[CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)** → **this file** → **[CREATURE_TRAIT_USAGE.md](../Definitive_Features/CREATURE_TRAIT_USAGE.md)** → **[CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md)** (ENGINE motor, phasing) → **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** (storage, **§14**).
+>
+> **V3 Step 3 sibling sync (2026-06-20):** Tree remains **semantic** priority doc; implementation = V3 hub **`build_eligible_goals`** — not `tier2_dominance.gd` / cardinal scorer. Full **§12.3.4** at **6d**.
 >
 > **Naming:** Distinct from archived **[Completed_Features/CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md)** (tier A snapshot).
 
@@ -18,13 +20,13 @@ A **goal driver** is the combination of:
 2. **`CreatureDefinition` trait axes** — how strongly each pole biases Tier-2 weights and habitual replay (**§3**).
 3. **`GoalKind`-aligned memory aggregates** — locale priors and episodic traces keyed for habitual **`believed_goal_*`** projection (**[CREATURE_MEMORY.md §2.1](CREATURE_MEMORY.md)**); **`context_hash`** overlays are defined **there**.
 
-**Non-scope:** `SeekCandidate` build rules, `creature_motor` thresholds (**CREATURE_MOVEMENT_V2 §A.2–A.3.1**), precise/coarse belief tiers (**CREATURE_MEMORY §5–6**).
+**Non-scope:** V3 hub scoring keys live in **`creature_motor_v3`** ([CREATURE_MOVEMENT_V3 §1](CREATURE_MOVEMENT_V3.md)); precise/coarse belief tiers (**CREATURE_MEMORY §5–6**). Historical V2 cardinal / **`SeekCandidate`** paths archived.
 
 ---
 
 ## 2. Motivation tree
 
-Higher-level planner **constraints** expressed as tiers. **Costs / weights** in the cardinal scorer are ultimately **sums of motivation-weighted utilities** aligned to this tree — avoids ad-hoc `weight_seek_prey` vs `weight_seek_ready_food` sprawl unless they map here. **Integration:** **[CREATURE_MOVEMENT_V2.md §A.2–A.3.1](CREATURE_MOVEMENT_V2.md)**.
+Higher-level planner **constraints** expressed as tiers. **Semantic** priority model for V3 hub consideration — integration = **[CREATURE_MOVEMENT_V3.md §1](CREATURE_MOVEMENT_V3.md)** hub eligibility (not `tier2_dominance.gd` or cardinal cost sums).
 
 ```
 Tier 1 — Don’t die
@@ -765,6 +767,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Date | Change |
 |------|--------|
+| 2026-06-20 | **V3 Step 3 sibling sync (§12.3.3):** Motor authority → [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); read order updated; §2 tree = semantic model for hub eligibility (not cardinal scorer). **§12.3.4** at **6d**. |
 | 2026-05-25 | **Phase 2:** salient emitter + locale priors integrated at runtime (`ai_driver` → `goal_source_memory`); Phase 1 contracts unchanged (trait Tier-2 stub, tactic classifiers optional). |
 | 2026-05-23 | **§2 / §6:** live **`SeekCandidate`** / threat ingest cross-link **CREATURE_MOVEMENT_V2 §E.1** (hybrid radius + forward cone awareness). |
 | 2026-05-20 | **Tier A:** starvation exception **§3**; **§4.1** `avoid_hostiles` compositor + shelter stub writes; **§5.1.1** `open_forage`, **`pole_facet_tag`** on row; **§5.1.5** escape reversal (AH-7a–c). |
