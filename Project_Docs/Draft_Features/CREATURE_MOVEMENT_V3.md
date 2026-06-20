@@ -1,8 +1,6 @@
-Purpose: Working Spec for a movement and goal refactor to fix the current overly complex implementation. This is specifically for the Engine logic and not for a creature controlled by an LLM or by a Human. Once the spec is refined, it will be converted to an .md file for agentic coder implementation.
+Purpose: Working spec for ENGINE creature movement and goal refactor (V3). **Authority:** supersedes V2 + POST_LOS; greenfield `creature/motor/` design. Sibling docs ([CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md), [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) refactored separately — V3 defines the **planner interface** they must satisfy. **Sibling rework:** resolved checklists **§12.3** (apply at Step 3 / before **6d** close; **§13 Tracking**).
 
-Authority: This doc supersedes V2 + POST_LOS; this is a greenfield `creature/motor/` design. Sibling docs ([CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md), [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) are refactored separately — V3 defines the **planner interface** memory and goal drivers must satisfy, not their storage schemas. **Sibling rework:** resolved checklists **§12.3** (apply at Step 3 / before **6d** close; **§13 Tracking**).
-
-<<Comment: On promotion to `.md` — **Deferred** process (§12 step 1, §13): retire [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) and [POST_LOS_MOVEMENT.md](POST_LOS_MOVEMENT.md) to `Completed_Features/` with abandonment banners; register this file in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md). Does not block spec completion.>>
+**Step 1 (2026-06-20):** Promoted to [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); [CREATURE_MOVEMENT_V2.md](../Completed_Features/CREATURE_MOVEMENT_V2.md) + [POST_LOS_MOVEMENT.md](../Completed_Features/POST_LOS_MOVEMENT.md) archived with supersession banners; registered in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 
 # Definitions
 
@@ -34,11 +32,25 @@ Start with defining an active goal based on the following. Structure this in a h
 
 NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i.e. a creature with plentiful calories and an available mate might weigh reproduction over food, even if Eat would win out if no mate were present. Likewise, the same creature would ignore the mate if the calorie count were low.) **Mate-vs-Eat numerics deferred** until §6.5.
 
-**Resolved — hub entry contract:** Single entry function under `creature/motor/`. **No explicit parameters** — reads the creature's current state and surroundings internally. **Output:** one **action** for the current physics tick. Goal consideration (§10) and step decomposition run inside this pipeline on the Observation cadence.
+**Resolved — hub entry contract:** Single entry function on each creature’s **motor stack** (§1 below). **No explicit parameters** — reads **that** creature’s body, vitals, and world context via stack-owned refs. **Output:** one **action** for the current physics tick. Goal consideration (§10) and step decomposition run inside this pipeline on the Observation cadence.
+
+**Resolved — per-creature motor stack (closes §14.2.5):** **One motor stack per [`CreatureRoot3D`](../../creature/creature_root_3d.gd)** — not a global singleton hub and not `ai_driver` `_…_by_body` dictionaries. Scales to N creatures with isolated state and consistent per-tick behavior.
+
+| Artifact | Path | Role |
+|----------|------|------|
+| **Motor stack** | [`creature/motor/creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) (new) | Owns hub + planner runtime state + per-creature memory adapter delegate; **`tick() -> Action`** |
+| **Owner** | [`creature/creature_root_3d.gd`](../../creature/creature_root_3d.gd) | Creates / holds stack child; wires `Body` + `Vitals` + `creature_motor_v3` at spawn |
+| **Orchestrator** | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) | Iterates registered roots; **`motor_stack.tick()`** per ENGINE subject — **no** motor state on driver |
+
+**Stack owns (per creature):** `ActiveGoal` table + consideration cadence counters; planner ephemeral state; **`memory_adapter`** façade with that creature’s belief / locale / kind stores (replaces V2 `_goal_belief_by_body` on driver); Flight fast-path / Safety counters; `blocked_approach_memory` instance.
+
+**Stack reads (refs, not copies):** `CreatureKinematicBody3D` facing/pos; vitals (`calorie_ratio`, …); merged **`creature_motor_v3`**; shared world services (`main_3d` navmesh RID, playfield, scene tree for zone scan).
+
+**Hard rules:** Hub/planner **`tick()`** must not read another creature’s body or memory. Zone scan lists **other** creatures as threat/food samples only — never as the active subject. **6b** headless: dual-root fixture asserts distinct actions per stack same tick.
 
 **Resolved — V3 goal ↔ `GoalKind`:** Wire through [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) per the table above. Rest has no salient `GoalKind` (preserve-calories behavior only). **Find shelter** uses wire id **`shelter`** ([GOAL_DRIVERS §4.1](CREATURE_GOAL_DRIVERS.md)). Flight uses **`avoid_hostiles`**; Mate uses **`find_mate`** when enabled. Salient writes use the active wire id at outcome.
 
-**Resolved — goal scoring (architecture):** At each consideration cycle, each candidate goal computes `weight = effective_base × urgency × (feasibility_floor + feasibility) × trait_goal_mul`. **`effective_base`** = `goal_base_<wire_id>` for most goals; **Find shelter** uses §1 shelter base formula. **`feasibility_floor`** = per-goal `goal_feasibility_floor_<wire_id>` from `creature_motor_v3` (§1). Urgency is continuous 0…1 from vitals/threat proximity. Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). **`trait_goal_mul`** — v1 **1.0** (§1 trait stub). Hard overrides: `calorie_ratio < starvation_override_food_ceiling` forces Eat dominance; acute Flight fast-path (§10) suppresses normal consideration — **Find shelter excluded entirely** during acute threat. **`replay_weight`** applies at **planner / memory consult** (§6d, §9) — **not** on hub `weight` in v1. Tier-2 dominance ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)) gates eligibility and memory consult, not the urgency/feasibility curves themselves.
+**Resolved — goal scoring (architecture):** At each consideration cycle, each candidate goal computes `weight = effective_base × urgency × (feasibility_floor + feasibility) × trait_goal_mul`. **`effective_base`** = `goal_base_<wire_id>` for most goals; **Find shelter** uses §1 shelter base formula. **`feasibility_floor`** = per-goal `goal_feasibility_floor_<wire_id>` from `creature_motor_v3` (§1). Urgency is continuous 0…1 from vitals/threat proximity. Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). **`trait_goal_mul`** — v1 **1.0** (§1 trait stub). Hard overrides: `calorie_ratio < starvation_override_food_ceiling` forces Eat-only eligibility (§1 eligibility matrix); acute Flight fast-path (§10) suppresses normal consideration — **Find shelter excluded entirely** during acute threat. **`replay_weight`** applies at **planner / memory consult** (§6d, §9) — **not** on hub `weight` in v1. **Single control plane:** hub **`build_eligible_goals`** (§1) decides which rows enter the table; **winner = max `weight`** among eligible rows. Memory salient-write **`parent_tier2`** comes from **`parent_tier2_for_goal_kind(winner.goal_kind)`** — **not** from [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd).
 
 **Resolved — per-goal `base` (`creature_motor_v3`):** Temperament multiplier (typical range **0…2**; ship profile uses **~0.5–1.0**). **Not** V2 `weight_seek_*` cardinal keys. Species packs may override.
 
@@ -81,7 +93,7 @@ effective_base_shelter = goal_base_shelter × food_map_confidence
 | `preserve_seek_blend_smoothness` | **0.5** | Mid-band **0.80–0.90** smoothstep aggressiveness |
 | `starvation_override_food_ceiling` | **0.10** | Below: Eat hard-dominates acute threat |
 
-**Eat urgency curve:** `urgency_eat = 1.0` when `calorie_ratio < seek_priority_food_ceiling` or under starvation override; `0.0` when `calorie_ratio ≥ preserve_bias_food_floor`; else smoothstep blend between ceilings using `preserve_seek_blend_smoothness` (same shape as [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) `preserve_find_food_seek_scale`, inverted for urgency). Aligns [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md).
+**Eat urgency curve:** `urgency_eat = 1.0` when `calorie_ratio < seek_priority_food_ceiling` or under starvation override; `0.0` when `calorie_ratio ≥ preserve_bias_food_floor`; else smoothstep blend between ceilings using `preserve_seek_blend_smoothness` (same shape as V2 `preserve_find_food_seek_scale`, inverted for urgency — [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)). Implemented in the V3 hub module; **not** delegated to `tier2_dominance.gd`.
 
 **Resolved — Flight urgency (`gate_dist` + disposition):**
 
@@ -120,7 +132,7 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 
 **Relative threat (`relative_threat_mod`) — deferred combat (§6.6):** Opponent matchup (e.g. healthy lion vs hungry fox) may drive mod → **0** even when `urgency_dist = 1`. **V3 v1:** **`1.0`** stub. Health / wounds may feed this term when combat lands — may **zero out** Flight for non-threatening opponents regardless of geometry.
 
-**Acute / fast-path (unchanged):** `gate_dist ≤ panic` footprint, `tactic_jeopardy_egress`, or §10 acute signal still triggers **Flight fast-path** — does not replace the consideration curve for sub-acute band competition.
+**Acute / fast-path (unchanged):** `gate_dist ≤ flight_acute_panic_radius` (§1 keys), `tactic_jeopardy_egress`, or §10 acute signal still triggers **Flight fast-path** — does not replace the consideration curve for sub-acute band competition.
 
 **`creature_motor_v3` keys (geometry + disposition clamps):**
 
@@ -133,6 +145,7 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 | `flight_disposition_mod_max` | **1.2** | Ceiling on `threat_disposition_mod` |
 | `flight_disposition_benign_delta` | TBD playtest | Per benign-exposure nudge (sign negative) |
 | `flight_disposition_evade_delta` | TBD playtest | Per hunt/evade nudge (sign positive) |
+| `flight_acute_panic_radius` | **220.0** | Acute Flight fast-path when threat `gate_dist ≤` this (world units; V2 parity: `herbivore_flee_panic_radius` from duel rabbit pack) |
 
 **Implementation phasing:** **6b** — `urgency_dist` + `threat_disposition_mod = 1.0` + `relative_threat_mod = 1.0`. **6d** — persist / update per-creature disposition on benign vs evade events (motor meta or memory adapter field — not `LocalePriorMap`). **Combat** — `relative_threat_mod` + Fight hub reuse of `urgency_dist` geometry (§6.6).
 
@@ -140,29 +153,54 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 
 **Resolved — Mate vs Eat tradeoff:** Goal **Deferred** until §6.5. **No Mate-vs-Eat numerics** in V3 v1 — `goal_base_find_mate` remains **0.0**; explicit tradeoff formula ships with the mating goal.
 
-**Resolved — Tier-2 dominance at consideration:** **Reuse** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) as the canonical priority / rules library ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md), [CREATURE_MOVEMENT_V2.md §A.2.3](CREATURE_MOVEMENT_V2.md)) — **no greenfield duplicate** of the priority table. **Do not** greenfield a parallel module that re-implements the same starvation → acute threat → hunger → preserve → mate stack.
+**Resolved — single control plane (hub eligibility; deprecate `tier2_dominance.gd`):** Closes §14.1.2 / §14.4.2. **Do not** call [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) from the V3 hub. **Deprecate and delete** that module at **§12.2 6b** (with V2 `ai_driver` motor teardown) — its ~50-line if-ladder is **inlined** as explicit per-goal eligibility in the hub module. **Keep** [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) **`parent_tier2`** as memory **taxonomy** ([CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)) — derive at outcome from the **winning hub goal**, not from `derive_dominant_tier2_leaf`. **Keep** the [CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md) motivation tree as **semantic** priority documentation only.
 
-**V3 role (narrower than V2):** Goal **winner** comes from hub **`weight`** scoring (§1) on the **consideration cadence** (§10) — **not** per-tick `derive_dominant_tier2_leaf` for motor goal selection ([POST_LOS_MOVEMENT.md §4.5b](POST_LOS_MOVEMENT.md)). Tier-2 dominance **gates eligibility and memory consult** only; urgency/feasibility curves stay per-hub-goal (Eat, Flight, …).
+**Practical recommendation (adopted):**
 
-**Call pattern:**
+1. **Hub owns eligibility + scoring** — one pipeline; no dual control with a parallel dominance module.
+2. **Keep `parent_tier2` in `goal_kind_registry`** — salient writes and memory consult use `parent_tier2_for_goal_kind(active_winner.goal_kind, catalog)`.
+3. **Ship in 6b** — do not build a hub + `tier2_dominance` wrapper and delete later.
+4. **Port parity tests** — starvation-over-acute and preserve-band cases from `tests/run_all.gd` tier2 assertions to hub eligibility + `urgency_eat` tests at 6b.
 
-| When | API | Purpose |
-|------|-----|---------|
-| Each **consideration** cycle | `derive_dominant_tier2_leaf(calorie_ratio, acute_threat, find_mate_urgency, motor_p)` | Eligibility filter + memory-consult parent leaf (once per cycle, not per physics tick) |
-| Hub eligibility wrapper (V3 hub module) | Maps hub goals ↔ Tier-2 leaves via [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) `parent_tier2_for_goal_kind`; applies V3-only rules on top (Find shelter suppressed during acute threat — §1, §10) | Rest / Find shelter / Fight rows not in the four-leaf enum |
-| Eat mid-band smoothstep | `preserve_find_food_seek_scale` — **superseded** for cardinal weights; Eat **`urgency_eat`** already uses the same shape (§1) | Retain function for tests / parity until V2 cardinal deleted |
+**V3 role (narrower than V2):** Goal **winner** = **max `weight`** among **eligible** hub rows on the **consideration cadence** (§10) — **not** per-tick `derive_dominant_tier2_leaf` ([POST_LOS_MOVEMENT.md §4.5b](POST_LOS_MOVEMENT.md)). Sub-acute threat uses continuous **`urgency_flight`** (§1), not tier2’s boolean `acute_threat`. Acute response uses **Flight fast-path** (§10), which bypasses the goal table entirely.
 
-**Hard rules (unchanged — delegate to `tier2_dominance`):** priority **0** starvation (`starvation_override_food_ceiling`) forces **Find food** / Eat eligibility over acute threat; acute threat → **Avoid hostiles** / Flight fast-path (§10) and blocks Find-shelter consideration row.
+**Consideration pipeline (6b):**
 
-**Retired with V2 delete:** per-tick `dom_leaf` in `ai_driver` `_build_motor_context`, [`goal_seek.gd`](../../creature/motor/goal_seek.gd) dominant-leaf target filter, `preserve_find_food_seek_scale` scaling cardinal `w_seek` / explore weights.
+| Step | Owner | Action |
+|------|-------|--------|
+| 1 | §10 fast-path | If acute Flight (or future combat fast-path) → bypass table; emit flee actions |
+| 2 | Hub | `build_eligible_goals(...)` → candidate hub rows (matrix below) |
+| 3 | Hub | Score each eligible row: `weight = effective_base × urgency × (feasibility_floor + feasibility) × trait_goal_mul` |
+| 4 | Hub | Winner = max weight (§10 tie-break) |
+| 5 | Memory adapter (**6d**) | Salient write / consult parent: `parent_tier2_for_goal_kind(winner.goal_kind, catalog)` |
 
-**Disposition:** **`keep`** — §12.1 inventory; hub calls from **§12.2 6b**; memory adapter consult from **6d**.
+**Resolved — eligibility matrix (`build_eligible_goals`):** Applies on each **consideration** cycle when fast-path is **not** active. “Eligible” = row may enter the goal table and receive a `weight`. Mate row omitted until §6.5 (`goal_base_find_mate` **0.0**).
 
-**Resolved — trait channels v1 (stub):** **Do not** wire non-zero trait coefficients in **`creature_motor_v3`** for V3 v1. Reuse [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) **`apply_trait_urgency_channels`** — **zero deltas** (returns base unchanged; phase-1 parity with shipped code). Hub consideration: **`trait_goal_mul = 1.0`** always. Planner tactic style: **`trait_tactic_mul = 1.0`** always (reserved hook — no separate module in v1).
+| Condition | Eat | Flight | Find shelter | Rest | Notes |
+|-----------|:---:|:------:|:------------:|:----:|-------|
+| **Starvation** — `calorie_ratio < starvation_override_food_ceiling` | ✓ | — | — | — | Eat only; scores even under threat samples (starvation priority **0**) |
+| **Acute fast-path** (§10) | — | bypass | — | — | Table frozen / not scored; Flight every tick |
+| **Normal** — default band | ✓ | ✓* | ✓† | ✓‡ | Compete on `weight` |
+| **Find shelter gate** | — | — | † | — | † `calorie_ratio ≥ seek_priority_food_ceiling` |
+| **Rest gate** | — | — | — | ‡ | ‡ calories **≥ 95%** + Safety path (§6.1); not eligible 80–95% band |
 
-**Long-term intent (deferred — no full spec in this doc):** Traits should bias **how** an active goal is **implemented** (target choice, seek vs local commit, persist / switch / seek — [CREATURE_GOAL_DRIVERS.md §3.1–3.2](CREATURE_GOAL_DRIVERS.md)), **not** which hub goal wins consideration. Example: Eat + Explorer + sated calories → seek novel food sources; Eat + Builder → persist on known local patch; Change → favor seek/switch; Stability → favor persist/wait. Numerics and module ownership ship post–V3 v1 ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — trait urgency / tactic modulator). **V3 v1 intentional:** **`trait_goal_mul = 1.0`** at hub; personality via **`replay_weight`** / locale priors at memory consult (**6d**) only.
+\* Flight row eligible when threat samples exist in zone (including sub-acute — `urgency_flight` may be **< 1.0** at far edge).  
+† Find shelter **not** eligible during acute fast-path (§1, §6.4).  
+‡ Rest competes only when Rest gates pass; Eat **`urgency_eat → 0`** at `calorie_ratio ≥ preserve_bias_food_floor` (**0.90**).
 
-**Disposition:** **`trait_tier2_mapper.gd`** → **`keep`**, stub; optional hub call for API shape. **§12.1** inventory.
+**Hard rules (hub-owned — same semantics as V2 [§A.2.3](CREATURE_MOVEMENT_V2.md), no `tier2_dominance` call):** starvation → Eat-only eligibility; acute fast-path → Flight bypass + Find shelter suppressed; sub-acute → continuous weight competition.
+
+**Retired with V2 delete:** per-tick `dom_leaf` in `ai_driver` `_build_motor_context`, [`goal_seek.gd`](../../creature/motor/goal_seek.gd) dominant-leaf target filter, [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) (entire module), `preserve_find_food_seek_scale` scaling cardinal `w_seek` / explore weights.
+
+**Disposition:** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) → **`delete`** at **§12.2 6b**; hub eligibility lives in new V3 hub module under `creature/motor/`.
+
+**Resolved — trait channels v1 (stub):** **Do not** wire non-zero trait coefficients in **`creature_motor_v3`** for V3 v1. Hub consideration: **`trait_goal_mul = 1.0`** always. Planner tactic style: **`trait_tactic_mul = 1.0`** always (reserved hook — no separate module in v1). **Do not** call [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) from the V3 hub — it maps **`dom_leaf` → Tier-2 urgency channels**, the same dual-control pattern retired with **`tier2_dominance.gd`** (§1).
+
+**Long-term intent (deferred — no full spec in this doc):** Traits should bias **how** an active goal is **implemented** (target choice, seek vs local commit, persist / switch / seek — [CREATURE_GOAL_DRIVERS.md §3.1–3.2](CREATURE_GOAL_DRIVERS.md)), **not** which hub goal wins consideration. Example: Eat + Explorer + sated calories → seek novel food sources; Eat + Builder → persist on known local patch; Change → favor seek/switch; Stability → favor persist/wait. Numerics and module ownership ship post–V3 v1 ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — **Post–V3 trait tactic modulator**). **V3 v1 intentional:** **`trait_goal_mul = 1.0`** at hub; personality via **`replay_weight`** / locale priors at memory consult (**6d**) only.
+
+**Deferred — post–V3 v1 trait modulator:** Does **not** block V3 ship or **6b**. Scoped in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — **Post–V3 trait tactic modulator (non-stub)**. Open decisions when picked up: greenfield module (`trait_tactic_modulator.gd` or similar) vs **`creature_motor_v3`** scalar keys for planner tactic style; **do not** revive [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) or V2 **`urgency_*`** Tier-2 channel API. **`trait_goal_mul` / `trait_tactic_mul`** remain V3 spec hooks (literal **1.0** in v1); not wired in legacy code.
+
+**Disposition:** [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) → **`delete`** at **§12.2 6b** (with `tier2_dominance.gd`). **§12.1** inventory; **§15**.
 
 ---
 
@@ -287,7 +325,25 @@ If the current step objective requires movement, follow the movement trees below
 
 **Resolved — “Unexplored locations”:** See Definitions §9 (coarse/precise tier, 50% area-of-awareness object-density rule). Does not reuse `explore_coverage_cell_px` as the primary contract.
 
-**Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional **`creature_motor_v3.detour_score_competition`** (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID.
+**Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional **`creature_motor_v3.detour_score_competition`** (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID — see **headless path fixture** below.
+
+**Resolved — headless path fixture (minimal — closes §14.2.3 / §14.4.5):** V3 **6c+** headless slices use a **programmatic minimal fixture** — **not** full [`main_3d.gd`](../../main_3d.gd) / duel scene boot. Duel manual smoke continues to use playfield navmesh bake (`get_navigation_map_rid()` on main).
+
+| Artifact | Path | Role |
+|----------|------|------|
+| **Fixture builder** | [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) (new) | Headless-only: spawn flat walkable floor + `NavigationRegion3D`, **sync bake**, return valid `map_rid` |
+| **Layout variants** | same module | **`open`** — clear floor nav path; **`blocked`** — floor + static AABB wall for backtrack / detour slices |
+| **Main stub hook** | extend [`tests/terrain_test_main_stub.gd`](../../tests/terrain_test_main_stub.gd) | Add **`get_navigation_map_rid()`** delegating to active fixture (same contract as `main_3d`) |
+
+**Fixture contract (6c CI gates):**
+
+1. **Setup** — `MotorPathFixture.build_open()` / `.build_blocked()` returns `{ map_rid, space_state?, bounds, teardown }`. Assert `map_rid.is_valid()` before planner tests run.
+2. **Navmesh ready** — after bake, assert `NavigationServer3D.map_get_path(map_rid, from, to, true).size() ≥ 2` for fixture start → goal used in the test (guards async-bake flakes without booting duel).
+3. **LoS** — when fixture includes collision world, pass `space_state` into planner LoS ctx; when absent, tests follow §3 headless rule (corridor sweep only; LoS skipped).
+4. **Teardown** — free fixture nodes after each test (or per `run_all` group) so CI stays deterministic.
+5. **Fallback slice** — one separate headless test uses **invalid** `RID()` to assert detour / `STEP_MODE_NONE` fallback — **not** a substitute for navmesh-first slices.
+
+**Out of scope for fixture:** grasslands art pack, interior boulders, LLM/HUD, creature pack merge — keep tests fast. Full duel scene remains **manual smoke** only (§12.2 **6c**).
 
 **Resolved — backtrack v1:** **Approach-heading TTL memory** only ([`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) pattern) — no position stack in v1.
 
@@ -565,7 +621,7 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 
 **Resolved — `stimulus_kind_id` authoring (required):** Every food source scene **must** define **`stimulus_kind_id`** before spawn. **Spawn / placement:** do **not** instantiate food into the world without a valid id — fix the bush/shrub (or pack) definition instead of ingesting with a missing key. **`OLog.error`** when spawn is attempted without **`stimulus_kind_id`**. Required for all new food assets; kind ranking and EWMA depend on it (§6.2, §8.4 **6d**).
 
-**Resolved — module ownership:** **Hub** — goal scoring only; **no** ingest or memory calls. **Planner** — runs awareness pass (or calls shared util), ranks live food targets using **kind** `nutrition_yield` consult + geometry; binds active step `instance_id` for EAT. **Memory adapter** (§8.4, **6d**) — all writes: instance sync, `record_observation`, locale salient write fan-out. **Body / executor** — emits EAT completion outcome to adapter (calories gained); does not mutate belief stores directly.
+**Resolved — module ownership:** **Motor stack** ([§1](CREATURE_MOVEMENT_V3)) — orchestrates tick; owns hub scoring runtime, planner state, per-creature **memory adapter** instance. **Hub** — goal scoring only; **no** ingest or memory calls. **Planner** (within stack) — runs awareness pass (or calls shared util), ranks live food targets using **kind** `nutrition_yield` consult + geometry; binds active step `instance_id` for EAT. **Memory adapter** (§8.4, **6d**) — one façade **per stack**; all writes: instance sync, `record_observation`, locale salient write fan-out. **Body / executor** — emits EAT completion outcome to **this stack’s** adapter (calories gained); does not mutate belief stores directly.
 
 **Resolved — kind read (foraging / replace):** Rank live candidates and §8.3 cross-instance replace by **`kind_profile.facet(nutrition_yield, stimulus_kind_id)`** — never-seen kind → **neutral prior** (ship default **0.5** on 0…1 scale). V3 **`unknown_kind_multiplier`** = **1.0** (no familiarity bonus/penalty until traits / plants land). §8.3 “superior same-goal option” = higher **kind** yield belief, not higher instance `anticipated_calories`.
 
@@ -739,8 +795,8 @@ Three layers; **world targets and urgency stop at the planner**. <<Comment: Tabl
 
 | Layer | Location | Inputs | Output |
 |-------|----------|--------|--------|
-| **Planner** | `creature/motor/` hub | Creature state, zone of awareness, memory tiers, `step_goal`, urgency, terrain/squeeze **beliefs** | One `Action` per physics tick |
-| **Executor** | `creature/motor/` locomotion module | `Action` only (+ `delta`) | `ActionOutcome` (displacement, blocked) |
+| **Planner + hub** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) on each [`CreatureRoot3D`](../../creature/creature_root_3d.gd) | **This** creature’s body/vitals, zone scan, memory adapter, `step_goal`, urgency | One `Action` per physics tick |
+| **Executor** | `creature/motor/` locomotion module (stateless) | `Action` only (+ `delta`) | `ActionOutcome` (displacement, blocked) |
 | **Body** | [`CreatureKinematicBody3D`](../../creature/capabilities/creature_kinematic_body_3d.gd) | Called by executor | Physics, facing state, vitals |
 
 The executor **never** receives `step_goal`, `ultimate_pos`, or urgency. The planner uses those internally (e.g. emit `TURN_LEFT` until facing aligns with `step_goal`, then `MOVE_FORWARD`). Human input (deferred) maps keys to the same `Action` values and calls the same executor entry point.
@@ -790,7 +846,7 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Moves to executor / deprecates on body:** world-space intent vector, `_engine_heading_with_wall_slide` for engine mode, facing-from-velocity after move, per-frame distance calorie integration.
 
-**Tick order (engine):** motor hub selects `Action` → executor `apply_action` → body completes physics step. One action, one application, one calorie debit.
+**Tick order (engine):** For each ENGINE [`CreatureRoot3D`](../../creature/creature_root_3d.gd): **`motor_stack.tick()`** selects `Action` → executor **`apply_action(body, …)`** → body completes physics step. One action, one application, one calorie debit **per creature**. [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) loops registered roots only — does not hold per-body goal or belief state (§1 motor stack).
 
 ### 7.5 Action calorie costs
 
@@ -893,7 +949,7 @@ While **`REST` is selected:** **area sphere only**; cone **off** (table above). 
 
 **Retired — not in V3 packs or zone builder:** `awareness_forward_cone_only`, `herbivore_threat_awareness_omni`, `predator_prey_awareness_omni`, `predator_prey_awareness_cone_extra` (legacy diet / posture forks).
 
-**Resolved — single consumer contract:** One zone builder feeds **live** ingest for **threat** ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)), **food** (§6.2), **memory re-awareness** ([CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)), **Flight `urgency_dist` / `eff_reach`** (§1), **Safety** checks (§1, §6.1), and debug overlay. Same geometry + LoS rule every tick. **6d:** occluded-in-zone **ghost layer** (below) merges threat ghosts into the same threat / danger consumers.
+**Resolved — single consumer contract:** [`awareness_zone.gd`](../../creature/motor/awareness_zone.gd) + [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) feed **live** ingest for **threat** ([CREATURE_GOAL_DRIVERS.md §2](CREATURE_GOAL_DRIVERS.md)), **food** (§6.2), **memory re-awareness** ([CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)), **Flight `urgency_dist` / `eff_reach`** (§1), **Safety** checks (§1, §6.1), and debug overlay. Same geometry + LoS rule every tick. **6d:** occluded-in-zone **ghost layer** (below) merges threat ghosts into the same threat / danger consumers.
 
 **Resolved — occluded-in-zone ghost mapping (Option A — `_goal_belief` / MEMORY §5.5):**
 
@@ -904,7 +960,7 @@ While **`REST` is selected:** **area sphere only**; cone **off** (table above). 
 | **Eligibility** | Row exists from prior **live** in-zone sighting with clear LoS; target is **geometrically in zone** this tick but **LoS blocked**; **dedupe:** when live LoS clears for the same instance, **live sample wins** — drop ghost projection for that instance this tick |
 | **Phasing** | **6c:** **no ghosts** — live + LoS only. **6d:** adapter read API emits ghost samples |
 
-**Movers** (`is_moving = true` — hostiles, prey, relocating mobs):
+**Movers** (`is_moving = true` — **all tracked creatures**: hostiles, prey, mates, neutrals, relocating mobs):
 
 - **Believed position** for zone membership: **`last_world_pos`**; optional intercept hint **`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`** (default **0.4 s** — MEMORY §5.5) for pursuit / Flight geometry only.
 - **Persist while:** **`last_world_pos`** (and intercept when used for reach-cap test) remains inside **geometric zone** (full union; **area sphere only** while `REST` selected — same posture table as live ingest).
@@ -916,12 +972,13 @@ While **`REST` is selected:** **area sphere only**; cone **off** (table above). 
 - **Non-threat / not noteworthy:** **No occluded-in-zone ghost** unless the instance already has a **`_goal_belief`** row from another memory path (precise/coarse outside zone — §8.2–8.3). If only held as a transient occluded-in-zone ghost with **no** persistent row, **forget when `last_world_pos` leaves geometric zone** — do not clog memory.
 - **Threat statics** (if any): same zone-based ghost as movers **without** velocity extrapolation.
 
-**Threat ghosts — danger consumers (yes):**
+**Ghost projection vs danger consumers (resolved — consult filters in §8.4):**
 
-- Valid threat ghosts count as **nearby danger** for **Safety state**, **Flight** urgency / fast-path eligibility, **`REST` area interrupt**, and threat ingest — until ghost expiry (zone exit or mover reach cap).
-- **Non-threat** ghosts (food, neutral props): **do not** affect Safety / Flight danger; **forget when out of zone** unless promoted to persistent **`_goal_belief`** / coarse / precise tiers via normal adapter writes (§8.2–8.3).
+- **Projection** (who may emit an occluded-in-zone ghost sample) follows eligibility above — **same rules** for tracked creatures, persistent static food, and **remembered shelter sites** (`goal_kind == shelter` from §6.4 probe).
+- **Consumption** is **not** uniform: only samples passing **`danger_filter`** (§8.4) reach Safety / Flight / **`REST` area interrupt**. Food, **shelter**, mate (deferred), and neutral creature ghosts **project** when eligible but **never** count as danger unless **`goal_kind == avoid_hostiles`**.
+- Transient occluded statics with **no** persistent row: **forget when out of zone** (§972–974).
 
-**Ingest shape (6d):** ghost entries mirror live samples with **`source: ghost`**, **`line_of_sight_clear: false`**, position from **`last_world_pos`** (movers: optional intercept in pursuit hints only). Threat ghosts feed **`ThreatSample`** / **`gate_dist`** like live samples.
+**Ingest shape (6d):** ghost entries mirror live samples with **`source: ghost`**, **`line_of_sight_clear: false`**, position from **`last_world_pos`** (movers: optional intercept in pursuit hints only). Samples passing **`danger_filter`** feed **`ThreatSample`** / **`gate_dist`** like live threat samples.
 
 **Sibling doc — [CREATURE_MEMORY.md](CREATURE_MEMORY.md):** Step 3 + **6d** sibling sync checklists — **§12.3**. Adapter implementation remains **§12.2 6d**; doc sync is **not** optional drift.
 
@@ -981,6 +1038,20 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 
 **Resolved — MEMORY sibling split:** [CREATURE_MEMORY.md](CREATURE_MEMORY.md) owns **row schema, TTL keys, eviction, salient-write gates** (§§5.5, 5.6, 5.7, 10). This doc owns **when** the V3 planner reads/writes via the memory adapter — no V2 `MotorContext` merge. On promotion, add matching **§8.4 planner-consumption** section to MEMORY with cross-anchors to this §8.4.
 
+**Resolved — memory modules (adapter facade — not greenfield rewrite):** Keep [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) and [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) as **storage + consult implementations**, but V3 **must not** call V2 **`MotorContext` merge** entry points (`project_believed_goal_bias`, per-tick cardinal projection, `sector_weights` locomotion). Introduce a **thin memory adapter** under `creature/motor/` (§12.2 **6d**) that exposes §8.4 read/write tables only. Legacy V2 consult methods become **dead code** behind the adapter boundary until **deleted** in **§12 step 11** (**§15**). **Do not** duplicate storage schemas or salient-write math in a parallel memory stack — adapter wraps existing classes.
+
+**Resolved — memory adapter module path (Option A — dedicated façade):** Closes §15.3 adapter-path row.
+
+| Artifact | Path / name | Role |
+|----------|-------------|------|
+| **Memory adapter** | [`creature/motor/memory_adapter.gd`](../../creature/motor/memory_adapter.gd) | **Sole public entry** for hub/planner memory I/O — §8.4 read/write tables |
+| **Salient write payload** | **`SalientWriteContext`** (`class_name`) | Replaces V2 `motor_ctx: Dictionary` on salient writes (§12.3.4); may live in [`salient_write_context.gd`](../../creature/motor/salient_write_context.gd) or the same file as the adapter |
+| **Storage (internal)** | `goal_belief_memory.gd`, `goal_source_memory.gd`, `kind_profile_memory.gd` | Delegate only — **not** imported by hub/planner for consult |
+
+**Hard rules:** Hub, planner, and executor outcome hooks on a stack **preload/import only** `memory_adapter.gd` (and `SalientWriteContext` when building write payloads) for **that creature’s adapter instance**. **Do not** nest the façade API under `goal_*_memory.gd` or call V2 projection/merge entry points from V3 code paths. **Do not** store per-creature belief / goal state on [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — stacks own it (§1).
+
+**Resolved — V2 projection method cleanup:** **Delete** unused V2 projection/merge methods from [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) / [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) in **one pass at §12 step 11** once grep confirms zero callers (V3 adapter path + any remaining V2 tests migrated or removed). **Do not** leave `@deprecated` stubs for a release — storage modules stay; dead V2 **API surface** is removed cleanly.
+
 **Resolved — instance belief cap eviction (`_goal_belief`):** When **`goal_memory_max_entries`** is exceeded (after TTL / forget-radius / coarse-TTL evictions), evict the row with **lowest `last_observed_ms`** (oldest live sighting). Tie-break: deterministic low **`instance_id`**. **`merge_use_count`** / **`last_merged_ms`** — **deprecated** in V3 (V2 motor-merge fields; not read or written). No consult-frequency retention in v1 — adapter reads do **not** bump eviction stats. Future use-based retention may land via backlog if playtest warrants.
 
 **Resolved — memory adapter read API (6d):**
@@ -993,7 +1064,55 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 | **Dead-end filter** | `_dead_end_marks_by_body` | §3 Movement Weighing edge-waypoint filter; §6.3 Flight spatial option removal |
 | **Instance passibility** | `_goal_belief.passibility_fail_count` | §9 switch bias; shelter / Flight consume blocked instances |
 | **Kind yield / threat** | `_kind_profile` facets ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)) | §6.2 live ranking; §8.3 replace; §9 switch; §1 `kind_threat` |
-| **Occluded-in-zone ghost** | `_goal_belief` read projection (§8.1) | Threat ghosts → danger / Flight / Safety / REST; non-threat food ghosts → goal targeting only; **6d** |
+| **Occluded-in-zone ghost** | `_goal_belief` read projection (§8.1) | Filtered per **§8.4 consult filters** — **6d** |
+
+**Resolved — occluded-in-zone ghost projection + consult filters (closes §14.4.6):** Single **`_goal_belief`** store; **one** internal ghost projector; **multiple** public adapter consults apply **consumer-specific filters**. Ghosts are classified at **consult** time, not by separate storage tiers.
+
+**Pipeline:**
+
+| Step | Rule |
+|------|------|
+| **A — Project** | Internal only: **`_project_occluded_in_zone_ghosts(zone_ctx)`** — for each eligible row (§8.1), if **`last_world_pos`** is in geometric zone this tick **and** LoS blocked **and** no live sample for same **`instance_id`**, emit ghost sample (`source: ghost`, `line_of_sight_clear: false`). |
+| **B — Filter** | Each public consult below applies its predicate — **never** pass unfiltered ghosts to Safety / Flight / REST danger. |
+
+**Ghost eligibility by row class:**
+
+| Row class | `is_moving` | Occluded-in-zone ghost? | Persistent row required? |
+|-----------|-------------|-------------------------|---------------------------|
+| **Tracked creatures** (hostile, prey, mate, neutral) | `true` | **Yes** | Prior live in-zone sighting (clear LoS) |
+| **Static food** | `false` | **Only if** row exists | Yes — live sight or §8.2–8.3 promotion |
+| **Shelter site** (`goal_kind == shelter`) | `false` | **Yes** | Yes — §6.4 successful probe write |
+| Transient occluded static, no row | `false` | **No** | — |
+
+**`danger_filter(sample) -> bool` (v1):** True when sample is **nearby threat** for Safety / Flight / REST area interrupt:
+
+- **`goal_kind == &"avoid_hostiles"`**, **and**
+- Sample shape matches threat ingest (**`ThreatSample`** / live threat scan) with **`stimulus_kind_id`** for **`kind_threat`** (§1).
+
+**Exclude from danger:** `find_food`, **`shelter`**, `find_mate` (deferred), neutral creatures tracked under non-hostile kinds, any row failing **`danger_filter`**. Creature ghosts that fail **`danger_filter`** still **project** when occluded-in-zone but reach **goal consults only**.
+
+**Deferred — combat / neutral fauna:** **`relative_threat_mod`** and low **`kind_profile.threat_danger`** may refine **`danger_filter`**; neutral kinds never pass **`danger_filter`** even when occluded.
+
+**Public adapter consults (filtered reads):**
+
+| Adapter consult | Row / sample filter | Ghost? | Primary consumers |
+|-----------------|---------------------|--------|-------------------|
+| **`consult_danger_samples()`** | **`danger_filter`** | Live + threat ghost | Safety state (§1), Flight urgency / fast-path (§1, §6.3), **`REST` area interrupt** (§6.1), hub threat eligibility |
+| **`consult_food_targets()`** | **`goal_kind == &"find_food"`** | Live + ghost when persistent row | Eat ranking (§6.2), remembered food seek (§8.2), §8.3 replace |
+| **`consult_shelter_beliefs()`** | **`goal_kind == &"shelter"`** | Precise / coarse outside zone; **live + ghost inside** zone (remembered bolt-hole behind cover still counts at **`last_world_pos`**) | **`safe_site_score`** (§6.1), Find shelter probe (§6.4), REST site rank / qualify |
+| **`consult_goal_beliefs(goal_kind)`** | **`goal_kind` param match** (+ optional `tier`) | Live + ghost per §8.1 | Generic remembered seek (§8.2–8.3); future **`find_mate`** |
+| **`consult_kind_facet(...)`** | **`_kind_profile`** by **`stimulus_kind_id`** | N/A (not instance rows) | §6.2 yield rank; §1 **`kind_threat`** on threat samples |
+
+**First sight → `goal_kind` stamp (write-side; before any ghost):**
+
+| Live ingest / write event | `goal_kind` on new row |
+|---------------------------|------------------------|
+| Hostile threat scan | **`avoid_hostiles`** |
+| Food plant in awareness | **`find_food`** |
+| Successful Find shelter probe (§6.4) | **`shelter`** |
+| Future mate recognition | **`find_mate`** (deferred — §6.5) |
+
+Re-sync updates **`last_world_pos`**, **`consumable_now`**, **`last_velocity`**, **`is_moving`** only — **`goal_kind`** unchanged unless a salient episode retags (combat deferred).
 
 **Resolved — memory adapter write API (6d):**
 
@@ -1063,7 +1182,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 
 ## 11. Adopted decisions (from POST_LOS — intent only)
 
-**Resolved — POST_LOS ledger vs V2 (kickoff audit):** Every row in the table below is **V3 intent-only**. **None** retains `cardinal_avoidance.gd` eight-way selection or V2 **`MotorContext`** merge at runtime. POST_LOS described goals and seek state atop those modules; V3 replaces them with an explicit **`ActiveGoal` table** (§2, §10), facing-relative **`Action`** execution (§7), and **memory adapter** consult (§8.4) — not a `MotorContext` projection path. Rows whose wording echoes POST_LOS/V2 are clarified in the **Notes** column (e.g. Eat urgency = **`creature_motor_v3` keys only**; Tier-2 = **reuse** `tier2_dominance.gd`, **delete** per-tick `dom_leaf` / `goal_seek` filter).
+**Resolved — POST_LOS ledger vs V2 (kickoff audit):** Every row in the table below is **V3 intent-only**. **None** retains `cardinal_avoidance.gd` eight-way selection or V2 **`MotorContext`** merge at runtime. POST_LOS described goals and seek state atop those modules; V3 replaces them with an explicit **`ActiveGoal` table** (§2, §10), facing-relative **`Action`** execution (§7), and **memory adapter** consult (§8.4) — not a `MotorContext` projection path. Rows whose wording echoes POST_LOS/V2 are clarified in the **Notes** column (e.g. Eat urgency = **`creature_motor_v3` keys only**; eligibility = **hub `build_eligible_goals`** §1 — **delete** `tier2_dominance.gd`, per-tick `dom_leaf`, `goal_seek` filter).
 
 **Resolved — Step 3 teardown (V2 behavior out; not “delete every motor file”):** §12 Step 3 removes V2 **motor behavior** per §12.1 dispositions. After Step 3 the game launches with **no intelligent creature movement** (Step 5); compile survives via **stub**, **keep**, and **adapter** rows until §12.2 Step 6 rebuilds in order **6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**.
 
@@ -1071,7 +1190,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 |-------------|---------------|------------------------------------------------------|----------|
 | **delete** | Remove file or motor pipeline block | `cardinal_avoidance.gd`, `goal_seek.gd`, `seek_planner.gd`, `ai_driver` `_mob_hist` / `awareness_memory_*`, cardinal / explore / eight-way helpers | — |
 | **stub** | Minimal placeholder until Step 6 | `ai_driver.gd` motor pipeline | **6b** hub entry |
-| **keep** | Utility V3 calls directly | `line_of_sight.gd`, `blocked_approach_memory.gd`, `tier2_dominance.gd`, `trait_tier2_mapper.gd`, `threat_sample.gd`; `game_config_merge.gd` + `creature_motor_v3` | **6a**–**6c** |
+| **keep** | Utility V3 calls directly | `line_of_sight.gd`, `blocked_approach_memory.gd`, `threat_sample.gd`; `game_config_merge.gd` + `creature_motor_v3` | **6a**–**6c** |
 | **adapter** | Retain storage; drop V2 `MotorContext` API | `goal_belief_memory.gd`, `goal_source_memory.gd`, `kind_profile_memory.gd` (new) | **6d** |
 
 **6c adapter stubs:** Until **6d**, memory adapter returns empty / no-op for instance belief, locale prior, kind EWMA writes, dead-end consults, and ghost projection — live awareness + LoS only (§8.4).
@@ -1079,12 +1198,12 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 | Decision | V3 section | Notes |
 |----------|------------|-------|
 | Three layers: goals → planner → execution | §1–3, §7 | **V3 intent.** Runtime **call** order; **build** order §12.2 (execution first) |
-| Hub: no explicit inputs; one action per tick | §1 | **V3 intent.** `creature/motor/` |
+| Hub: no explicit inputs; one action per tick | §1 | **V3 intent.** **`creature_motor_stack.gd`** per [`CreatureRoot3D`](../../creature/creature_root_3d.gd) |
 | V3 ↔ `GoalKind` routing | §1 table | **V3 intent.** Via `goal_kind_registry.gd` |
 | `ActiveGoal` schema | §2 | **V3 intent.** POST_LOS §3.1 fields; **replaces** scattered `MotorContext` goal keys |
 | Slow replan vs fast-path Flight/combat | §10 | **V3 intent.** Every tick bypass for acute response; `goal_replan_base_ticks` **8** (§10) |
 | Clear path = LoS (>80% blocked) + corridor sweep | §3 | **V3 intent.** Reuse **keep** `line_of_sight.gd`; squeeze skill-check **Deferred** (skills) |
-| Navmesh-first, detour fallback when blocked | §3 Seek cycle | **V3 intent.** Greenfield planner; `creature_motor_v3.detour_score_competition` optional |
+| Navmesh-first, detour fallback when blocked | §3 Seek cycle | **V3 intent.** Greenfield planner; **`tests/motor_path_fixture.gd`** for headless CI; duel manual smoke |
 | Unexplored = coarse/precise low object density | Definitions §9 | **V3 intent.** 50% area-of-awareness rule |
 | Approach-heading backtrack TTL (v1) | §3 Seek cycle | **V3 intent.** Reuse **keep** `blocked_approach_memory.gd`; no position stack v1 |
 | Dead-end memory — geographic + instance | §3, §8.4 | **V3 intent.** §5.6 + `_goal_belief` passibility; **6d** |
@@ -1121,22 +1240,24 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 | Mate vs Eat numerics | §1, §6.5 | **Deferred** with Mate goal |
 | `EAT` per-tick calorie = `STAY` | §7.5 | **V3 intent.** Net positive on completion |
 | Flight urgency (`gate_dist` + disposition) | §1, §6.3 | **V3 intent.** Far floor **0.5**; disposition **6d**; `relative_threat_mod` combat |
-| Tier-2 dominance — reuse `tier2_dominance.gd` | §1 | **V3 intent.** **Keep** module for eligibility + memory consult; **delete** per-tick `dom_leaf`, `goal_seek` filter |
+| Hub eligibility — `build_eligible_goals` (deprecate `tier2_dominance.gd`) | §1 | **V3 intent.** Hub-owned matrix; **delete** module at **6b** |
+| Trait stub — delete `trait_tier2_mapper.gd` | §1 | **V3 intent.** Hub `trait_*_mul` constants only; **delete** at **6b** |
+| V2 cleanup backlog | §15 | **Tracking** — close at **§12 step 11** |
 | Trait channels v1 stub (`trait_goal_mul` / `trait_tactic_mul` = 1.0) | §1 | **V3 intent.** Tactic style deferred; replay in **6d** |
 
 ---
 
 ## 12. Implementation phases
 
-1. **Kick off refactor**
-   - Create `Goal_Movement_RefactorV3` branch.
-   - Convert this file to `.md` and reformat.
-   - Retirement banners on superseded docs → `Completed_Features/`.
-   - `PROJECT_DOC_INDEX` row.
+1. **Kick off refactor** — **Step 1 closed 2026-06-20**
+   - [x] Create `Goal_Movement_RefactorV3` branch.
+   - [x] Convert this file to `.md` and reformat.
+   - [x] Retirement banners on superseded docs → `Completed_Features/`.
+   - [x] `PROJECT_DOC_INDEX` row.
 2. **Inventory (§12.1)** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
 3. Remove code per §12.1 dispositions; empty stubs where noted. **Sibling doc pass (same step):** execute **§12.3.1** + **§12.3.3** checklists; set matching **§13 Tracking** rows to **Done** when sibling files land. Adapter code remains **§12.2 6d**.
 4. Address linter errors.
-5. Run game — no creature movement expected; fix errors.
+5. Run game — **§12 Step 3–5 QA contract** below; no intelligent creature movement expected; fix **non-motor** launch/crash errors only.
 6. Implement code changes per **§12.2** sub-phases (**6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**); repeat 6–10 after each sub-phase closes.
 7. Address linter errors.
 8. Review code against design for gaps, inconsistencies, sibling-doc conflicts.
@@ -1147,7 +1268,24 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Sibling docs:** **§12.3** — four resolved checklists for [CREATURE_MEMORY.md](CREATURE_MEMORY.md) and [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md) (**§13 Tracking** at Step 3 / before **6d.3** closes).
 
-11. Clean up: Map all deferred features to [Enhancement_Backlog_Plan](../ENHANCEMENT_BACKLOG_PLAN.md), update[Creature_Movement](../Definitive_Features/CREATURE_MOVEMENT.md) to reflect all V3 changes, move this md file to C:\Users\mikea\Documents\Git_Proj\hunter-killer\Project_Docs\Completed_Features
+**Resolved — Step 3–5 QA contract (closes §14.4.4):** Intentional **motor teardown window** after Step 3 until **§12.2** sub-phases restore behavior. Maintainer/tester accepts anticipated limitations; **motor intelligence bugs deferred** to sub-phase checklists where movement is in scope — not triaged as regressions during Steps 3–5.
+
+| Phase | In scope (fix / assert) | Out of scope (expected broken — do not file) |
+|-------|-------------------------|---------------------------------------------|
+| **Step 3–5** | Project **compiles**; **linter clean**; duel / main scene **launches without crash**; non-motor systems sane (HUD, round flow, vitals drain if still wired); delete or disable V2 motor tests per §12.1 inventory — **`tests/run_all.gd` green for tests still in scope** | Creatures **not** seeking food, fleeing, remembering bushes; idle / `STAY` / stub motor; empty or stale motor debug overlays; “AI feels dumb” |
+| **6a** | §12.2 **6a** headless — facing-relative turn/move, `ActionOutcome.blocked`, calorie debit | Hub goals, pathing, live food |
+| **6b** | §12.2 **6b** headless — hub `STAY`, eligibility matrix, dual-stack isolation | Live locomotion toward objectives |
+| **6c+** | §12.2 **6c** manual smoke — **duel** LoS-visible seek; headless planner slices | Remembered food, memory tiers (**6d**) |
+
+**Step 5 pass criteria:** Launch duel (or main 3D entry), no crash, no error spam — **motor behavior assertions not required**. Creatures may stand still or emit stub actions indefinitely.
+
+**CI / tests:** Remove or skip V2 motor tests at Step 3 with inventory row — **do not** restore V2 seek/cardinal tests to green the branch. New headless gates attach **only** as each **6a→6d** sub-phase closes its checklist.
+
+**Manual duel smoke:** **Deferred until §12.2 6c** (14.2.7). Steps 3–5: optional “loads and runs” sanity only.
+
+**Bug policy:** Infrastructure failures (crash, failed load, broken round start, linter/CI red on in-scope tests) → fix in Steps 3–5. Missed motor logic → acceptable slip-through here; **caught when later sub-phases expect movement** (6a executor, 6c planner, 6d memory).
+
+11. Clean up: Map all deferred features to [Enhancement_Backlog_Plan](../ENHANCEMENT_BACKLOG_PLAN.md), update [Creature_Movement](../Definitive_Features/CREATURE_MOVEMENT.md) to reflect all V3 changes, move this md file to `Project_Docs/Completed_Features/`, and execute **§15 V2 cleanup backlog** — every row **done** or explicitly deferred to backlog with owner. Grep `creature/motor/` and `ai_driver.gd` for remaining V2 preloads (`cardinal_avoidance`, `MotorContext`, `creature_motor` reads in V3 paths) before promotion.
 
 ### 12.1 Step 2 inventory template
 
@@ -1162,7 +1300,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Config merge | `AI_int_lib/game_config_merge.gd` (`creature_motor`, future `creature_motor_v3`) |
 | Pack authoring | `assets/creatures/**/pack_resources.json` (`creature_motor` blocks) |
 | Body integration | `creature/creature_root_3d.gd`, `creature/capabilities/*.gd` (motor hooks) |
-| Tests | `tests/run_all.gd`, `tests/debug_motor_pick.gd` |
+| Tests | `tests/run_all.gd`, `tests/debug_motor_pick.gd`, `tests/motor_path_fixture.gd`, `tests/terrain_test_main_stub.gd` |
 | Debug / HUD | `creature/awareness_debug_overlay_3d.gd`, `hud.gd` (motor readouts only) |
 
 **Disposition values:**
@@ -1184,7 +1322,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | **Tests** | Per test: **delete** (V2-only), **port** (reuse under V3), or **replace** (new name TBD in Step 6) |
 | **V3 owner / notes** | Target module or § anchor; Step 6 sub-phase if blocked on adapter |
 
-**Alignment:** Inventory **adapter** rows must map to **§12.2 sub-phase 6d**. **delete** rows must have no remaining consumers after Step 3. **keep** rows typically land in **6a** (execution) or **6c** (planner).
+**Alignment:** Inventory **adapter** rows must map to **§12.2 sub-phase 6d**. **delete** rows must have no remaining consumers after Step 3 (or after the §15 **Target phase** column closes). **keep** rows typically land in **6a** (execution) or **6c** (planner). **Complete the table on branch** — seed rows below are not exhaustive; grep `creature/motor/**/*.gd` per §12 step 2 and register every file in **§15** until disposition is set.
 
 **Seed examples (illustrative — complete the table on branch):**
 
@@ -1199,9 +1337,34 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests | §12.2 **6d** — `_kind_profile` storage |
 | `creature/motor/line_of_sight.gd` | keep | planner consumers TBD | port LoS helpers | §12.2 **6c** |
 | `creature/motor/blocked_approach_memory.gd` | keep | `ai_driver.gd` | port: `_test_*` backtrack if behavior matches §3 | §12.2 **6c** |
-| `creature/motor/tier2_dominance.gd` | keep | V2 `ai_driver.gd`, `goal_seek.gd`, `trait_tier2_mapper.gd` | port: dominance + `preserve_find_food_seek_scale` tests | §12.2 **6b** hub eligibility + memory consult |
-| `creature/motor/trait_tier2_mapper.gd` | keep | V2 `ai_driver.gd` (telemetry only today) | port: stub zero-delta test | §12.2 **6b** — `trait_goal_mul` **1.0**; tactic style deferred |
-| `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d`, creature bodies, HUD | delete: escape-cardinal / V2 intent tests; keep registry smoke | §12.2 **6b** hub entry |
+| `creature/motor/tier2_dominance.gd` | delete | V2 `ai_driver.gd`, `goal_seek.gd`, `trait_tier2_mapper.gd` | delete: dominance + `preserve_find_food_seek_scale` tests; replace with hub eligibility + `urgency_eat` tests at **6b** | §12.2 **6b** — logic inlined in hub; module removed |
+| `creature/motor/trait_tier2_mapper.gd` | delete | V2 `ai_driver.gd` | delete: stub zero-delta test | §12.2 **6b** — hub `trait_*_mul` **1.0**; **§15** |
+| `creature/motor/motor_tactic_classifier.gd` | delete | V2 `ai_driver.gd`, `goal_source_memory.gd` | delete V2-only; salient writes use `SalientWriteContext` stub | §12.2 **6d.2** — **§15**; flags from outcome hooks |
+| `creature/motor/motor_target_builder.gd` | delete | V2 `ai_driver.gd`, `goal_seek.gd` | delete: `_test_motor_target_builder_*`; replace with zone builder tests **6c** | §12.2 **6c** greenfield §8.1 zone builder |
+| `creature/motor/believed_goal_sector.gd` | delete | cardinal, `goal_source_memory`, `blocked_approach_memory` | delete sector locomotion tests | §12.2 **6d** — path-in-direction only; **§15** |
+| `creature/motor/eight_way_directions.gd` | delete | cardinal, `seek_direction_turn.gd` | delete with cardinal | Step 3 / **§15** |
+| `creature/motor/creature_motor_stack.gd` (new) | keep | `creature_root_3d.gd`, `ai_driver` | replace: per-root tick + dual-stack isolation tests **6b** | §1 — hub/planner/adapter runtime per creature |
+| `creature/creature_root_3d.gd` | keep | duel spawn, `ai_driver` registry | port: motor stack child wiring **6b** | Owns stack; Body + Vitals refs |
+| `creature/motor/awareness_zone.gd` (new) | keep | planner, `awareness_zone_scan` | replace: zone geometry + LoS tests **6c** | §12.2 **6c** — §8.1 sphere + cone + LoS |
+| `creature/motor/awareness_zone_scan.gd` (new) | keep | planner | replace: live food/threat ingest tests **6c** | §12.2 **6c** — scene scan split from geometry |
+| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult tests | §12.2 **6d** — §8.4 façade; **sole** public memory I/O entry |
+| `creature/motor/salient_write_context.gd` (new, optional split) | keep | memory adapter, outcome hooks | replace: salient-write gate tests | §12.2 **6d.2** — **`SalientWriteContext`**; may co-locate in adapter file |
+| `tests/motor_path_fixture.gd` (new) | keep | `tests/run_all.gd`, `terrain_test_main_stub.gd` | replace: navmesh + blocked layout headless tests **6c** | §3 headless fixture — **not** duel boot |
+| `tests/terrain_test_main_stub.gd` | keep | `tests/run_all.gd` | extend: `get_navigation_map_rid()` delegate | §3 fixture hook |
+| `creature/motor/expanding_cardinal_explore.gd` | delete | `ai_driver.gd` | delete with cardinal tests | Step 3 / **§15** |
+| `creature/motor/no_goal_patrol_lock.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/seek_direction_commit.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/seek_direction_turn.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/seek_stationary_look.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/scripted_intent_hold.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/wall_slide_pick.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/motor_obstacle_strategy.gd` | delete | `ai_driver.gd`, cardinal | delete | Step 3 / **§15** |
+| `creature/motor/motor_obstacle_geometry.gd` | delete | `ai_driver.gd`, cardinal | port geometry helpers only if navmesh/detour needs | Step 3 / **§15** |
+| `creature/motor/terrain_motor.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `creature/motor/carnivore_pursuit.gd` | delete | TBD | deferred tests | **Deferred** combat — **§15** |
+| `creature/motor/seek_candidate.gd` | delete | `motor_target_builder.gd` | replace with V3 live-sample types **6c** | §12.2 **6c** |
+| `creature/motor/goal_visibility_latch.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
+| `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d`, creature bodies, HUD | delete: escape-cardinal / V2 intent tests; keep registry smoke | §12.2 **6b** hub entry; extract motor to `creature/motor/` — **§15** |
 | `AI_int_lib/ai_driver.gd` — `_mob_hist`, `_mob_ids_ever_observed`, `awareness_memory_*` ghost path | delete | `_motor_mobs_array`, overlay | delete: mob ghost / gated-live tests tied to ring buffer | Retired — §8.1 ghosts via **`_goal_belief`** adapter **6d** |
 | `AI_int_lib/game_config_merge.gd` | keep + extend | packs, tests | port profile tests to `creature_motor_v3` when wired | §12.2 **6a**+ (`creature_motor_v3`); drop unused **`awareness_memory_*`** defaults when inventory confirms |
 
@@ -1221,7 +1384,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Entry:** Step 3 stubs compile; `creature_motor_v3` merge block exists (calorie keys minimum).
 
-**In scope:** §7 — `Action` types, `apply_action`, facing (§7.3), calorie debit (§7.5), `ActionOutcome`, body integration (§7.4). Deprecate engine `set_creature_move_intent` / distance calorie on body.
+**In scope:** §7 — `Action` types, `apply_action`, facing (§7.3), calorie debit (§7.5), `ActionOutcome`, body integration (§7.4). Deprecate ENGINE `set_creature_move_intent` / distance calorie on body (§15 #14). Add **`creature_motor_v3`** merge in `game_config_merge.gd` + **one-shot copy** duel `creature_motor` → `creature_motor_v3` (§12.2 pack migration <<Comment>>); **`OLog`** guard if V3 path reads legacy `creature_motor` (§15 #9).
 
 **Out of scope:** Goal table, pathing, memory, Flight/Rest flows.
 
@@ -1249,7 +1412,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Entry:** 6a acceptance closed.
 
-**In scope:** §1 hub entry (including **`trait_goal_mul = 1.0`** stub), §10 cadence shell, `ActiveGoal` table, empty-table → `STAY` (§7.2), wire `ai_driver` tick: **hub → executor → body** (§7.4). Flight fast-path **stub** (flag only). **`tier2_dominance.gd`** eligibility + consult (§1). **Flight urgency geometry** ships in 6b; **`threat_disposition_mod`** stubbed **1.0** until **6d**. **§1 goal scoring closed** — remaining §13 **Open** rows addressed before Step 1 kickoff.
+**In scope:** §1 hub entry (including **`trait_goal_mul = 1.0`** / **`trait_tactic_mul = 1.0`** — no `trait_tier2_mapper`), §10 cadence shell, `ActiveGoal` table, empty-table → `STAY` (§7.2), wire **`CreatureRoot3D` → `creature_motor_stack.tick()`** (§1, §7.4); `ai_driver` iterates roots only. Flight fast-path **stub** (flag only). Hub **`build_eligible_goals`** + eligibility matrix (§1); **delete** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) and [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd). **Flight urgency geometry** ships in 6b; **`threat_disposition_mod`** stubbed **1.0** until **6d**. **`creature_motor_v3`** merge wired — V3 paths **must not** read legacy **`creature_motor`** (§15). **§1 goal scoring closed** (§13).
 
 **Out of scope:** Movement toward objectives, memory tiers, full Rest/Flight/Mate (§6), **`replay_weight`** / trait tactic style (§6d / deferred).
 
@@ -1267,9 +1430,11 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Entry | 6a closed |
 | Headless **required** | Hub entry returns exactly one `Action`/call; empty table → `STAY` |
 | Headless **required** | Consideration cadence advances on tick count (§10 formula or stub `n`) |
+| Headless **required** | Hub eligibility matrix (§1): starvation → Eat-only; sub-acute Flight competes on `weight`; port tier2 parity cases from `tests/run_all.gd` |
+| Headless **required** | Dual-root fixture — two `creature_motor_stack` instances return distinct actions; no cross-creature state bleed (§1) |
 | Manual **smoke** | Duel creatures idle (`STAY`); no crash; calories drain at baseline |
-| Inventory | `ai_driver` motor pipeline **stub → replace** with hub call |
-| Blocker note | §13 **Open** rows (non-§1) must be **Closed** or **Deferred** before Step 1 kickoff — see §13 |
+| Inventory | `ai_driver` motor pipeline **stub → replace** with root **`motor_stack.tick()`** loop; **`tier2_dominance.gd`** + **`trait_tier2_mapper.gd` deleted**; **`creature_motor_stack.gd`** + **`creature_root_3d.gd`** wiring |
+| Blocker note | §13 spec-complete — all rows **Closed**, **Deferred**, or **Tracking** (see §13) |
 
 ---
 
@@ -1277,7 +1442,9 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Entry:** 6b acceptance closed.
 
-**In scope:** §3 movement + seek trees, §8.1 **live** zone / movement weighing (objective **in awareness** with LoS). Reuse **keep** utility [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd); **greenfield** §8.1 zone builder (sphere + cone + LoS). Also reuse `blocked_approach_memory.gd`, navmesh detour (§3). **Live targets only** — **no occluded-in-zone ghosts**, no `_goal_belief` / `LocalePriorMap` / kind EWMA writes. **§6.2:** awareness ingest includes **`stimulus_kind_id`**; live food ranking uses kind consult with **neutral** priors.
+**In scope:** §3 movement + seek trees, §8.1 **live** zone / movement weighing (objective **in awareness** with LoS). **Greenfield** §8.1 zone builder (sphere + cone + LoS) — **not** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) diet forks. Reuse **keep** [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd), [`threat_sample.gd`](../../creature/motor/threat_sample.gd), `blocked_approach_memory.gd`, navmesh detour (§3). **Delete** `motor_target_builder.gd`, `seek_candidate.gd` when zone builder lands. **Live targets only** — **no occluded-in-zone ghosts**, no `_goal_belief` / `LocalePriorMap` / kind EWMA writes. **§6.2:** awareness ingest includes **`stimulus_kind_id`**; live food ranking uses kind consult with **neutral** priors. **Headless:** ship [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) at **6c slice 1** (§3 fixture contract).
+
+**Resolved — adopt `awareness_zone.gd`** for sphere + cone + LoS geometry (§8.1). **Split live ingest:** food/threat scene scan in a separate module — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) — so geometry stays stable as scan logic grows. Planner imports both; zone builder owns geometry only. Inventory at **6c** slice 1.
 
 **Out of scope:** Precise/coarse remembered targets (§8.2–8.3), locale prior hotspots, §9 blocked-objective memory layers, Rest phase machine, full Flight exit, **Find shelter** belief tiers (§6.4 → **6d**).
 
@@ -1297,8 +1464,9 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | Live target fixture → planner emits turn/move sequence toward objective |
 | Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) |
 | Headless **required** | Seek when no live objective (no memory consult) |
+| Headless **required** | §3 **motor_path_fixture** — valid `map_rid` + nav path assert before navmesh-first slices; **`build_blocked`** for backtrack slice |
 | Manual **smoke** | Duel creature seeks **LoS-visible** shrub; pursuit movement plausible with live prey in zone only |
-| Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; planner modules added per §3 |
+| Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; **`motor_target_builder.gd`** **delete**d; **`awareness_zone.gd`** + **`awareness_zone_scan.gd`** + planner added per §3; **`tests/motor_path_fixture.gd`** added |
 | Out of scope | Remembered food, coarse bearing, §9 exceptions, **occluded-in-zone ghosts** |
 
 ---
@@ -1309,7 +1477,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Why three sub-phases:** **6d.1** validates **read-only** consult (remembered seek) without write-side or ghost coupling. **6d.2** adds **learning writes**, §9 exceptions, and kind EWMA — depends on stable reads from **6d.1**. **6d.3** adds **occluded-in-zone ghosts**, disposition, and shelter beliefs — highest coupling to Safety / Flight / `REST`; needs kind threat plumbing from **6d.2**. After **each** sub-phase closes, run §12 steps **6–10** before starting the next.
 
-**Shared scope (lands across 6d.1–6d.3):** §8.4 adapter API (no V2 `MotorContext` merge). **Retire** legacy **`_mob_hist`** / **`awareness_memory_*`** mob ghost path by **6d.3**. **`sector_weights` locomotion** retired (§8.3). Trait tactic style deferred; **`replay_weight`** consult only.
+**Shared scope (lands across 6d.1–6d.3):** §8.4 **memory adapter** façade — [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) only public entry (§8.4 Option A); no V2 `MotorContext` merge. **Retire** legacy **`_mob_hist`** / **`awareness_memory_*`** mob ghost path by **6d.3**. **`sector_weights` locomotion** retired (§8.3); stop calling `believed_goal_sector` from adapter. **Delete** [`motor_tactic_classifier.gd`](../../creature/motor/motor_tactic_classifier.gd); salient writes use **`SalientWriteContext`** at outcome time (§12.3.4). Trait tactic style deferred; **`replay_weight`** consult only. V2 projection methods on `goal_*_memory` — **no V3 callers** after adapter lands; **delete** dead methods at **§12 step 11** (**§15** #7).
 
 ---
 
@@ -1334,7 +1502,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | Coarse tier → bearing-only locomotion (not GPS `ultimate_pos`) |
 | Headless **required** | Locale prior row → seek bias / alternate target ranking |
 | Manual **smoke** | Duel remembered-food seek (beliefs seeded or observed earlier in session) |
-| Inventory | `goal_belief_memory`, `goal_source_memory` adapter **read** paths wired |
+| Inventory | [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) read paths wired; hub/planner import adapter only — storage via internal delegates |
 | Out of scope | Writes, §9 exception layers, ghosts, disposition |
 
 **After close:** §12 steps **6–10**; then **6d.2**.
@@ -1383,7 +1551,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 **Vertical slices:**
 
 7. **Flight disposition + kind threat** — benign-exposure vs evade nudges to `threat_disposition_mod`; `kind_threat` on samples (§1).
-8. **Occluded-in-zone ghosts** — threat ghosts affect Safety / Flight / REST; live-wins dedupe; mover reach cap; static non-threat zone-only expiry (§8.1).
+8. **Occluded-in-zone ghosts** — **`danger_filter`** + shelter / food consults (§8.1, §8.4); threat ghosts affect Safety / Flight / REST; live-wins dedupe; mover reach cap; static non-threat zone-only expiry.
 
 **Acceptance checklist:**
 
@@ -1402,7 +1570,9 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Resolved — config namespace (`creature_motor_v3`):** All V3 movement, planner, locomotion, and exception tuning keys live in a **new** pack-root inline object **`creature_motor_v3`** (same authoring pattern as V2 `creature_motor`, **separate merge block**). V3 runtime **does not** merge or alias legacy **`creature_motor`**, V2 **`MotorContext`** key names, or POST_LOS-prefixed motor keys — greenfield modules read **`creature_motor_v3` only** so old cardinal / tier-2 paths are not implied dependencies.
 
-- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency band keys + **Flight urgency / disposition / `kind_threat` clamp keys**, §8.1 **`awareness_radius` / `awareness_cone_extra` / `awareness_cone_half_angle_deg` / `los_eye_height` / `los_blocked_occlusion_fraction` / `awareness_requires_los`**, §6.1 **`safe_site_*`** rest-site scoring keys, §9 **`blocked_objective_chaos`** (ship default **0.15**), §10 **`goal_replan_base_ticks`** (ship default **8**) + **`goal_consideration_chaos`** (ship default **0.15**), §7 **`turn_increment_deg`** (ship **22.5**) + per-action **`action_max_distance`** (EAT ship **5**), §6.2 **`unknown_kind_multiplier`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent).
+**Resolved — one-shot copy at 6a.** Copy duel `creature_motor` → `creature_motor_v3` in the same commit that wires V3 merge; **do not** dual-author both blocks during transition. V3 runtime reads **`creature_motor_v3` only**. Legacy `creature_motor` may remain in packs for archived V2 tests until **§12 step 11**, then **remove** legacy blocks entirely. At **6a**, add an **`OLog`** guard (e.g. warn once if any V3 code path reads legacy `creature_motor` keys) to catch stray reads while debugging mid-transition behavior.
+
+- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency band keys + **Flight urgency / disposition / `kind_threat` clamp keys** + **`flight_acute_panic_radius`**, §8.1 **`awareness_radius` / `awareness_cone_extra` / `awareness_cone_half_angle_deg` / `los_eye_height` / `los_blocked_occlusion_fraction` / `awareness_requires_los`**, §6.1 **`safe_site_*`** rest-site scoring keys, §9 **`blocked_objective_chaos`** (ship default **0.15**), §10 **`goal_replan_base_ticks`** (ship default **8**) + **`goal_consideration_chaos`** (ship default **0.15**), §7 **`turn_increment_deg`** (ship **22.5**) + per-action **`action_max_distance`** (EAT ship **5**), §6.2 **`unknown_kind_multiplier`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent).
 - **Memory storage keys** (`goal_*`, `believed_goal_*`, **`kind_profile_*`** — [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)) remain the **MEMORY sibling** contract for belief / locale-prior / **kind-profile** **storage and TTL**; V3 consumes them through the **memory adapter** (§8.4) in **§12.2 6d**, not by reusing V2 motor merge codepaths or V2 pack motor weights.
 
 ### 12.3 Sibling doc rework (single-pass checklists)
@@ -1444,7 +1614,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 - **§5.4 Re-awareness:** zone definition = **V3 §8.1** (sphere ∪ eye-anchored 3D cone + **mandatory LoS**); cross-link **CREATURE_MOVEMENT_V3 §8.1**, not **CREATURE_MOVEMENT_V2 §E.1** alone.
 - **§5.5 `_goal_belief`:**
   - **`last_world_pos` / `last_velocity`:** document **`Vector3`** façade (world units); note 2D projection at ingest boundary if code still uses plane helpers.
-  - **Occluded-in-zone ghosts (Option A):** add subsection mirroring V3 §8.1 — threat ghosts → danger consumers; non-threat zone-only expiry; mover **reach cap**; **`ghost_strength`**; intercept hint `last_world_pos + last_velocity × goal_memory_ghost_horizon_sec` for pursuit geometry only.
+  - **Occluded-in-zone ghosts (Option A):** add subsection mirroring V3 §8.1 + **§8.4 consult filters** — one projector, **`danger_filter`**, **`consult_shelter_beliefs`**; mover **reach cap**; **`ghost_strength`**; intercept hint `last_world_pos + last_velocity × goal_memory_ghost_horizon_sec` for pursuit geometry only.
   - **Retire narrative:** `_mob_hist`, `awareness_memory_*`, ring-buffer mob ghosts — superseded by **`_goal_belief`** ghost projection (**6d** code).
   - **Phase E “Motor merge shape (Q4)”:** mark **superseded** — no `SeekCandidate` / `pursuit_targets` merge from memory; V3 adapter returns consult records for planner. Keep **storage fields** (`is_moving`, `last_velocity`, etc.).
 - **§5.5 functions** (`_goal_belief_sync_from_scene`, `_goal_belief_maintain`): remove steps that call **`project_believed_goal_bias`** or increment **sector_weights**; point to **adapter** ownership (V3 §8.4 write table). **LRU at cap:** **lowest `last_observed_ms`** (§8.4); do not reference **`merge_use_count`**.
@@ -1456,7 +1626,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 **§8.4 Planner consumption:**
 
-- Confirm read/write tables match **V3 §8.4** (including **occluded-in-zone ghost** consult row).
+- Confirm read/write tables match **V3 §8.4** (including **occluded-in-zone ghost consult filters** — **`danger_filter`**, **`consult_shelter_beliefs`**, **`consult_danger_samples`**).
 - **6c / 6d phasing** rows: match V3 §8.4 “6c stubs” bullet.
 
 **§10 Config (Step 3 slice only):**
@@ -1506,7 +1676,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 **§2 Motivation tree:**
 
-- Intro: remove “costs in the **cardinal scorer**” as the **implementation** anchor; keep tree as **semantic** priority model; integration = **V3 hub consideration** + **`tier2_dominance.gd`** eligibility ([CREATURE_MOVEMENT_V3 §1](CREATURE_MOVEMENT_V3)).
+- Intro: remove “costs in the **cardinal scorer**” as the **implementation** anchor; keep tree as **semantic** priority model; integration = **V3 hub consideration** + hub **`build_eligible_goals`** (§1) — **not** `tier2_dominance.gd` ([CREATURE_MOVEMENT_V3 §1](CREATURE_MOVEMENT_V3)).
 - **§2 table “Implemented today”:** replace V2 bullets (`SeekCandidate`, patrol lock, cardinal explore, **§E.1** without LoS) with **V3 v1 snapshot** — hub goals (Eat, Flight, Rest, Find shelter), consideration cadence (§10), Flight fast-path, **`goal_kind_registry`**, live ingest = V3 §8.1 zone + LoS. Mark prey chase / carnivore pursuit **deferred** unless already shipped elsewhere.
 - **Jeopardy / starvation:** keep numeric cross-refs but cite **`creature_motor_v3`** keys (`starvation_override_food_ceiling`, etc.) aligned with V3 §1.
 
@@ -1537,14 +1707,16 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 **§5.1.1 Salient episode emitter:**
 
 - **Caller:** V3 outcome hooks (Eat complete, Flight exit, Find shelter probe, etc.) — not `ai_driver._build_motor_context`.
-- **Replace `MotorContext` parameter** with **`SalientWriteContext`** (name TBD in code) carrying:
+- **Replace `MotorContext` parameter** with **`SalientWriteContext`** ([§8.4](CREATURE_MOVEMENT_V3)) carrying:
   - active **`GoalKind`** wire id,
   - dominant Tier-2 at outcome (for write gates),
   - **tactic classifier flags** (below) — optional stub `{}` until tactic style lands,
   - food-anchor **`Vector3`** (or plane projection),
   - merged **`creature_motor_v3`** (or global config slice) for gate thresholds,
   - per-instance allowlists unchanged.
-- **Tactic classifier flags (phase 1):** preserve **GOAL_DRIVERS §5.1.1 flag ids** (`tactic_jeopardy_egress`, `hide_hold_still`, …) but document **producer** = V3 planner/hub snapshot struct, **not** `motor_tactic_classifier.gd` on `MotorContext`. Until detectors ship: **`tactic_classifier_active = false`** → default modality inference per `GoalKind` (existing table).
+- **Tactic classifier flags (phase 1):** preserve **GOAL_DRIVERS §5.1.1 flag ids** (`tactic_jeopardy_egress`, `hide_hold_still`, …) but document **producer** = V3 planner/hub **`SalientWriteContext`** snapshot at outcome time, **not** [`motor_tactic_classifier.gd`](../../creature/motor/motor_tactic_classifier.gd) on `MotorContext`. Until detectors ship: **`tactic_classifier_active = false`** → default modality inference per `GoalKind` (existing table). **Delete** `motor_tactic_classifier.gd` at **6d.2** (**§15**).
+
+**Resolved — defer through V3 v1.** Ship **`tactic_classifier_active = false`** and empty tactic-flag map on **`SalientWriteContext`** at **6d.2**; salient writes use default modality inference per `GoalKind` (GOAL_DRIVERS §5.1.1 table). **Do not** reimplement squeeze/hide corridor detectors in planner or hub for v1. Post–V3: revisit navmesh-corridor squeeze + hide-viable detectors when tactic style lands ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — post–V3 trait tactic modulator).
 - **`emitter_knows_modality`:** redefine as **`SalientWriteContext.tactic_classifier_active`** (same semantics).
 - Delete “Cardinal / motor code may set **`MotorContext`** tactic flags” — **planner / hub** sets context at outcome time only.
 
@@ -1569,8 +1741,9 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Goal scoring — Flight urgency | §1, §6.3 | — | **Closed** |
 | Goal scoring — Rest weights | §1 | — | **Closed** |
 | Goal scoring — Mate vs Eat | §1, §6.5 | No | **Deferred** |
-| Goal scoring — Tier-2 dominance wire | §1 | — | **Closed** |
-| Goal scoring — trait channels v1 | §1 | — | **Closed** |
+| Goal scoring — hub eligibility (single control plane) | §1 | — | **Closed** |
+| Goal scoring — trait channels v1 | §1, §15 #2 | — | **Closed** — delete `trait_tier2_mapper` at **6b** |
+| Post–V3 trait tactic modulator | §1, [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) | No | **Deferred** — post–V3 v1; module vs config keys |
 | Dead-end geographic memory schema | §3 | — | **Closed** |
 | Safe location signal weights | §6.1 | — | **Closed** |
 | Eat — kind vs instance ingest + adapter | §6.2, §8.4 | — | **Closed** |
@@ -1580,6 +1753,16 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Awareness sphere + 3D cone + LoS | §8.1 | — | **Closed** |
 | Ghost mapping contract | §8.1 | — | **Closed** |
 | MEMORY adapter vs storage split | §8.4 | — | **Closed** |
+| Memory adapter façade — `memory_adapter.gd` + `SalientWriteContext` | §8.4 | — | **Closed** — Option A; hub/planner import adapter only |
+| V2 projection method delete policy | §8.4 | — | **Closed** — delete at §12 step 11 when grep clean; no `@deprecated` stubs |
+| Zone builder — `awareness_zone.gd` + scan split | §12.2 **6c** <<Comment>> | — | **Closed** |
+| Pack `creature_motor` → `creature_motor_v3` migration | §12.2 <<Comment>> | — | **Closed** — one-shot copy at **6a**; `OLog` guard; remove legacy at step 11 |
+| Squeeze/hide tactic flags (v1) | §12.3.4 <<Comment>> | — | **Closed** — `tactic_classifier_active = false` through v1 |
+| `ai_driver` extraction boundary | §15.3 <<Comment>> | — | **Closed** — thin façade; **`creature_motor_stack`** per root |
+| Per-creature motor stack ownership | §1 | — | **Closed** — `creature_motor_stack.gd` on `CreatureRoot3D`; closes §14.2.5 |
+| Step 3–5 QA contract (expected broken motor) | §12 | — | **Closed** — launch/no-crash only; motor bugs deferred to **6a→6d** |
+| Flight acute panic radius key | §1 | — | **Closed** — `flight_acute_panic_radius` default **220.0** |
+| Headless path fixture (navmesh + LoS scope) | §3 | — | **Closed** — `tests/motor_path_fixture.gd`; duel = manual only |
 | `blocked_objective_chaos` default | §9 | — | **Closed** |
 | `goal_replan_base_ticks` default | §10 | — | **Closed** |
 | §11 POST_LOS row re-validation | §11 | — | **Closed** |
@@ -1588,22 +1771,11 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | MEMORY sibling sync (6d) | §12.3.2 | 6d.3 | **Tracking** — apply before 6d.3 acceptance closes |
 | GOAL_DRIVERS sibling sync (Step 3) | §12.3.3 | Step 3 | **Tracking** — apply checklist when executing §12 step 3 |
 | GOAL_DRIVERS sibling sync (6d) | §12.3.4 | 6d.3 | **Tracking** — apply before 6d.3 acceptance closes |
-| Locomotion / executor contract | §7 | — | **Closed** |
-| Past experience + chaos namespace | §9 | — | **Closed** |
-| Coarse path-in-direction | §8.3 | — | **Closed** |
-| Step 2 inventory template | §12.1 | — | **Closed** |
-| Step 6 sub-phases | §12.2 | — | **Closed** (6a→6c→6d.1→6d.2→6d.3) |
-| LoS blocked threshold (80% unified) | §3, §8.1 | — | **Closed** |
-| `action_max_distance` + facing alignment | §7.2–7.3, Definitions §4–5 | — | **Closed** |
-| `goal_consideration_chaos` default | §10 | — | **Closed** |
-| `stimulus_kind_id` spawn gate | §6.2 | — | **Closed** |
-| Path-following algorithm (facing-relative) | §3 | — | **Closed** |
-| Flight / `safety_time` during fast-path | §1, §6.3, §10 | — | **Closed** |
-| Pending Safety timing (`safety_time × n`) | §1, §6.1 | — | **Closed** |
-| 6d memory adapter sub-phases | §12.2 | — | **Closed** |
+| §15 V2 cleanup backlog | §15 | §12 step 11 | **Tracking** — all rows **done** or backlog-deferred before promotion |
+| Shared `_goal_belief` consult filters | §8.4 | — | **Closed** |
 | Config namespace `creature_motor_v3` | §12 | — | **Closed** |
 | Headless / playtest gates | §12.2 | — | **Closed** (per sub-phase) |
-| Doc promotion (.md, index, archive V2) | header, §12 step 1 | No | **Deferred** (process) |
+| Doc promotion (`.md`, index, archive V2) | §12 step 1 | No | **Closed** — Step 1 **2026-06-20** |
 | Human control cadence | §7.6 | No | **Deferred** |
 | Mate goal flow | §6.5 | No | **Deferred** |
 | Fight goal flow | §6.6 | No | **Deferred** |
@@ -1615,7 +1787,66 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Flight `relative_threat_mod` (opponent matchup) | §1, §6.6 | No | **Deferred** |
 | Trait tactic style (implementation) | §1 | No | **Deferred** |
 
-**Recently closed (architecture):** **`_goal_belief` LRU** (`merge_use_count` / `last_merged_ms` deprecated; **`last_observed_ms`** eviction at cap), **§12.3 sibling sync checklists** (resolved — no open design questions; **Tracking** until applied), **`blocked_objective_chaos` default 0.15**, **`goal_replan_base_ticks` default 8**, **§11 POST_LOS ledger audit** (all rows V3 intent-only; Step 3 delete/stub/keep/adapter table), hub entry contract, `GoalKind` routing, step/objective/action definitions, `ActiveGoal` schema, goal scoring **formula shape** (§1), **per-goal `base` keys + ship defaults**, **`goal_feasibility_floor_*` epsilon defaults**, **Eat urgency V2 calorie bands**, **Flight urgency** (`gate_dist` curve, far floor **0.5**, **`kind_threat` × `threat_disposition_mod`** — **6d** wiring), **Tier-2 dominance reuse** (`tier2_dominance.gd` — consideration eligibility + memory consult), **trait channels v1 stub** (`trait_goal_mul` / `trait_tactic_mul` **1.0**; tactic style deferred), **Rest loses 80–95% band** (wound urgency deferred), **`EAT` per-tick cost = `STAY`**, **Find shelter** hub (`shelter` wire id, `goal_base_shelter`, `food_map_confidence` effective base, eligibility, Flight suppression + flee consume), clear-path + multistep + backtrack, unexplored contract, secondary objectives, outcome hooks, **safe location scoring** (`safe_site_weight_*` **0.70 / 0.20 / 0.10**, squeeze anti-double-count, Safety state hard gate), Flight exit + table freeze + **believed shelter in flee**, Observation → n **curve**, incumbent between replans, coarse expiry split, coarse path-in-direction + cross-instance rules, MOVE turn-only semantics, execution-first build order, locomotion owner, executor `Action`-only contract, per-action calorie anchor (MOVE/STAY/REST/EAT), physics failure → beliefs, `STAY`/`REST` phase machine, §9 **three** memory layers (locale + instance + kind), `creature_motor_v3` namespace, §12.1 inventory, §12.2 sub-phases, **dead-end memory three-way split** (backtrack / geographic §5.6 / instance passibility), **MEMORY adapter read-write API** (§8.4), dead-end config defaults (`dead_end_*`, `passibility_fail_switch_threshold`), **Eat kind vs instance memory** (`stimulus_kind_id`, `record_observation`, learn-topic registry §5.7, neutral unseen, `unknown_kind_multiplier` **1.0**), **§8.1 awareness** (sphere ∪ eye-anchored 3D cone, mandatory LoS, `creature_motor_v3` keys, diet/posture forks retired), **§8.1 occluded-in-zone ghosts** (`_goal_belief` Option A, threat danger yes, mover reach cap A, static non-threat zone-only, 6c none / 6d full, retire `_mob_hist`).
+---
+
+## 15. V2 cleanup backlog (reduce cruft)
+
+**Purpose:** Single register of V1/V2 motor dependencies to retire so V3 stays on one control plane (same pattern as §1 **`tier2_dominance.gd` delete**). **Close every row** at **§12 step 11** before promoting this doc to `Completed_Features/`. Update **§12.1** inventory when disposition changes.
+
+**Status legend:** `pending` = not started | `in_progress` = sub-phase active | `done` = deleted or V3 replacement shipped | `deferred` = explicit backlog entry required
+
+**Difficulty:** **Low** = small module / few callers | **Medium** = critical-path or cross-module | **High** = architectural boundary
+
+### 15.1 Cleanup candidates
+
+| # | Module / concern | Action | Target phase | Difficulty | Why |
+|---|------------------|--------|--------------|------------|-----|
+| 1 | [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) | **delete** — logic in hub `build_eligible_goals` | **6b** | Low | ~50-line if-ladder; dual control with hub weights (§1) |
+| 2 | [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) | **delete** — hub `trait_*_mul = 1.0` | **6b** | Low | Stub; maps `dom_leaf` → channels; no v1 behavior |
+| 3 | [`motor_tactic_classifier.gd`](../../creature/motor/motor_tactic_classifier.gd) | **delete** — `SalientWriteContext` at outcomes | **6d.2** | Medium | `MotorContext` coupling; preload of cardinal for squeeze |
+| 4 | [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) | **delete** — greenfield §8.1 zone builder | **6c** | Medium | Cardinal + diet forks; on live-ingest critical path |
+| 5 | [`seek_candidate.gd`](../../creature/motor/seek_candidate.gd) | **delete** — V3 live-sample types in zone builder | **6c** | Low | Data shape tied to deleted builder |
+| 6 | [`believed_goal_sector.gd`](../../creature/motor/believed_goal_sector.gd) + [`eight_way_directions.gd`](../../creature/motor/eight_way_directions.gd) | **delete** locomotion use | **6d** | Low–Med | §8.3 path-in-direction replaces `sector_weights` |
+| 7 | `goal_belief_memory` / `goal_source_memory` V2 **projection API** | **delete** dead projection/merge methods — storage kept | **6d** → **step 11** | Med–High | Façade = `memory_adapter.gd` (§8.4); **delete** V2 API at step 11 when grep clean — no `@deprecated` stubs |
+| 8 | [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) + eight-way stack | **delete** | Step 3 | Low | Already §12.1; largest V2 surface |
+| 9 | **`creature_motor`** config namespace | **ban** V3 reads; packs add **`creature_motor_v3`**; **remove** legacy block at **§12 step 11** | **6a**+ | Medium | One-shot copy at **6a**; `OLog` guard on stray V3 reads; no dual-author |
+| 10 | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) motor pipeline | **thin loop** — iterate roots, call `motor_stack.tick()` | **6b** | High | No `_…_by_body` motor state on driver; stacks on root (§1) |
+| 11 | `_mob_hist` / **`awareness_memory_*`** | **delete** | Step 3 → **6d.3** | Low | Replaced by `_goal_belief` ghosts (§8.1) |
+| 12 | Cardinal satellites (`expanding_cardinal_explore`, `no_goal_patrol_lock`, `seek_direction_*`, `scripted_intent_hold`, `wall_slide_pick`, `motor_obstacle_*`, `terrain_motor`, `goal_visibility_latch`) | **delete** with Step 3 / cardinal | Step 3 | Low | No V3 consumer after `ai_driver` stub |
+| 13 | [`goal_seek.gd`](../../creature/motor/goal_seek.gd), [`seek_planner.gd`](../../creature/motor/seek_planner.gd) | **delete** | Step 3 / **6c** | Low | V2 seek; replaced by hub + planner |
+| 14 | Body [`set_creature_move_intent`](../../creature/capabilities/creature_kinematic_body_3d.gd) ENGINE path | **deprecate** for ENGINE — `apply_action` only | **6a** | Medium | Human adapter may keep intent path |
+| 15 | [`carnivore_pursuit.gd`](../../creature/motor/carnivore_pursuit.gd) | **delete** or backlog-isolate | **Deferred** | Low | Combat deferred (14.2.9) |
+
+### 15.2 Keep (not cleanup targets)
+
+| Module | Role |
+|--------|------|
+| [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd) | Pure LoS utility (§3, §8.1) |
+| [`threat_sample.gd`](../../creature/motor/threat_sample.gd) | Shared threat shape (§1 Flight, ingest) |
+| [`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) | Backtrack TTL (§3) |
+| [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) **`parent_tier2`** | Memory taxonomy — not tick dominance |
+| [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) (new) | §8.4 façade — **only** public entry for hub/planner memory I/O |
+| [`salient_write_context.gd`](../../creature/motor/salient_write_context.gd) (new, optional split) | **`SalientWriteContext`** write-side payload — §12.3.4 |
+| [`awareness_zone.gd`](../../creature/motor/awareness_zone.gd) (new) | §8.1 zone geometry + LoS — not live scan |
+| [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) (new) | Live food/threat scene scan — split from geometry |
+| [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) (new) | Per-creature hub + planner + adapter runtime — **`tick()`** entry |
+
+### 15.3 Open decisions (<<Question>> index)
+
+| Topic | Where decided | Blocks |
+|-------|---------------|--------|
+| Post–V3 trait modulator (module vs config keys) | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) | Post–V3 v1 — **deferred** |
+| Squeeze/hide tactic detectors (post–v1) | §12.3.4 <<Comment>> | Post–V3 v1 — **deferred** |
+
+**Resolved — `ai_driver` extraction (§15.3):** **Keep in `AI_int_lib/ai_driver.gd`:** LLM round loop, pack/creature registry, perception snippets for AI, HUD/debug telemetry hooks, **root registration + tick loop**. **Live on each [`CreatureRoot3D`](../../creature/creature_root_3d.gd):** [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) — hub, planner state, memory adapter delegate, orchestrates shared utils (`awareness_zone.gd`, executor). **`ai_driver`** calls **`root.motor_stack.tick()`** per ENGINE subject — **no** motor state dictionaries on the driver. Confirm wiring at **6b**.
+
+### 15.4 Acceptance (§12 step 11)
+
+- [ ] Every **§15.1** row **`done`** or **`deferred`** with [ENHANCEMENT_BACKLOG_PLAN](../ENHANCEMENT_BACKLOG_PLAN.md) entry
+- [ ] `grep` / inventory: no V3 code preloads **`cardinal_avoidance`**, **`tier2_dominance`**, **`trait_tier2_mapper`**, **`motor_tactic_classifier`**, **`motor_target_builder`**
+- [ ] No V3 runtime read of **`creature_motor`** keys; legacy pack blocks **removed** (V2 tests migrated or removed)
+- [ ] **`goal_*_memory`** V2 projection/merge methods **deleted** — grep confirms zero callers (V3 adapter + V2 tests migrated/removed); no `@deprecated` stubs
+- [ ] **§12.1** inventory complete — every `creature/motor/**/*.gd` row filled
 
 ---
 
@@ -1630,26 +1861,26 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | 14.1.1 | **Facing-relative + one action/tick** — up to **8** turn ticks for 180° before `MOVE_FORWARD` (§7.3); threats close every tick. | `accepted` | Product bet vs V2 single-tick cardinal pick |
-| 14.1.2 | **Dual control on goals** — hub `weight` scoring (§1) **and** `tier2_dominance.gd` eligibility + acute overrides. | `open` | Follow up in chat |
+| 14.1.2 | **Dual control on goals** — hub `weight` scoring (§1) **and** `tier2_dominance.gd` eligibility + acute overrides. | `done` | §1 — hub **`build_eligible_goals`**; **delete** `tier2_dominance.gd` at **6b** |
 | 14.1.3 | **`safety_time` in consideration cycles**, not physics time. | `accepted` | §1, §6.1, §10 — intentional |
 | 14.1.4 | **6d scope** — split into reviewable sub-phases. | `done` | §12.2 **6d.1 → 6d.2 → 6d.3** |
 | 14.1.5 | **Traits stubbed** but **replay** ships at **6d** — habitual via locale priors first. | `accepted` | §1 — intentional v1 |
-| 14.1.6 | **File still extensionless** — promotion to `.md` + index deferred. | `deferred` | §12 step 1 |
+| 14.1.6 | **File promotion to `.md` + index** | `done` | §12 step 1 — **2026-06-20** |
 
 ### 14.2 Unconfirmed assumptions
 
 | # | Assumption | Risk if wrong | Status |
 |---|------------|---------------|--------|
-| 14.2.1 | Every species pack gets **`creature_motor_v3`** merge block at **6a** | Wrong / missing keys at runtime | `open` — chat |
+| 14.2.1 | Every species pack gets **`creature_motor_v3`** merge block at **6a** | Wrong / missing keys at runtime | `done` — §12.2 pack migration <<Comment>>; one-shot copy + `OLog` guard |
 | 14.2.2 | **`stimulus_kind_id`** required on food spawn (§6.2) | Kind ranking / EWMA noop | `done` |
-| 14.2.3 | **Navmesh RID valid** in duel + headless (§3) | 6c CI slices fail without fixtures | `open` — chat |
+| 14.2.3 | **Navmesh RID valid** in duel + headless (§3) | 6c CI slices fail without fixtures | `done` — §3 minimal **`motor_path_fixture`**; duel navmesh unchanged |
 | 14.2.4 | **`stat_observation` clamp min 10** until pools land (§10) | Same replan cadence early | `accepted` |
-| 14.2.5 | Hub **“no explicit parameters”** reads correct per-body state | Wrong creature / stale awareness | `open` — chat |
+| 14.2.5 | Hub **“no explicit parameters”** reads correct per-body state | Wrong creature / stale awareness | `done` — §1 **`creature_motor_stack`** per [`CreatureRoot3D`](../../creature/creature_root_3d.gd) |
 | 14.2.6 | **2D `*_px` keys** in **3D** motor | Wrong consult radii | `done` | §12.3.2 — rename at **6d.2** |
-| 14.2.7 | **Duel scene** sufficient manual smoke | Complex flows need harness | `accepted` | |
+| 14.2.7 | **Duel scene** sufficient manual smoke | Complex flows need harness | `accepted` | §12 Step 3–5 QA — duel motor smoke **from 6c**; load-only before |
 | 14.2.8 | **§12.3 Tracking** sibling passes on schedule | Sibling drift during **6d** | `accepted` | |
 | 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | |
-| 14.2.10 | **Acute fast-path** — `gate_dist ≤ panic` but **`panic` not in keys table** | Implementers guess threshold | `open` — chat |
+| 14.2.10 | **Acute fast-path** — `gate_dist ≤ flight_acute_panic_radius` | Implementers guess threshold | `done` — §1 keys table; default **220.0** |
 | 14.2.11 | **`arrival_tolerance` / interaction range** undefined | Step completion ambiguous | `done` | §7.2 **`action_max_distance`** — EAT **5** |
 | 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3 — 50% of turn increment |
 
@@ -1673,20 +1904,20 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | # | Constraint | Status | Notes |
 |---|------------|--------|-------|
 | 14.4.1 | **Sibling split + fat 6d adapter** | `done` | §12.2 **6d.1–6d.3** split |
-| 14.4.2 | **`tier2_dominance.gd` reuse** vs V3 acute threat | `open` | Chat follow-up |
-| 14.4.3 | **`ai_driver.gd` choke point** | `open` | Chat follow-up |
-| 14.4.4 | **Step 3–5 “expected broken”** QA | `open` | Chat follow-up |
-| 14.4.5 | **Headless + navmesh + LoS** harness scope | `open` | Chat follow-up |
-| 14.4.6 | **Shared `_goal_belief`** consult filters (shelter vs threat ghosts) | `open` | Chat follow-up |
-| 14.4.7 | **Config sprawl** across pack namespaces | `open` | Chat follow-up |
+| 14.4.2 | **`tier2_dominance.gd` reuse** vs V3 acute threat | `done` | §1 — sub-acute = `urgency_flight`; acute = fast-path; module **delete** at **6b** |
+| 14.4.3 | **`ai_driver.gd` choke point** | `done` | §15 #10 + §1 — root tick loop; motor state on **`creature_motor_stack`** |
+| 14.4.4 | **Step 3–5 “expected broken”** QA | `done` | §12 Step 3–5 QA contract — motor out of scope until **6a→6d** |
+| 14.4.5 | **Headless + navmesh + LoS** harness scope | `done` | §3 fixture — navmesh required; LoS optional via fixture collision; detour fallback separate test |
+| 14.4.6 | **Shared `_goal_belief`** consult filters (shelter vs threat ghosts) | `done` | §8.4 — one projector, **`danger_filter`**, shelter / food / goal consults |
+| 14.4.7 | **Config sprawl** across pack namespaces | `done` | §15 #9 — `creature_motor_v3` only in V3 paths |
 
 ### 14.5 In good shape (no action unless review disagrees)
 
 - Phasing **6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3** with vertical slices per sub-phase.
-- Layer split: hub / planner / executor / memory adapter.
+- Layer split: hub / planner / executor / memory adapter — **one stack per [`CreatureRoot3D`](../../creature/creature_root_3d.gd)** (§1).
 - §13 **Closed** for motor numerics; sibling sync **Tracking** only.
 - Dead-end three-way split; kind vs instance memory; coarse path-in-direction.
-- §11 ledger + Step 3 dispositions.
+- §11 ledger + Step 3 dispositions + **§15** cleanup register.
 
 ### 14.6 Highest-value fixes — status
 
@@ -1695,10 +1926,12 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 1 | Unify **LoS 80%** | `done` — §3, §8.1 |
 | 2 | **`action_max_distance`** + **facing alignment** | `done` — §7.2–7.3 |
 | 3 | **`safety_time` during Flight** | `done` — §6.3, §10 |
-| 4 | **`panic` / acute fast-path threshold** | `open` — 14.2.10 |
+| 4 | **`panic` / acute fast-path threshold** | `done` — §1 `flight_acute_panic_radius` **220.0** |
 | 5 | **Goal consideration tie-break** | `done` — §10 |
 | 6 | **`*_px` rename** | `done` — §12.3.2 |
 | 7 | **Split 6d** | `done` — §12.2 |
+| 8 | **Single control plane** — hub eligibility; deprecate `tier2_dominance.gd` | `done` — §1, §12.1, **6b** |
+| 9 | **V2 cleanup backlog** | `tracking` — §15; close at **§12 step 11** |
 
 
 

@@ -1,10 +1,10 @@
 # POST_LOS movement — navigation / seek planner (draft)
 
-> **Purpose:** **Navigation and seek-cycle contract** for the ENGINE motor refactor. This file owns the **planning layer** between motivation/goals and cardinal execution: active goal table, Observation-driven replan cadence, clear-path checks, multistep decomposition, explore/backtrack.
+> **Archived (2026-06-20 — V3 refactor Step 1):** Superseded by **[CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md)** §§2–3, §7, §10 (goal table, seek cycle, execution). Parent was [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) (also archived). **Snapshot** — drift expected. Not authoritative unless a task explicitly cites this archive.
 >
-> **Parent roadmap:** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) remains the **source of truth for refactor phasing** (Phases 1–7 + **Phase 4.5** POST_LOS). This doc is the **authoritative design** for Phase 4.5 implementation details; phase exit criteria live in **CREATURE_MOVEMENT_V2 §G.5.2.5**.
+> **Parent roadmap (archived):** [CREATURE_MOVEMENT_V2.md](CREATURE_MOVEMENT_V2.md) — superseded by **[CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md)** §§2–3, §7, §10.
 >
-> **Sibling contracts:** motivation tree — [CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md); beliefs / locale priors — [CREATURE_MEMORY.md](CREATURE_MEMORY.md); Observation stat hook — [CREATURE_ATTRIBUTES_USAGE.md](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) §3.5.
+> **Sibling contracts (archived paths):** motivation tree — [../Draft_Features/CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md); beliefs — [../Draft_Features/CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md); Observation stat — [../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) §3.5.
 >
 > **Tier:** Draft (tier II) — decision trees below are normative intent; §§2–7 add implementable contracts. §§2.2, 3.3, 4.1, 4.4 design questions resolved (design round 4); 4.5c explore/backtrack unblocked.
 

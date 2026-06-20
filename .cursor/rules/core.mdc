@@ -35,7 +35,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
   4. If none exists and the change is user-facing or contract-like → **stop and ask** whether to extend an existing doc or add a new `Draft_Features/` plan (register in index)
 - **Tier rules:**
   - **`Definitive_Features/`** — update contract sections: tables, config keys, layer maps, file-path inventories, “implementation snapshot” blocks, acceptance checklists. These must match code after the change.
-  - **`Draft_Features/`** — update the sections the task or code comments reference (technical design, acceptance criteria, open questions). Resolve or add `<<Question>>` / `<<Comment>>` when the code answers them.
+  - **`Draft_Features/`** — update the sections the task or code comments reference (technical design, acceptance criteria, open questions). Resolve or add `<<Question>>` / `<<Comment>>` when the code answers them. <<Answer>> reserved for user response to inline <<Question>>.
   - **`Completed_Features/`** — **do not** update to match new code (snapshots; drift expected). If behavior supersedes an archive, update **active** draft/definitive docs instead.
   - **Cross-tier:** Semantic narrative stays in draft hubs (e.g. [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)); code-facing maps stay in definitive usage docs (e.g. [CREATURE_TRAIT_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_TRAIT_USAGE.md)) — update the **appropriate** file, don’t duplicate.
 - **Exclusions (no doc edit required):** Pure refactors with zero behavior/API/config contract change; typo-only fixes; user explicitly requests code-only.
@@ -90,6 +90,6 @@ Auto-attach when matching files are open (see each `.mdc` body):
 
 Does not apply when the user is in question/review-only mode, when `feature-designer` scope is doc-only, or when a domain subagent is already executing.
 
-**Feature hub (not a Cursor rule):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — movement in [CREATURE_MOVEMENT_V2.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md), memory in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md).
+**Feature hub (not a Cursor rule):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — movement in [CREATURE_MOVEMENT_V3.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md), memory in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md).
 
 **Archived docs:** `Completed_Features/` drift is expected unless explicitly cited.
