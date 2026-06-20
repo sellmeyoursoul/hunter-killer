@@ -1254,7 +1254,7 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
    - [x] Convert this file to `.md` and reformat.
    - [x] Retirement banners on superseded docs → `Completed_Features/`.
    - [x] `PROJECT_DOC_INDEX` row.
-2. **Inventory (§12.1)** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
+2. **Inventory (§12.1)** — **Step 2 closed 2026-06-20** — fill one row per module on the refactor branch; grep consumers and `tests/run_all.gd` before Step 3.
 3. Remove code per §12.1 dispositions; empty stubs where noted. **Sibling doc pass (same step):** execute **§12.3.1** + **§12.3.3** checklists; set matching **§13 Tracking** rows to **Done** when sibling files land. Adapter code remains **§12.2 6d**.
 4. Address linter errors.
 5. Run game — **§12 Step 3–5 QA contract** below; no intelligent creature movement expected; fix **non-motor** launch/crash errors only.
@@ -1322,51 +1322,95 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | **Tests** | Per test: **delete** (V2-only), **port** (reuse under V3), or **replace** (new name TBD in Step 6) |
 | **V3 owner / notes** | Target module or § anchor; Step 6 sub-phase if blocked on adapter |
 
-**Alignment:** Inventory **adapter** rows must map to **§12.2 sub-phase 6d**. **delete** rows must have no remaining consumers after Step 3 (or after the §15 **Target phase** column closes). **keep** rows typically land in **6a** (execution) or **6c** (planner). **Complete the table on branch** — seed rows below are not exhaustive; grep `creature/motor/**/*.gd` per §12 step 2 and register every file in **§15** until disposition is set.
+**Alignment:** Inventory **adapter** rows must map to **§12.2 sub-phase 6d**. **delete** rows must have no remaining consumers after Step 3 (or after the §15 **Target phase** column closes). **keep** rows typically land in **6a** (execution) or **6c** (planner). Grep completed **2026-06-20** on branch **`Goal_Movement_RefactorV3`** — **30** scripts under `creature/motor/`, plus orchestrator, config, body, packs, tests (see table + §12.1.1).
 
-**Seed examples (illustrative — complete the table on branch):**
+**Step 2 inventory (complete — `Goal_Movement_RefactorV3`, 2026-06-20):**
 
 | Module path | Disposition | Consumers | Tests | V3 owner / notes |
 |-------------|-------------|-----------|-------|------------------|
-| `creature/motor/cardinal_avoidance.gd` | delete | `ai_driver.gd`, `tests/run_all.gd`, `tests/debug_motor_pick.gd` | delete: `_test_cardinal_avoidance`, `_test_cardinal_interior_env_grid`, `_test_explore_trail_repulsion_motor`, … | §12.2 **6a** — facing-relative MOVE |
-| `creature/motor/goal_seek.gd` | delete | `ai_driver.gd`, `motor_target_builder.gd` | delete: `_test_goal_seek_resolve_and_cost`, `_test_food_seek_motor`; replace in **6c** | §12.2 **6c** planner |
-| `creature/motor/seek_planner.gd` | delete | `ai_driver.gd` | delete: `_test_seek_planner_*`; replace per §10 in **6b**/**6c** | §12.2 **6b** cadence |
-| `creature/motor/goal_source_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §14](CREATURE_MEMORY.md) | port: locale-prior consult; delete V2 `MotorContext` projection tests | §12.2 **6d** |
-| `creature/motor/goal_belief_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) | port: instance belief read; delete V2 merge tests | §12.2 **6d** |
-| `creature/memory/stimulus_learn_registry.gd` (new) | keep | memory adapter, packs | replace: kind-profile unit tests | §12.2 **6d** — learn-topic catalog |
-| `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests | §12.2 **6d** — `_kind_profile` storage |
-| `creature/motor/line_of_sight.gd` | keep | planner consumers TBD | port LoS helpers | §12.2 **6c** |
-| `creature/motor/blocked_approach_memory.gd` | keep | `ai_driver.gd` | port: `_test_*` backtrack if behavior matches §3 | §12.2 **6c** |
-| `creature/motor/tier2_dominance.gd` | delete | V2 `ai_driver.gd`, `goal_seek.gd`, `trait_tier2_mapper.gd` | delete: dominance + `preserve_find_food_seek_scale` tests; replace with hub eligibility + `urgency_eat` tests at **6b** | §12.2 **6b** — logic inlined in hub; module removed |
-| `creature/motor/trait_tier2_mapper.gd` | delete | V2 `ai_driver.gd` | delete: stub zero-delta test | §12.2 **6b** — hub `trait_*_mul` **1.0**; **§15** |
-| `creature/motor/motor_tactic_classifier.gd` | delete | V2 `ai_driver.gd`, `goal_source_memory.gd` | delete V2-only; salient writes use `SalientWriteContext` stub | §12.2 **6d.2** — **§15**; flags from outcome hooks |
-| `creature/motor/motor_target_builder.gd` | delete | V2 `ai_driver.gd`, `goal_seek.gd` | delete: `_test_motor_target_builder_*`; replace with zone builder tests **6c** | §12.2 **6c** greenfield §8.1 zone builder |
-| `creature/motor/believed_goal_sector.gd` | delete | cardinal, `goal_source_memory`, `blocked_approach_memory` | delete sector locomotion tests | §12.2 **6d** — path-in-direction only; **§15** |
-| `creature/motor/eight_way_directions.gd` | delete | cardinal, `seek_direction_turn.gd` | delete with cardinal | Step 3 / **§15** |
-| `creature/motor/creature_motor_stack.gd` (new) | keep | `creature_root_3d.gd`, `ai_driver` | replace: per-root tick + dual-stack isolation tests **6b** | §1 — hub/planner/adapter runtime per creature |
+| `creature/motor/cardinal_avoidance.gd` | delete | `ai_driver.gd`, `motor_target_builder.gd`, `jeopardy_forced_turn.gd`, `motor_tactic_classifier.gd`, `tests/run_all.gd`, `tests/debug_motor_pick.gd` | delete: `_test_cardinal_avoidance`, `_test_cardinal_interior_env_grid`, `_test_playfield_*` escape, `_test_predator_*` pinch/escape, `_test_herbivore_flee_*`, `_test_food_seek_motor`, `_test_explore_trail_repulsion_motor`, `_test_ne_corner_food_seek_egress`, … | Step 3 — §12.2 **6a** facing-relative MOVE |
+| `creature/motor/eight_way_directions.gd` | delete | `cardinal_avoidance.gd`, `expanding_cardinal_explore.gd`, `no_goal_patrol_lock.gd`, `seek_direction_turn.gd`, `jeopardy_forced_turn.gd`, `ai_driver.gd`, `tests/run_all.gd` | delete with cardinal | Step 3 / **§15** #6 |
+| `creature/motor/motor_oct_directions.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_seek_oct_directions` | Step 3 — V3 facing-relative (no oct pick) |
+| `creature/motor/expanding_cardinal_explore.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_expanding_cardinal_explore`, `_test_predator_patrol_expanding_coverage`, `_test_no_goal_plateau_random` | Step 3 / **§15** #12 |
+| `creature/motor/no_goal_patrol_lock.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_no_goal_patrol_lock`, `_test_no_goal_patrol_lock_guided` | Step 3 / **§15** #12 |
+| `creature/motor/seek_direction_commit.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_seek_direction_commit` | Step 3 / **§15** #12 |
+| `creature/motor/seek_direction_turn.gd` | delete | `seek_direction_commit.gd`, `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_seek_direction_turn`, `_test_seek_diagonal_intent` | Step 3 / **§15** #12 |
+| `creature/motor/seek_stationary_look.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_seek_stationary_look` | Step 3 / **§15** #12 |
+| `creature/motor/scripted_intent_hold.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_scripted_intent_hold` | Step 3 / **§15** #12 |
+| `creature/motor/jeopardy_forced_turn.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_jeopardy_forced_turn` | Step 3 |
+| `creature/motor/wall_slide_pick.gd` | delete | `creature_kinematic_body_3d.gd`, `tests/run_all.gd` | delete: `_test_wall_slide_pick` | Step 3 / **§15** #12; body uses `apply_action` **6a** |
+| `creature/motor/motor_obstacle_strategy.gd` | delete | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_obstacle_strategy_shield_pin`, `_test_pinch_obstacle_*` | Step 3 / **§15** #12 |
+| `creature/motor/motor_obstacle_geometry.gd` | delete | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | delete: env-grid obstacle tests tied to cardinal; port pure geometry only if navmesh/detour needs | Step 3 / **§15** #12 |
+| `creature/motor/terrain_motor.gd` | delete | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_terrain_physics_cardinal_blocked`, `_test_terrain_stuck_escape_prefers_uphill` | Step 3 / **§15** #12 |
+| `creature/motor/goal_visibility_latch.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_goal_visibility_latch_streak_and_engagement` | Step 3 / **§15** #12 |
+| `creature/motor/tier2_dominance.gd` | delete | `ai_driver.gd`, `goal_seek.gd`, `trait_tier2_mapper.gd`, `tests/run_all.gd` | delete: `_test_creature_motor_v2_profiles`, `_test_motor_motivation_wiring` (tier2 paths); replace hub eligibility **6b** | §12.2 **6b** — inlined in hub |
+| `creature/motor/trait_tier2_mapper.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: stub paths in `_test_motor_motivation_wiring` | §12.2 **6b** — **§15** #2 |
+| `creature/motor/motor_tactic_classifier.gd` | delete | `ai_driver.gd`, `goal_source_memory.gd`, `tests/run_all.gd` | delete: tactic build in `_test_motor_motivation_wiring` | §12.2 **6d.2** — **§15** #3 |
+| `creature/motor/goal_seek.gd` | delete | `ai_driver.gd`, `motor_target_builder.gd`, `tests/run_all.gd` | delete: `_test_goal_seek_resolve_and_cost`, `_test_food_seek_motor`, `_test_seek_occlusion_step_cost_no_los_ctx` | §12.2 **6c** planner |
+| `creature/motor/seek_planner.gd` | delete | `ai_driver.gd`, `tests/run_all.gd` | delete: `_test_seek_planner_replan_interval`, `_test_seek_planner_resolve_disabled_and_no_los` | §12.2 **6b**/**6c** cadence |
+| `creature/motor/motor_target_builder.gd` | delete | `ai_driver.gd`, `goal_seek.gd`, `tests/run_all.gd` | delete: `_test_motor_target_builder_feeding_mode`, `_test_plant_occluded_live_food_entries`, `_test_eaten_bush_moves_to_unready_not_seek` | §12.2 **6c** — `awareness_zone` + scan |
+| `creature/motor/seek_candidate.gd` | delete | `motor_target_builder.gd`, `goal_belief_memory.gd`, `goal_seek.gd`, `tests/run_all.gd` | delete: V2 seek-candidate merge tests; replace live-sample types **6c** | §12.2 **6c** |
+| `creature/motor/carnivore_pursuit.gd` | delete | tests only (`run_all.gd`) | delete: `_test_carnivore_pursuit_intent` | **Deferred** combat — **§15** #15; unused by `ai_driver` |
+| `creature/motor/believed_goal_sector.gd` | delete | `goal_source_memory.gd`, `goal_belief_memory.gd`, `blocked_approach_memory.gd`, `seek_direction_turn.gd`, `tests/run_all.gd` | delete: sector align in `_test_creature_motor_v2_profiles`; delete sector locomotion tests | §12.2 **6d** — path-in-direction |
+| `creature/motor/goal_belief_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md) | port: `_test_goal_belief_coarse_ttl`; delete: `_test_goal_belief_merge_skips_live_awareness`, `_test_goal_belief_moving_prey_ghost`, `_test_goal_belief_anticipated_calories_stub` (V2 merge) | §12.2 **6d** — storage; drop V2 merge API step 11 |
+| `creature/motor/goal_source_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §14](CREATURE_MEMORY.md) | port: `_test_goal_source_memory`, `_test_goal_kind_phase_c_replay`, `_test_locale_prior_escalate_seek`; delete V2 `MotorContext` projection tests | §12.2 **6d** |
+| `creature/motor/line_of_sight.gd` | keep | `cardinal_avoidance.gd`, `motor_target_builder.gd`, `seek_planner.gd`, `tests/run_all.gd` | port: `_test_line_of_sight_wall_occlusion` | §12.2 **6c** — §3, §8.1 |
+| `creature/motor/threat_sample.gd` | keep | `motor_target_builder.gd`, `tests/run_all.gd` (preload) | port where ingest shape unchanged | §1 Flight, §6.3, **6c** scan |
+| `creature/motor/blocked_approach_memory.gd` | keep | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | port: `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack`, `_test_herbivore_food_seek_pinch_escape_backtrack` | §12.2 **6c** — §3 backtrack TTL |
+| `creature/motor/motor_plane.gd` | keep | `ai_driver.gd`, `creature_kinematic_body_3d.gd`, `awareness_debug_overlay_3d.gd`, `environment/nav_path_hint.gd`, `environment/playfield_bounds_3d.gd`, many motor modules | port: `_test_motor_plane_yaw_from_facing`; drop after full Vector3-native V3 paths if redundant | Utility — XZ projection / playfield scale until **6c** zone builder owns geometry |
+| `creature/motor/creature_motor_stack.gd` (new) | keep | `creature_root_3d.gd`, `ai_driver` tick loop | replace: per-root tick + dual-stack isolation **6b** | §1 — hub/planner/adapter runtime |
+| `creature/motor/awareness_zone.gd` (new) | keep | planner, `awareness_zone_scan` | replace: zone geometry + LoS tests **6c** | §12.2 **6c** — §8.1 |
+| `creature/motor/awareness_zone_scan.gd` (new) | keep | planner | replace: live food/threat ingest tests **6c** | §12.2 **6c** |
+| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult tests **6d** | §12.2 **6d** — §8.4 façade |
+| `creature/motor/salient_write_context.gd` (new, optional) | keep | memory adapter, outcome hooks | replace: salient-write gate tests **6d.2** | §12.2 **6d.2** |
+| `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests **6d** | §12.2 **6d** — `_kind_profile` |
+| `creature/memory/stimulus_learn_registry.gd` (new) | keep | memory adapter, packs | replace: learn-topic registry tests **6d** | §12.2 **6d** |
+| `creature/memory/goal_kind_registry.gd` | keep | `ai_driver.gd`, `goal_source_memory.gd`, tests | port: `_test_goal_kind_phase_c_replay` | Taxonomy — **not** tick dominance |
+| `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d.gd`, creature bodies, HUD, overlay | delete: cardinal/escape/V2 intent tests (§12.1.1); keep `_test_ai_driver_creature_registry` | §12.2 **6b** — thin root tick loop; **§15** #10 |
+| `AI_int_lib/ai_driver.gd` — `_mob_hist`, `awareness_memory_*` | delete | `_motor_mobs_array`, overlay ghost path | delete: `_test_goal_belief_moving_prey_ghost`, `_test_predator_prey_memory_chase` (ring-buffer path) | Retired — §8.1 `_goal_belief` ghosts **6d.3** |
+| `AI_int_lib/game_config_merge.gd` | keep + extend | packs, `tests/run_all.gd` | port: `_test_creature_motor_v2_profiles`, `_test_creature_pack_motor_overlays` → `creature_motor_v3` **6a** | §12.2 **6a**+; drop unused `awareness_memory_*` defaults Step 3 |
+| `assets/creatures/*/pack_resources.json` — `creature_motor` | keep → migrate | fox, rabbit, resolver_smoke | port overlays test **6a** | One-shot copy → `creature_motor_v3` **6a**; remove legacy step 11 |
 | `creature/creature_root_3d.gd` | keep | duel spawn, `ai_driver` registry | port: motor stack child wiring **6b** | Owns stack; Body + Vitals refs |
-| `creature/motor/awareness_zone.gd` (new) | keep | planner, `awareness_zone_scan` | replace: zone geometry + LoS tests **6c** | §12.2 **6c** — §8.1 sphere + cone + LoS |
-| `creature/motor/awareness_zone_scan.gd` (new) | keep | planner | replace: live food/threat ingest tests **6c** | §12.2 **6c** — scene scan split from geometry |
-| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult tests | §12.2 **6d** — §8.4 façade; **sole** public memory I/O entry |
-| `creature/motor/salient_write_context.gd` (new, optional split) | keep | memory adapter, outcome hooks | replace: salient-write gate tests | §12.2 **6d.2** — **`SalientWriteContext`**; may co-locate in adapter file |
-| `tests/motor_path_fixture.gd` (new) | keep | `tests/run_all.gd`, `terrain_test_main_stub.gd` | replace: navmesh + blocked layout headless tests **6c** | §3 headless fixture — **not** duel boot |
-| `tests/terrain_test_main_stub.gd` | keep | `tests/run_all.gd` | extend: `get_navigation_map_rid()` delegate | §3 fixture hook |
-| `creature/motor/expanding_cardinal_explore.gd` | delete | `ai_driver.gd` | delete with cardinal tests | Step 3 / **§15** |
-| `creature/motor/no_goal_patrol_lock.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/seek_direction_commit.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/seek_direction_turn.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/seek_stationary_look.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/scripted_intent_hold.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/wall_slide_pick.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/motor_obstacle_strategy.gd` | delete | `ai_driver.gd`, cardinal | delete | Step 3 / **§15** |
-| `creature/motor/motor_obstacle_geometry.gd` | delete | `ai_driver.gd`, cardinal | port geometry helpers only if navmesh/detour needs | Step 3 / **§15** |
-| `creature/motor/terrain_motor.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `creature/motor/carnivore_pursuit.gd` | delete | TBD | deferred tests | **Deferred** combat — **§15** |
-| `creature/motor/seek_candidate.gd` | delete | `motor_target_builder.gd` | replace with V3 live-sample types **6c** | §12.2 **6c** |
-| `creature/motor/goal_visibility_latch.gd` | delete | `ai_driver.gd` | delete | Step 3 / **§15** |
-| `AI_int_lib/ai_driver.gd` (motor pipeline) | stub → replace | `main_3d`, creature bodies, HUD | delete: escape-cardinal / V2 intent tests; keep registry smoke | §12.2 **6b** hub entry; extract motor to `creature/motor/` — **§15** |
-| `AI_int_lib/ai_driver.gd` — `_mob_hist`, `_mob_ids_ever_observed`, `awareness_memory_*` ghost path | delete | `_motor_mobs_array`, overlay | delete: mob ghost / gated-live tests tied to ring buffer | Retired — §8.1 ghosts via **`_goal_belief`** adapter **6d** |
-| `AI_int_lib/game_config_merge.gd` | keep + extend | packs, tests | port profile tests to `creature_motor_v3` when wired | §12.2 **6a**+ (`creature_motor_v3`); drop unused **`awareness_memory_*`** defaults when inventory confirms |
+| `creature/capabilities/creature_kinematic_body_3d.gd` | keep | `ai_driver`, duel bodies | port: `_test_creature_kinematic_playfield_clamp_after_move`, human intent tests | §7.4 — deprecate ENGINE `set_creature_move_intent` **6a** |
+| `creature/awareness_debug_overlay_3d.gd` | keep | `main_3d`, debug HUD | port when zone builder lands **6c** | Uses `MotorPlane` for draw helpers |
+| `hud.gd` (motor readouts) | keep | `main_3d` | port: `_test_hud_resolves_3d_herbivore_motor_body` | Telemetry only — **6b** |
+| `tests/run_all.gd` | keep | CI | prune motor tests Step 3 per §12.1.1; add V3 gates per **6a→6d** | Master harness |
+| `tests/debug_motor_pick.gd` | delete | manual cardinal debug | n/a | Step 3 |
+| `tests/run_motor_motivation_only.gd` | delete | dev wrapper for `_test_motor_motivation_wiring` | n/a | Step 3 — replace **6b** hub tests |
+| `tests/terrain_test_main_stub.gd` | keep | `tests/run_all.gd` | extend: `get_navigation_map_rid()` delegate | §3 fixture hook **6c** |
+| `tests/motor_path_fixture.gd` (new) | keep | `tests/run_all.gd`, `terrain_test_main_stub.gd` | replace: navmesh + blocked layout headless **6c** | §3 — not duel boot |
+
+#### 12.1.1 Motor test disposition (Step 2 grep — `tests/run_all.gd`)
+
+**Step 3 action:** Remove or skip rows marked **delete**; keep **port** until V3 replacement lands in the matching sub-phase.
+
+| Test | Action | V3 sub-phase / notes |
+|------|--------|----------------------|
+| `_test_cardinal_avoidance` | delete | Step 3 |
+| `_test_cardinal_interior_env_grid` | delete | Step 3 |
+| `_test_playfield_corner_escape`, `_test_world_corner_static_wedge_escape`, `_test_playfield_open_corner_escape`, `_test_playfield_boundary_edge_rocks` | delete | Step 3 |
+| `_test_predator_cover_pin_flank`, `_test_predator_*` pinch/escape/pacing/outward/rim (cardinal) | delete | Step 3 |
+| `_test_herbivore_flee_*`, `_test_herbivore_food_seek_pinch_escape_backtrack` | delete | Step 3 |
+| `_test_food_seek_motor`, `_test_ne_corner_food_seek_egress`, `_test_explore_trail_repulsion_motor`, `_test_explore_idle_when_no_pickup` | delete | Step 3 |
+| `_test_expanding_cardinal_explore`, `_test_no_goal_plateau_random`, `_test_predator_patrol_expanding_coverage` | delete | Step 3 |
+| `_test_predator_chase_motor_ctx`, `_test_predator_prey_memory_chase` | delete | Step 3 — mob_hist retired |
+| `_test_goal_belief_moving_prey_ghost` | delete | Step 3 — **6d.3** ghost replacement |
+| `_test_goal_belief_merge_skips_live_awareness` | delete | Step 3 — V2 merge |
+| `_test_goal_seek_resolve_and_cost`, `_test_seek_occlusion_step_cost_no_los_ctx` | delete | Step 3 |
+| `_test_motor_target_builder_feeding_mode`, `_test_plant_occluded_live_food_entries`, `_test_eaten_bush_moves_to_unready_not_seek` | delete | Step 3 |
+| `_test_creature_motor_v2_profiles`, `_test_motor_motivation_wiring` | delete | Step 3 — **6b** hub eligibility tests |
+| `_test_seek_planner_*`, `_test_seek_direction_*`, `_test_seek_oct_directions`, `_test_seek_diagonal_intent`, `_test_seek_stationary_look` | delete | Step 3 |
+| `_test_scripted_intent_hold`, `_test_jeopardy_forced_turn`, `_test_no_goal_patrol_lock*` | delete | Step 3 |
+| `_test_wall_slide_pick`, `_test_obstacle_strategy_shield_pin`, `_test_pinch_obstacle_*`, `_test_terrain_physics_cardinal_blocked`, `_test_terrain_stuck_escape_prefers_uphill` | delete | Step 3 |
+| `_test_goal_visibility_latch_streak_and_engagement`, `_test_carnivore_pursuit_intent` | delete | Step 3 |
+| `_test_motor_cardinal_probe_scaled_for_small_playfield` | delete | Step 3 |
+| `_test_line_of_sight_wall_occlusion` | port | **6c** |
+| `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack` | port | **6c** |
+| `_test_goal_belief_coarse_ttl`, `_test_goal_belief_anticipated_calories_stub` | port | **6d** |
+| `_test_goal_source_memory`, `_test_goal_kind_phase_c_replay`, `_test_locale_prior_escalate_seek`, `_test_escape_reversal_suppression` | port | **6d** |
+| `_test_creature_pack_motor_overlays`, `_test_creature_motor_v2_profiles` | port | **6a** → `creature_motor_v3` |
+| `_test_ai_driver_creature_registry`, `_test_hud_resolves_3d_herbivore_motor_body` | port | **6b** |
+| `_test_motor_plane_yaw_from_facing` | port | keep until `motor_plane` retired |
 
 ### 12.2 Step 6 implementation sub-phases
 
@@ -1776,6 +1820,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Config namespace `creature_motor_v3` | §12 | — | **Closed** |
 | Headless / playtest gates | §12.2 | — | **Closed** (per sub-phase) |
 | Doc promotion (`.md`, index, archive V2) | §12 step 1 | No | **Closed** — Step 1 **2026-06-20** |
+| §12.1 module inventory | §12.1 | — | **Closed** — Step 2 **2026-06-20** |
 | Human control cadence | §7.6 | No | **Deferred** |
 | Mate goal flow | §6.5 | No | **Deferred** |
 | Fight goal flow | §6.6 | No | **Deferred** |
@@ -1824,6 +1869,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd) | Pure LoS utility (§3, §8.1) |
 | [`threat_sample.gd`](../../creature/motor/threat_sample.gd) | Shared threat shape (§1 Flight, ingest) |
 | [`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) | Backtrack TTL (§3) |
+| [`motor_plane.gd`](../../creature/motor/motor_plane.gd) | XZ projection / playfield scale helpers — retain until V3 paths fully native 3D |
 | [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd) **`parent_tier2`** | Memory taxonomy — not tick dominance |
 | [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) (new) | §8.4 façade — **only** public entry for hub/planner memory I/O |
 | [`salient_write_context.gd`](../../creature/motor/salient_write_context.gd) (new, optional split) | **`SalientWriteContext`** write-side payload — §12.3.4 |
@@ -1846,7 +1892,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 - [ ] `grep` / inventory: no V3 code preloads **`cardinal_avoidance`**, **`tier2_dominance`**, **`trait_tier2_mapper`**, **`motor_tactic_classifier`**, **`motor_target_builder`**
 - [ ] No V3 runtime read of **`creature_motor`** keys; legacy pack blocks **removed** (V2 tests migrated or removed)
 - [ ] **`goal_*_memory`** V2 projection/merge methods **deleted** — grep confirms zero callers (V3 adapter + V2 tests migrated/removed); no `@deprecated` stubs
-- [ ] **§12.1** inventory complete — every `creature/motor/**/*.gd` row filled
+- [x] **§12.1** inventory complete — every `creature/motor/**/*.gd` row filled (**Step 2 — 2026-06-20**)
 
 ---
 
