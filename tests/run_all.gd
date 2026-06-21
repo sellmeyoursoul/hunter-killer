@@ -26,7 +26,6 @@ const _TopDownCameraScr := preload("res://environment/top_down_camera_control.gd
 const _PerimeterBoulders := preload("res://environment/playfield_perimeter_boulders.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
-const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
 const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
 const _RabbitArchetypeRes := preload("res://creature/species/rabbit_archetype.tres")
@@ -39,6 +38,9 @@ const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memo
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _MotorAction := preload("res://creature/motor/motor_action.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
+const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
+const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
+const _CreatureMotorStack := preload("res://creature/motor/creature_motor_stack.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -118,6 +120,14 @@ func _run_all() -> void:
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
   _test_body_no_distance_calorie_burn()
+  _test_motor_goal_hub_starvation_eat_only()
+  _test_motor_goal_hub_urgency_eat_preserve_band()
+  _test_motor_goal_hub_subacute_flight_weight()
+  _test_motor_consideration_cadence_interval()
+  _test_creature_motor_stack_stay_action()
+  _test_creature_motor_stack_consideration_advances()
+  _test_creature_motor_stack_dual_isolation()
+  _test_creature_motor_stack_integration_single_debit()
   _test_goal_source_memory()
   _test_goal_kind_phase_c_replay()
   _test_creature_trait_usage_wiring()
@@ -678,16 +688,16 @@ func _test_locomotion_executor_turn_facing() -> void:
   body.set_use_v3_action_calories(true)
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
   var motor_v3 := _motor_v3_test_params()
-  var start := body.last_move_direction
+  var start: Vector3 = body.last_move_direction
   for _i in 8:
     _LocomotionExecutor.apply_action(body, _MotorAction.TURN_RIGHT, 1.0 / 60.0, motor_v3)
-  var end_facing := body.last_move_direction.normalized()
+  var end_facing: Vector3 = body.last_move_direction.normalized()
   _assert(
     is_equal_approx(start.dot(end_facing), -1.0),
     "8 TURN_RIGHT yields ~180 deg facing (dot=%.3f)" % start.dot(end_facing),
   )
   _assert(
-    is_equal_approx(end_facing.length_squared(), 1.0, 0.01),
+    is_equal_approx(end_facing.length_squared(), 1.0),
     "facing stays normalized after turns",
   )
   main.queue_free()
@@ -759,6 +769,149 @@ func _test_locomotion_executor_move_blocked() -> void:
   _assert(outcome.blocked, "MOVE_FORWARD against wall sets blocked")
   main.queue_free()
 
+func _test_motor_goal_hub_starvation_eat_only() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var threat := _ThreatSampleScr.make(Vector2(100.0, 0.0), 50.0, true)
+  var ctx := {
+    "motor_v3": motor_v3,
+    "calorie_ratio": 0.05,
+    "threat_samples": [threat],
+    "flight_fast_path_active": false,
+    "safety_met": false,
+  }
+  var eligible := _MotorGoalHub.build_eligible_goals(ctx)
+  _assert(eligible.size() == 1, "starvation yields single Eat row")
+  _assert(
+    String(eligible[0].get("goal_kind", &"")) == str(_MotorGoalHub.GOAL_FIND_FOOD),
+    "starvation row is find_food",
+  )
+
+func _test_motor_goal_hub_urgency_eat_preserve_band() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var mid := _MotorGoalHub.urgency_eat(0.85, motor_v3)
+  _assert(mid > 0.0 and mid < 1.0, "preserve band mid urgency between 0 and 1")
+  _assert(
+    is_equal_approx(_MotorGoalHub.urgency_eat(0.92, motor_v3), 0.0),
+    "preserve floor zeroes Eat urgency",
+  )
+  _assert(
+    is_equal_approx(_MotorGoalHub.urgency_eat(0.75, motor_v3), 1.0),
+    "below seek ceiling full Eat urgency",
+  )
+
+func _test_motor_goal_hub_subacute_flight_weight() -> void:
+  var motor_v3 := _motor_v3_test_params().duplicate(true)
+  motor_v3["awareness_radius"] = 1500.0
+  var far_threat := _ThreatSampleScr.make(Vector2(100.0, 0.0), 1500.0, true)
+  var ctx := {
+    "motor_v3": motor_v3,
+    "calorie_ratio": 0.75,
+    "threat_samples": [far_threat],
+    "flight_fast_path_active": false,
+    "safety_met": false,
+  }
+  var scored := _MotorGoalHub.score_goals(_MotorGoalHub.build_eligible_goals(ctx), ctx)
+  var eat_w := 0.0
+  var flight_w := 0.0
+  for row_v in scored:
+    var row: Dictionary = row_v
+    if row.get("goal_kind", &"") == _MotorGoalHub.GOAL_FIND_FOOD:
+      eat_w = float(row.get("weight", 0.0))
+    elif row.get("goal_kind", &"") == _MotorGoalHub.GOAL_AVOID_HOSTILES:
+      flight_w = float(row.get("weight", 0.0))
+  _assert(eat_w > 0.0, "Eat row scored under sub-acute threat")
+  _assert(flight_w > 0.0, "Flight row scored under sub-acute threat")
+  _assert(flight_w < eat_w, "far threat Flight weight below Eat (sub-acute competition)")
+
+func _test_motor_consideration_cadence_interval() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  _assert(
+    _MotorCadence.observation_replan_interval_ticks(10, motor_v3) == 8,
+    "stat_observation=10 yields n=8",
+  )
+
+func _motor_stack_test_configure(body: CharacterBody3D) -> _CreatureMotorStack:
+  var stack := _CreatureMotorStack.new()
+  stack.configure(body, null, _motor_v3_test_params(), "", {})
+  body.set_use_v3_action_calories(true)
+  body.set_motor_stack_drives_physics(true)
+  body.set_control_mode(_ControlMode.engine_as_int())
+  return stack
+
+func _test_creature_motor_stack_stay_action() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 10.0
+  var stack := _motor_stack_test_configure(body)
+  var delta := 0.5
+  var before := float(body.current_calories)
+  var outcome: ActionOutcome = stack.tick(delta)
+  _assert(int(outcome.action) == _MotorAction.STAY, "stack tick emits STAY in 6b")
+  _assert(body.current_calories < before, "stack STAY debits calories")
+  main.queue_free()
+
+func _test_creature_motor_stack_consideration_advances() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  _assert(stack.get_physics_tick_count() == 0, "stack starts at tick 0")
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_physics_tick_count() == 1, "first tick increments counter")
+  _assert(not stack.get_incumbent().is_empty(), "first tick runs consideration")
+  for _i in 6:
+    stack.tick(1.0 / 60.0)
+  _assert(stack.get_physics_tick_count() == 7, "tick counter advances between considerations")
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_physics_tick_count() == 8, "cadence boundary tick")
+  main.queue_free()
+
+func _test_creature_motor_stack_dual_isolation() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body_a := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var body_b := _spawn_carnivore_body(main, Vector3(4.0, 1.0, 0.0))
+  var stack_a := _motor_stack_test_configure(body_a)
+  var stack_b := _motor_stack_test_configure(body_b)
+  stack_a.set_threat_samples_for_test(
+    [_ThreatSampleScr.make(Vector2(10.0, 0.0), 800.0, true)]
+  )
+  stack_a.tick(1.0 / 60.0)
+  stack_b.tick(1.0 / 60.0)
+  var incumbent_b := stack_b.get_incumbent()
+  stack_a.set_threat_samples_for_test(
+    [_ThreatSampleScr.make(Vector2(10.0, 0.0), 50.0, true)]
+  )
+  stack_a.tick(1.0 / 60.0)
+  _assert(stack_a.get_physics_tick_count() == 2, "stack A tick counter isolated")
+  _assert(stack_b.get_physics_tick_count() == 1, "stack B tick counter not advanced by stack A")
+  _assert(
+    stack_b.get_incumbent() == incumbent_b,
+    "stack B incumbent unchanged when stack A threat context changes",
+  )
+  main.queue_free()
+
+func _test_creature_motor_stack_integration_single_debit() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 10.0
+  body.velocity = Vector3.ZERO
+  var stack := _motor_stack_test_configure(body)
+  var pos_before := body.global_position
+  var before := float(body.current_calories)
+  var outcome: ActionOutcome = stack.tick(1.0 / 60.0)
+  var after_stack := float(body.current_calories)
+  body.call("_physics_process", 1.0 / 60.0)
+  _assert(int(outcome.action) == _MotorAction.STAY, "integration tick STAY")
+  _assert(is_equal_approx(body.current_calories, after_stack), "body _physics_process does not double debit")
+  _assert(body.current_calories < before, "single stack tick debits once")
+  var disp := body.global_position - pos_before
+  disp.y = 0.0
+  _assert(disp.length_squared() < 0.25, "STAY tick does not duplicate horizontal displacement")
+  main.queue_free()
+
 func _test_body_no_distance_calorie_burn() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -768,7 +921,7 @@ func _test_body_no_distance_calorie_burn() -> void:
   body.current_calories = 10.0
   body.velocity = Vector3(100.0, 0.0, 0.0)
   body.apply_action(_MotorAction.STAY, 1.0, _motor_v3_test_params())
-  var after_action := body.current_calories
+  var after_action := float(body.current_calories)
   body.call("_physics_process", 1.0)
   _assert(
     is_equal_approx(body.current_calories, after_action),
@@ -874,7 +1027,7 @@ func _test_duel_spawn_facing_variance() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var prey := _spawn_herbivore_body(main, Vector3.ZERO)
-  var driver: Node = _AiDriverScr.new()
+  var driver: Node = _ai_driver_script().new()
   root.add_child(driver)
   driver.call("attach_main", main)
   driver.call("register_creature", prey)
@@ -1019,7 +1172,7 @@ func _test_footprint_geometry() -> void:
   _assert(is_equal_approx(obs.distance_to(closest_obs), 20.0), "footprint point clearance uses AABB edge distance")
 
 func _test_goal_belief_coarse_ttl() -> void:
-  var ad: Node = _AiDriverScr.new()
+  var ad: Node = _ai_driver_script().new()
   var motor_p := _Merge.creature_motor_spine()
   motor_p["goal_memory_coarse_ttl_sec"] = 15.0
   motor_p["goal_memory_precise_radius"] = 1000.0
@@ -1356,7 +1509,7 @@ func _test_human_prey_control_bootstrap() -> void:
   var prey_body := creature_root.get_node("Body") as CharacterBody3D
   prey_body.add_to_group(&"prey")
   prey_body.set_control_mode(_ControlMode.engine_as_int())
-  var driver: Node = _AiDriverScr.new()
+  var driver: Node = _ai_driver_script().new()
   root.add_child(driver)
   driver.call("register_creature", prey_body)
   driver.call("set_duel_round_active", true)

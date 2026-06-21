@@ -1532,6 +1532,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 #### 6b — Hub shell
 
+**Implementation started 2026-06-20** — hub module, consideration cadence, per-root [code]creature_motor_stack[/code], [code]AiDriver[/code] root iteration; 6b vertical slice emits [code]STAY[/code] only (planner deferred to **6c**).
+
 **Entry:** 6a acceptance closed. Complete **§12.2 6b pre-flight checklist** (all Blocker rows) before first hub/stack commit.
 
 **In scope:** §1 hub entry (including **`trait_goal_mul = 1.0`** / **`trait_tactic_mul = 1.0`** — no `trait_tier2_mapper`), §10 cadence shell, `ActiveGoal` table, empty-table → `STAY` (§7.2), wire **`CreatureRoot3D` → `creature_motor_stack.tick()`** (§1, §7.4); `ai_driver` iterates roots only. Flight fast-path **stub** (flag only). Hub **`build_eligible_goals`** + eligibility matrix (§1); **delete** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) and [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd). **Flight urgency geometry** ships in 6b; **`threat_disposition_mod`** stubbed **1.0** until **6d**. **`creature_motor_v3`** merge wired — V3 paths **must not** read legacy **`creature_motor`** (§15). **§1 goal scoring closed** (§13).

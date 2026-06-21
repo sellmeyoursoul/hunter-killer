@@ -299,6 +299,19 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "blocked_objective_chaos": 0.15,
     "goal_consideration_chaos": 0.15,
     "flight_acute_panic_radius": 220.0,
+    "goal_base_find_food": 1.0,
+    "goal_base_avoid_hostiles": 1.0,
+    "goal_base_rest": 0.85,
+    "goal_base_shelter": 0.5,
+    "goal_base_find_mate": 0.0,
+    "goal_feasibility_floor_find_food": 0.05,
+    "goal_feasibility_floor_avoid_hostiles": 0.05,
+    "goal_feasibility_floor_rest": 0.05,
+    "goal_feasibility_floor_shelter": 0.05,
+    "goal_feasibility_floor_find_mate": 0.05,
+    "flight_urgency_far_floor": 0.5,
+    "flight_urgency_dist_floor": 1.0,
+    "food_map_confidence": 0.0,
   }
 
 

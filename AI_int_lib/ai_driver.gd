@@ -88,6 +88,7 @@ var _state: State = State.IDLE
 var _main: Node = null
 var _creature: Node = null
 var _registered_creatures: Array = []
+var _registered_creature_roots: Array = []
 var _primary_creature: Node = null
 var _duel_round_active: bool = false
 var _duel_motor_round_salt: int = 0
@@ -252,21 +253,41 @@ func _sync_creature_from_main() -> void:
 
 func clear_creature_registry() -> void:
   _registered_creatures.clear()
+  _registered_creature_roots.clear()
   _creature = null
   _primary_creature = null
+
+
+func register_creature_root(root: Node) -> void:
+  if root == null or not is_instance_valid(root):
+    return
+  if not root.has_method(&"motor_stack_tick"):
+    return
+  var id := root.get_instance_id()
+  for x in _registered_creature_roots:
+    if x is Node and is_instance_valid(x) and (x as Node).get_instance_id() == id:
+      return
+  _registered_creature_roots.append(root)
 
 
 func register_creature(node: Node) -> void:
   if node == null or not is_instance_valid(node):
     return
-  if not _MotorPlane.is_motor_physics_body(node):
+  if _MotorPlane.is_motor_physics_body(node):
+    var pb := node as Node
+    var id := pb.get_instance_id()
+    var already_registered := false
+    for x in _registered_creatures:
+      if x is Node and is_instance_valid(x) and (x as Node).get_instance_id() == id:
+        already_registered = true
+        break
+    if not already_registered:
+      _registered_creatures.append(pb)
+    var parent := pb.get_parent()
+    if parent != null:
+      register_creature_root(parent)
     return
-  var pb := node as Node
-  var id := pb.get_instance_id()
-  for x in _registered_creatures:
-    if x is Node and is_instance_valid(x) and (x as Node).get_instance_id() == id:
-      return
-  _registered_creatures.append(pb)
+  register_creature_root(node)
 
 
 func set_primary_creature(node: Node) -> void:
@@ -292,6 +313,34 @@ func set_duel_round_active(active: bool) -> void:
 
 func is_duel_round_active() -> bool:
   return _duel_round_active
+
+
+func _scripted_motor_roots() -> Array:
+  if not _registered_creature_roots.is_empty():
+    var out: Array = []
+    for n in _registered_creature_roots:
+      if n is Node and is_instance_valid(n):
+        out.append(n as Node)
+    return out
+  var fb: Array = []
+  for n in _registered_creatures:
+    if not _MotorPlane.is_motor_physics_body(n) or not is_instance_valid(n):
+      continue
+    var parent := (n as Node).get_parent()
+    if parent != null and parent.has_method(&"motor_stack_tick"):
+      var pid := parent.get_instance_id()
+      var seen := false
+      for existing in fb:
+        if existing is Node and (existing as Node).get_instance_id() == pid:
+          seen = true
+          break
+      if not seen:
+        fb.append(parent)
+  if fb.is_empty() and _creature != null:
+    var cp := _creature.get_parent()
+    if cp != null and cp.has_method(&"motor_stack_tick"):
+      fb.append(cp)
+  return fb
 
 
 func _scripted_motor_subjects() -> Array:
@@ -741,32 +790,38 @@ func _creature_motor_mode() -> String:
   return "scripted"
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
   if _state != State.PLAYING or _main == null:
     return
   var subjects := _scripted_motor_subjects()
-  if subjects.is_empty():
+  if subjects.is_empty() and _scripted_motor_roots().is_empty():
     return
   var focal := _primary_creature if _primary_creature != null else _creature
-  if focal == null:
+  if focal == null and not subjects.is_empty():
     focal = subjects[0] as Node
 
   _physics_ticks += 1
   var p: Dictionary = _live_perception_params()
   var stride := maxi(1, int(p.get("SNAPSHOT_PHYSICS_STRIDE", 1)))
-  if _physics_ticks % stride == 0:
+  if focal != null and _physics_ticks % stride == 0:
     _latest_snapshot = _build_snapshot_blob(focal)
     _has_snapshot = not _latest_snapshot.is_empty()
 
   if _creature_motor_mode() != "scripted":
     return
-  for subj in subjects:
-    if not is_instance_valid(subj):
+  for root in _scripted_motor_roots():
+    if not is_instance_valid(root):
       continue
-    var is_pred_subj: bool = subj.is_in_group(&"mobs") and not subj.is_in_group(&"prey")
-    if not is_pred_subj and int(subj.get("control_mode")) != _ControlMode.engine_as_int():
+    var body: Node = null
+    if root.has_method(&"get_motor_body"):
+      body = root.call("get_motor_body") as Node
+    if body == null or not _MotorPlane.is_motor_physics_body(body):
       continue
-    _call_set_creature_move_intent(subj, Vector3.ZERO)
+    var is_pred_subj: bool = body.is_in_group(&"mobs") and not body.is_in_group(&"prey")
+    if not is_pred_subj and int(body.get("control_mode")) != _ControlMode.engine_as_int():
+      continue
+    if root.has_method(&"motor_stack_tick"):
+      root.call("motor_stack_tick", delta)
 
 
 func _refresh_inference_client_config() -> void:

@@ -45,6 +45,8 @@ var _defeat_hidden: bool = false
 var _wall_slide_away_hint: Vector3 = Vector3.ZERO
 ## When true, ENGINE/AI calorie burn is owned by V3 [method apply_action] / [LocomotionExecutor] (§7.5).
 var _use_v3_action_calories: bool = false
+## When true, V3 [code]CreatureMotorStack[/code] owns ENGINE/AI [method _physics_process] motion (§7.4).
+var _motor_stack_drives_physics: bool = false
 
 
 func _ready() -> void:
@@ -273,10 +275,22 @@ func _refresh_calorie_burn_params() -> void:
   _calorie_baseline_drain_per_sec = 1.0
   _calorie_cost_per_unit_moved = 0.002
   var gc := get_node_or_null("/root/GameConfig")
-  if gc != null and gc.has_method(&"get_creature_motor_params"):
+  if gc == null:
+    return
+  if _use_v3_action_calories and gc.has_method(&"get_creature_motor_v3_params"):
+    var v3: Dictionary = gc.get_creature_motor_v3_params()
+    _calorie_baseline_drain_per_sec = float(
+      v3.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec)
+    )
+    return
+  if gc.has_method(&"get_creature_motor_params"):
     var cm: Dictionary = gc.get_creature_motor_params()
-    _calorie_baseline_drain_per_sec = float(cm.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec))
-    _calorie_cost_per_unit_moved = float(cm.get("calorie_cost_per_unit_moved", _calorie_cost_per_unit_moved))
+    _calorie_baseline_drain_per_sec = float(
+      cm.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec)
+    )
+    _calorie_cost_per_unit_moved = float(
+      cm.get("calorie_cost_per_unit_moved", _calorie_cost_per_unit_moved)
+    )
 
 
 func _apply_calorie_drain_and_starvation(delta: float) -> void:
@@ -319,10 +333,17 @@ func _check_starvation_after_calorie_debit() -> void:
 ## Enables V3 per-action calorie debit; skips distance-based drain in [method _physics_process] for ENGINE/AI.
 func set_use_v3_action_calories(enabled: bool) -> void:
   _use_v3_action_calories = enabled
+  if enabled:
+    _refresh_calorie_burn_params()
 
 
 func use_v3_action_calories() -> bool:
   return _use_v3_action_calories
+
+
+## When enabled, [code]CreatureMotorStack[/code] applies actions; body skips deprecated intent path (§7.4).
+func set_motor_stack_drives_physics(enabled: bool) -> void:
+  _motor_stack_drives_physics = enabled
 
 
 func _resolve_creature_motor_v3_params(override: Dictionary) -> Dictionary:
@@ -550,6 +571,8 @@ func _sync_visual_facing() -> void:
 
 func _physics_process(delta: float) -> void:
   if _defeat_hidden:
+    return
+  if _motor_stack_drives_physics and _should_skip_v3_legacy_calorie_drain():
     return
   var pos_before := global_position
   var intent := _read_move_intent()

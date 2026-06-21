@@ -113,8 +113,12 @@ func new_game() -> void:
   _reset_food_plants()
   _spawn_duel_pair()
   if ad != null:
-    ad.register_creature(_herb_body)
-    ad.register_creature(_carn_body)
+    ad.register_creature_root(_herbivore_root)
+    ad.register_creature_root(_carnivore_root)
+    if _herbivore_root.has_method(&"configure_motor_stack"):
+      _herbivore_root.call("configure_motor_stack")
+    if _carnivore_root.has_method(&"configure_motor_stack"):
+      _carnivore_root.call("configure_motor_stack")
     ad.sync_duel_control_modes()
     ad.set_duel_round_active(true)
     ad.set_primary_creature(_herb_body)
