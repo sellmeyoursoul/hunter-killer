@@ -37,6 +37,8 @@ const _LoS := preload("res://creature/motor/line_of_sight.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
 const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memory.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
+const _MotorAction := preload("res://creature/motor/motor_action.gd")
+const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -108,7 +110,14 @@ func _run_all_async() -> void:
 
 func _run_all() -> void:
   _test_merge_defaults_and_override()
+  _test_creature_motor_v3_merge_defaults()
   _test_creature_pack_motor_overlays()
+  _test_creature_motor_v3_pack_overlays()
+  await _test_locomotion_executor_turn_facing()
+  await _test_locomotion_executor_move_forward()
+  _test_locomotion_executor_stay_calorie_debit()
+  await _test_locomotion_executor_move_blocked()
+  _test_body_no_distance_calorie_burn()
   _test_goal_source_memory()
   _test_goal_kind_phase_c_replay()
   _test_creature_trait_usage_wiring()
@@ -559,6 +568,214 @@ func _test_creature_pack_motor_overlays() -> void:
   _assert(str(rabbit_def.get("display_name")) == "Rabbit", "rabbit display_name for HUD")
   _assert(str(fox_def.get("display_name")) == "Fox", "fox display_name for HUD")
 
+func _test_creature_motor_v3_merge_defaults() -> void:
+  var base := _Merge.default_root()
+  _assert(base.has("creature_motor_v3"), "default_root includes creature_motor_v3")
+  var v3: Dictionary = base["creature_motor_v3"]
+  _assert(is_equal_approx(float(v3.get("turn_increment_deg", 0.0)), 22.5), "v3 turn_increment_deg default")
+  _assert(
+    is_equal_approx(float(v3.get("calorie_baseline_drain_per_sec", 0.0)), 1.0),
+    "v3 calorie_baseline_drain_per_sec default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("move_calorie_per_sec", 0.0)), 1.0),
+    "v3 move_calorie_per_sec default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("rest_baseline_multiplier", 0.0)), 0.5),
+    "v3 rest_baseline_multiplier default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("preserve_bias_food_floor", 0.0)), 0.90),
+    "v3 preserve_bias_food_floor default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("seek_priority_food_ceiling", 0.0)), 0.80),
+    "v3 seek_priority_food_ceiling default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("los_blocked_occlusion_fraction", 0.0)), 0.80),
+    "v3 los_blocked_occlusion_fraction default",
+  )
+  _assert(int(v3.get("goal_replan_base_ticks", -1)) == 8, "v3 goal_replan_base_ticks default")
+  _assert(
+    is_equal_approx(float(v3.get("blocked_objective_chaos", 0.0)), 0.15),
+    "v3 blocked_objective_chaos default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("goal_consideration_chaos", 0.0)), 0.15),
+    "v3 goal_consideration_chaos default",
+  )
+  var file_root := {"creature_motor_v3": {"turn_increment_deg": 30.0}}
+  var merged: Dictionary = _Merge.merge_root(base, file_root)
+  _assert(
+    is_equal_approx(float(merged["creature_motor_v3"].get("turn_increment_deg", 0.0)), 30.0),
+    "merge creature_motor_v3 override",
+  )
+  _assert(
+    is_equal_approx(float(merged["creature_motor_v3"].get("move_calorie_per_sec", 0.0)), 1.0),
+    "merge creature_motor_v3 keeps default move_calorie_per_sec",
+  )
+
+func _test_creature_motor_v3_pack_overlays() -> void:
+  var base := _Merge.default_creature_motor_v3_params()
+  var rabbit_m := _Merge.merge_creature_motor_v3_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/rabbit",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("awareness_radius", 0.0)), 150.0),
+    "rabbit v3 pack awareness_radius",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("flight_acute_panic_radius", 0.0)), 220.0),
+    "rabbit v3 pack flight_acute_panic_radius",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("preserve_bias_food_floor", 0.0)), 0.90),
+    "rabbit v3 pack preserve_bias_food_floor",
+  )
+  var fox_m := _Merge.merge_creature_motor_v3_pack_overlay(
+    base.duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("awareness_radius", 0.0)), 150.0),
+    "fox v3 pack awareness_radius",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("awareness_cone_half_angle_deg", 0.0)), 50.0),
+    "fox v3 pack awareness_cone_half_angle_deg",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_m.get("awareness_radius", 0.0)), 150.0),
+    "rabbit v3 overlay overrides default awareness_radius",
+  )
+  var explicit_v3 := _PackRes.load_creature_motor_v3_overlay("res://assets/creatures/rabbit")
+  _assert(not explicit_v3.is_empty(), "rabbit pack defines creature_motor_v3 block")
+
+func _motor_v3_test_params() -> Dictionary:
+  return _Merge.default_creature_motor_v3_params()
+
+func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
+  var floor_body := StaticBody3D.new()
+  var floor_col := CollisionShape3D.new()
+  var floor_box := BoxShape3D.new()
+  floor_box.size = Vector3(40.0, 0.2, 40.0)
+  floor_col.shape = floor_box
+  floor_col.position = Vector3(0.0, -0.1, 0.0)
+  floor_body.add_child(floor_col)
+  floor_body.collision_layer = 1
+  floor_body.collision_mask = 1
+  parent.add_child(floor_body)
+  return floor_body
+
+func _test_locomotion_executor_turn_facing() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var floor_body := _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  var motor_v3 := _motor_v3_test_params()
+  var start := body.last_move_direction
+  for _i in 8:
+    _LocomotionExecutor.apply_action(body, _MotorAction.TURN_RIGHT, 1.0 / 60.0, motor_v3)
+  var end_facing := body.last_move_direction.normalized()
+  _assert(
+    is_equal_approx(start.dot(end_facing), -1.0),
+    "8 TURN_RIGHT yields ~180 deg facing (dot=%.3f)" % start.dot(end_facing),
+  )
+  _assert(
+    is_equal_approx(end_facing.length_squared(), 1.0, 0.01),
+    "facing stays normalized after turns",
+  )
+  main.queue_free()
+
+func _test_locomotion_executor_move_forward() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var floor_body := _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  await physics_frame
+  var pos_before := body.global_position
+  var outcome: ActionOutcome = _LocomotionExecutor.apply_action(
+    body, _MotorAction.MOVE_FORWARD, 1.0, _motor_v3_test_params()
+  )
+  await physics_frame
+  var disp := body.global_position - pos_before
+  disp.y = 0.0
+  _assert(disp.length_squared() > 1e-4, "MOVE_FORWARD displaces along facing")
+  _assert(
+    disp.normalized().dot(body.last_move_direction.normalized()) > 0.95,
+    "MOVE_FORWARD displacement aligns with facing",
+  )
+  _assert(not outcome.blocked, "MOVE_FORWARD open floor not blocked")
+  main.queue_free()
+
+func _test_locomotion_executor_stay_calorie_debit() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.current_calories = 10.0
+  var delta := 0.5
+  var motor_v3 := _motor_v3_test_params()
+  var expected_cost := _MotorAction.calorie_cost_for(_MotorAction.STAY, delta, motor_v3)
+  var outcome: ActionOutcome = body.apply_action(_MotorAction.STAY, delta, motor_v3)
+  _assert(
+    is_equal_approx(outcome.calorie_cost, expected_cost),
+    "STAY outcome reports baseline calorie cost",
+  )
+  _assert(
+    is_equal_approx(body.current_calories, 10.0 - expected_cost),
+    "STAY debits baseline * delta on body",
+  )
+  main.queue_free()
+
+func _test_locomotion_executor_move_blocked() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var floor_body := _motor_v3_test_floor(main)
+  var wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(0.5, 4.0, 4.0)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  wall.add_child(col)
+  wall.global_position = Vector3(1.2, 1.0, 0.0)
+  wall.collision_layer = 1
+  main.add_child(wall)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  await physics_frame
+  var outcome: ActionOutcome = _LocomotionExecutor.apply_action(
+    body, _MotorAction.MOVE_FORWARD, 1.0, _motor_v3_test_params()
+  )
+  await physics_frame
+  _assert(outcome.blocked, "MOVE_FORWARD against wall sets blocked")
+  main.queue_free()
+
+func _test_body_no_distance_calorie_burn() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.set_control_mode(_ControlMode.engine_as_int())
+  body.current_calories = 10.0
+  body.velocity = Vector3(100.0, 0.0, 0.0)
+  body.apply_action(_MotorAction.STAY, 1.0, _motor_v3_test_params())
+  var after_action := body.current_calories
+  body.call("_physics_process", 1.0)
+  _assert(
+    is_equal_approx(body.current_calories, after_action),
+    "v3 body skips distance calorie burn in _physics_process",
+  )
+  main.queue_free()
+
 func _test_creature_perception_3d_scale() -> void:
   var def = _CreatureDefinition.new()
   def.perception_radius_scale = 1.5
@@ -751,9 +968,9 @@ func _test_environment_baked_grid() -> void:
   _assert(baked.cell_width == 2 and baked.cell_height == 1, "bake cell dims from 4x2 image with pixels_per_cell 2")
   _assert(baked.get_kind_id_at(0, 0) == 0 and baked.get_kind_id_at(1, 0) == 1, "bake maps top-left pixel per cell")
   _assert(baked.is_valid_shape(), "baked buffer matches dimensions")
-  var wc: Vector2i = baked.world_to_cell(Vector3(33.0, 0.0, 10.0))
+  var wc: Vector2i = baked.world_to_cell(Vector2(33.0, 10.0))
   _assert(wc == Vector2i(1, 0), "world_to_cell uses floor division by cell_size")
-  var d1 = baked.sample_cell_data_at_world(Vector3(50.0, 0.0, 0.0))
+  var d1 = baked.sample_cell_data_at_world(Vector2(50.0, 0.0))
   _assert(d1 != null and d1.get("passible") == false, "sample_cell_data_at_world returns squeeze preset")
 
 func _test_environment_footprint_overlap() -> void:

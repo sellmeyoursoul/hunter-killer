@@ -96,6 +96,11 @@
     "post_los_seek_planner_enabled": true,
     "post_los_replan_base_ticks": 8
   },
+  "creature_motor_v3": {
+    "awareness_radius": 150.0,
+    "awareness_cone_extra": 400.0,
+    "awareness_cone_half_angle_deg": 50.0
+  },
   "strategy_class_tags": {
     "extra_modalities": []
   },

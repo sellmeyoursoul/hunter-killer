@@ -1258,7 +1258,9 @@ Every **n** physics ticks, re-evaluate zone of awareness and run **goal consider
 3. Remove code per §12.1 dispositions; empty stubs where noted. **Sibling doc pass (same step):** execute **§12.3.1** + **§12.3.3** checklists; set matching **§13 Tracking** rows to **Done** when sibling files land. Adapter code remains **§12.2 6d**.
    - [x] **Step 3 closed 2026-06-20** — V2 motor modules deleted; `ai_driver.gd` motor stub; `run_all.gd` pruned; sibling sync **§12.3.1** + **§12.3.3**.
 4. Address linter errors.
+   - [x] **Step 4 closed 2026-06-20** — `check_gdscript_no_tabs.py` clean; Step 3 scripts parse; fixed `world_to_cell` Vector2 type in `run_all.gd`.
 5. Run game — **§12 Step 3–5 QA contract** below; no intelligent creature movement expected; fix **non-motor** launch/crash errors only.
+   - [x] **Step 5 closed 2026-06-20** — duel launches; no errors; idle creatures + calorie drain (manual smoke).
 6. Implement code changes per **§12.2** sub-phases (**6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**); repeat 6–10 after each sub-phase closes.
 7. Address linter errors.
 8. Review code against design for gaps, inconsistencies, sibling-doc conflicts.
@@ -1427,6 +1429,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 #### 6a — Execution
 
+**Closed 2026-06-20** — headless `run_all.gd` green (turn/move/blocked/calorie gates); manual duel smoke (idle + calorie drain).
+
 **Entry:** Step 3 stubs compile; `creature_motor_v3` merge block exists (calorie keys minimum).
 
 **In scope:** §7 — `Action` types, `apply_action`, facing (§7.3), calorie debit (§7.5), `ActionOutcome`, body integration (§7.4). Deprecate ENGINE `set_creature_move_intent` / distance calorie on body (§15 #14). Add **`creature_motor_v3`** merge in `game_config_merge.gd` + **one-shot copy** duel `creature_motor` → `creature_motor_v3` (§12.2 pack migration <<Comment>>); **`OLog`** guard if V3 path reads legacy `creature_motor` (§15 #9).
@@ -1453,9 +1457,82 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ---
 
+#### 6b pre-flight checklist
+
+<<Comment: Generated from 6a implementation review (2026-06-20). Run **before** starting 6b code; re-run after each 6b vertical slice before closing acceptance.>>
+
+**Purpose:** 6a delivered a **testable execution module** that is **not wired** to the live duel loop. 6b introduces `creature_motor_stack.tick()` and replaces the `ai_driver` motor stub — the highest-risk seam is **one action → one apply → one debit per tick** (§7.4). Fail any **Blocker** row before writing hub code; fail any **Blocker** in **Integration contract** before manual smoke.
+
+##### A — 6a closure (entry gates)
+
+| # | Check | Blocker? |
+|---|-------|----------|
+| A1 | §12.2 **6a** headless gates green on maintainer machine (`run_all.gd` — turn, move, STAY calorie, blocked, no distance burn, v3 merge/overlays) | **Yes** |
+| A2 | `python tools/check_gdscript_no_tabs.py` clean | **Yes** |
+| A3 | `LocomotionExecutor`, `MotorAction`, `ActionOutcome` registered / preload paths resolve (no missing-class launch errors) | **Yes** |
+| A4 | Duel `pack_resources.json` blocks define **`creature_motor_v3`** (rabbit + fox); legacy `creature_motor` still present only for archived tests until step 11 | No |
+| A5 | §12.2 **6a** acceptance row checked in this doc after A1–A3 pass | No — **closed 2026-06-20** |
+
+##### B — Integration contract (§7.4 tick order)
+
+| # | Check | Blocker? |
+|---|-------|----------|
+| B1 | **Single owner per tick:** `motor_stack.tick()` selects exactly one `Action` → `LocomotionExecutor.apply_action(body, …)` → **no second** horizontal move in the same physics step | **Yes** |
+| B2 | **`_physics_process` gating:** When stack owns ENGINE/AI motion, body **does not** re-apply `creature_move_intent` / `apply_horizontal_move_intent` from the deprecated vector path (§7.4 — retire intent vector for ENGINE) | **Yes** |
+| B3 | **`set_use_v3_action_calories(true)`** enabled for every ENGINE/AI body before first stack tick (duel spawn or root init) — distance burn in `_apply_calorie_drain_and_starvation` skipped for ENGINE/AI | **Yes** |
+| B4 | **One debit per tick:** `debit_action_calories` runs once per applied action; `_physics_process` does **not** also distance-burn when B3 is set | **Yes** |
+| B5 | **Playfield clamp:** After executor move, playfield safety net runs (either inside executor post-move hook or once per tick after `apply_action` — must not rely solely on `_physics_process` intent path) | **Yes** |
+| B6 | **Gravity / floor:** Non-move actions (`STAY`, `TURN_*`) still allow gravity / floor contact in the same tick if body remains a `CharacterBody3D` step (document chosen approach in stack or body) | No |
+| B7 | **`ai_driver`:** Drops per-body `set_creature_move_intent(Vector3.ZERO)` loop for ENGINE subjects; iterates registered **`CreatureRoot3D`** instances and calls **`motor_stack.tick()`** only (§1, §7.4) | **Yes** |
+| B8 | Headless **integration test** added: one tick through stack (hub → `STAY`) → single calorie debit, zero duplicate displacement vs baseline-only friction drift | **Yes** |
+
+##### C — Config namespace (`creature_motor_v3` only)
+
+| # | Check | Blocker? |
+|---|-------|----------|
+| C1 | Stack, hub, and executor read **`GameConfig.get_creature_motor_v3_params_for_pack(pack_root)`** (or equivalent per-spawn merge) — **not** `get_creature_motor_params()` | **Yes** |
+| C2 | Body `_refresh_calorie_burn_params()` / food-outcome thresholds migrated to **`creature_motor_v3`** keys where V3 path is active (or stack passes merged dict into body at spawn) | **Yes** |
+| C3 | **`OLog` warn-once** if any V3 stack/hub/executor code path reads legacy **`creature_motor`** (§12.2 6a <<Comment>>, §15 #9) | No |
+| C4 | `merge_creature_motor_v3_from_legacy` covered by headless test (pack **without** explicit v3 block still merges calorie/awareness keys) | No |
+
+##### D — 6a test debt (close during 6b or before 6c)
+
+| # | Check | Blocker for 6b close? |
+|---|-------|------------------------|
+| D1 | `MOVE_BACKWARD` displacement + not-blocked on open floor | No |
+| D2 | `TURN_LEFT` facing + turn calorie = `move_calorie_per_sec × delta` | No |
+| D3 | `REST` calorie = baseline × `rest_baseline_multiplier` × delta | No |
+| D4 | `apply_action` without `set_use_v3_action_calories(true)` does **not** double-burn (negative test) | No |
+| D5 | Realistic `delta` (e.g. `1/60`) for move/blocked tests — not only `delta=1.0` | No |
+| D6 | `ActionOutcome.blocked` false when playfield clamp stops motion without wall contact (document expected behavior) | No |
+
+##### E — Hub / stack scaffolding (6b slice 1)
+
+| # | Check | Blocker? |
+|---|-------|----------|
+| E1 | `creature_motor_stack.gd` exists; holds hub + cadence shell; **no** cross-creature static state | **Yes** |
+| E2 | `CreatureRoot3D` owns one stack instance; duel registers two roots → **dual-stack isolation** headless test passes | **Yes** |
+| E3 | Hub slice 1: empty / stub table → **`STAY`** every tick; calories drain at baseline only (manual smoke) | **Yes** |
+| E4 | **`tier2_dominance.gd`** + **`trait_tier2_mapper.gd`** deleted; eligibility matrix lives in hub module | **Yes** (before 6b close) |
+| E5 | Flight fast-path **stub** (flag only) — no full flee geometry until 6c/6d | No |
+
+##### F — Manual smoke (6b; not Step 5)
+
+| # | Expected | Failure signal |
+|---|----------|----------------|
+| F1 | Duel launches; no crash | Error spam, failed load |
+| F2 | Creatures **idle** (`STAY`); no pursuit / seek | Movement toward food or prey |
+| F3 | Calories drain at **baseline** rate (~1 cal/s per §7.5 defaults), not distance-based | Burn tracks sliding / jitter without stack actions |
+| F4 | No duplicate motion (visual slide or speed 2×) | Body moves on `STAY` ticks |
+
+**Sign-off:** Maintainer checks all **Blocker = Yes** rows in **A**, **B**, **E1–E3**, and **C1–C2** before marking §12.2 **6b** acceptance closed.
+
+---
+
+
 #### 6b — Hub shell
 
-**Entry:** 6a acceptance closed.
+**Entry:** 6a acceptance closed. Complete **§12.2 6b pre-flight checklist** (all Blocker rows) before first hub/stack commit.
 
 **In scope:** §1 hub entry (including **`trait_goal_mul = 1.0`** / **`trait_tactic_mul = 1.0`** — no `trait_tier2_mapper`), §10 cadence shell, `ActiveGoal` table, empty-table → `STAY` (§7.2), wire **`CreatureRoot3D` → `creature_motor_stack.tick()`** (§1, §7.4); `ai_driver` iterates roots only. Flight fast-path **stub** (flag only). Hub **`build_eligible_goals`** + eligibility matrix (§1); **delete** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) and [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd). **Flight urgency geometry** ships in 6b; **`threat_disposition_mod`** stubbed **1.0** until **6d**. **`creature_motor_v3`** merge wired — V3 paths **must not** read legacy **`creature_motor`** (§15). **§1 goal scoring closed** (§13).
 

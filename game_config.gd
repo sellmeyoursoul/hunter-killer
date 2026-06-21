@@ -1,6 +1,6 @@
 extends Node
 ## Autoload **GameConfig**: loads and merges [code]user://game_config.json[/code] before **OLog** initializes.
-## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], and [code]creature_motor[/code] with safe defaults.
+## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], [code]creature_motor[/code], and [code]creature_motor_v3[/code] with safe defaults.
 
 const CONFIG_PATH := "user://game_config.json"
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -57,10 +57,24 @@ func get_creature_motor_params() -> Dictionary:
   return cm.duplicate(true)
 
 
+## Merged [code]creature_motor_v3[/code] (V3 locomotion / hub / planner keys only).
+func get_creature_motor_v3_params() -> Dictionary:
+  var cm: Variant = _merged.get("creature_motor_v3", {})
+  if typeof(cm) != TYPE_DICTIONARY:
+    return _Merge.default_creature_motor_v3_params()
+  return cm.duplicate(true)
+
+
 ## Spine + profile + optional pack [code]creature_motor[/code] overlay for one creature instance.
 func get_creature_motor_params_for_pack(pack_root: String) -> Dictionary:
   var base := get_creature_motor_params()
   return _Merge.merge_creature_motor_pack_overlay(base, pack_root)
+
+
+## Defaults + optional pack [code]creature_motor_v3[/code] overlay for one creature instance.
+func get_creature_motor_v3_params_for_pack(pack_root: String) -> Dictionary:
+  var base := get_creature_motor_v3_params()
+  return _Merge.merge_creature_motor_v3_pack_overlay(base, pack_root)
 
 
 ## Full merged root (advanced callers / tests).

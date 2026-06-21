@@ -282,6 +282,37 @@ static func merge_creature_motor_pack_overlay(motor_p: Dictionary, pack_root: St
   return _merge_dict_shallow(motor_p, over)
 
 
+## V3 motor defaults ([CREATURE_MOVEMENT_V3.md §7.5 / §12.2 6a](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+static func default_creature_motor_v3_params() -> Dictionary:
+  return {
+    "turn_increment_deg": 22.5,
+    "calorie_baseline_drain_per_sec": 1.0,
+    "move_calorie_per_sec": 1.0,
+    "rest_baseline_multiplier": 0.5,
+    "preserve_bias_food_floor": 0.90,
+    "seek_priority_food_ceiling": 0.80,
+    "preserve_seek_blend_smoothness": 0.5,
+    "starvation_override_food_ceiling": 0.10,
+    "awareness_radius": 1500.0,
+    "los_blocked_occlusion_fraction": 0.80,
+    "goal_replan_base_ticks": 8,
+    "blocked_objective_chaos": 0.15,
+    "goal_consideration_chaos": 0.15,
+    "flight_acute_panic_radius": 220.0,
+  }
+
+
+## Per-spawn pack overlay: [param motor_v3] ∪ [code]pack_resources.json[/code] [code]creature_motor_v3[/code] (one-shot legacy copy when absent).
+static func merge_creature_motor_v3_pack_overlay(motor_v3: Dictionary, pack_root: String) -> Dictionary:
+  var root := str(pack_root).strip_edges()
+  if root.is_empty():
+    return motor_v3.duplicate(true)
+  var over := _PackRes.merge_creature_motor_v3_pack_overlay(root)
+  if over.is_empty():
+    return motor_v3.duplicate(true)
+  return _merge_dict_shallow(motor_v3, over)
+
+
 ## Defaults for [code]inference_client[/code]; empty [code]INFERENCE_BASE_URL[/code] means AI cannot arm until set.
 static func default_inference_client() -> Dictionary:
   return {
@@ -313,6 +344,7 @@ static func default_root() -> Dictionary:
     "inference_client": default_inference_client(),
     "perception": default_perception_params(),
     "creature_motor": default_creature_motor_params(),
+    "creature_motor_v3": default_creature_motor_v3_params(),
   }
 
 
@@ -338,6 +370,8 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
     r["perception"] = _merge_dict_shallow(r["perception"], file_root["perception"])
   if file_root.has("creature_motor"):
     r["creature_motor"] = _merge_dict_shallow(r["creature_motor"], file_root["creature_motor"])
+  if file_root.has("creature_motor_v3"):
+    r["creature_motor_v3"] = _merge_dict_shallow(r["creature_motor_v3"], file_root["creature_motor_v3"])
   return r
 
 

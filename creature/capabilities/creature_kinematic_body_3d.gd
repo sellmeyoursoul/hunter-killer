@@ -14,6 +14,8 @@ const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
+const _ConfigMerge := preload("res://AI_int_lib/game_config_merge.gd")
+const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 
 @export var definition: Variant
 @export var is_hostile: bool = false
@@ -41,6 +43,8 @@ var _calorie_baseline_drain_per_sec: float = 1.0
 var _calorie_cost_per_unit_moved: float = 0.002
 var _defeat_hidden: bool = false
 var _wall_slide_away_hint: Vector3 = Vector3.ZERO
+## When true, ENGINE/AI calorie burn is owned by V3 [method apply_action] / [LocomotionExecutor] (§7.5).
+var _use_v3_action_calories: bool = false
 
 
 func _ready() -> void:
@@ -203,6 +207,7 @@ func set_control_mode(mode: int) -> void:
 
 
 ## AiDriver motor contract: [code]Vector3(x, 0, z)[/code] or legacy [code]Vector2(x, z)[/code] on the horizontal plane.
+## @deprecated V3 ENGINE path — use [method apply_action] / [LocomotionExecutor] instead ([CREATURE_MOVEMENT_V3.md §7.4](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 func set_creature_move_intent(dir: Variant) -> void:
   var h := _MotorPlane.read_dir(dir, _MotorPlane.HORIZONTAL_ZERO)
   creature_move_intent = h if h.length_squared() > 1e-12 else Vector3.ZERO
@@ -288,6 +293,19 @@ func _apply_calorie_drain_and_starvation(delta: float) -> void:
   )
   current_calories = maxf(0.0, current_calories - burn)
   _push_calories_to_vitals()
+  _check_starvation_after_calorie_debit()
+
+
+## Debits per-action V3 calorie cost ([CREATURE_MOVEMENT_V3.md §7.5](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+func debit_action_calories(cost: float) -> void:
+  if _defeat_hidden or _starvation_fired:
+    return
+  current_calories = maxf(0.0, current_calories - maxf(0.0, cost))
+  _push_calories_to_vitals()
+  _check_starvation_after_calorie_debit()
+
+
+func _check_starvation_after_calorie_debit() -> void:
   if current_calories > 0.0:
     return
   _starvation_fired = true
@@ -296,6 +314,31 @@ func _apply_calorie_drain_and_starvation(delta: float) -> void:
   var main := get_tree().current_scene
   if main != null and main.has_method(&"end_round") and is_hostile:
     main.call(&"end_round", "starvation_carn_herb_win", "herbivore")
+
+
+## Enables V3 per-action calorie debit; skips distance-based drain in [method _physics_process] for ENGINE/AI.
+func set_use_v3_action_calories(enabled: bool) -> void:
+  _use_v3_action_calories = enabled
+
+
+func use_v3_action_calories() -> bool:
+  return _use_v3_action_calories
+
+
+func _resolve_creature_motor_v3_params(override: Dictionary) -> Dictionary:
+  if not override.is_empty():
+    return override
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
+    return gc.get_creature_motor_v3_params()
+  return _ConfigMerge.default_creature_motor_v3_params()
+
+
+## V3 locomotion entry — delegates to [LocomotionExecutor] (headless tests + future motor stack).
+func apply_action(action: Variant, delta: float, motor_v3: Dictionary = {}) -> ActionOutcome:
+  return _LocomotionExecutor.apply_action(
+    self, action, delta, _resolve_creature_motor_v3_params(motor_v3)
+  )
 
 
 func _apply_defeat_local() -> void:
@@ -518,7 +561,18 @@ func _physics_process(delta: float) -> void:
   _apply_facing_after_horizontal_move(pos_before, intent)
   _sync_visual_facing()
   _sync_calories_from_vitals()
+  if _should_skip_v3_legacy_calorie_drain():
+    return
   _apply_calorie_drain_and_starvation(delta)
+
+
+func _should_skip_v3_legacy_calorie_drain() -> bool:
+  if not _use_v3_action_calories:
+    return false
+  return (
+    control_mode == _ControlMode.engine_as_int()
+    or control_mode == _ControlMode.ai_as_int()
+  )
 
 
 func _process(_delta: float) -> void:

@@ -62,6 +62,49 @@ static func load_creature_motor_overlay(pack_root: String) -> Dictionary:
   return cm
 
 
+const _V3_LEGACY_COPY_KEYS: Array[StringName] = [
+  &"calorie_baseline_drain_per_sec",
+  &"awareness_radius",
+  &"awareness_cone_extra",
+  &"awareness_cone_half_angle_deg",
+  &"preserve_bias_food_floor",
+  &"seek_priority_food_ceiling",
+  &"preserve_seek_blend_smoothness",
+  &"starvation_override_food_ceiling",
+]
+
+
+## **`creature_motor_v3`** overlay from pack root ([CREATURE_MOVEMENT_V3.md §12.2 6a](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+static func load_creature_motor_v3_overlay(pack_root: String) -> Dictionary:
+  var root := load_pack_root(pack_root)
+  var cm: Variant = root.get("creature_motor_v3", {})
+  if typeof(cm) != TYPE_DICTIONARY:
+    return {}
+  return cm
+
+
+## One-shot copy of selected legacy [code]creature_motor[/code] keys when [code]creature_motor_v3[/code] is absent.
+static func merge_creature_motor_v3_from_legacy(pack_root: String) -> Dictionary:
+  var legacy := load_creature_motor_overlay(pack_root)
+  if legacy.is_empty():
+    return {}
+  var out := {}
+  for key in _V3_LEGACY_COPY_KEYS:
+    if legacy.has(key):
+      out[key] = legacy[key]
+  if legacy.has("herbivore_flee_panic_radius") and not out.has("flight_acute_panic_radius"):
+    out["flight_acute_panic_radius"] = legacy["herbivore_flee_panic_radius"]
+  return out
+
+
+## Pack overlay for V3 motor: explicit [code]creature_motor_v3[/code] block, else one-shot legacy copy.
+static func merge_creature_motor_v3_pack_overlay(pack_root: String) -> Dictionary:
+  var v3 := load_creature_motor_v3_overlay(pack_root)
+  if not v3.is_empty():
+    return v3
+  return merge_creature_motor_v3_from_legacy(pack_root)
+
+
 ## Loads **`shared_resources`** only (empty **`Dictionary`** when **`pack_resources.json`** is absent or malformed).
 static func load_shared_resources_map(pack_root: String) -> Dictionary:
   var json_path := "%s/pack_resources.json" % _normalized_pack_root(pack_root)
