@@ -1,6 +1,8 @@
 # Hunter Killer — 3D creature architecture (reuse vs leaf data)
 
 > **Purpose:** Implementable map of the **3D creature** stack: **one copy** of each **capability** (vitals math, locomotion, perception scales, diet policies, predation clamp) and **leaf-heavy** [CreatureDefinition](../../creature/definition/creature_definition.gd) Resources for species. **Production** duel bodies live in [`creature/templates/*_kinematic_3d.tscn`](../../creature/templates/); entry [`main_3d.tscn`](../../main_3d.tscn). **Parent design:** internal plan “3D creatures: reuse vs leaf data”; goals alignment: [CREATURE_GOALS.md](../Completed_Features/CREATURE_GOALS.md). **Index:** [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
+>
+> **Tier:** Definitive (tier III) — align with code, `project.godot`, and creature templates; drift is a bug.
 
 ---
 
@@ -15,6 +17,7 @@
 | **Diet → default groups** | [diet_registry.gd](../../creature/capabilities/diet_registry.gd) (static) | Runs at setup / AI context build | [CreatureDefinition.FeedingMode](../../creature/definition/creature_definition.gd) |
 | **Intake policy data** | [food_intake_policy.gd](../../creature/definition/food_intake_policy.gd) (Resource) | Referenced by AI / overlap handlers | `plant_groups`, `prey_groups` |
 | **Locomotion (kinematic)** | [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd) | `CharacterBody3D` **Body** child | [LocomotionProfile](../../creature/definition/locomotion_profile.gd) on definition; **`_apply_physics_layers()`** sets player vs mob bits |
+| **Visual facing (3D)** | [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd) `_sync_visual_facing` + [motor_plane.gd](../../creature/motor/motor_plane.gd) `yaw_from_horizontal_dir` | `Body/Visual` child (mounted by [creature_root_3d.gd](../../creature/creature_root_3d.gd)) | [member last_move_direction](../../creature/capabilities/creature_kinematic_body_3d.gd) — same vector as awareness cone; capsule stays axis-aligned |
 | **Orchestration** | [creature_root_3d.gd](../../creature/creature_root_3d.gd) | `Node3D` scene root | `@export var definition` |
 
 **Pure helpers** stay free of `Node` for headless tests. **Components** hold runtime state (e.g. `current_calories`) and emit signals.
@@ -25,7 +28,7 @@
 
 ## 2. Leaf data: CreatureDefinition
 
-Single Resource type (plus [LocomotionProfile](../../creature/definition/locomotion_profile.gd)): `species_id`, `feeding_mode`, vitals multipliers, perception scales, collision capsule hints, motivation trait **placeholders** ([CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md)), optional `variant_scene`. **Example leaf asset:** [rabbit_archetype.tres](../../creature/species/rabbit_archetype.tres). Species **do not** need their own `.gd` unless behavior diverges (climb, burrow, etc.).
+Single Resource type (plus [LocomotionProfile](../../creature/definition/locomotion_profile.gd)): `species_id`, `feeding_mode`, vitals multipliers, perception scales, collision capsule hints, motivation trait **placeholders** ([CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md)), optional `variant_scene`. **Example leaf asset:** [rabbit_archetype.tres](../../creature/species/rabbit_archetype.tres). Species **do not** need their own `.gd` unless behavior diverges (climb, burrow, etc.).
 
 ---
 
@@ -43,6 +46,7 @@ Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals
 ## 4. AI / motor bridge (intent API)
 
 - **Kinematic:** `CreatureKinematicBody3D.apply_horizontal_move_intent` — pass **Vector3**; **Y is ignored**; horizontal velocity integrated and **gravity** applied on this node. **XZ ownership:** all flattening from motor-plane direction to world XZ happens **here** (via [MotorPlane](../../creature/motor/motor_plane.gd) adapter).
+- **Visual facing:** `Body/Visual.rotation.y` tracks **`last_move_direction`** via `_sync_visual_facing()` (after each physics step and in `_process` so AiDriver stationary 8-way turns stay aligned). Yaw from [MotorPlane.yaw_from_horizontal_dir](../../creature/motor/motor_plane.gd) assumes mesh default forward **−Z**; per-body **`visual_yaw_offset_rad`** export corrects mismatched imports. **Collision capsule does not rotate.**
 - **Size sync (M4):** `apply_effective_creature_size(size)` scales mesh + capsule with `creature_size`; `get_collision_capsule_radius()` / `get_los_eye_height()` feed nav + LoS.
 - **AiDriver / scripting:** single “direction in, motion out” contract on registered [code]CharacterBody3D[/code] duel bodies; cardinal motor output maps to [code]Vector3(x, 0, z)[/code] in one adapter — **not** scattered per species.
 
@@ -50,7 +54,7 @@ Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals
 
 ## 5. Testing strategy
 
-- **Headless:** [tests/run_all.gd](../../tests/run_all.gd) covers **vitals burn**, **predation clamp**, **diet default policies**, **perception scale**, **3D template load**, **predation contact** — **no** per-species branches.
+- **Headless:** [tests/run_all.gd](../../tests/run_all.gd) covers **vitals burn**, **predation clamp**, **diet default policies**, **perception scale**, **3D template load**, **predation contact**, **motor-plane yaw ↔ 8-way facing** — **no** per-species branches.
 - **Play mode:** load templates under a `SubViewport` or dedicated 3D test scene when physics integration is required (deferred).
 
 ---
@@ -59,5 +63,7 @@ Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals
 
 | Date | Change |
 |------|--------|
+| 2026-06-09 | **Visual facing:** `Body/Visual` Y rotation synced to `last_move_direction` (awareness cone); `MotorPlane.yaw_from_horizontal_dir`; optional `visual_yaw_offset_rad`. |
+| 2026-06-09 | Promoted from `Draft_Features/` to `Definitive_Features/` (tier III). |
 | 2026-06-08 | **D4:** Unified kinematic templates only; removed rigid-body fork and stale 2D parallel wording (M3). |
 | 2026-05-15 | Initial architecture doc + `creature/definition/*`, `creature/capabilities/*`, templates. |

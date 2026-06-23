@@ -1,0 +1,37 @@
+---
+description: YAML frontmatter and Directory Scope template for new .cursor/agents specialists
+globs: ".cursor/agents/**"
+alwaysApply: false
+---
+
+# Subagent provisioning template
+
+**Applies when:** Creating or editing files under [`.cursor/agents/`](../agents/).
+
+Reference implementation: [`creature-motor.md`](../agents/creature-motor.md). Copy-paste skeleton: [`_TEMPLATE.md`](../agents/_TEMPLATE.md).
+
+## Required YAML frontmatter
+
+| Key | Purpose |
+|-----|---------|
+| `name` | Kebab-case identifier matching the filename (without `.md`) |
+| `description` | When to activate (task cues) + strict write scope summary |
+| `model` | `inherit` unless a specific model is required |
+| `readonly` | `false` for implementers; `true` for review-only agents |
+| `is_background` | `false` for interactive domain work |
+
+## Required body sections
+
+1. `# [Domain] Specialist Protocol`
+2. `## Directory Scope` — primary write paths; optional read-only exceptions (no writes outside scope)
+3. `## Execution Constraints` — include at minimum:
+   - Verify syntax/types before completion
+   - Return structural diff summary to orchestrator, not full source dumps
+   - Follow scoped `.cursor/rules/*.mdc` for the domain (e.g. `gdscript.mdc`)
+   - Flag orchestrator for doc sync when contracts change
+   - **Do not provision subagents or edit `.cursor/agents/` from this spoke**
+
+## After creating a new agent
+
+- Register the primary write path in [`AGENTS.md`](./AGENTS.md) path→agent table
+- Orchestrator logs: `[System] Provisioned new specialist subagent: @[name] for path [path].`

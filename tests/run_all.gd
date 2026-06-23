@@ -7,6 +7,7 @@ const _Wire := preload("res://AI_int_lib/perception_wire.gd")
 const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
 const _Motor := preload("res://creature/motor/cardinal_avoidance.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const IntentHoldScr := preload("res://creature/motor/scripted_intent_hold.gd")
 const _NoGoalPatrolLockScr := preload("res://creature/motor/no_goal_patrol_lock.gd")
 const _SeekStationaryLookScr := preload("res://creature/motor/seek_stationary_look.gd")
@@ -31,6 +32,7 @@ const _CreaturePerception3D := preload("res://creature/capabilities/creature_per
 const _CreatureRoot3D := preload("res://creature/creature_root_3d.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _PlayfieldBounds3D := preload("res://environment/playfield_bounds_3d.gd")
+const _TopDownCameraScr := preload("res://environment/top_down_camera_control.gd")
 const _PerimeterBoulders := preload("res://environment/playfield_perimeter_boulders.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
@@ -44,12 +46,15 @@ const _SeekDirTurnScr := preload("res://creature/motor/seek_direction_turn.gd")
 const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memory.gd")
 const _MotorOct := preload("res://creature/motor/motor_oct_directions.gd")
 const _AiDriverScr := preload("res://AI_int_lib/ai_driver.gd")
+const _GoalVisLatch := preload("res://creature/motor/goal_visibility_latch.gd")
 const _GoalSeekScr := preload("res://creature/motor/goal_seek.gd")
 const _SeekCandScr := preload("res://creature/motor/seek_candidate.gd")
 const _MotorTargetBuilder := preload("res://creature/motor/motor_target_builder.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
+const _MotorPlaneScr := preload("res://creature/motor/motor_plane.gd")
+const _EightWayDirScr := preload("res://creature/motor/eight_way_directions.gd")
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
 const _SolidShrub3DScenePath := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
@@ -59,6 +64,7 @@ const _EnvMerge := preload("res://environment/environment_movement_impact.gd")
 const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
 const _LoS := preload("res://creature/motor/line_of_sight.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
+const _SeekPlanner := preload("res://creature/motor/seek_planner.gd")
 
 var _failures: int = 0
 
@@ -147,6 +153,7 @@ func _run_all() -> void:
   _test_escape_reversal_suppression()
   _test_goal_belief_coarse_ttl()
   _test_goal_belief_merge_skips_live_awareness()
+  _test_plant_occluded_live_food_entries()
   _test_goal_seek_resolve_and_cost()
   _test_motor_target_builder_feeding_mode()
   _test_load_merged_config_repo_fallback()
@@ -182,7 +189,52 @@ func _run_all() -> void:
   _test_seek_direction_commit()
   _test_seek_direction_turn()
   _test_no_goal_patrol_lock()
+  _test_no_goal_patrol_lock_guided()
+  _test_predator_patrol_expanding_coverage()
+  _test_predator_pacing_trap_break()
+  _test_predator_south_wall_boulder_pinch_escape()
+  _test_predator_northeast_corner_interior_escape()
+  _test_predator_ne_corner_static_wedge_escape()
+  _test_predator_ne_corner_wedge_multi_tick_replay()
+  _test_predator_ne_corner_rim_pocket_stall_escape()
+  _test_predator_ne_corner_rim_pocket_no_pacing_override()
+  _test_predator_rim_pocket_escape_adopts_immediately()
+  _test_predator_rim_pocket_lock_seeds_without_stall()
+  _test_predator_outward_guard_allows_tangential_west_on_north_rim()
+  _test_predator_outward_guard_rejects_east_at_east_rim()
+  _test_predator_sanitize_preserves_tangential_west()
+  _test_predator_east_rim_outward_intent_forbidden()
+  _test_predator_pacing_trap_no_unchecked_lateral()
+  _test_predator_interior_esc_respects_east_wall()
+  _test_creature_kinematic_playfield_clamp_after_move()
+  _test_pinch_obstacle_influence_weight()
+  _test_pinch_obstacle_awareness_weighted_detection()
+  _test_predator_rim_patrol_eight_way()
+  _test_predator_interior_stuck_escape_midfield()
+  _test_goal_visibility_latch_streak_and_engagement()
+  _test_seek_occlusion_step_cost_no_los_ctx()
+  _test_predator_obstructed_hunt_active_lost_visual()
+  _test_predator_east_rim_to_interior_patrol()
+  _test_predator_patrol_heading_variance()
+  _test_predator_east_rim_peel_prefers_inward()
+  _test_predator_patrol_coverage_stall_escape()
+  _test_motor_cardinal_probe_scaled_for_small_playfield()
+  _test_static_obstacle_awareness_gated()
+  _test_static_obstacle_peripheral_vs_corridor()
+  _test_static_obstacle_off_axis_does_not_block_peel()
+  _test_predator_midfield_stall_escape_scaled_playfield()
+  _test_predator_east_rim_boulder_wedge_escape()
+  _test_predator_east_corridor_wall_aware_interior_escape()
+  _test_duel_scaled_awareness_stays_playfield_scaled()
+  _test_predator_no_prey_patrol_trail_repulsion()
+  _test_east_rim_patrol_heading_mix_scaled()
+  _test_predator_open_ground_patrol_east_rim()
+  _test_predator_no_prey_expanding_explore_segments()
+  _test_predator_patrol_wall_occlusion_active()
+  _test_predator_no_prey_patrol_heading_spread()
+  _test_predator_duel_weak_prey_prior()
   _test_seek_stationary_look()
+  _test_motor_plane_yaw_from_facing()
   _test_seek_diagonal_intent()
   _test_seek_wall_filter_and_backtrack()
   _test_blocked_approach_memory()
@@ -210,6 +262,7 @@ func _run_all() -> void:
   _test_diet_registry_defaults()
   _test_creature_perception_3d_scale()
   _test_creature_3d_template_scenes_load()
+  _test_shrub_3d_visual_scenes_load()
   await _test_creature_3d_predation_contact()
   _test_playfield_clamp()
   _test_playfield_bounds_3d_collision_only()
@@ -225,6 +278,8 @@ func _run_all() -> void:
   _test_human_move_intent_world_space()
   _test_human_facing_blocked_no_spin()
   _test_human_strafe_intent_stable_under_camera_spin()
+  _test_top_down_camera_pan_directions()
+  _test_top_down_camera_zoom_clamp()
   _test_footprint_geometry()
   _test_carnivore_pursuit_intent()
   _test_creature_diet_on_3d_bodies()
@@ -234,6 +289,9 @@ func _run_all() -> void:
   _test_creature_size_sync_capsule()
   await _test_line_of_sight_wall_occlusion()
   _test_nav_path_hint_invalid_map()
+  _test_nav_path_hint_first_waypoint_invalid_map()
+  _test_seek_planner_replan_interval()
+  _test_seek_planner_resolve_disabled_and_no_los()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -450,8 +508,12 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
+    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.65),
     "rabbit pack no-goal patrol lock duration",
+  )
+  _assert(
+    not bool(rabbit_m.get("plant_awareness_requires_los", true)),
+    "rabbit pack allows occluded-in-zone plants for goal belief sync",
   )
   var fox_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
@@ -482,12 +544,20 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack herbivore expanding explore mul",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 8.0),
+    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 4.0),
     "rabbit pack restores intent hold ticks",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
+    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 18.0),
+    "rabbit pack seek ready food weight",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 4.4),
     "fox pack duel motor chaos",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("geometry_escape_lock_ticks", 0.0)), 6.0),
+    "fox pack geometry escape lock ticks",
   )
   _assert(
     not bool(fox_m.get("predator_prey_awareness_omni", true)),
@@ -498,8 +568,16 @@ func _test_creature_pack_motor_overlays() -> void:
     "fox pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 1.0),
+    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.5),
     "fox pack no-goal patrol lock duration",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("weight_explore_trail_repulsion", 0.0)), 2.35),
+    "fox pack explore trail repulsion for patrol coverage",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("expanding_explore_base_physics_ticks", 0.0)), 48.0),
+    "fox pack expanding explore segment ticks for guided patrol",
   )
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
@@ -983,6 +1061,28 @@ func _test_goal_belief_coarse_ttl() -> void:
   var beliefs: Dictionary = (ad.get("_goal_belief_by_body") as Dictionary).get(BODY_ID, {})
   _assert(not beliefs.has(iid), "coarse belief evicted after coarse TTL")
   ad.queue_free()
+
+
+func _test_plant_occluded_live_food_entries() -> void:
+  var entries: Array = [
+    {
+      "pos": Vector3(120.0, 0.0, 80.0),
+      "instance_id": 501,
+      "occluded": true,
+      "line_of_sight_clear": false,
+    },
+    {
+      "pos": Vector3(200.0, 0.0, 80.0),
+      "instance_id": 502,
+      "occluded": false,
+      "line_of_sight_clear": true,
+    },
+  ]
+  var live: Array = _GoalBeliefScr.food_positions_from_live_entries(entries)
+  var all: Array = _GoalBeliefScr.food_positions_from_entries(entries)
+  _assert(live.size() == 1, "occluded plant excluded from live food seek positions")
+  _assert(all.size() == 2, "occluded plant kept for goal-belief sync ingest")
+  _assert((live[0] as Vector3).is_equal_approx(Vector3(200.0, 0.0, 80.0)), "live entry is LoS-clear bush")
 
 
 func _test_goal_belief_merge_skips_live_awareness() -> void:
@@ -2874,8 +2974,8 @@ func _test_hunger_calorie_clamp() -> void:
   var grant := 5.0
   var next := minf(cap, cur + grant)
   _assert(is_equal_approx(next, 10.0), "hunger burst clamps at caloric_needs")
-  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub.tscn"), "solid_shrub scene exists")
-  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub.tscn"), "open_shrub scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/solid_shrub/solid_shrub_3d.tscn"), "solid_shrub_3d scene exists")
+  _assert(ResourceLoader.exists("res://assets/plants/open_shrub/open_shrub_3d.tscn"), "open_shrub_3d scene exists")
 
 
 func _test_calorie_drain_movement_formula() -> void:
@@ -3395,6 +3495,31 @@ func _test_human_strafe_intent_stable_under_camera_spin() -> void:
   )
 
 
+func _test_top_down_camera_pan_directions() -> void:
+  var forward_only := _TopDownCameraScr.strengths_from_actions(0.0, 0.0, 0.0, 1.0)
+  _assert(
+    forward_only.is_equal_approx(Vector2(0.0, -1.0)),
+    "camera pan forward maps to world −Z",
+  )
+  var right_only := _TopDownCameraScr.strengths_from_actions(1.0, 0.0, 0.0, 0.0)
+  _assert(
+    right_only.is_equal_approx(Vector2(1.0, 0.0)),
+    "camera pan right maps to world +X",
+  )
+  var delta: Vector2 = _TopDownCameraScr.pan_offset_delta(forward_only, 1.0, 10.0)
+  _assert(
+    delta.is_equal_approx(Vector2(0.0, -10.0)),
+    "camera pan forward delta moves −Z at configured speed",
+  )
+
+
+func _test_top_down_camera_zoom_clamp() -> void:
+  var zoomed_in: float = _TopDownCameraScr.apply_zoom_step(0.4, true, 0.12, 0.35, 3.0)
+  _assert(is_equal_approx(zoomed_in, 0.35), "camera zoom in clamps at minimum scale")
+  var zoomed_out: float = _TopDownCameraScr.apply_zoom_step(2.95, false, 0.12, 0.35, 3.0)
+  _assert(is_equal_approx(zoomed_out, 3.0), "camera zoom out clamps at maximum scale")
+
+
 func _test_playfield_bounds_3d_collision_only() -> void:
   var playfield_root := Node3D.new()
   var floor_body := StaticBody3D.new()
@@ -3499,6 +3624,48 @@ func _test_creature_3d_template_scenes_load() -> void:
   _assert(rabbit.get_script() == _CreatureDefinition, "rabbit_archetype uses CreatureDefinition")
   _assert(rabbit.get("species_id") == &"rabbit", "rabbit archetype id")
   _assert(rabbit.get("locomotion_profile") != null, "rabbit has locomotion profile")
+
+
+func _test_shrub_3d_visual_scenes_load() -> void:
+  const open_path := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
+  const solid_path := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
+  _assert(ResourceLoader.exists(open_path), "open_shrub_3d exists")
+  _assert(ResourceLoader.exists(solid_path), "solid_shrub_3d exists")
+  _assert(
+    ResourceLoader.exists("res://assets/plants/open_shrub/bush_ready.blend"),
+    "open_shrub ready blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/open_shrub/bush.blend"),
+    "open_shrub depleted blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/solid_shrub/h-k-shrub_ready.blend"),
+    "solid_shrub ready blend exists",
+  )
+  _assert(
+    ResourceLoader.exists("res://assets/plants/solid_shrub/h-k-shrub.blend"),
+    "solid_shrub depleted blend exists",
+  )
+  for path in [open_path, solid_path]:
+    var scene := load(path) as PackedScene
+    _assert(scene != null, "%s loads" % path)
+    var bush := scene.instantiate() as Node3D
+    var holder := Node3D.new()
+    root.add_child(holder)
+    holder.add_child(bush)
+    var ready_v := bush.get_node_or_null("Visual/ReadyVisual") as Node3D
+    var depleted_v := bush.get_node_or_null("Visual/DepletedVisual") as Node3D
+    _assert(ready_v != null, "%s has ReadyVisual" % path)
+    _assert(depleted_v != null, "%s has DepletedVisual" % path)
+    bush.call("reset_session")
+    _assert(ready_v.visible, "%s ready visual visible when full" % path)
+    _assert(not depleted_v.visible, "%s depleted hidden when full" % path)
+    bush.set("current_calories", 0.0)
+    bush.call("_refresh_visual")
+    _assert(not ready_v.visible, "%s ready hidden when depleted" % path)
+    _assert(depleted_v.visible, "%s depleted visible when empty" % path)
+    holder.queue_free()
 
 
 func _test_creature_3d_predation_contact() -> void:
@@ -3975,6 +4142,2750 @@ func _test_no_goal_patrol_lock() -> void:
     )
 
 
+func _test_no_goal_patrol_lock_guided() -> void:
+  var pick := Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided")
+  var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
+  var st: Dictionary = {}
+  var north := Vector3(0.0, 0.0, -1.0)
+  reset.call(st)
+  var guided: Vector3 = pick.call(st, 1.0, 42, north, Callable(), false) as Vector3
+  _assert(guided.is_equal_approx(north), "guided patrol prefers expand hint when unblocked")
+  var second: Vector3 = pick.call(st, 1.0, 42, Vector3.RIGHT, Callable(), false) as Vector3
+  _assert(second.is_equal_approx(north), "guided patrol holds locked hint within lock window")
+  var block_north := func(dir: Vector3) -> bool:
+    return dir.is_equal_approx(north)
+  reset.call(st)
+  var fallback: Vector3 = pick.call(st, 0.01, 99, north, block_north, false) as Vector3
+  _assert(not fallback.is_equal_approx(north), "guided patrol falls back when hint blocked")
+  _assert(fallback.length_squared() > 1e-12, "guided patrol fallback moves when allow_idle false")
+  for i in 64:
+    reset.call(st)
+    var no_idle: Vector3 = pick.call(st, 0.01, 1000 ^ i, Vector3.ZERO, Callable(), false) as Vector3
+    _assert(no_idle.length_squared() > 1e-12, "allow_idle false never returns stay-still")
+  var seg_lock: float = Callable(_NoGoalPatrolLockScr, &"segment_lock_sec").call(48, 1.0) as float
+  _assert(seg_lock >= 0.35 and seg_lock <= 1.0, "segment_lock_sec clamps to cap_sec")
+
+
+func _test_predator_patrol_expanding_coverage() -> void:
+  var X := _EXPANDING_CARDINAL_EXPLORE_SCR.Explore
+  var pick := Callable(_NoGoalPatrolLockScr, &"pick_or_hold_guided")
+  var reset := Callable(_NoGoalPatrolLockScr, &"reset_state")
+  var base_ticks := 48
+  var phase_seed := 9001
+  var sectors: Dictionary = {}
+  var pos := Vector3.ZERO
+  var speed := 400.0
+  var physics_hz := maxf(1.0, float(Engine.physics_ticks_per_second))
+  var dt := 1.0 / physics_hz
+  var st: Dictionary = {}
+  var tick := 0
+  while tick < 400:
+    var hint: Vector3 = X.pick_cardinal(base_ticks, tick, phase_seed)
+    var loc: Dictionary = X.locate(base_ticks, tick)
+    var seg_ticks := int(loc.get("segment_ticks", base_ticks))
+    reset.call(st)
+    var lock_sec: float = Callable(_NoGoalPatrolLockScr, &"segment_lock_sec").call(seg_ticks, 1.0) as float
+    var dir: Vector3 = pick.call(st, lock_sec, phase_seed, hint, Callable(), false) as Vector3
+    if dir.length_squared() > 1e-12:
+      sectors[dir] = true
+    for _seg in seg_ticks:
+      if tick >= 400:
+        break
+      if dir.length_squared() > 1e-12:
+        pos += dir.normalized() * speed * dt
+      tick += 1
+  _assert(sectors.size() >= 4, "predator guided patrol visits at least 4 headings over 400 ticks")
+  var coverage_cell := 52.0
+  _assert(
+    pos.length() >= coverage_cell * 1.5,
+    "predator guided patrol net displacement exceeds ~1.5 coverage cells",
+  )
+
+
+func _test_predator_pacing_trap_break() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator pacing trap test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 88001
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+  }
+  var bounds_min := Vector2(0.0, 0.0)
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var pos := Vector3(500.0, 0.0, 980.0)
+  var he := Vector2(13.5, 30.5)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  driver.call(
+    "_predator_pacing_trap_active",
+    body_id,
+    south,
+    south,
+    2,
+    pos,
+    he,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  )
+  var trap_active := bool(
+    driver.call(
+      "_predator_pacing_trap_active",
+      body_id,
+      north,
+      south,
+      2,
+      pos,
+      he,
+      bounds_min,
+      bounds_max,
+      motor_p,
+    )
+  )
+  _assert(trap_active, "predator pacing trap detects opposing cardinals at south edge")
+  var break_dir: Vector3 = driver.call(
+    "_predator_pacing_trap_break_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+  ) as Vector3
+  _assert(break_dir.length_squared() > 1e-12, "predator pacing trap returns lateral escape")
+  _assert(absf(break_dir.dot(north)) < 0.35, "predator pacing trap breaks away from N-S axis")
+  var hold_st: Dictionary = {}
+  var incumbent_ns := north
+  var filtered: Vector3 = Callable(IntentHoldScr, &"filtered_intent").call(
+    break_dir, incumbent_ns, 1, hold_st
+  ) as Vector3
+  _assert(
+    filtered.is_equal_approx(break_dir),
+    "predator pacing trap lateral escape applies immediately with hold_apply=1",
+  )
+  driver.queue_free()
+
+
+func _test_south_perimeter_static_obs_near(
+  center_x: float, _bounds_min: Vector2, bounds_max: Vector2, span: float = 96.0
+) -> Array:
+  var obs: Array = []
+  var inset := 0.5
+  var spacing := 1.4
+  var rock_he := Vector2(1.05, 1.05)
+  var z_fixed := bounds_max.y - inset
+  var x := center_x - span
+  while x <= center_x + span + 0.001:
+    obs.append({"position": Vector3(x, 0.0, z_fixed), "half_extents": rock_he})
+    x += spacing
+  return obs
+
+
+func _test_predator_south_wall_boulder_pinch_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator south-wall boulder pinch test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 88002
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "predator_obstacle_probe": 280.0,
+    "predator_edge_slide_min_clearance": 2.0,
+    "geometry_escape_lock_ticks": 14,
+  }
+  var bounds_min := Vector2(0.0, 0.0)
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(27.0, 61.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  var boulder := {
+    "position": Vector3(680.0, 0.0, 820.0),
+    "half_extents": Vector2(55.0, 55.0),
+  }
+  var perimeter := _test_south_perimeter_static_obs_near(740.0, bounds_min, bounds_max)
+  var static_obs: Array = [boulder]
+  static_obs.append_array(perimeter)
+  var far_rim_pos := Vector3(740.0, 0.0, bounds_max.y - he.y - 8.0)
+  var edge_hint_far: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    far_rim_pos,
+    he,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    north,
+    false,
+  ) as Vector3
+  _assert(edge_hint_far.length_squared() > 1e-12, "far south rim edge expand returns a heading")
+  _assert(
+    absf(edge_hint_far.dot(north)) < 0.35,
+    "far south rim edge expand defaults to wall tangent not toward-center north",
+  )
+  var pos := Vector3(740.0, 0.0, 900.0)
+  var edge_hint_pinch: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    pos,
+    he,
+    static_obs,
+    bounds_min,
+    bounds_max,
+    motor_p,
+    north,
+    true,
+  ) as Vector3
+  _assert(edge_hint_pinch.length_squared() > 1e-12, "pinch edge expand returns lateral slide")
+  _assert(
+    absf(edge_hint_pinch.dot(north)) < 0.35,
+    "pinch edge expand avoids north axis at south wall",
+  )
+  var pinch_esc: Vector3 = driver.call(
+    "_predator_edge_pinch_escape_intent",
+    body_id,
+    pos,
+    he,
+    static_obs,
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+    Vector3(1.0, 0.0, 0.0),
+  ) as Vector3
+  _assert(pinch_esc.length_squared() > 1e-12, "edge pinch escape returns lateral with perimeter chain")
+  _assert(absf(pinch_esc.dot(north)) < 0.35, "edge pinch escape avoids N-S oscillation axis")
+  driver.call(
+    "_predator_pacing_trap_active",
+    body_id,
+    south,
+    south,
+    2,
+    pos,
+    he,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  )
+  var trap_active := bool(
+    driver.call(
+      "_predator_pacing_trap_active",
+      body_id,
+      north,
+      south,
+      2,
+      pos,
+      he,
+      bounds_min,
+      bounds_max,
+      motor_p,
+    )
+  )
+  _assert(trap_active, "south-wall boulder pinch pacing trap detects N-S flip")
+  var break_dir: Vector3 = driver.call(
+    "_predator_pacing_trap_break_intent",
+    body_id,
+    pos,
+    he,
+    static_obs,
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    north,
+  ) as Vector3
+  _assert(break_dir.length_squared() > 1e-12, "south-wall boulder pinch returns lateral escape")
+  _assert(absf(break_dir.dot(north)) < 0.35, "south-wall boulder pinch breaks off N-S axis")
+  var hold_st: Dictionary = {}
+  var filtered: Vector3 = Callable(IntentHoldScr, &"filtered_intent").call(
+    break_dir, north, 1, hold_st
+  ) as Vector3
+  _assert(
+    filtered.is_equal_approx(break_dir),
+    "pinch trap break lateral escape applies immediately with hold_apply=1",
+  )
+  var pinch_active := bool(
+    driver.call(
+      "_predator_geometry_pinch_active",
+      pos,
+      he,
+      static_obs,
+      motor_p,
+    )
+  )
+  _assert(pinch_active, "predator geometry pinch active in south-wall boulder wedge")
+  driver.queue_free()
+
+
+func _test_predator_northeast_corner_interior_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator NE corner escape test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var body_id := 88003
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "geometry_escape_lock_ticks": 14,
+  }
+  var bounds_min := Vector2(0.0, 0.0)
+  var bounds_max := Vector2(100.0, 100.0)
+  var he := Vector2(13.5, 30.5)
+  var east := Vector3(1.0, 0.0, 0.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var pos := Vector3(bounds_max.x - he.x - 2.0, 0.0, bounds_min.y + he.y + 2.0)
+  var edge_info: Dictionary = driver.call(
+    "_playfield_wall_edge_info", pos, he, bounds_min, bounds_max
+  ) as Dictionary
+  _assert(bool(edge_info.get("is_corner", false)), "NE rim position is a dual-edge corner")
+  var corner_in: Vector3 = edge_info.get("corner_inward", Vector3.ZERO) as Vector3
+  _assert(corner_in.length_squared() > 1e-12, "NE corner has interior diagonal")
+  var cur_edge: float = driver.call(
+    "_footprint_edge_margin", pos, he, bounds_min, bounds_max
+  ) as float
+  var corner_esc: Vector3 = driver.call(
+    "_pick_playfield_corner_interior_cardinal",
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+    body_id,
+  ) as Vector3
+  _assert(corner_esc.length_squared() > 1e-12, "NE corner interior escape returns a heading")
+  _assert(absf(corner_esc.dot(east)) < 0.85, "NE corner escape avoids pure east rim slide")
+  _assert(absf(corner_esc.dot(north)) < 0.85, "NE corner escape avoids pure north rim slide")
+  var probe_pos: Vector3 = pos + corner_esc * 8.0
+  var probe_edge: float = driver.call(
+    "_footprint_edge_margin", probe_pos, he, bounds_min, bounds_max
+  ) as float
+  _assert(probe_edge > cur_edge + 0.1, "NE corner escape increases playfield edge margin")
+  var patrol_hint: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+    north,
+    false,
+  ) as Vector3
+  _assert(patrol_hint.length_squared() > 1e-12, "NE corner patrol expand returns interior hint")
+  _assert(
+    absf(patrol_hint.dot(east)) < 0.85,
+    "NE corner patrol expand avoids pure east rim slide",
+  )
+  var latched_esc: Vector3 = driver.call(
+    "_predator_latched_corner_escape_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+  ) as Vector3
+  _assert(latched_esc.length_squared() > 1e-12, "NE corner latched predator escape returns heading")
+  driver.call(
+    "_predator_pacing_trap_active",
+    body_id,
+    east,
+    east,
+    0,
+    pos,
+    he,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  )
+  var trap_active := bool(
+    driver.call(
+      "_predator_pacing_trap_active",
+      body_id,
+      north,
+      east,
+      0,
+      pos,
+      he,
+      bounds_min,
+      bounds_max,
+      motor_p,
+    )
+  )
+  _assert(trap_active, "NE corner pacing trap detects rim oscillation at corner band")
+  var trap_break: Vector3 = driver.call(
+    "_predator_pacing_trap_break_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    east,
+  ) as Vector3
+  _assert(trap_break.length_squared() > 1e-12, "NE corner pacing trap break returns interior escape")
+  _assert(absf(trap_break.dot(east)) < 0.85, "NE corner pacing trap break avoids east rim axis")
+  driver.queue_free()
+
+
+func _test_pinch_obstacle_influence_weight() -> void:
+  var w_close := _Motor.pinch_obstacle_influence_weight(8.0, 100.0, 12.0)
+  var w_far := _Motor.pinch_obstacle_influence_weight(100.0, 100.0, 12.0)
+  var w_mid := _Motor.pinch_obstacle_influence_weight(50.0, 100.0, 12.0)
+  _assert(w_close >= 0.99, "pinch influence full at close gate distance")
+  _assert(w_far <= 0.01, "pinch influence zero at awareness max reach")
+  _assert(w_mid > w_far and w_mid < w_close, "pinch influence falls off monotonically with gate distance")
+
+
+func _test_pinch_obstacle_awareness_weighted_detection() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip pinch awareness-weighted detection test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(52.0, 0.0, 52.0)
+  var facing := Vector3(0.0, 0.0, 1.0)
+  var probe := float(motor_p.get("predator_obstacle_probe", 280.0))
+  var obs_edge := [
+    {"position": Vector3(52.0 + float(motor_p.get("awareness_radius", 150.0)) * 0.92, 0.0, 52.0), "half_extents": Vector2(4.0, 4.0)},
+  ]
+  var clr_edge := _Motor.footprint_static_clearance(pos, he, obs_edge)
+  _assert(clr_edge < probe, "edge fixture clearance below unweighted probe")
+  _assert(
+    bool(
+      driver.call(
+        "_creature_geometry_pinched", pos, he, obs_edge, probe, {}, facing
+      )
+    ),
+    "legacy pinch arms without awareness weighting",
+  )
+  _assert(
+    not bool(
+      driver.call(
+        "_creature_geometry_pinched", pos, he, obs_edge, probe, motor_p, facing
+      )
+    ),
+    "awareness-weighted pinch ignores cone-edge blocker alone",
+  )
+  var obs_close := [{"position": Vector3(54.5, 0.0, 52.0), "half_extents": Vector2(3.5, 3.5)}]
+  _assert(
+    bool(
+      driver.call(
+        "_predator_geometry_pinch_active", pos, he, obs_close, motor_p, facing
+      )
+    ),
+    "awareness-weighted pinch still arms for close blocker",
+  )
+  driver.queue_free()
+
+
+func _test_predator_ne_corner_static_wedge_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator NE corner static wedge test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var body_id := 88045
+  var east := Vector3(1.0, 0.0, 0.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var pos := Vector3(bounds_max.x - he.x - 1.5, 0.0, bounds_min.y + he.y + 1.5)
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var obs_aabb := [
+    {"position": Vector3(pos.x - 1.0, 0.0, pos.z + 8.5), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, pos.z + 0.5), "half_extents": shrub_half},
+  ]
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.set("_duel_motor_round_salt", 88045)
+  _assert(
+    bool(
+      driver.call(
+        "_creature_playfield_corner_wedge_active",
+        pos,
+        he,
+        obs_aabb,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "NE corner boulder+shrub layout registers corner wedge",
+  )
+  _assert(
+    bool(driver.call("_predator_geometry_pinch_active", pos, he, obs_aabb, motor_p, Vector3(-0.7, 0.0, -0.7))),
+    "NE corner static wedge detects predator geometry pinch",
+  )
+  var corner_esc: Vector3 = driver.call(
+    "_predator_latched_corner_escape_intent",
+    body_id,
+    pos,
+    he,
+    obs_aabb,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  ) as Vector3
+  if corner_esc.length_squared() < 1e-12:
+    corner_esc = driver.call(
+      "_predator_edge_pinch_escape_intent",
+      body_id,
+      pos,
+      he,
+      obs_aabb,
+      2,
+      motor_p,
+      bounds_min,
+      bounds_max,
+    ) as Vector3
+  _assert(corner_esc.length_squared() > 1e-12, "NE corner static wedge escape returns non-zero heading")
+  _assert(absf(corner_esc.dot(east)) < 0.85, "NE corner static wedge escape avoids pure east rim slide")
+  _assert(absf(corner_esc.dot(north)) < 0.85, "NE corner static wedge escape avoids pure north rim slide")
+  var block_clr := float(motor_p.get("motor_patrol_min_step_clearance", 4.0))
+  _assert(
+    not bool(
+      driver.call(
+        "_cardinal_step_blocked_for_escape", pos, he, corner_esc, obs_aabb, block_clr, motor_p
+      )
+    ),
+    "NE corner static wedge escape heading passes escape block test",
+  )
+  driver.queue_free()
+
+
+func _test_predator_ne_corner_wedge_multi_tick_replay() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip NE corner wedge multi-tick replay — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var start_pos := Vector3(bounds_max.x - he.x - 1.5, 0.0, bounds_min.y + he.y + 1.5)
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var main_boulder_pos := Vector3(playfield.x * 0.86, 0.0, playfield.y * 0.34)
+  var obs_aabb := [
+    {"position": Vector3(start_pos.x - 1.0, 0.0, start_pos.z + 8.5), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, start_pos.z + 0.5), "half_extents": shrub_half},
+    {"position": main_boulder_pos, "half_extents": boulder_half},
+  ]
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  predator.set("last_move_direction", Vector3(0.0, 0.0, 1.0))
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("set_duel_round_active", true)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88046)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  var body_id := predator.get_instance_id()
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, start_pos, motor_p)
+  _assert(
+    bool(
+      driver.call(
+        "_creature_playfield_corner_wedge_active",
+        start_pos,
+        he,
+        obs_aabb,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "NE corner wedge replay fixture registers corner wedge",
+  )
+  var coverage_cell := float(motor_p.get("explore_coverage_cell", 52.0))
+  var stall_radius := maxf(2.0, coverage_cell * 0.65)
+  var tick_count := 120
+  var path_len := 0.0
+  var prev_pos := start_pos
+  var max_stuck_n := 0
+  var stuck_zero_ticks := 0
+  var corner_hug_ticks := 0
+  var pinch_active_ticks := 0
+  var corner_wedge_ticks := 0
+  var pred_interior_ticks := 0
+  var rim_pocket_ticks := 0
+  var start_edge_m: float = driver.call(
+    "_footprint_edge_margin", start_pos, he, bounds_min, bounds_max
+  ) as float
+  var max_edge_m := start_edge_m
+  var saw_inward_escape_intent := false
+  var inward_hold_ticks := 0
+  var saw_nonzero_intent := false
+  var max_zero_intent_streak := 0
+  var zero_intent_streak := 0
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center_start := Vector3(center.x, 0.0, center.y) - start_pos
+  var toward_center_u := (
+    toward_center_start.normalized() if toward_center_start.length_squared() > 1e-12 else Vector3.ZERO
+  )
+  for tick_i in tick_count:
+    driver.set("_physics_ticks", 9500 + tick_i)
+    driver.call("_physics_process", 1.0 / 60.0)
+    var tick_pos := predator.global_position
+    var edge_band: float = driver.call(
+      "_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max
+    ) as float
+    var edge_m: float = driver.call(
+      "_footprint_edge_margin", tick_pos, he, bounds_min, bounds_max
+    ) as float
+    var intent_v: Variant = predator.get("creature_move_intent")
+    if typeof(intent_v) == TYPE_VECTOR3:
+      var intent3 := intent_v as Vector3
+      if intent3.length_squared() > 1e-12:
+        saw_nonzero_intent = true
+        zero_intent_streak = 0
+        if toward_center_u.length_squared() > 1e-12 and intent3.normalized().dot(toward_center_u) > 0.18:
+          saw_inward_escape_intent = true
+          inward_hold_ticks += 1
+      elif edge_m < edge_band:
+        zero_intent_streak += 1
+        max_zero_intent_streak = maxi(max_zero_intent_streak, zero_intent_streak)
+    path_len += prev_pos.distance_to(tick_pos)
+    prev_pos = tick_pos
+    var stuck_n := int((driver.get("_motor_stuck_ticks") as Dictionary).get(body_id, 0))
+    max_stuck_n = maxi(max_stuck_n, stuck_n)
+    if stuck_n < 1:
+      stuck_zero_ticks += 1
+    var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, predator)
+    if bool(ctx.get("motor_corner_hugging", false)):
+      corner_hug_ticks += 1
+    if bool(ctx.get("predator_geometry_pinch_active", false)):
+      pinch_active_ticks += 1
+    if bool(ctx.get("motor_corner_wedge_active", false)):
+      corner_wedge_ticks += 1
+    if edge_m >= edge_band:
+      pred_interior_ticks += 1
+    max_edge_m = maxf(max_edge_m, edge_m)
+    if int((driver.get("_motor_stuck_ticks") as Dictionary).get(body_id, 0)) >= 8:
+      var stall_active := bool(
+        driver.call(
+          "_predator_patrol_coverage_stall_active", body_id, tick_pos, motor_p
+        )
+      )
+      if stall_active and edge_m < edge_band:
+        rim_pocket_ticks += 1
+  var net_disp := start_pos.distance_to(prev_pos)
+  var edge_gain := max_edge_m - start_edge_m
+  print(
+    "NE corner wedge replay: net_disp=%.2f path_len=%.2f stall_radius=%.2f edge_gain=%.2f inward=%s"
+    % [net_disp, path_len, stall_radius, edge_gain, str(saw_inward_escape_intent)]
+  )
+  print(
+    "  stuck_zero=%d/%d max_stuck=%d corner_hug=%d pinch=%d wedge=%d pred_interior=%d rim_pocket=%d"
+    % [
+      stuck_zero_ticks,
+      tick_count,
+      max_stuck_n,
+      corner_hug_ticks,
+      pinch_active_ticks,
+      corner_wedge_ticks,
+      pred_interior_ticks,
+      rim_pocket_ticks,
+    ]
+  )
+  _assert(saw_nonzero_intent, "NE corner wedge replay produces patrol intents")
+  _assert(
+    max_zero_intent_streak < 12,
+    "NE corner wedge replay must not freeze with zero intent for 12+ rim ticks (max_streak=%d)"
+    % max_zero_intent_streak,
+  )
+  _assert(
+    saw_inward_escape_intent,
+    "NE corner wedge replay achieves inward egress after rim-pocket escape",
+  )
+  _assert(
+    inward_hold_ticks >= 8,
+    "NE corner wedge replay sustains inward heading across escape lock window",
+  )
+  _assert(edge_gain > 0.5, "NE corner wedge replay increases edge margin away from rim")
+  _assert(
+    predator.global_position.x + he.x <= bounds_max.x + 0.05,
+    "NE corner wedge replay stays inside playfield east bound (x=%.2f max=%.2f)"
+    % [predator.global_position.x + he.x, bounds_max.x],
+  )
+  _assert(
+    predator.global_position.x - he.x >= bounds_min.x - 0.05,
+    "NE corner wedge replay stays inside playfield west bound",
+  )
+  _assert(
+    predator.global_position.z + he.y <= bounds_max.y + 0.05,
+    "NE corner wedge replay stays inside playfield south bound",
+  )
+  _assert(
+    predator.global_position.z - he.y >= bounds_min.y - 0.05,
+    "NE corner wedge replay stays inside playfield north bound",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_east_rim_outward_intent_forbidden() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip east-rim outward intent forbidden — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var start_pos := Vector3(bounds_max.x - he.x - 1.5, 0.0, bounds_min.y + he.y + 1.5)
+  var main_boulder_pos := Vector3(playfield.x * 0.86, 0.0, playfield.y * 0.34)
+  var obs_aabb := [
+    {"position": Vector3(start_pos.x - 1.0, 0.0, start_pos.z + 8.5), "half_extents": Vector2(3.5, 3.5)},
+    {"position": Vector3(bounds_max.x - 2.5 - 0.5, 0.0, start_pos.z + 0.5), "half_extents": Vector2(2.5, 2.5)},
+    {"position": main_boulder_pos, "half_extents": Vector2(3.5, 3.5)},
+  ]
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  predator.set("last_move_direction", Vector3(0.0, 0.0, 1.0))
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("set_duel_round_active", true)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88055)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  var body_id := predator.get_instance_id()
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, start_pos, motor_p)
+  var edge_band: float = driver.call(
+    "_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max
+  ) as float
+  var outward_violations := 0
+  var zero_intent_streak := 0
+  var max_zero_intent_streak := 0
+  for tick_i in 90:
+    driver.set("_physics_ticks", 10500 + tick_i)
+    driver.call("_physics_process", 1.0 / 60.0)
+    var tick_pos := predator.global_position
+    var edge_m: float = driver.call(
+      "_footprint_edge_margin", tick_pos, he, bounds_min, bounds_max
+    ) as float
+    if edge_m >= edge_band * 1.05:
+      zero_intent_streak = 0
+      continue
+    var intent_v: Variant = predator.get("creature_move_intent")
+    if typeof(intent_v) != TYPE_VECTOR3:
+      continue
+    var intent3 := intent_v as Vector3
+    if intent3.length_squared() < 1e-12:
+      zero_intent_streak += 1
+      max_zero_intent_streak = maxi(max_zero_intent_streak, zero_intent_streak)
+      continue
+    zero_intent_streak = 0
+    if intent3.x > 0.25:
+      outward_violations += 1
+  _assert(
+    outward_violations == 0,
+    "east-rim NE fixture never commits outward +X intent while edge_m < edge_band (violations=%d)"
+    % outward_violations,
+  )
+  _assert(
+    max_zero_intent_streak < 12,
+    "east-rim NE fixture must not freeze with zero intent for 12+ ticks in rim band (max_streak=%d)"
+    % max_zero_intent_streak,
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_outward_guard_allows_tangential_west_on_north_rim() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip tangential west north rim — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(50.0, 0.0, bounds_min.y + he.y + 1.5)
+  var west := Vector3(-1.0, 0.0, 0.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  _assert(
+    bool(
+      driver.call(
+        "_predator_playfield_outward_intent_ok",
+        pos,
+        he,
+        west,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "tangential west allowed along north rim (row 56 guard)",
+  )
+  _assert(
+    not bool(
+      driver.call(
+        "_predator_playfield_outward_intent_ok",
+        pos,
+        he,
+        north,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "outward north rejected at north rim",
+  )
+  driver.queue_free()
+
+
+func _test_predator_outward_guard_rejects_east_at_east_rim() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip east rim outward reject — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(bounds_max.x - he.x - 1.5, 0.0, 50.0)
+  var east := Vector3(1.0, 0.0, 0.0)
+  var west := Vector3(-1.0, 0.0, 0.0)
+  _assert(
+    not bool(
+      driver.call(
+        "_predator_playfield_outward_intent_ok",
+        pos,
+        he,
+        east,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "outward east rejected at east rim",
+  )
+  _assert(
+    bool(
+      driver.call(
+        "_predator_playfield_outward_intent_ok",
+        pos,
+        he,
+        west,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "inward west allowed at east rim",
+  )
+  driver.queue_free()
+
+
+func _test_predator_sanitize_preserves_tangential_west() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip sanitize tangential west — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(50.0, 0.0, bounds_min.y + he.y + 1.5)
+  var body_id := 88058
+  var west := Vector3(-1.0, 0.0, 0.0)
+  var sanitized: Vector3 = driver.call(
+    "_predator_sanitize_rim_playfield_intent",
+    pos,
+    he,
+    west,
+    [],
+    body_id,
+    motor_p,
+    bounds_min,
+    bounds_max,
+  ) as Vector3
+  _assert(
+    sanitized.length_squared() > 1e-12,
+    "sanitize preserves tangential west at north rim (intent=%.2f,%.2f)"
+    % [sanitized.x, sanitized.z],
+  )
+  _assert(
+    sanitized.x <= -0.5,
+    "sanitize west at north rim stays westward (intent=%.2f,%.2f)" % [sanitized.x, sanitized.z],
+  )
+  driver.queue_free()
+
+
+func _test_predator_pacing_trap_no_unchecked_lateral() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip pacing trap unchecked lateral — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var body_id := 88056
+  var pos := Vector3(bounds_max.x - he.x - 1.5, 0.0, 50.0)
+  var north := Vector3(0.0, 0.0, -1.0)
+  var south := Vector3(0.0, 0.0, 1.0)
+  for i in 12:
+    driver.set("_physics_ticks", 10600 + i)
+    var break_dir: Vector3 = driver.call(
+      "_predator_pacing_trap_break_intent",
+      body_id,
+      pos,
+      he,
+      [],
+      12,
+      motor_p,
+      bounds_min,
+      bounds_max,
+      north if (i & 1) == 0 else south,
+    ) as Vector3
+    if break_dir.length_squared() < 1e-12:
+      continue
+    _assert(
+      break_dir.x <= 0.25,
+      "east-rim pacing trap break never emits unchecked outward east (intent=%.2f,%.2f)"
+      % [break_dir.x, break_dir.z],
+    )
+    _assert(
+      bool(
+        driver.call(
+          "_predator_playfield_outward_intent_ok",
+          pos,
+          he,
+          break_dir,
+          bounds_min,
+          bounds_max,
+          motor_p,
+        )
+      ),
+      "east-rim pacing trap break passes outward guard (intent=%.2f,%.2f)"
+      % [break_dir.x, break_dir.z],
+    )
+  driver.queue_free()
+
+
+func _test_predator_interior_esc_respects_east_wall() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip interior esc east wall — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(95.0, 0.0, 10.0)
+  var body_id := 88057
+  var edge_band: float = driver.call(
+    "_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max
+  ) as float
+  var edge_m: float = driver.call(
+    "_footprint_edge_margin", pos, he, bounds_min, bounds_max
+  ) as float
+  _assert(edge_m < edge_band * 1.05, "interior esc fixture sits in rim band (edge_m=%.1f)" % edge_m)
+  var se := Vector3(0.71, 0.0, -0.71)
+  _assert(
+    not bool(
+      driver.call(
+        "_predator_playfield_outward_intent_ok",
+        pos,
+        he,
+        se,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "row 55 SE heading rejected at NE rim pocket",
+  )
+  driver.set("_physics_ticks", 10700)
+  driver.set("_predator_patrol_anchor_by_body", {
+    body_id: {"pos": pos, "since_tick": 10600},
+  })
+  var patrol_state: Dictionary = {}
+  var interior_esc: Vector3 = driver.call(
+    "_predator_interior_patrol_stall_escape_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    12,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    patrol_state,
+  ) as Vector3
+  var sanitized: Vector3 = driver.call(
+    "_predator_sanitize_rim_playfield_intent",
+    pos,
+    he,
+    interior_esc,
+    [],
+    body_id,
+    motor_p,
+    bounds_min,
+    bounds_max,
+  ) as Vector3
+  if sanitized.length_squared() > 1e-12:
+    _assert(
+      sanitized.x <= 0.25,
+      "interior esc sanitize rejects outward east (intent=%.2f,%.2f)"
+      % [sanitized.x, sanitized.z],
+    )
+  driver.queue_free()
+
+
+func _test_creature_kinematic_playfield_clamp_after_move() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  var body := _spawn_carnivore_body(main, Vector3(88.0, 1.0, 50.0))
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  body.set_control_mode(_ControlMode.engine_as_int())
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.1, 1.0, 50.0)
+  body.velocity = Vector3(30.0, 0.0, 0.0)
+  body.apply_horizontal_move_intent(Vector3(1.0, 0.0, 0.0), 1.0)
+  body.call("_clamp_playfield_position")
+  _assert(
+    body.global_position.x + he.x <= bounds_max.x + 0.01,
+    "kinematic post-move clamp keeps footprint inside east bound (x=%.2f max=%.2f)"
+    % [body.global_position.x + he.x, bounds_max.x],
+  )
+  body.global_position = Vector3(bounds_min.x + he.x + 0.1, 1.0, 50.0)
+  body.velocity = Vector3(-30.0, 0.0, 0.0)
+  body.apply_horizontal_move_intent(Vector3(-1.0, 0.0, 0.0), 1.0)
+  body.call("_clamp_playfield_position")
+  _assert(
+    body.global_position.x - he.x >= bounds_min.x - 0.01,
+    "kinematic post-move clamp keeps footprint inside west bound",
+  )
+  main.queue_free()
+
+
+func _test_predator_ne_corner_rim_pocket_stall_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip NE corner rim-pocket stall escape — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  var edge_band: float = 0.0
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  edge_band = driver.call("_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max) as float
+  var body_id := 88047
+  var pos := Vector3(95.0, 0.0, 10.0)
+  var edge_m: float = driver.call(
+    "_footprint_edge_margin", pos, he, bounds_min, bounds_max
+  ) as float
+  _assert(
+    edge_m >= corner_band and edge_m < edge_band,
+    "rim-pocket fixture sits between corner_band and edge_band (edge_m=%.1f band=%.1f/%.1f)"
+    % [edge_m, corner_band, edge_band],
+  )
+  _assert(
+    not bool(
+      driver.call(
+        "_creature_playfield_corner_hugging", pos, he, bounds_min, bounds_max, motor_p
+      )
+    ),
+    "rim-pocket fixture is past corner_hug band (Test 53 geometry)",
+  )
+  var edge_info: Dictionary = driver.call(
+    "_playfield_wall_edge_info", pos, he, bounds_min, bounds_max
+  ) as Dictionary
+  _assert(
+    bool(edge_info.get("is_corner", false)),
+    "rim-pocket fixture sits at dual-edge NE corner",
+  )
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var obs_aabb := [
+    {"position": Vector3(pos.x - 2.0, 0.0, pos.z + 5.0), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, pos.z - 0.5), "half_extents": shrub_half},
+  ]
+  _assert(
+    bool(
+      driver.call(
+        "_creature_playfield_corner_wedge_active",
+        pos,
+        he,
+        obs_aabb,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "rim-pocket position registers corner wedge via flat pinch fallback",
+  )
+  driver.set("_predator_patrol_anchor_by_body", {
+    body_id: {"pos": pos, "since_tick": 9000},
+  })
+  driver.set("_physics_ticks", 9100)
+  driver.set("_motor_stuck_ticks", {body_id: 12})
+  var inc_ne := Vector3(0.71, 0.0, 0.71)
+  var comp_se := Vector3(0.71, 0.0, -0.71)
+  _assert(
+    bool(
+      driver.call(
+        "_predator_rim_pocket_stall_active",
+        body_id,
+        pos,
+        he,
+        bounds_min,
+        bounds_max,
+        motor_p,
+        12,
+        false,
+        inc_ne,
+        comp_se,
+      )
+    ),
+    "rim-pocket stall arms with coverage stall + high stuck_n",
+  )
+  driver.call(
+    "_predator_local_intent_oscillation_active",
+    body_id,
+    inc_ne,
+    comp_se,
+  )
+  _assert(
+    bool(
+      driver.call(
+        "_predator_local_intent_oscillation_active",
+        body_id,
+        comp_se,
+        inc_ne,
+      )
+    ),
+    "perpendicular diagonal flip registers local intent oscillation",
+  )
+  var corner_esc: Vector3 = driver.call(
+    "_predator_rim_pocket_dual_edge_corner_escape_intent",
+    body_id,
+    pos,
+    he,
+    obs_aabb,
+    bounds_min,
+    bounds_max,
+    motor_p,
+  ) as Vector3
+  if corner_esc.length_squared() < 1e-12:
+    corner_esc = driver.call(
+      "_predator_interior_patrol_stall_escape_intent",
+      body_id,
+      pos,
+      he,
+      obs_aabb,
+      12,
+      motor_p,
+      bounds_min,
+      bounds_max,
+      {},
+    ) as Vector3
+  if corner_esc.length_squared() < 1e-12:
+    corner_esc = driver.call(
+      "_predator_rim_boulder_wedge_escape_intent",
+      body_id,
+      pos,
+      he,
+      obs_aabb,
+      12,
+      motor_p,
+      bounds_min,
+      bounds_max,
+    ) as Vector3
+  if corner_esc.length_squared() < 1e-12:
+    corner_esc = driver.call(
+      "_predator_edge_pinch_escape_intent",
+      body_id,
+      pos,
+      he,
+      obs_aabb,
+      12,
+      motor_p,
+      bounds_min,
+      bounds_max,
+    ) as Vector3
+  if corner_esc.length_squared() < 1e-12:
+    corner_esc = driver.call(
+      "_pick_stuck_escape_cardinal",
+      pos,
+      he,
+      obs_aabb,
+      body_id,
+      12,
+      motor_p,
+      bounds_min,
+      bounds_max,
+    ) as Vector3
+  _assert(corner_esc.length_squared() > 1e-12, "rim-pocket stall escape returns non-zero heading")
+  var center_pt := (bounds_min + bounds_max) * 0.5
+  var toward_center := Vector3(center_pt.x, 0.0, center_pt.y) - pos
+  _assert(
+    toward_center.length_squared() < 1e-12
+    or corner_esc.normalized().dot(toward_center.normalized()) > 0.18,
+    "rim-pocket dual-edge escape biases inward toward playfield center",
+  )
+  _assert(
+    bool(
+      driver.call(
+        "_predator_rim_escape_inward_gain_ok",
+        pos,
+        he,
+        corner_esc,
+        bounds_min,
+        bounds_max,
+        motor_p,
+      )
+    ),
+    "rim-pocket dual-edge escape increases edge margin",
+  )
+  driver.queue_free()
+
+
+func _test_predator_ne_corner_rim_pocket_no_pacing_override() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip NE corner rim-pocket no-pacing override — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var start_pos := Vector3(bounds_max.x - he.x - 9.5, 0.0, bounds_min.y + he.y + 8.5)
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var obs_aabb := [
+    {"position": Vector3(start_pos.x - 1.0, 0.0, start_pos.z + 8.5), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, start_pos.z + 0.5), "half_extents": shrub_half},
+  ]
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  var opposing_incumbent := Vector3(-0.71, 0.0, 0.71)
+  predator.set("last_move_direction", opposing_incumbent)
+  predator.set("creature_move_intent", opposing_incumbent)
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("set_duel_round_active", true)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88048)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  var body_id := predator.get_instance_id()
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, start_pos, motor_p)
+  var start_edge_m: float = driver.call(
+    "_footprint_edge_margin", start_pos, he, bounds_min, bounds_max
+  ) as float
+  var corner_band := float(motor_p.get("motor_playfield_corner_band", 56.0))
+  _assert(
+    start_edge_m >= corner_band,
+    "rim-pocket replay starts past corner_hug (edge_m=%.1f corner_band=%.1f)"
+    % [start_edge_m, corner_band],
+  )
+  var tick_count := 90
+  var max_edge_m := start_edge_m
+  var inward_hold_ticks := 0
+  var saw_rim_commit := false
+  var lock_ticks_after_commit := 0
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center_u := (Vector3(center.x, 0.0, center.y) - start_pos).normalized()
+  var first_commit_intent := Vector3.ZERO
+  var first_locked_dir := Vector3.ZERO
+  for tick_i in tick_count:
+    driver.set("_physics_ticks", 9600 + tick_i)
+    driver.call("_physics_process", 1.0 / 60.0)
+    var tick_pos := predator.global_position
+    var edge_m: float = driver.call(
+      "_footprint_edge_margin", tick_pos, he, bounds_min, bounds_max
+    ) as float
+    max_edge_m = maxf(max_edge_m, edge_m)
+    var lock_active := bool(
+      driver.call("_predator_rim_pocket_escape_lock_active", body_id)
+    )
+    var intent_v: Variant = predator.get("creature_move_intent")
+    if typeof(intent_v) == TYPE_VECTOR3:
+      var intent3 := intent_v as Vector3
+      if (
+        lock_active
+        and intent3.length_squared() > 1e-12
+        and toward_center_u.length_squared() > 1e-12
+        and intent3.normalized().dot(toward_center_u) > 0.18
+      ):
+        inward_hold_ticks += 1
+    if lock_active:
+      saw_rim_commit = true
+      lock_ticks_after_commit += 1
+      if first_commit_intent.length_squared() < 1e-12:
+        var commit_intent_v: Variant = predator.get("creature_move_intent")
+        if typeof(commit_intent_v) == TYPE_VECTOR3:
+          first_commit_intent = commit_intent_v as Vector3
+          var geo_lock: Dictionary = driver.get("_geometry_escape_lock_by_body") as Dictionary
+          var lock_rec_v: Variant = geo_lock.get(body_id, null)
+          if typeof(lock_rec_v) == TYPE_DICTIONARY:
+            var lock_dir_v: Variant = (lock_rec_v as Dictionary).get("dir", Vector3.ZERO)
+            if typeof(lock_dir_v) == TYPE_VECTOR3:
+              first_locked_dir = lock_dir_v as Vector3
+  var edge_gain := max_edge_m - start_edge_m
+  print(
+    "NE rim-pocket no-pacing: edge_gain=%.2f inward_hold=%d saw_commit=%s lock_ticks=%d"
+    % [edge_gain, inward_hold_ticks, str(saw_rim_commit), lock_ticks_after_commit]
+  )
+  _assert(saw_rim_commit, "rim-pocket replay commits geometry escape lock")
+  _assert(
+    first_commit_intent.length_squared() > 1e-12
+    and first_locked_dir.length_squared() > 1e-12
+    and first_commit_intent.normalized().dot(first_locked_dir.normalized()) > 0.92,
+    "rim-pocket first commit tick matches geometry escape lock (intent=%.2f,%.2f lock=%.2f,%.2f)"
+    % [first_commit_intent.x, first_commit_intent.z, first_locked_dir.x, first_locked_dir.z],
+  )
+  _assert(
+    lock_ticks_after_commit >= int(motor_p.get("geometry_escape_lock_ticks", 14)),
+    "rim-pocket geometry lock persists across escape window",
+  )
+  _assert(inward_hold_ticks >= 8, "rim-pocket escape holds inward heading across lock window")
+  _assert(edge_gain > 1.0, "rim-pocket replay increases edge margin away from NE corner")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_rim_pocket_escape_adopts_immediately() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip rim-pocket immediate adoption — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var start_pos := Vector3(bounds_max.x - he.x - 9.5, 0.0, bounds_min.y + he.y + 8.5)
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var obs_aabb := [
+    {"position": Vector3(start_pos.x - 1.0, 0.0, start_pos.z + 8.5), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, start_pos.z + 0.5), "half_extents": shrub_half},
+  ]
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  var opposing_incumbent := Vector3(-0.71, 0.0, 0.71)
+  predator.set("last_move_direction", opposing_incumbent)
+  predator.set("creature_move_intent", opposing_incumbent)
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("set_duel_round_active", true)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88049)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  var body_id := predator.get_instance_id()
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, start_pos, motor_p)
+  var saw_commit := false
+  for tick_i in 90:
+    driver.set("_physics_ticks", 9700 + tick_i)
+    driver.call("_physics_process", 1.0 / 60.0)
+    var lock_active := bool(
+      driver.call("_predator_rim_pocket_escape_lock_active", body_id)
+    )
+    if not lock_active:
+      continue
+    var intent_v: Variant = predator.get("creature_move_intent")
+    if typeof(intent_v) != TYPE_VECTOR3:
+      continue
+    var intent3 := intent_v as Vector3
+    if intent3.length_squared() < 1e-12:
+      continue
+    var geo_lock: Dictionary = driver.get("_geometry_escape_lock_by_body") as Dictionary
+    var lock_rec_v: Variant = geo_lock.get(body_id, null)
+    var locked_dir := Vector3.ZERO
+    if typeof(lock_rec_v) == TYPE_DICTIONARY:
+      var lock_dir_v: Variant = (lock_rec_v as Dictionary).get("dir", Vector3.ZERO)
+      if typeof(lock_dir_v) == TYPE_VECTOR3:
+        locked_dir = lock_dir_v as Vector3
+    _assert(
+      locked_dir.length_squared() > 1e-12
+      and intent3.normalized().dot(locked_dir.normalized()) > 0.92,
+      "rim escape commit tick matches geometry lock (intent=%.2f,%.2f lock=%.2f,%.2f)"
+      % [intent3.x, intent3.z, locked_dir.x, locked_dir.z],
+    )
+    saw_commit = true
+    break
+  _assert(saw_commit, "rim-pocket escape commits during opposing-incumbent replay")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_rim_pocket_lock_seeds_without_stall() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip rim-pocket lock seed without stall — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var start_pos := Vector3(bounds_max.x - he.x - 9.5, 0.0, bounds_min.y + he.y + 8.5)
+  var boulder_half := Vector2(3.5, 3.5)
+  var shrub_half := Vector2(2.5, 2.5)
+  var obs_aabb := [
+    {"position": Vector3(start_pos.x - 1.0, 0.0, start_pos.z + 8.5), "half_extents": boulder_half},
+    {"position": Vector3(bounds_max.x - shrub_half.x - 0.5, 0.0, start_pos.z + 0.5), "half_extents": shrub_half},
+  ]
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  var opposing_incumbent := Vector3(-0.71, 0.0, 0.71)
+  predator.set("last_move_direction", opposing_incumbent)
+  predator.set("creature_move_intent", opposing_incumbent)
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("set_duel_round_active", true)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88050)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  var body_id := predator.get_instance_id()
+  var escape_dir := Vector3(0.71, 0.0, -0.71)
+  driver.set("_geometry_escape_lock_by_body", {
+    body_id: {"dir": escape_dir, "until_tick": 9999},
+  })
+  driver.set("_predator_patrol_anchor_by_body", {
+    body_id: {"pos": Vector3(50.0, 0.0, 50.0), "since_tick": 9000},
+  })
+  driver.set("_physics_ticks", 9800)
+  _assert(
+    not bool(driver.call("_predator_patrol_coverage_stall_active", body_id, start_pos, motor_p)),
+    "displaced patrol anchor clears coverage stall at NE fixture",
+  )
+  driver.call("_physics_process", 1.0 / 60.0)
+  _assert(
+    bool(driver.call("_predator_rim_pocket_escape_lock_active", body_id)),
+    "geometry lock remains active when coverage stall is false",
+  )
+  var intent_v: Variant = predator.get("creature_move_intent")
+  _assert(typeof(intent_v) == TYPE_VECTOR3, "lock seed produces creature_move_intent")
+  var intent3 := intent_v as Vector3
+  _assert(intent3.length_squared() > 1e-12, "lock seed produces non-zero intent")
+  _assert(
+    intent3.normalized().dot(escape_dir.normalized()) > 0.92,
+    "lock seeds escape heading when coverage stall false (intent=%.2f,%.2f)"
+    % [intent3.x, intent3.z],
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_rim_patrol_eight_way() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator rim patrol 8-way test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "predator_edge_slide_min_clearance": 2.0,
+  }
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(13.5, 30.5)
+  var body_id := 88004
+  var pos := Vector3(bounds_max.x - he.x - 2.0, 0.0, 520.0)
+  var saw_diagonal := false
+  for i in 16:
+    driver.set("_physics_ticks", 6400 + i)
+    driver.set("_duel_motor_round_salt", 12345)
+    var pick: Vector3 = driver.call(
+      "_predator_pick_edge_tangent_cardinal",
+      pos,
+      he,
+      [],
+      bounds_min,
+      bounds_max,
+      motor_p,
+      [],
+      Vector3.ZERO,
+      body_id,
+    ) as Vector3
+    if bool(Callable(_MotorOct, &"is_diagonal").call(pick)):
+      saw_diagonal = true
+      break
+  _assert(saw_diagonal, "east-rim predator tangent picker can return diagonal skim heading")
+  driver.queue_free()
+
+
+func _test_predator_interior_stuck_escape_midfield() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator interior stuck escape test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+  }
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(13.5, 30.5)
+  var pos := Vector3(500.0, 0.0, 500.0)
+  var esc: Vector3 = driver.call(
+    "_pick_stuck_escape_cardinal",
+    pos,
+    he,
+    [],
+    88005,
+    2,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    Vector3(1.0, 0.0, 0.0),
+  ) as Vector3
+  _assert(esc.length_squared() > 1e-12, "predator interior stuck escape returns non-zero heading")
+  driver.queue_free()
+
+
+func _test_goal_visibility_latch_streak_and_engagement() -> void:
+  var streak: Dictionary = {}
+  _assert(
+    not _GoalVisLatch.streak_confirmed(streak, 42, true, 3),
+    "goal visibility streak needs consecutive ticks",
+  )
+  _assert(
+    not _GoalVisLatch.streak_confirmed(streak, 42, true, 3),
+    "goal visibility streak still short after two ticks",
+  )
+  _assert(
+    _GoalVisLatch.streak_confirmed(streak, 42, true, 3),
+    "goal visibility streak confirms on third tick",
+  )
+  _GoalVisLatch.streak_confirmed(streak, 42, false, 3)
+  _assert(
+    not _GoalVisLatch.streak_confirmed(streak, 42, true, 3),
+    "goal visibility streak resets after dropout",
+  )
+  var engagement: Dictionary = {}
+  _GoalVisLatch.record_engagement(engagement, 7, 100, 12, [Vector3(10.0, 0.0, 20.0)])
+  _assert(
+    _GoalVisLatch.engagement_active(engagement, 7, 105),
+    "goal engagement latch active before expiry tick",
+  )
+  var merged: Array = []
+  _assert(
+    _GoalVisLatch.merge_engagement_positions(engagement, 7, 105, merged),
+    "engagement latch merges last visible positions",
+  )
+  _assert(merged.size() == 1, "engagement latch merged one latched prey position")
+
+
+func _test_seek_occlusion_step_cost_no_los_ctx() -> void:
+  var cost := _Motor.seek_occlusion_step_cost(
+    Vector3(100.0, 0.0, 100.0),
+    Vector3(0.0, 0.0, -1.0),
+    Vector3(100.0, 0.0, 20.0),
+    {"enabled": false},
+    Vector2(13.5, 30.5),
+    [],
+    40.0,
+    12.0,
+  )
+  _assert(cost == 0.0, "seek occlusion cost zero when los ctx disabled")
+
+
+func _test_predator_obstructed_hunt_active_lost_visual() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator lost-visual obstructed hunt test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {"motor_patrol_min_step_clearance": 4.0, "predator_obstacle_probe": 280.0}
+  var he := Vector2(13.5, 30.5)
+  var obs_aabb := [
+    {"position": Vector3(300.0, 0.0, 350.0), "half_extents": Vector2(55.0, 55.0)},
+  ]
+  var pred_h := Vector3(300.0, 0.0, 180.0)
+  var prey_h := Vector3(300.0, 0.0, 520.0)
+  var memory_ctx := {
+    "prey_seek_targets": [],
+    "pursuit_targets": [{"position": prey_h, "velocity": Vector3.ZERO, "cost_scale": 1.0}],
+    "predator_lost_visual": true,
+    "static_obstacles": obs_aabb,
+  }
+  _assert(
+    bool(driver.call("_predator_obstructed_hunt_active", memory_ctx, motor_p, pred_h, he, 0)),
+    "obstructed hunt active for memory chase when bush blocks path",
+  )
+  driver.queue_free()
+
+
+func _test_predator_east_rim_to_interior_patrol() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator east-rim to interior patrol test — AiDriver script did not compile")
+    return
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, Vector3(0.0, 0.0, 0.0))
+  predator.set("current_calories", float(predator.get("caloric_needs")))
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  var motor_p := _Merge.merge_creature_motor_pack_overlay(
+    _Merge.default_creature_motor_params().duplicate(true),
+    "res://assets/creatures/fox",
+  )
+  motor_p["predator_chase_edge_band"] = 130.0
+  motor_p["motor_playfield_corner_band"] = 84.0
+  motor_p["predator_patrol_interior_expand_weight"] = 8.0
+  predator.set("playfield_bounds_min", Vector2.ZERO)
+  predator.set("playfield_bounds_max", Vector2(1000.0, 1000.0))
+  predator.global_position = Vector3(976.0, 0.0, 500.0)
+  var _rim_ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, predator)
+  predator.global_position = Vector3(780.0, 0.0, 500.0)
+  var interior_ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, predator)
+  var interior_hint: Vector3 = interior_ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+  _assert(interior_hint.length_squared() > 1e-12, "predator leaving east rim gets interior patrol nudge")
+  _assert(interior_hint.x < -0.2, "east-side interior nudge points toward center/west")
+  var nudged_map: Dictionary = driver.get("_predator_rim_exit_nudged_by_body")
+  _assert(
+    bool(nudged_map.get(predator.get_instance_id(), false)),
+    "rim-exit nudge latch records once-per-body application",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_patrol_heading_variance() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator patrol heading variance test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "predator_edge_slide_min_clearance": 2.0,
+  }
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(13.5, 30.5)
+  var pos := Vector3(bounds_max.x - he.x - 2.0, 0.0, 500.0)
+  var headings: Dictionary = {}
+  for i in 12:
+    driver.set("_duel_motor_round_salt", 2026)
+    driver.set("_physics_ticks", 9000 + i)
+    var heading: Vector3 = driver.call(
+      "_predator_pick_edge_tangent_cardinal",
+      pos,
+      he,
+      [],
+      bounds_min,
+      bounds_max,
+      motor_p,
+      [],
+      Vector3.ZERO,
+      88006,
+    ) as Vector3
+    if heading.length_squared() > 1e-12:
+      headings[heading] = true
+  _assert(headings.size() >= 2, "predator edge patrol heading varies by deterministic seed/tick")
+  driver.queue_free()
+
+
+func _test_predator_east_rim_peel_prefers_inward() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator east-rim peel test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "predator_edge_slide_min_clearance": 2.0,
+    "predator_patrol_rim_peel_min_gain": 0.35,
+  }
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(13.5, 30.5)
+  var pos := Vector3(bounds_max.x - he.x - 2.0, 0.0, 500.0)
+  var peel: Vector3 = driver.call(
+    "_predator_pick_rim_peel_cardinal",
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+    88007,
+  ) as Vector3
+  _assert(peel.length_squared() > 1e-12, "east-rim peel returns non-zero heading")
+  _assert(peel.x < -0.2, "east-rim peel points west/inward off the east wall")
+  var patrol_hint: Vector3 = driver.call(
+    "_predator_patrol_edge_expand_hint",
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+    Vector3.ZERO,
+    false,
+    88007,
+  ) as Vector3
+  _assert(patrol_hint.length_squared() > 1e-12, "east-rim patrol expand prefers peel over N-S slide")
+  _assert(patrol_hint.x < -0.2, "east-rim patrol expand points toward interior")
+  driver.queue_free()
+
+
+func _test_predator_patrol_coverage_stall_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator patrol coverage stall test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := {
+    "motor_playfield_corner_band": 84.0,
+    "motor_patrol_min_step_clearance": 4.0,
+    "predator_chase_edge_band": 130.0,
+    "explore_coverage_cell": 52.0,
+    "predator_patrol_stall_window_ticks": 60,
+  }
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(1000.0, 1000.0)
+  var he := Vector2(13.5, 30.5)
+  var body_id := 88008
+  var pos := Vector3(500.0, 0.0, 500.0)
+  driver.set("_physics_ticks", 9000)
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, pos, motor_p)
+  driver.set("_physics_ticks", 9035)
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, pos + Vector3(0.5, 0.0, 0.3), motor_p)
+  _assert(
+    bool(driver.call("_predator_patrol_coverage_stall_active", body_id, pos, motor_p)),
+    "predator patrol coverage stall detects local oscillation",
+  )
+  var esc: Vector3 = driver.call(
+    "_predator_interior_patrol_stall_escape_intent",
+    body_id,
+    pos,
+    he,
+    [],
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    {},
+  ) as Vector3
+  _assert(esc.length_squared() > 1e-12, "coverage stall escape returns non-zero heading")
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center := Vector3(center.x, 0.0, center.y) - pos
+  _assert(
+    esc.normalized().dot(toward_center.normalized()) > 0.15,
+    "coverage stall escape biases toward playfield center",
+  )
+  driver.queue_free()
+
+
+func _test_motor_cardinal_probe_scaled_for_small_playfield() -> void:
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var scaled: Dictionary = _MotorPlane.scale_motor_distance_params({}, scale)
+  var probe_min := float(scaled.get("motor_cardinal_probe_min", 40.0))
+  _assert(probe_min < 3.0, "3D playfield scales cardinal probe min below legacy 40")
+  var he := Vector2(0.7, 1.8)
+  var step := _Motor.motor_cardinal_probe_step(he, probe_min)
+  _assert(step < 5.0, "cardinal probe step fits ~100m playfield footprint")
+  if not _ai_driver_can_instantiate():
+    push_warning("skip scaled south-rim tangent test — AiDriver script did not compile")
+    return
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var motor_p := scaled.duplicate(true)
+  motor_p["motor_playfield_corner_band"] = 84.0 * scale
+  motor_p["motor_patrol_min_step_clearance"] = 4.0 * scale
+  motor_p["predator_chase_edge_band"] = 130.0 * scale
+  motor_p["predator_edge_slide_min_clearance"] = 2.0 * scale
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var pos := Vector3(70.0, 0.0, playfield.y - he.y - 2.0)
+  var tangent: Vector3 = driver.call(
+    "_predator_pick_edge_tangent_cardinal",
+    pos,
+    he,
+    [],
+    bounds_min,
+    bounds_max,
+    motor_p,
+    [],
+    Vector3.ZERO,
+    88003,
+  ) as Vector3
+  _assert(tangent.length_squared() > 1e-12, "scaled south rim finds wall-tangent step")
+  _assert(
+    absf(tangent.dot(Vector3(0.0, 0.0, -1.0))) < 0.35 and absf(tangent.dot(Vector3(0.0, 0.0, 1.0))) < 0.35,
+    "scaled south rim tangent is lateral not N-S",
+  )
+  driver.queue_free()
+
+
+func _test_static_obstacle_awareness_gated() -> void:
+  var ctr := Vector3(400.0, 0.0, 400.0)
+  var pred := Vector3(410.0, 0.0, 400.0)
+  var he := Vector2(10.0, 10.0)
+  var obs_near := [{"position": Vector3(430.0, 0.0, 400.0), "half_extents": Vector2(5.0, 5.0)}]
+  var obs_far := [{"position": Vector3(900.0, 0.0, 400.0), "half_extents": Vector2(5.0, 5.0)}]
+  var corridor_p := {
+    "peripheral_mul": 0.2,
+    "cone_edge_mul": 0.5,
+    "block_min_clearance": 4.0,
+  }
+  var cos45 := cos(deg_to_rad(45.0))
+  var c_near := _Motor.static_obstacle_step_cost(
+    ctr,
+    pred,
+    he,
+    obs_near,
+    2.5,
+    1.0,
+    0.0,
+    0.0,
+    12.0,
+    100.0,
+    0.0,
+    cos45,
+    Vector3(1.0, 0.0, 0.0),
+    false,
+    corridor_p,
+  )
+  var c_far := _Motor.static_obstacle_step_cost(
+    ctr,
+    pred,
+    he,
+    obs_far,
+    2.5,
+    1.0,
+    0.0,
+    0.0,
+    12.0,
+    100.0,
+    0.0,
+    cos45,
+    Vector3(1.0, 0.0, 0.0),
+    false,
+    corridor_p,
+  )
+  _assert(c_near > 0.001, "near obstacle inside awareness adds repulsion")
+  _assert(c_far < 0.001, "far obstacle outside awareness adds no repulsion")
+
+
+func _test_static_obstacle_peripheral_vs_corridor() -> void:
+  var ctr := Vector3(90.0, 0.0, 55.0)
+  var he := Vector2(0.7, 1.8)
+  var obs := [{"position": Vector3(85.0, 0.0, 58.0), "half_extents": Vector2(3.5, 3.5)}]
+  var corridor_p := {
+    "peripheral_mul": 0.2,
+    "cone_edge_mul": 0.5,
+    "block_min_clearance": 4.0,
+  }
+  var cos50 := cos(deg_to_rad(50.0))
+  var facing_s := Vector3(0.0, 0.0, 1.0)
+  var step_len := 60.0
+  var pred_n := ctr + Vector3(0.0, 0.0, -1.0) * step_len
+  var pred_s := ctr + Vector3(0.0, 0.0, 1.0) * step_len
+  var c_n_periph := _Motor.static_obstacle_step_cost(
+    ctr,
+    pred_n,
+    he,
+    obs,
+    3.2,
+    0.45,
+    1.05,
+    0.0,
+    6.0,
+    150.0,
+    400.0,
+    cos50,
+    facing_s,
+    false,
+    corridor_p,
+  )
+  var c_s_corridor := _Motor.static_obstacle_step_cost(
+    ctr,
+    pred_s,
+    he,
+    obs,
+    3.2,
+    0.45,
+    1.05,
+    0.0,
+    6.0,
+    150.0,
+    400.0,
+    cos50,
+    facing_s,
+    false,
+    corridor_p,
+  )
+  var c_n_legacy: float = CardinalAvoidance.cost_at_prediction_aware(
+    pred_n,
+    [],
+    Vector2.ZERO,
+    Vector2(105.0, 105.0),
+    0.45,
+    1.05,
+    1e7,
+    6.0,
+    he,
+    0.0,
+    0.0,
+    0.0,
+    ctr,
+    150.0,
+    400.0,
+    cos50,
+    facing_s,
+    obs,
+    3.2,
+  )
+  _assert(
+    c_n_periph < c_n_legacy - 0.001,
+    "off-path north step uses peripheral not full obstacle weight",
+  )
+  _assert(
+    c_s_corridor > c_n_periph + 0.001,
+    "south step toward boulder corridor costs more than off-path north",
+  )
+
+
+func _test_static_obstacle_off_axis_does_not_block_peel() -> void:
+  var cos50 := cos(deg_to_rad(50.0))
+  var obs := [{"position": Vector3(85.0, 0.0, 58.0), "half_extents": Vector2(3.5, 3.5)}]
+  var ctx := {
+    "creature_position": Vector3(90.0, 0.0, 55.0),
+    "creature_half_extents": Vector2(0.7, 1.8),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": Vector2(105.0, 105.0),
+    "mobs": [],
+    "weight_dist": 0.45,
+    "weight_closing": 1.05,
+    "weight_dist_sq": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 6.0,
+    "weight_interior": 0.0,
+    "weight_edge": 0.48,
+    "weight_obstacle": 3.2 * 1.55,
+    "weight_obstacle_peripheral_mul": 0.2,
+    "weight_obstacle_cone_edge_mul": 0.5,
+    "static_obstacles": obs,
+    "awareness_radius": 150.0,
+    "awareness_cone_extra": 400.0,
+    "awareness_cone_cos_threshold": cos50,
+    "creature_facing": Vector3(0.0, 0.0, 1.0),
+    "weight_expanding_explore_hint": 2.4,
+    "expanding_explore_hint": Vector3(0.0, 0.0, 1.0),
+    "exploration_blend_multiplier": 1.0,
+    "motor_filter_blocked_cardinals": false,
+    "deterministic_tie_order": true,
+    "shuffle_tie_break": false,
+    "motor_intent_cost_chaos": 0.0,
+  }
+  var intent := _Motor.pick_best_move_intent(ctx)
+  _assert(intent.length_squared() > 1e-12, "off-axis boulder peel picks a heading")
+  var west_peel := intent.dot(Vector3(-1.0, 0.0, 0.0))
+  var nw_peel := intent.dot(Vector3(-0.7071067811865475, 0.0, -0.7071067811865475))
+  _assert(
+    west_peel > 0.35 or nw_peel > 0.35,
+    "off-axis boulder with south expand hint prefers west peel over south lock",
+  )
+
+
+func _test_predator_midfield_stall_escape_scaled_playfield() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip scaled mid-field stall escape test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var boulder_half := Vector2(3.5, 3.5)
+  var obs_aabb := [
+    {"position": Vector3(88.0, 0.0, 58.0), "half_extents": boulder_half},
+  ]
+  var start_pos := Vector3(90.0, 0.0, 52.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, start_pos)
+  predator.set("screen_size", playfield)
+  predator.set("playfield_bounds_min", bounds_min)
+  predator.set("playfield_bounds_max", bounds_max)
+  predator.set_control_mode(_ControlMode.engine_as_int())
+  predator.set("current_calories", 0.0)
+  predator.set("last_move_direction", Vector3(0.0, 0.0, 1.0))
+  driver.call("attach_main", main)
+  driver.call("register_creature", predator)
+  driver.call("_set_state", 2)
+  driver.set("_duel_motor_round_salt", 88009)
+  driver.set("_motor_obstacle_aabbs", obs_aabb)
+  driver.set("_motor_obstacle_samples", PackedVector3Array())
+  _assert(
+    bool(driver.call("_predator_geometry_pinch_active", start_pos, he, obs_aabb, motor_p)),
+    "scaled mid-field layout detects predator geometry pinch near interior boulder",
+  )
+  var pinch_esc: Vector3 = driver.call(
+    "_predator_interior_pinch_escape_intent",
+    predator.get_instance_id(),
+    start_pos,
+    he,
+    obs_aabb,
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+  ) as Vector3
+  _assert(
+    pinch_esc.length_squared() > 1e-12,
+    "scaled interior pinch escape returns non-zero heading",
+  )
+  _assert(
+    pinch_esc.dot(Vector3(0.0, 0.0, 1.0)) < 0.35,
+    "scaled interior pinch escape does not keep pushing south into boulder",
+  )
+  var body_id := predator.get_instance_id()
+  driver.set("_physics_ticks", 9100)
+  driver.call("_predator_update_patrol_coverage_anchor", body_id, start_pos, motor_p)
+  driver.set("_physics_ticks", 9135)
+  driver.call(
+    "_predator_update_patrol_coverage_anchor",
+    body_id,
+    start_pos + Vector3(0.2, 0.0, 0.15),
+    motor_p,
+  )
+  _assert(
+    bool(driver.call("_predator_patrol_coverage_stall_active", body_id, start_pos, motor_p)),
+    "scaled mid-field patrol coverage stall detects local oscillation",
+  )
+  var stall_esc: Vector3 = driver.call(
+    "_predator_interior_patrol_stall_escape_intent",
+    body_id,
+    start_pos,
+    he,
+    obs_aabb,
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+    {"locked_intent": Vector3(0.0, 0.0, 1.0)},
+  ) as Vector3
+  _assert(stall_esc.length_squared() > 1e-12, "scaled coverage stall escape returns non-zero heading")
+  var center := (bounds_min + bounds_max) * 0.5
+  var toward_center := Vector3(center.x, 0.0, center.y) - start_pos
+  _assert(
+    stall_esc.normalized().dot(toward_center.normalized()) > 0.05,
+    "scaled coverage stall escape biases away from south wedge toward center",
+  )
+  var tick_pos := start_pos
+  var saw_escape_heading := false
+  var coverage_cell := float(motor_p.get("explore_coverage_cell", 52.0))
+  for tick_i in 90:
+    driver.set("_physics_ticks", 9200 + tick_i)
+    driver.call("_physics_process", 1.0 / 60.0)
+    tick_pos = predator.global_position
+    var intent_v: Variant = predator.get("last_move_direction")
+    if typeof(intent_v) == TYPE_VECTOR3:
+      var intent_u := (intent_v as Vector3).normalized()
+      if intent_u.dot(Vector3(0.0, 0.0, 1.0)) < 0.2:
+        saw_escape_heading = true
+  var displacement := start_pos.distance_to(tick_pos)
+  _assert(
+    saw_escape_heading or displacement >= coverage_cell * 0.5,
+    "scaled mid-field motor ticks escape south stall via displacement or non-south heading",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_east_rim_boulder_wedge_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip east-rim boulder wedge escape test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var boulder_half := Vector2(3.5, 3.5)
+  var obs_aabb := [
+    {"position": Vector3(88.0, 0.0, 62.0), "half_extents": boulder_half},
+  ]
+  var start_pos := Vector3(94.0, 0.0, 62.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.set("_duel_motor_round_salt", 88012)
+  _assert(
+    bool(driver.call("_predator_geometry_pinch_active", start_pos, he, obs_aabb, motor_p)),
+    "east-rim boulder wedge layout detects predator geometry pinch",
+  )
+  var wedge_esc: Vector3 = driver.call(
+    "_predator_rim_boulder_wedge_escape_intent",
+    88012,
+    start_pos,
+    he,
+    obs_aabb,
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+  ) as Vector3
+  _assert(wedge_esc.length_squared() > 1e-12, "east-rim boulder wedge escape returns non-zero heading")
+  _assert(
+    wedge_esc.x < -0.08,
+    "east-rim boulder wedge escape peels west/inward away from east wall",
+  )
+  _assert(
+    wedge_esc.dot(Vector3(1.0, 0.0, 0.0)) < 0.35,
+    "east-rim boulder wedge escape does not step toward east wall",
+  )
+  var edge_band: float = driver.call(
+    "_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max
+  ) as float
+  var edge_m: float = driver.call(
+    "_footprint_edge_margin", start_pos, he, bounds_min, bounds_max
+  ) as float
+  _assert(edge_m < edge_band, "east-rim wedge fixture sits inside rim band not interior")
+  var south_blocked := bool(
+    driver.call(
+      "_cardinal_step_blocked",
+      start_pos,
+      he,
+      Vector3(0.0, 0.0, 1.0),
+      obs_aabb,
+      float(motor_p.get("motor_patrol_min_step_clearance", 4.0)),
+      motor_p,
+    )
+  )
+  if south_blocked:
+    var open_hint: Vector3 = driver.call(
+      "_predator_open_ground_patrol_hint",
+      start_pos,
+      he,
+      obs_aabb,
+      bounds_min,
+      bounds_max,
+      motor_p,
+      88012,
+      -1,
+      true,
+    ) as Vector3
+    _assert(
+      open_hint.length_squared() > 1e-12 and open_hint.x < -0.05,
+      "blocked south expand hint detours west via open-ground patrol scorer",
+    )
+  driver.queue_free()
+
+
+func _test_predator_east_corridor_wall_aware_interior_escape() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip east-corridor interior escape test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var boulder_half := Vector2(3.5, 3.5)
+  var obs_aabb := [
+    {"position": Vector3(88.0, 0.0, 55.0), "half_extents": boulder_half},
+    {"position": Vector3(88.0, 0.0, 68.0), "half_extents": boulder_half},
+  ]
+  var start_pos := Vector3(90.0, 0.0, 65.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.set("_duel_motor_round_salt", 88044)
+  var edge_band: float = driver.call(
+    "_predator_chase_edge_band_m", motor_p, bounds_min, bounds_max
+  ) as float
+  var edge_m: float = driver.call(
+    "_footprint_edge_margin", start_pos, he, bounds_min, bounds_max
+  ) as float
+  _assert(edge_m >= edge_band, "east-corridor fixture is interior-classified (edge_m >= band)")
+  _assert(
+    bool(driver.call("_predator_geometry_pinch_active", start_pos, he, obs_aabb, motor_p)),
+    "east-corridor interior layout detects predator geometry pinch",
+  )
+  var ar := float(motor_p.get("awareness_radius", 0.0))
+  _assert(
+    bool(
+      driver.call(
+        "_predator_wall_aware_east_west_corridor_pinch",
+        start_pos,
+        he,
+        bounds_min,
+        bounds_max,
+        motor_p,
+        ar,
+        true,
+      )
+    ),
+    "east-corridor interior fixture still qualifies as E/W corridor pinch",
+  )
+  var wedge_esc: Vector3 = driver.call(
+    "_predator_rim_boulder_wedge_escape_intent",
+    88044,
+    start_pos,
+    he,
+    obs_aabb,
+    1,
+    motor_p,
+    bounds_min,
+    bounds_max,
+  ) as Vector3
+  _assert(wedge_esc.length_squared() > 1e-12, "east-corridor interior wedge escape returns heading")
+  _assert(
+    wedge_esc.x < -0.08,
+    "east-corridor interior wedge escape peels west/inward not N/S corridor slide",
+  )
+  _assert(
+    absf(wedge_esc.z) < 0.85,
+    "east-corridor interior wedge escape avoids pure north/south oscillation axis",
+  )
+  driver.queue_free()
+
+
+func _test_duel_scaled_awareness_stays_playfield_scaled() -> void:
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var base := {
+    "awareness_radius": 150.0,
+    "awareness_cone_extra": 400.0,
+    "goal_memory_forget_radius": 3200.0,
+  }
+  var scaled: Dictionary = _MotorPlane.scale_motor_distance_params(base, scale)
+  _assert(
+    float(scaled.get("awareness_radius", 0.0)) < 20.0,
+    "scaled awareness shrinks on ~105m playfield",
+  )
+  _assert(
+    float(scaled.get("awareness_cone_extra", 0.0)) < 50.0,
+    "scaled awareness cone extra shrinks on ~105m playfield",
+  )
+  if not _ai_driver_can_instantiate():
+    push_warning("skip duel opposite-rim awareness test — AiDriver script did not compile")
+    return
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(90.0, 0.0, 52.0))
+  _spawn_herbivore_body(main, Vector3(12.0, 0.0, 52.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("last_move_direction", Vector3(-1.0, 0.0, 0.0))
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("set_duel_round_active", true)
+  driver.call("_creature_motor_params_for_body", fox)
+  var prey: Array = driver.call("_prey_positions_for_predator_motor", fox) as Array
+  _assert(prey.is_empty(), "opposite-rim duel spawns stay outside scaled fox awareness at round start")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_no_prey_patrol_trail_repulsion() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator no-prey trail repulsion test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(90.0, 0.0, 52.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("set_duel_round_active", true)
+  var motor_p: Dictionary = driver.call("_creature_motor_params_for_body", fox)
+  driver.set(
+    "_explore_trail_centers_by_body",
+    {fox.get_instance_id(): [Vector3(90.0, 0.0, 52.0)]},
+  )
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+  _assert(
+    float(ctx.get("weight_explore_trail_repulsion", 0.0)) > 0.0,
+    "hungry fox without live prey still applies trail repulsion during patrol",
+  )
+  var trail_ctx := {
+    "creature_position": Vector3(88.0, 0.0, 52.0),
+    "creature_speed": 400.0,
+    "lookahead_sec": 0.15,
+    "bounds_min": Vector2.ZERO,
+    "bounds_max": playfield,
+    "mobs": [],
+    "weight_dist": 0.0,
+    "weight_closing": 0.0,
+    "penalty_oob": 1e7,
+    "distance_eps": 8.0,
+    "shuffle_tie_break": false,
+    "weight_interior": 0.0,
+    "weight_dist_sq": 0.0,
+    "weight_edge": 0.0,
+    "food_seek_targets": [],
+    "weight_seek_ready_food": 0.0,
+    "weight_explore_idle_penalty": 0.0,
+    "weight_explore_turn_bias": 0.0,
+    "explore_trail_centers": [Vector3(90.0, 0.0, 52.0)],
+    "weight_explore_trail_repulsion": 40.0,
+    "expanding_explore_hint": Vector3(0.0, 0.0, 1.0),
+    "weight_expanding_explore_hint": 0.0,
+    "motor_has_active_goal": false,
+  }
+  var intent: Vector3 = _Motor.pick_best_move_intent(trail_ctx)
+  _assert(
+    intent.dot(Vector3(0.0, 0.0, 1.0)) < 0.85,
+    "trail repulsion discourages retread south step along visited corridor",
+  )
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_east_rim_patrol_heading_mix_scaled() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip scaled east-rim patrol heading mix test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var motor_p := _MotorPlane.scale_motor_distance_params(
+    {
+      "motor_playfield_corner_band": 84.0,
+      "motor_patrol_min_step_clearance": 4.0,
+      "predator_chase_edge_band": 130.0,
+      "predator_chase_edge_band_frac": 0.12,
+      "predator_edge_slide_min_clearance": 2.0,
+      "predator_patrol_rim_peel_min_gain": 0.35,
+    },
+    scale,
+  )
+  var bounds_min := Vector2.ZERO
+  var bounds_max := playfield
+  var he := Vector2(0.7, 1.8)
+  var pos := Vector3(playfield.x - he.x - 2.0, 0.0, 52.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.set("_duel_motor_round_salt", 88010)
+  var headings: Dictionary = {}
+  for i in 12:
+    driver.set("_physics_ticks", 9300 + i)
+    var peel: Vector3 = driver.call(
+      "_predator_pick_rim_peel_cardinal",
+      pos,
+      he,
+      [],
+      bounds_min,
+      bounds_max,
+      motor_p,
+      88011,
+      true,
+    ) as Vector3
+    if peel.length_squared() > 1e-12:
+      headings[peel] = true
+    var patrol_hint: Vector3 = driver.call(
+      "_predator_patrol_edge_expand_hint",
+      pos,
+      he,
+      [],
+      bounds_min,
+      bounds_max,
+      motor_p,
+      Vector3.ZERO,
+      false,
+      88011,
+      true,
+    ) as Vector3
+    if patrol_hint.length_squared() > 1e-12:
+      headings[patrol_hint] = true
+  _assert(headings.size() >= 2, "scaled east-rim patrol produces multiple heading options")
+  var has_inward := false
+  for h in headings.keys():
+    if typeof(h) == TYPE_VECTOR3 and (h as Vector3).x < -0.15:
+      has_inward = true
+      break
+  _assert(has_inward, "scaled east-rim no-prey patrol includes west/inward headings")
+  driver.queue_free()
+
+
+func _test_predator_open_ground_patrol_east_rim() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator open-ground east-rim test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(102.0, 0.0, 8.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("set_duel_round_active", true)
+  var motor_p: Dictionary = _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var inward_count := 0
+  var pure_south_count := 0
+  for i in 6:
+    driver.set("_duel_motor_round_salt", 88020 + i)
+    driver.set("_physics_ticks", 9400 + i * 17)
+    var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+    var hint: Vector3 = ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+    if hint.length_squared() > 1e-12 and hint.x < -0.12:
+      inward_count += 1
+    if hint.length_squared() > 1e-12 and hint.z > 0.85 and absf(hint.x) < 0.15:
+      pure_south_count += 1
+  _assert(inward_count >= 3, "no-prey east-rim patrol prefers inward/west expand hints")
+  _assert(pure_south_count == 0, "no-prey east-rim patrol avoids pure south wall tangents")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_no_prey_expanding_explore_segments() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator no-prey segment explore test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(52.0, 0.0, 52.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("set_duel_round_active", true)
+  driver.set("_duel_motor_round_salt", 88030)
+  var motor_p: Dictionary = driver.call("_creature_motor_params_for_body", fox)
+  var headings: Dictionary = {}
+  var patrol_ex := int(motor_p.get("carnivore_explore_rotate_physics_ticks", 48))
+  var seg_ticks := _EXPANDING_CARDINAL_EXPLORE_SCR.Explore.segment_ticks_for_cycle(patrol_ex, 0)
+  for seg in 8:
+    driver.set("_physics_ticks", seg * seg_ticks + 2)
+    var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+    var hint: Vector3 = ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+    if hint.length_squared() > 1e-12:
+      headings[hint] = true
+  _assert(headings.size() >= 3, "no-prey patrol expand hint varies across expanding segments")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_patrol_wall_occlusion_active() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator patrol wall occlusion test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(102.0, 0.0, 52.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  var motor_p: Dictionary = driver.call("_creature_motor_params_for_body", fox)
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+  _assert(
+    bool(ctx.get("motor_patrol_occlusion_active", false)),
+    "east-rim no-prey patrol arms wall occlusion without static pinch",
+  )
+  _assert(
+    float(ctx.get("motor_patrol_occlusion_penalty_weight", 0.0)) > 0.0,
+    "wall occlusion patrol supplies penalty weight",
+  )
+  var goal: Vector3 = ctx.get("motor_seek_goal_pos", Vector3.ZERO) as Vector3
+  _assert(goal.x < fox.global_position.x - 0.5, "wall-in-awareness patrol occlusion goal aims inward off east rim")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_no_prey_patrol_heading_spread() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator no-prey patrol heading spread test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var scale := minf(playfield.x, playfield.y) / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(102.0, 0.0, 8.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("set_duel_round_active", true)
+  var motor_p: Dictionary = _MotorPlane.scale_motor_distance_params(
+    _Merge.merge_creature_motor_pack_overlay(
+      _Merge.default_creature_motor_params().duplicate(true),
+      "res://assets/creatures/fox",
+    ),
+    scale,
+  )
+  var headings: Dictionary = {}
+  for i in 12:
+    driver.set("_duel_motor_round_salt", 99100 + i * 3)
+    driver.set("_physics_ticks", 12000 + i * 23)
+    var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+    var intent: Vector3 = _Motor.pick_best_move_intent(ctx)
+    if intent.length_squared() > 1e-12:
+      headings[intent] = true
+  _assert(headings.size() >= 4, "no-prey east-rim patrol intents vary across salt/tick pairs")
+  driver.queue_free()
+  main.queue_free()
+
+
+func _test_predator_duel_weak_prey_prior() -> void:
+  if not _ai_driver_can_instantiate():
+    push_warning("skip predator duel weak prey prior test — AiDriver script did not compile")
+    return
+  var playfield := Vector2(105.0, 105.0)
+  var main := Node3D.new()
+  root.add_child(main)
+  var fox := _spawn_carnivore_body(main, Vector3(90.0, 0.0, 52.0))
+  var herb := _spawn_herbivore_body(main, Vector3(12.0, 0.0, 52.0))
+  fox.set("screen_size", playfield)
+  fox.set("playfield_bounds_min", Vector2.ZERO)
+  fox.set("playfield_bounds_max", playfield)
+  fox.set("current_calories", 0.0)
+  var driver: Node = _AiDriverScr.new()
+  root.add_child(driver)
+  driver.call("attach_main", main)
+  driver.call("register_creature", fox)
+  driver.call("register_creature", herb)
+  driver.call("set_duel_round_active", true)
+  var motor_p: Dictionary = driver.call("_creature_motor_params_for_body", fox)
+  var ctx: Dictionary = driver.call("_build_motor_context", motor_p, {}, fox)
+  var hint: Vector3 = ctx.get("expanding_explore_hint", Vector3.ZERO) as Vector3
+  _assert(hint.length_squared() > 1e-12, "duel no-prey patrol expand hint is non-zero")
+  _assert(hint.x < -0.1, "duel weak prey prior biases fox patrol toward registered herbivore")
+  driver.queue_free()
+  main.queue_free()
+
+
 func _test_seek_stationary_look() -> void:
   var pick := Callable(_SeekStationaryLookScr, &"pick_facing")
   var seg := 3
@@ -3989,6 +6900,13 @@ func _test_seek_stationary_look() -> void:
   _assert(a.is_equal_approx(b), "stationary look is deterministic for tick + seed")
   var c: Vector2 = pick.call(seg, seg, phase_seed) as Vector2
   _assert(not a.is_equal_approx(c), "stationary look advances facing across segment boundary")
+
+
+func _test_motor_plane_yaw_from_facing() -> void:
+  for d in _EightWayDirScr.DIRECTIONS:
+    var yaw: float = _MotorPlaneScr.yaw_from_horizontal_dir(d)
+    var rebuilt := Vector3(sin(yaw), 0.0, -cos(yaw))
+    _assert(rebuilt.is_equal_approx(d), "yaw_from_horizontal_dir round-trips 8-way direction %s" % d)
 
 
 func _test_seek_diagonal_intent() -> void:
@@ -4263,6 +7181,11 @@ func _test_herbivore_forage_plateau_release() -> void:
   }
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector3.ZERO, 0, motor_p)
   driver.call("_track_herbivore_forage_plateau", body_id, ctx, Vector3.ZERO, 0, motor_p)
+  var plateau_state: Dictionary = driver.get("_forage_plateau_ticks_by_body")
+  _assert(
+    int(plateau_state.get(body_id, 0)) == 2,
+    "Vector3 food targets accumulate forage plateau ticks while idle near food",
+  )
   _assert(
     not bool(driver.call("_herbivore_forage_plateau_release", body_id, motor_p, ctx)),
     "forage plateau not released before threshold",
@@ -4315,6 +7238,16 @@ func _test_herbivore_food_awareness_latch() -> void:
   )
   _assert(latched and food_targets.size() == 1, "food latch records ready bush")
   _assert(bool(driver.call("_herbivore_food_latch_active", body_id)), "food latch stays active")
+  var food_after_dropout: Array = []
+  var merged_latch := bool(
+    driver.call("_herbivore_food_latch_merge", body_id, [], food_after_dropout, motor_p)
+  )
+  _assert(merged_latch, "food latch merge active after cone dropout")
+  _assert(food_after_dropout.size() == 1, "latched Vector3 food re-merges into seek targets")
+  _assert(
+    (food_after_dropout[0] as Vector3).is_equal_approx(Vector3(500.0, 0.0, 200.0)),
+    "latched food position preserved in Vector3 merge",
+  )
   var ctx := {
     "creature_position": Vector3(200.0, 0.0, 200.0),
     "food_seek_targets": [Vector3(500.0, 0.0, 200.0)],
@@ -5378,6 +8311,52 @@ func _test_line_of_sight_wall_occlusion() -> void:
 func _test_nav_path_hint_invalid_map() -> void:
   var dir := _NavHint.unit_direction_to_next_waypoint(RID(), Vector3.ZERO, Vector3(10, 0, 0), 0.35)
   _assert(dir == Vector3.ZERO, "invalid nav map returns zero hint")
+
+
+func _test_nav_path_hint_first_waypoint_invalid_map() -> void:
+  var wp := _NavHint.first_waypoint_world(RID(), Vector3.ZERO, Vector3(10, 0, 0), 0.35)
+  _assert(wp == Vector3.ZERO, "invalid nav map returns zero first waypoint")
+
+
+func _test_seek_planner_replan_interval() -> void:
+  var motor_p := {"post_los_replan_base_ticks": 8}
+  var low_n := _SeekPlanner.observation_replan_interval_ticks(0.0, motor_p)
+  var high_n := _SeekPlanner.observation_replan_interval_ticks(100.0, motor_p)
+  _assert(low_n > high_n, "higher observation yields smaller replan interval n")
+  _assert(low_n >= 1 and high_n >= 1, "replan interval n is at least 1 tick")
+
+
+func _test_seek_planner_resolve_disabled_and_no_los() -> void:
+  var ultimate := Vector3(100.0, 0.0, 50.0)
+  var from := Vector3.ZERO
+  var disabled: Dictionary = _SeekPlanner.resolve_step_goal(
+    from,
+    ultimate,
+    {"enabled": false},
+    RID(),
+    1.0,
+    false,
+  )
+  _assert(
+    (disabled.get("step_goal", Vector3.ZERO) as Vector3) == ultimate,
+    "planner disabled keeps ultimate as step goal",
+  )
+  _assert(
+    disabled.get("step_mode", &"") == _SeekPlanner.STEP_MODE_DIRECT,
+    "planner disabled reports direct mode",
+  )
+  var no_nav: Dictionary = _SeekPlanner.resolve_step_goal(
+    from,
+    ultimate,
+    {"enabled": false},
+    RID(),
+    1.0,
+    true,
+  )
+  _assert(
+    (no_nav.get("step_goal", Vector3.ZERO) as Vector3) == ultimate,
+    "no los ctx with blocked assumption still returns ultimate when nav invalid",
+  )
 
 
 func _test_bundled_inference_helpers() -> void:

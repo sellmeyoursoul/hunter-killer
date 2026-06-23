@@ -1,11 +1,23 @@
 # Motor play baseline (Phase 1 → Phase 3)
 
-**Last updated:** 2026-05-22  
+**Last updated:** 2026-06-14  
 **Regression anchor:** `godot --path . --headless -s res://tests/run_all.gd` (Godot 4.6.2 steam tools).
 
 **Duel species packs:** Herbivore **rabbit** → `res://assets/creatures/rabbit/pack_resources.json` ([`rabbit_archetype.tres`](../../creature/species/rabbit_archetype.tres) on Player). Carnivore **fox** → `res://assets/creatures/fox/pack_resources.json` ([`fox_archetype.tres`](../../creature/species/fox_archetype.tres) on Mob). Editor default stays **dev** profile; pack overlays restore seek/prey and zero chaos for playtest (`resolver_smoke` remains headless-only).
 
 **Round end:** Duels end on **starvation** or **predation** only — no wall-clock round timer ([`main.gd`](../../main.gd)).
+
+## Phase 3 duel gates (tier 1 — before Phase 4)
+
+Authoritative spec: [CREATURE_MOVEMENT_V2.md §Phase 3 — exit tiers and gates](../Draft_Features/CREATURE_MOVEMENT_V2.md).
+
+| Gate | Pass |
+|------|------|
+| **Advance** | ≥1 `predation_carn_win` (fox) **and** ≥1 `starvation_carn_herb_win` (rabbit) on `main_3d` with 2× playtest boost |
+| **Ship viability** | ≥1 win (either species) with `hunter_killer_debug/use_ship_motor_profile = true` |
+| **Dev negative** | Default dev profile: no sustained seek / obvious aberrant loop; `_test_creature_motor_v2_profiles` green |
+
+Log rows in [CREATURE_GOALS_PLAYTEST_LOG.md](../Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md). Re-run all three gates after **major** motor merge / profile / duel-pack changes.
 
 ## How to run QA profile (editor)
 
@@ -27,10 +39,11 @@
 | Scenario | Setup | Pass criteria (ship profile) |
 |----------|--------|------------------------------|
 | **1. Herbivore forage** | Rabbit pack on Player, calories &lt; ~80% need, ready bushes in cone | Moves toward ready food (including diagonals); avoids depleted bushes when mixed; seek weakens in preserve band (~90%+ calories). With **no plant in cone**, expanding **8-way** hint (`herbivore_expanding_explore_mul` × pack hint) sweeps off walls; stuck escape uses `weight_stuck_escape_explore` (not predator prey-floor keys). |
-| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal patrol lock:** random **8-way** direction or still for **`motor_no_goal_patrol_lock_sec`** (1 s); no rapid heading flip. Chase when prey enters awareness. Memory expand only after first live sight. |
-| **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs differ between runs (random lock re-rolls each ~1 s). Chase leg stays directed once prey in cone. |
+| **2. Mob pursuit** | Duel carnivore (fox pack on Mob), prey not yet in awareness | **No-goal guided patrol lock:** expanding **8-way** hint (`expanding_cardinal_explore` + `predator_patrol_explore_mul`) held for one segment; trail repulsion active; random lock remains for herbivore. Chase when prey enters awareness. Memory expand only after first live sight. |
+| **2b. Run variance** | Replay duel; fox patrol before contact | Patrol legs follow expand sweep (segment-aligned lock); phase_seed still varies spawn offset. Chase leg stays directed once prey in cone. |
 | **3. Jeopardy flee** | Fox enters rabbit **awareness cone** (not omni); panic flee only inside `herbivore_flee_panic_radius_px` footprint distance | No flee while fox is off-cone/behind; alert band keeps partial forage seek. |
 | **4. Hunt corner escape** | Fox chasing prey, pinned on shrub AABB | After one tick with intent but no displacement, hunt forces clearance **8-way** step or rotating explore heading (`predator_hunt_stuck_rotate_ticks`). |
+| **5. Predator NE-corner patrol** | Fox no-goal patrol hugging NE playfield rim (~105 m mains); static wedge (boulder S, shrub W) | **`motor_corner_hugging`** arms latched interior escape; **rim-pocket band** (`corner_band ≤ edge_m < edge_band`) arms **`rim_pocket_esc`** via **`_predator_rim_pocket_stall_active`** when **`coverage_stall`** + high **`stuck_n`** or perpendicular intent oscillation. At scaled positions where **`corner_hug=false`** but **`is_corner=true`**, **`_predator_rim_pocket_dual_edge_corner_escape_intent`** picks inward 8-way egress; lock persists **`geometry_escape_lock_ticks`** without **`pacing_trap`** / **`pinch_esc`** override churn. Headless: **`_test_predator_ne_corner_wedge_multi_tick_replay`**, **`_test_predator_ne_corner_rim_pocket_stall_escape`**, **`_test_predator_ne_corner_rim_pocket_no_pacing_override`**. Live OLog: **`rim_pocket_esc`** inward SW at NE; **`edge_m`** climbs; no interleaved **`pacing_trap`** during lock window. |
 
 ## Automated verification (headless)
 
@@ -44,6 +57,14 @@
 | Coarse belief TTL | `_test_goal_belief_coarse_ttl` |
 | Predator chase without explore | `_test_predator_chase_motor_ctx` |
 | No-goal patrol lock | `_test_no_goal_patrol_lock` |
+| No-goal guided patrol (fox) | `_test_no_goal_patrol_lock_guided`, `_test_predator_patrol_expanding_coverage` |
+| Predator south-wall pinch escape | `_test_predator_south_wall_boulder_pinch_escape`, `_test_predator_pacing_trap_break` |
+| Predator NE-corner interior escape | `_test_predator_northeast_corner_interior_escape` |
+| Predator NE-corner static wedge (single-tick) | `_test_predator_ne_corner_static_wedge_escape` |
+| Predator NE-corner wedge multi-tick replay | `_test_predator_ne_corner_wedge_multi_tick_replay` |
+| Predator NE-corner rim-pocket stall escape | `_test_predator_ne_corner_rim_pocket_stall_escape` |
+| Predator NE-corner rim-pocket lock persistence | `_test_predator_ne_corner_rim_pocket_no_pacing_override` |
+| 3D playfield-scaled cardinal probes | `_test_motor_cardinal_probe_scaled_for_small_playfield` |
 | Expand hint cardinal | `_test_expanding_cardinal_explore` (UP vs idle) |
 
 ## After memory (Phase 2 + Phase 3 retune)

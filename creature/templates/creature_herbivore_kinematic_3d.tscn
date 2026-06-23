@@ -1,8 +1,9 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://creature/creature_root_3d.gd" id="1"]
 [ext_resource type="Script" path="res://creature/capabilities/creature_kinematic_body_3d.gd" id="2"]
 [ext_resource type="Script" path="res://creature/capabilities/creature_vitals_component.gd" id="3"]
+[ext_resource type="Script" path="res://creature/awareness_debug_overlay_3d.gd" id="4"]
 
 [sub_resource type="CapsuleShape3D" id="caps"]
 radius = 0.35
@@ -21,6 +22,7 @@ floor_stop_on_slope = false
 floor_max_angle = 0.8726646259972418
 floor_snap_length = 0.35
 script = ExtResource("2")
+visual_yaw_offset_rad = 1.5707963267948966
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body"]
 shape = SubResource("caps")
@@ -32,6 +34,9 @@ monitoring = true
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body/MobHitbox"]
 shape = SubResource("hit_caps")
+
+[node name="AwarenessDebugOverlay" type="Node3D" parent="Body"]
+script = ExtResource("4")
 
 [node name="Vitals" type="Node" parent="."]
 script = ExtResource("3")

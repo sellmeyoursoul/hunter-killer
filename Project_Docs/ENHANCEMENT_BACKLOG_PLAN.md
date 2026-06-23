@@ -58,7 +58,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | **Trait → Tier-2 urgency channels (non-stub)** | Medium | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3.3.1 | Phase 1: **`trait_tier2_mapper.gd`** stub (zero deltas). Future: per-trait coefficients into `urgency_find_food`, `urgency_avoid_hostiles`, etc. |
 | **Slot B `current_fit` — full qualitative matchers** | Medium | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §5.1.4 | Phase 1: classifier flags only. Long-term: squeeze fingerprint, LoS hide, durable local state per §5.1 table. |
 | **Remembered seek weighting (`weight_seek_remembered_goal`)** | Medium | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §10 | Phase 1: interim bump on **`weight_seek_ready_food`** in [`goal_belief_memory.gd`](../creature/motor/goal_belief_memory.gd) / [`ai_driver.gd`](../AI_int_lib/ai_driver.gd). **Target:** per-target scaling via **`weight_seek_remembered_goal`** on precise remembered seeks into **`goal_seek_targets`** / **`weight_seek_goal`** (not global seek bump). **Blocked until** goal-seek ingress stable ([CREATURE_MOVEMENT_V2.md](Draft_Features/CREATURE_MOVEMENT_V2.md) §A.2.2). |
-| **`anticipated_calories` motor use** | Low | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §6 | **Stub shipped:** stored on `_goal_belief` at sync; no merge/scoring yet. Future: yield hints, Preserve band, seek prioritization. |
+| **`kind_profile` motor use (`nutrition_yield`)** | Medium | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §5.7, [CREATURE_MOVEMENT_V3](Draft_Features/CREATURE_MOVEMENT_V3) §6.2 | **V3 resolved:** yield on `_kind_profile` facets; instance `anticipated_calories` legacy stub. **6d:** EWMA on EAT; live ranking + §8.3 replace. Trait confidence modulation deferred. |
 | **Combat: `fight` vs `flee_retreat` dominance** | Medium | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §5.5 Phase E | Phase E: **`avoid_hostiles` always blocks** remembered prey chase. When combat ships, predators may **fight** through remembered threat under policy. |
 
 ---
@@ -108,7 +108,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
-| **2D → 3D playfield migration** | High | [Draft_Features/CONVERT_TO_3D.md](Draft_Features/CONVERT_TO_3D.md) | M0–M3 done; **M4 v1** shipped LoS, navmesh cardinal hint, footprint ≥25%, movement_impact merge. **D5 tile authoring** = separate project; **crush** deferred. |
+| **3D tile terrain authoring (D5)** | Medium | [Completed_Features/CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md) §D5, [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Replace dev grasslands mesh + procedural open env grid with Godot 4.x 3D tile tools. Migration umbrella **shipped** — [CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md) archived. |
 
 ---
 

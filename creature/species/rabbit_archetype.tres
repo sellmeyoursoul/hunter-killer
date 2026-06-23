@@ -1,7 +1,7 @@
-[gd_resource type="Resource" load_steps=3 format=3]
+[gd_resource type="Resource" script_class="CreatureDefinition" format=3 uid="uid://ca6d8j1idlnm6"]
 
-[ext_resource type="Script" path="res://creature/definition/creature_definition.gd" id="1_def"]
-[ext_resource type="Script" path="res://creature/definition/locomotion_profile.gd" id="2_loco"]
+[ext_resource type="Script" uid="uid://nvhv7s3mwyv2" path="res://creature/definition/creature_definition.gd" id="1_def"]
+[ext_resource type="Script" uid="uid://bqvxaitbcnhhc" path="res://creature/definition/locomotion_profile.gd" id="2_loco"]
 
 [sub_resource type="Resource" id="sub_loco"]
 script = ExtResource("2_loco")
@@ -14,9 +14,8 @@ script = ExtResource("1_def")
 species_id = &"rabbit"
 display_name = "Rabbit"
 asset_pack_root = "res://assets/creatures/rabbit"
-feeding_mode = 0
-caloric_needs = 30
-creature_size = 0.85
-collision_capsule_radius = 0.3
-collision_capsule_height = 1.0
+creature_size = 1.7
+collision_capsule_radius = 0.6
+collision_capsule_height = 2.0
+caloric_needs = 60
 locomotion_profile = SubResource("sub_loco")

@@ -22,6 +22,7 @@
 |-------|-----------------|
 | **`find_food`** + **`avoid_hostiles`** LocalePriorMap (write, consult, replay) | **`shelter`**, **`find_mate`**, pack **`extra_goal_kinds`** — registry only; no salient writes |
 | **`_goal_belief`** for stationary **`food_plants`** (**§5.5**) | Moving belief targets (prey, mobs) |
+| **`_kind_profile`** stimulus-type facets (**§5.7**) | Trait confidence modulation; weapon facets |
 | **`outcome_envelope`** + per-GoalKind hooks (**§14.4**) | **`ExperienceRing`**, Δ-calorie reward shaping |
 
 **Out of scope (explicit non-goals):**
@@ -200,7 +201,7 @@ When a remembered entity **re-enters the creature’s active zone of sensory awa
 
 ### 5.5 `_goal_belief` — instance memory implementation (phase-1 resolved)
 
-**Purpose:** Remember **specific instances** (this bush) after they leave awareness. Complements **`LocalePriorMap`** (patch habits). **Phase-1 scope:** stationary **`food_plants`** (`goal_kind = find_food`, `is_moving = false`).
+**Purpose:** Remember **specific instances** (this bush, this mob) after they leave awareness — **where** and passibility, **not** type-level yield or danger (those live in **`_kind_profile`** — §5.7). Complements **`LocalePriorMap`** (patch habits). **Phase-1 scope:** stationary **`food_plants`** (`goal_kind = find_food`, `is_moving = false`).
 
 **Phase E (resolved — moving beliefs):** same **`_goal_belief`** table; **no** parallel **`_predator_prey_memory_*`** store. Key = target **`instance_id`** (prey mob, hostile mob, bush).
 
@@ -219,10 +220,12 @@ When a remembered entity **re-enters the creature’s active zone of sensory awa
 | **`consumable_now`** | bool (frozen) | Last live read | Ready vs unready merge |
 | **`merge_use_count`** | int | Each motor merge | LRU eviction score |
 | **`last_merged_ms`** | int | Each motor merge | LRU tie-break |
-| **`anticipated_calories`** | float (optional) | Last live read | **Stub** — stored on entry; **not** used by motor merge / seek scoring (§6) |
+| **`anticipated_calories`** | float (optional) | Last live read | **Legacy V2 stub** — retained on row for compat; **V3 yield learning** uses **`_kind_profile`** §5.7, not instance rows |
 | **`is_moving`** | bool | First sighting / live sync | **Phase E:** `true` for prey / fleeing hostiles; `false` for bushes |
 | **`last_velocity`** | `Vector2` | Live moving sync | Ghost pursuit + intercept (**§5.5 Phase E**) |
 | **`ghost_strength`** | float 0.4…1.0 | Motor merge sample | Age decay within mover TTL (replaces predator-only strength) |
+| **`passibility_fail_count`** | int | Failed approach / shelter probe / passibility contradiction | §9 switch bias ([CREATURE_MOVEMENT_V3.md §3](CREATURE_MOVEMENT_V3) **C**); clear on re-awareness (**§5.4**) |
+| **`last_passibility_fail_ms`** | int | Each passibility increment | Audit + TTL hygiene with **`goal_memory_ttl_sec`** |
 
 **Do not store** egocentric sector in the entry — recompute each tick (**§5.2**).
 
@@ -248,7 +251,7 @@ When a remembered entity **re-enters the creature’s active zone of sensory awa
 ##### `_goal_belief_sync_from_scene(live_food: Dictionary) -> void`
 
 - **When:** After live awareness ingest, before maintenance/merge.
-- **Input:** Awareness pass returns **`{ "ready": [{pos, instance_id, …}, …], "unready": […] }`** — **`instance_id` required** for sync (**phase-1**). Entries **without** a stable **`instance_id`** (`0` / missing) are **skipped** — **no** nearest-bush resolve in phase-1. Optional **`anticipated_calories`** copied when the live plant node exposes **`current_calories`** ([`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd)).
+- **Input:** Awareness pass returns **`{ "ready": [{pos, instance_id, stimulus_kind_id, …}, …], "unready": […] }`** — **`instance_id` required** for sync (**phase-1**). Entries **without** a stable **`instance_id`** (`0` / missing) are **skipped** — **no** nearest-bush resolve in phase-1. **`stimulus_kind_id`** required for V3 kind consult ([CREATURE_MOVEMENT_V3 §6.2](CREATURE_MOVEMENT_V3)). V2 may still copy **`current_calories`** as **`anticipated_calories`** on the instance row — **ignored** by V3 planner scoring.
 - **Effect:** Upsert seen entries → **`PRECISE`**, refresh pos, freeze **`consumable_now`**, bump **`last_observed_ms`**.
 
 ##### `_goal_belief_maintain(creature_pos: Vector2, now_ms: int, motor_p: Dictionary) -> void`
@@ -266,6 +269,93 @@ When a remembered entity **re-enters the creature’s active zone of sensory awa
 
 **LocalePriorMap:** `_goal_belief` does **not** write locale priors; consumption outcomes still call **`goal_source_memory.try_salient_write`**.
 
+### 5.6 `_dead_end_marks` — geographic cul-de-sac memory (V3 §3 **B**)
+
+**Purpose:** Remember **local geographic cul-de-sacs** (failed waypoints, blocked approaches) so the planner can filter edge-of-awareness exploration candidates and Flight spatial options — distinct from **heading-only** backtrack ([`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd)) and from **instance** passibility on **`_goal_belief`** (**§5.5** `passibility_fail_count`).
+
+**Storage:** **`_dead_end_marks_by_body`** on **`AiDriver`** — per-creature **list** of mark rows (not keyed by `instance_id`).
+
+#### Entry schema
+
+| Field | Type | When set | Used for |
+|-------|------|----------|----------|
+| **`world_pos`** | `Vector3` | Clear-path fail; blocked `MOVE_FORWARD`; optional shelter probe fail | Cul-de-sac anchor |
+| **`approach_heading`** | `Vector3` (unit) | Same event as `world_pos` | Directional match — same point may be valid from another heading |
+| **`goal_kind`** | wire id | Write time | Read filter — active step `goal_kind` must match in v1 |
+| **`instance_id`** | int / `StringName` (optional) | When failure tied to incumbent objective | §9 correlation; **not** dictionary key |
+| **`recorded_ms`** | int | Write time | **`dead_end_memory_ttl_sec`** expiry; LRU tie-break at cap |
+
+#### Maintenance
+
+- **TTL:** evict when `now_ms - recorded_ms > dead_end_memory_ttl_sec` (**default 15** — tactical; alias scale of **`goal_memory_coarse_ttl_sec`**).
+- **Cap:** when list size **>** **`dead_end_memory_max_entries`** (**default 12**), evict row with **oldest `recorded_ms`** (LRU). No **`merge_use_count`**.
+- **Clear on success:** remove rows matching consult rule when creature successfully traverses a previously marked cul-de-sac.
+
+#### Consult (planner adapter — [CREATURE_MOVEMENT_V3.md §8.4](CREATURE_MOVEMENT_V3))
+
+Drop candidate waypoint **W** when ∃ mark with `distance(W, world_pos) ≤ dead_end_match_radius`, `goal_kind` matches active step, and `normalize(W − creature_pos).dot(approach_heading) ≥ dead_end_heading_dot`.
+
+**Phasing:** **V3 6c** — store unused; Movement Weighing branch treats as **no**. **V3 6d** — full read/write via memory adapter.
+
+### 5.7 `_kind_profile` — stimulus-type beliefs (V3 resolved)
+
+**Purpose:** Remember **what kind of thing** is worth how much — generalized across instances. Example: “apple trees yield more than strawberry plants”; “lions are scarier than wolves.” Distinct from **`_goal_belief`** (§5.5 — **where** is that tree) and **`LocalePriorMap`** (§14 — did foraging **here** work). Extensible to future facets (e.g. **`weapon_efficacy`** after combat) without a new memory architecture.
+
+**Storage:** **`_kind_profile_by_body`** on **`AiDriver`** (or memory-adapter owned) — per-creature **`stimulus_kind_id`** → facet map.
+
+**Stimulus identity (V3):**
+
+| Domain | `stimulus_kind_id` source | V3 recognition |
+|--------|---------------------------|----------------|
+| Plants | Pack-stable id on plant scene (`@export` / `plant_kind_id` on [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd)) | **Omniscient** at ingest |
+| Hostiles / prey | [`CreatureDefinition.species_id`](../../creature/definition/creature_definition.gd) on threat / prey samples | **Omniscient** at ingest |
+| Future (weapons, terrain kinds) | Pack catalog id | Register facet + learn topic when feature lands |
+
+#### Facet schema (per `stimulus_kind_id`)
+
+Sparse map — only observed facets exist:
+
+| Facet key | Learn topic | Default when unseen | V3 use |
+|-----------|-------------|---------------------|--------|
+| **`nutrition_yield`** | `&"nutrition_yield"` | **0.5** (neutral on 0…1 scale) | §6.2 live ranking; §8.3 replace; §9 switch |
+| **`threat_danger`** | `&"threat_danger"` | **0.5** | §1 `kind_threat` × `urgency_dist` × `threat_disposition_mod` |
+
+Per-facet fields:
+
+| Field | Type | Role |
+|-------|------|------|
+| **`value`** | float 0…1 | EWMA belief (yield normalized or danger) |
+| **`sample_count`** | int | Confidence / refinement over repeats |
+| **`last_updated_ms`** | int | Hygiene / debug |
+
+**V3:** **`unknown_kind_multiplier`** = **1.0** — no familiarity bonus for “known individual vs unknown kind.” Higher **kind** danger ranks scarier regardless of which individual was seen more.
+
+#### Learn-topic registry ([`stimulus_learn_registry.gd`](../../creature/memory/stimulus_learn_registry.gd) — path locks at implementation)
+
+Central catalog — adding a memorable dimension = **one registry row** + thin emitters at natural boundaries (EAT complete, Flight episode end, future combat strike). Pattern mirrors [`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd).
+
+| `topic_id` | Facet | Triggers (V3) | Update rule |
+|------------|-------|---------------|-------------|
+| `&"nutrition_yield"` | `nutrition_yield` | EAT completed (`calories_gained` observation) | EWMA — reuse `locale_prior_ewma_alpha` or sibling `kind_profile_ewma_alpha` (§10) |
+| `&"threat_danger"` | `threat_danger` | Flight episode end; near-death tier | EWMA from outcome tier |
+
+**Adapter API:**
+
+##### `record_observation(body_id, topic_id, stimulus_kind_id, value, context := {}) -> void`
+
+- **Owner:** V3 memory adapter (**6d**).
+- **Effect:** Look up topic in registry → update matching facet on `_kind_profile` for body.
+- **Emitters:** Body / planner outcome hooks only — **not** hub.
+
+##### `kind_profile_facet(body_id, facet_key, stimulus_kind_id) -> float`
+
+- **Owner:** V3 memory adapter read path.
+- **Effect:** Return facet **`value`**, or topic **`default_neutral`** (**0.5**) when row or facet missing.
+
+**Deferred:** Trait modulation on confidence and read weight ([CREATURE_MOVEMENT_V3 §6.2](CREATURE_MOVEMENT_V3)). Variable bite / pool / sharing — observe `calories_gained` only until plants land; schema allows **`believed_calories_per_action`** vs pool later.
+
+**Phasing:** **V3 6c** — read with neutral priors only; **no** EWMA writes. **V3 6d** — full `record_observation` + consult.
+
 ---
 
 ## 6. Optional goal payloads (`GoalPayload`)
@@ -274,13 +364,13 @@ Type-specific blobs **orthogonal** to tier geometry:
 
 | Goal kind | Example payload fields |
 |-----------|-------------------------|
-| **Nutrition / food** | `anticipated_calories` (estimate from memory or last sensory read), ripeness-ish flags mirrored from **`consumable_now`**. |
+| **Nutrition / food** | **`consumable_now`** mirror on instance row; **yield** on **`_kind_profile.nutrition_yield`** (§5.7), not instance `anticipated_calories` in V3 |
 | **Mate** | Compatibility / courtship cues when designed (size bracket, hormonal flag, lineage avoid list). |
 | **Finding shelter** (`shelter`) | `estimated_squeeze_body_size`, `estimated_hostile_size`, `confidence` (**§7**) — qualitative “fit” not raw editor truth unless skill maxed (**future progression**). Wire id — **[CREATURE_GOAL_DRIVERS.md §4.1](CREATURE_GOAL_DRIVERS.md)**. |
 
 Payloads attach to belief entries; **routing** ignores unknown fields gracefully.
 
-**Phase-1 stub — `anticipated_calories` (shipped):** When awareness ingest includes **`anticipated_calories`** (from plant **`current_calories`** at last live sighting), **`_goal_belief_sync_from_scene`** persists it on the belief row. **`_goal_belief_merge_into_motor_context`** and cardinal scoring **ignore** this field until a future enhancement (per-target yield bias, Preserve band hints, etc.). See [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — *Remembered seek weighting* is a separate deferred item.
+**V3 — yield on kind profile:** Planner reads **`kind_profile_facet(nutrition_yield, stimulus_kind_id)`** for target ranking. Instance **`anticipated_calories`** remains a **V2 compat stub** on `_goal_belief` rows ([`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd)); V3 does not use it for §6.2 / §8.3 / §9. See [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — retire instance yield field when V2 motor merge is removed.
 
 ---
 
@@ -335,7 +425,33 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 | Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; **`_goal_belief_*`** (**§5.5**); **`goal_source_memory.gd`** salient hooks (**§14.4**). Live zone geometry — **[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)**. |
 | Config merge spine | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — commented **`goal_*`** placeholders (**§10**); pack overlay via **`creature_motor`** (**CREATURE_MOVEMENT_V2 §A.1**). |
 | Cardinal costs | [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd). |
-| Stationary flora anchor | [`assets/plants/bush_food.gd`](../../assets/plants/bush_food.gd) — **`global_position`**, **`instance_id`**. |
+| Stationary flora anchor | [`assets/plants/bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) — **`global_position`**, **`stimulus_kind_id`** (V3; `@export` until authored), runtime **`instance_id`** for target binding |
+
+### 8.3 V3 movement refactor
+
+**[CREATURE_MOVEMENT_V3](CREATURE_MOVEMENT_V3)** supersedes V2 motor merge for ENGINE creatures. Storage contracts remain in this file (**§§5.5, 5.6, 5.7, 10, 14**); V3 owns planner **when** to read/write via the memory adapter (**CREATURE_MOVEMENT_V3 §8.4**).
+
+### 8.4 Planner consumption (V3 adapter — storage vs consult)
+
+**Split:** This file = **row schema, TTL, eviction, salient-write gates**. [CREATURE_MOVEMENT_V3 §8.4](CREATURE_MOVEMENT_V3) = **adapter read/write API** and planner trigger events.
+
+| Read consult | Storage (this doc) |
+|--------------|-------------------|
+| Precise / coarse belief seek | **`_goal_belief`** (**§5.5**) |
+| Locale prior / replay | **`LocalePriorMap`** (**§14**) |
+| Dead-end waypoint filter | **`_dead_end_marks_by_body`** (**§5.6**) |
+| Instance passibility / switch | **`_goal_belief.passibility_fail_count`** (**§5.5**) |
+| Kind yield / threat | **`_kind_profile`** facets (**§5.7**) |
+
+| Write event | Storage (this doc) |
+|-------------|-------------------|
+| Live sighting / re-awareness | **`_goal_belief` sync** (position / `consumable_now`); clear **`passibility_fail_count`** |
+| Kind observation | **`record_observation`** → **`_kind_profile`** (**§5.7**) |
+| Salient outcome | **`goal_source_memory.try_salient_write`** (**§14.4**) — may fan out with kind observation on same episode (EAT) |
+| Clear-path fail / blocked MOVE | **`_dead_end_marks_by_body` append** (**§5.6**) |
+| Failed approach / shelter probe | **`passibility_fail_count` increment** (+ optional geographic row) |
+
+**Phasing:** V3 **6c** — adapter stubs; **`blocked_approach_memory.gd`** only. V3 **6d** — full adapter wiring.
 
 ---
 
@@ -364,6 +480,15 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 | `goal_memory_coarse_ttl_sec` | **15** | Forget after N seconds continuously coarse |
 | `goal_memory_ttl_sec` | **45** | Forget since last **live** observation (matches [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) / [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd)) |
 | `goal_memory_max_entries` | **25** | LRU cap; eviction = lowest **`merge_use_count`**, tie least recently merged |
+| `passibility_fail_switch_threshold` | **2** | §9 / V3 switch bias when **`_goal_belief.passibility_fail_count`** reaches threshold ([CREATURE_MOVEMENT_V3.md §3](CREATURE_MOVEMENT_V3)) |
+| `dead_end_memory_ttl_sec` | **15** | Geographic cul-de-sac mark expiry (**§5.6**); tactical — alias scale of **`goal_memory_coarse_ttl_sec`** |
+| `dead_end_memory_max_entries` | **12** | Per-creature cap on **`_dead_end_marks_by_body`** list; LRU by **`recorded_ms`** |
+| `dead_end_match_radius` | **52** | Waypoint ↔ mark distance consult (**§5.6**); alias **`explore_coverage_cell`** |
+| `dead_end_heading_dot` | **0.55** | Heading match for consult (**§5.6**); alias **`blocked_approach_backtrack_dot`** |
+| `dead_end_record_min_blocked_ticks` | **3** | Debounce before geographic write on consecutive `ActionOutcome.blocked` |
+| `kind_profile_neutral_prior` | **0.5** | Default facet value when `stimulus_kind_id` unseen (**§5.7**) |
+| `kind_profile_ewma_alpha` | alias **`locale_prior_ewma_alpha`** (**0.15**) | EWMA step on `record_observation` (**§5.7**) |
+| `unknown_kind_multiplier` | **1.0** | V3 — no familiarity term; tune when traits / plants land ([CREATURE_MOVEMENT_V3 §6.2](CREATURE_MOVEMENT_V3)) |
 | `weight_seek_remembered_goal` | **8.0** | Scales cardinal **seek pull** toward **precise** remembered bush positions (merged into `food_seek_targets`). **~0.5×** default **`weight_seek_ready_food`** (16): remembered targets nudge direction but **weaker than live in-cone food**. **Raise** → chases stale GPS harder (may ignore fresher live cues). **Lower** → memory barely affects pathing. |
 | `weight_coarse_sector_goal_bias` | **3.0** | Scales **`sector_weights[s]`** in motor cost (**§14.1**). Multiplies egocentric 8-way bias from **coarse** beliefs only. **0** = off. **Raise** → stronger weak turn toward “food was that way” without exact coords. Keep **well below** live seek weights so coarse bias stays a hint. |
 
@@ -693,6 +818,8 @@ for s in 0..7:
 
 | Date | Change |
 |------|--------|
+| 2026-06-18 | **V3 kind memory:** §5.7 **`_kind_profile`** + learn-topic registry (`nutrition_yield`, `threat_danger`); §5.5 reframed as instance/**where** only; §6 / §8.4 adapter `record_observation`; §10 **`kind_profile_*`** + **`unknown_kind_multiplier`** — aligned with [CREATURE_MOVEMENT_V3 §6.2](CREATURE_MOVEMENT_V3). |
+| 2026-06-18 | **V3 dead-end memory:** §5.6 **`_dead_end_marks_by_body`** geographic cul-de-sac schema; §5.5 **`passibility_fail_count`** / **`last_passibility_fail_ms`**; §8.3–8.4 V3 adapter split; §10 **`dead_end_*`** + **`passibility_fail_switch_threshold`** defaults — aligned with [CREATURE_MOVEMENT_V3 §3](CREATURE_MOVEMENT_V3). |
 | 2026-05-25 | **Phase 2 integration:** `_goal_belief_*` + per-body `GoalSourceMemoryStore` wired in `ai_driver.gd`; `notify_food_consumption_outcome` / jeopardy-clear salient writes; `goal_belief_memory.gd` helper. Phase 1 movement foundations closed. |
 | 2026-05-23 | **§5.4 / §8.2:** re-awareness zone = **CREATURE_MOVEMENT_V2 §E.1** hybrid radius + forward cone (default not cone-only). |
 | 2026-05-20 | **Tier B closure:** §2.1.1 nearest-eligible consult; §10 defaults (`locale_prior_pull_w_norm` **3.0**, `locale_prior_ewma_alpha` **0.15**, `locale_prior_write_blend` **0.35**, `weight_believed_goal_pull` **6.4**, `salient_write_max_per_sec` **100**); §14.1 sector-arc **`align`**; §14.2 write blend; §14.4 failed-forage deferred; §7.4 Godot 3D ray future. |

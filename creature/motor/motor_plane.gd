@@ -1,6 +1,6 @@
 extends RefCounted
 class_name MotorPlane
-## Motor-plane helpers: horizontal **Vector3** (Y=0) with **Vector2** XZ shims ([CONVERT_TO_3D.md §3.2](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Motor-plane helpers: horizontal **Vector3** (Y=0) with **Vector2** XZ shims ([CONVERT_TO_3D.md §3.2](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
@@ -53,6 +53,12 @@ static func read_dir(v: Variant, default: Vector3 = HORIZONTAL_RIGHT) -> Vector3
   return Vector3(p.x, 0.0, p.z).normalized()
 
 
+## Y rotation (radians) so a mesh whose default forward is −Z aligns with horizontal [param dir].
+static func yaw_from_horizontal_dir(dir: Variant, default: Vector3 = HORIZONTAL_FORWARD) -> float:
+  var d := read_dir(dir, default)
+  return atan2(d.x, -d.z)
+
+
 ## Horizontal velocity from motor-plane variant ([code]Vector2[/code] or [code]Vector3[/code]).
 static func read_velocity(v: Variant) -> Vector3:
   return read_pos(v)
@@ -101,7 +107,7 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   return he_xy
 
 
-## Multiplier for legacy reference-playfield-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Multiplier for legacy reference-playfield-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -> float:
   if main == null or not main.has_method(&"get_motor_playfield_size"):
     return 1.0
@@ -113,15 +119,23 @@ static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -
   return minf(playfield_size.x, playfield_size.y) / REFERENCE_MOTOR_PLAYFIELD_EDGE
 
 
-## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Dictionary:
-  if is_equal_approx(scale, 1.0):
-    return motor_p
   var out := motor_p.duplicate(true)
-  for key in out.keys():
-    if _is_distance_motor_param_key(key):
-      out[key] = float(out[key]) * scale
+  if not is_equal_approx(scale, 1.0):
+    for key in out.keys():
+      if _is_distance_motor_param_key(key):
+        out[key] = float(out[key]) * scale
+  _inject_cardinal_probe_mins(out, scale)
   return out
+
+
+## Playfield-scaled cardinal lookahead floors ([code]cardinal_avoidance.gd[/code] stuck / edge escape).
+static func _inject_cardinal_probe_mins(motor_p: Dictionary, scale: float) -> void:
+  if not motor_p.has("motor_cardinal_probe_min"):
+    motor_p["motor_cardinal_probe_min"] = 40.0 * scale
+  if not motor_p.has("motor_cardinal_near_probe_min"):
+    motor_p["motor_cardinal_near_probe_min"] = 10.0 * scale
 
 
 ## True when [param key] is a motor distance tuned for playfield scale ([method scale_motor_distance_params]).

@@ -1,0 +1,45 @@
+---
+description: >-
+  Hub-and-spoke orchestration for the primary chat only. Read before creating files,
+  refactoring, or implementing features when write targets may fall outside a single
+  domain agent's Directory Scope. Covers scope cross-reference against .cursor/agents/,
+  provisioning new specialists, user confirmation, and Task handoff. Not for doc-only
+  work, Q&A, or when already running as a domain subagent.
+alwaysApply: false
+---
+
+# Subagent Governance and Provisioning Protocol
+
+You operate under a **hub-and-spoke** model: the primary chat is the **Orchestrator**; heavy domain execution belongs in Task subagents defined in [`.cursor/agents/`](../agents/). Routing table: [`AGENTS.md`](./AGENTS.md).
+
+**Applies when:** Primary orchestrator chat is about to create, refactor, or implement code.
+
+**Does not apply when:** Question/review-only mode, doc-only work (`feature-designer` scope), or a domain subagent is already executing (spokes follow their agent file only).
+
+## 1. Codebase drift monitoring
+
+Before file creation, refactor, or substantial feature implementation, cross-reference target paths against each agent's YAML `description` and `## Directory Scope` in [`.cursor/agents/`](../agents/). Use the path→agent table in [`AGENTS.md`](./AGENTS.md) for a quick lookup.
+
+## 2. Route to an existing specialist
+
+When the primary write target falls within one agent's Directory Scope, **HALT** direct implementation in the orchestrator thread and delegate via the **Task** tool to that subagent (`subagent_type` matching the domain, e.g. `creature-motor`).
+
+When the task spans **known domains** with an **explicit path list** from the orchestrator, delegate to [`code-executor`](../agents/code-executor.md) instead of inlining edits.
+
+## 3. Automatic provisioning trigger
+
+When a target path falls **completely outside** all existing agents (e.g. a new `networking/` tree or `services/analytics/` module—not routine cross-folder work covered by `code-executor`):
+
+1. **HALT** code generation in the orchestrator thread.
+2. **Generate the worker:** Create [`.cursor/agents/[new-domain-name].md`](../agents/) following [`subagent-provisioning.mdc`](./subagent-provisioning.mdc) and [`_TEMPLATE.md`](../agents/_TEMPLATE.md).
+3. **Assign boundaries:** Populate frontmatter `description` and `## Directory Scope` restricted strictly to the new path.
+4. **Log provisioning:** Tell the user: `[System] Provisioned new specialist subagent: @[new-domain-name] for path [path].`
+5. **Handoff:** Delegate the subsequent code task to the new subagent via the **Task** tool.
+
+Update [`AGENTS.md`](./AGENTS.md) path→agent table in the same change set.
+
+## 4. Anti-patterns
+
+- Never execute cross-domain modifications directly in the primary orchestrator thread.
+- Never provision subagents or edit `.cursor/agents/` from inside a spoke subagent.
+- Keep orchestrator context to macro coordination, scope checks, and delegation—not domain implementation.

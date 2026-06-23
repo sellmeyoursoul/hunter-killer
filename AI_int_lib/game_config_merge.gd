@@ -46,6 +46,10 @@ static func creature_motor_spine() -> Dictionary:
     "awareness_memory_weight": 0.35,
     "awareness_memory_horizon_sec": 0.0,
     "weight_obstacle": 1.25,
+    ## Off-path observed static AABB repulsion scale (full weight on step corridor / squeeze).
+    "weight_obstacle_peripheral_mul": 0.2,
+    ## Extra attenuation when obstacle is only in forward wedge beyond [code]awareness_radius[/code].
+    "weight_obstacle_cone_edge_mul": 0.5,
     ## Prey ENGINE: strip merged shrub static AABBs this close to current [code]food_seek_targets[/code] so grazing can beat repulsion.
     "vegetation_blocking_forage_clearance": 92.0,
     ## Multiply base [code]weight_obstacle[/code] for carnivores (shrub footprints + pursuit balance).
@@ -109,6 +113,8 @@ static func creature_motor_spine() -> Dictionary:
     "weight_terrain_uphill": 4.0,
     "terrain_depression_threshold_m": 0.5,
     "terrain_stuck_min_uphill_m": 0.15,
+    "terrain_drop_block_m": 0.35,
+    "weight_terrain_drop": 40.0,
     "motor_stuck_turn_bias_scale": 0.25,
     "motor_stuck_idle_penalty_scale": 2.5,
     "motor_stuck_prey_expand_floor": 0.95,
@@ -128,12 +134,19 @@ static func creature_motor_spine() -> Dictionary:
     ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
     "weight_obstacle_shield_prey": 28.0,
     "weight_obstacle_pin_predator": 22.0,
+    ## Pinch detection / escape: full influence within this gate distance; linear falloff to zero at awareness max reach.
+    "pinch_obstacle_full_weight_dist_m": 12.0,
+    "pinch_obstacle_min_influence": 0.12,
     "predator_chase_edge_band": 110.0,
     "predator_chase_edge_weight_mul": 0.12,
     "predator_chase_pin_scale": 0.15,
     "predator_chase_closing_intent_dot": 0.35,
     "predator_obstructed_hunt_lock_ticks": 10,
     "predator_obstructed_max_toward_dot": 0.22,
+    "predator_prey_visible_latch_ticks": 6,
+    "predator_prey_engagement_latch_ticks": 36,
+    "predator_engagement_latch_seek_scale": 0.72,
+    "motor_seek_occlusion_penalty_weight": 12.0,
     "predator_edge_kill_close_mul": 1.35,
     "predator_edge_kill_close_pad": 12.0,
     "predator_stalemate_full_ticks": 6,

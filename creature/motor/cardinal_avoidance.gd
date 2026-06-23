@@ -11,6 +11,8 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _TerrainMotor := preload("res://creature/motor/terrain_motor.gd")
 const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
+const _LoS := preload("res://creature/motor/line_of_sight.gd")
+const _GeomScr := preload("res://creature/motor/motor_obstacle_geometry.gd")
 
 ## Evaluation order for equal cost — first wins when [code]shuffle_tie_break[/code] is false (N→NW, then idle).
 static var _tie_order: Array[Vector3] = [
@@ -27,8 +29,9 @@ static var _tie_order: Array[Vector3] = [
 
 
 ## Lookahead distance for cardinal static probes (patrol block test, stuck escape, tie-break filter).
-static func motor_cardinal_probe_step(he_xy: Vector2) -> float:
-  return maxf(maxf(he_xy.x, he_xy.y) * 2.8, 40.0)
+## [param probe_min]: Playfield-scaled floor from [code]motor_cardinal_probe_min[/code] ([method MotorPlane.scale_motor_distance_params]).
+static func motor_cardinal_probe_step(he_xy: Vector2, probe_min: float = 40.0) -> float:
+  return maxf(maxf(he_xy.x, he_xy.y) * 2.8, probe_min)
 
 
 ## Horizontal zero pulled from [code]motor_plane.gd[/code] (fallback keeps migration safe if script metadata is unavailable).
@@ -75,9 +78,80 @@ static func _motor_from_vec3(v: Vector3) -> Vector2:
 
 
 ## Nearest surface separation between footprint at [param creature_pos] and static AABB obstacles.
+## Minimum separation between [param creature_pos] footprint and one static AABB ([code]INF[/code] when invalid).
+static func footprint_obstacle_clearance(creature_pos: Vector3, he_xy: Vector2, ob: Dictionary) -> float:
+  if typeof(ob) != TYPE_DICTIONARY:
+    return INF
+  var op: Vector3 = _motor_read_pos(ob.get("position", _motor_horizontal_zero()))
+  var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+  var ohe := Vector2.ZERO
+  if typeof(ohe_raw) == TYPE_VECTOR2:
+    ohe = ohe_raw as Vector2
+  if ohe.x > 0.0 and ohe.y > 0.0:
+    var sep_closest_c := closest_point_on_aabb(creature_pos, he_xy, op)
+    var sep_closest_o := closest_point_on_aabb(op, ohe, creature_pos)
+    return sep_closest_c.distance_to(sep_closest_o)
+  return creature_pos.distance_to(op) - maxf(he_xy.x, he_xy.y)
+
+
 static func footprint_static_clearance(creature_pos: Vector3, he_xy: Vector2, static_obs: Array) -> float:
   var best_clear := INF
   for ob in static_obs:
+    if typeof(ob) != TYPE_DICTIONARY:
+      continue
+    best_clear = minf(best_clear, footprint_obstacle_clearance(creature_pos, he_xy, ob))
+  return best_clear
+
+
+## True when a cardinal step toward [param predicted] is on the obstacle corridor or tightens a squeeze.
+static func static_obstacle_on_step_corridor(
+  creature_pos: Vector3,
+  predicted: Vector3,
+  half: Vector2,
+  ob: Dictionary,
+  min_clearance: float,
+) -> bool:
+  if typeof(ob) != TYPE_DICTIONARY:
+    return false
+  if _GeomScr.step_segment_intersects_aabb(creature_pos, predicted, ob, min_clearance):
+    return true
+  var clr_now := footprint_obstacle_clearance(creature_pos, half, ob)
+  var clr_pred := footprint_obstacle_clearance(predicted, half, ob)
+  if clr_pred < min_clearance:
+    return true
+  if clr_pred < clr_now - 0.35:
+    return true
+  return false
+
+
+## Awareness-gated static repulsion with low peripheral weight and full weight on step corridor / squeeze.
+static func static_obstacle_step_cost(
+  creature_pos: Vector3,
+  predicted: Vector3,
+  half: Vector2,
+  static_obstacles: Array,
+  weight_obstacle: float,
+  w_dist: float,
+  w_close: float,
+  weight_dist_sq: float,
+  eps: float,
+  awareness_radius: float,
+  awareness_cone_extra: float,
+  awareness_cone_cos_threshold: float,
+  creature_facing: Vector3,
+  awareness_forward_cone_only: bool,
+  corridor_params: Dictionary,
+) -> float:
+  if weight_obstacle <= 0.0 or static_obstacles.is_empty():
+    return 0.0
+  var peripheral_mul := clampf(float(corridor_params.get("peripheral_mul", 0.2)), 0.0, 1.0)
+  var cone_edge_mul := clampf(float(corridor_params.get("cone_edge_mul", 0.5)), 0.0, 1.0)
+  var min_clr := float(corridor_params.get("block_min_clearance", 4.0))
+  var gate_half := half
+  if gate_half.x <= 0.0 or gate_half.y <= 0.0:
+    gate_half = Vector2.ZERO
+  var total := 0.0
+  for ob in static_obstacles:
     if typeof(ob) != TYPE_DICTIONARY:
       continue
     var op: Vector3 = _motor_read_pos(ob.get("position", _motor_horizontal_zero()))
@@ -85,15 +159,34 @@ static func footprint_static_clearance(creature_pos: Vector3, he_xy: Vector2, st
     var ohe := Vector2.ZERO
     if typeof(ohe_raw) == TYPE_VECTOR2:
       ohe = ohe_raw as Vector2
-    var sep := INF
-    if ohe.x > 0.0 and ohe.y > 0.0:
-      var sep_closest_c := closest_point_on_aabb(creature_pos, he_xy, op)
-      var sep_closest_o := closest_point_on_aabb(op, ohe, creature_pos)
-      sep = sep_closest_c.distance_to(sep_closest_o)
-    else:
-      sep = creature_pos.distance_to(op) - maxf(he_xy.x, he_xy.y)
-    best_clear = minf(best_clear, sep)
-  return best_clear
+    if ohe.x <= 0.0 or ohe.y <= 0.0:
+      continue
+    if awareness_radius > 0.0:
+      var gd := awareness_gate_distance(creature_pos, gate_half, op)
+      var eff_r := effective_awareness_reach(
+        creature_pos,
+        op,
+        awareness_radius,
+        awareness_cone_extra,
+        awareness_cone_cos_threshold,
+        creature_facing,
+        awareness_forward_cone_only,
+      )
+      if gd > eff_r:
+        continue
+    var on_corridor := static_obstacle_on_step_corridor(creature_pos, predicted, half, ob, min_clr)
+    var w_scale := 1.0 if on_corridor else peripheral_mul
+    if not on_corridor and awareness_radius > 0.0:
+      var gd_edge := awareness_gate_distance(creature_pos, gate_half, op)
+      if gd_edge > awareness_radius:
+        w_scale *= cone_edge_mul
+    var w_eff := weight_obstacle * w_scale
+    if w_eff <= 1e-10:
+      continue
+    total += _add_mob_cost_terms(
+      predicted, half, op, _motor_horizontal_zero(), w_dist, w_close, weight_dist_sq, eps, w_eff
+    )
+  return total
 
 
 ## True when a unit step in [param direction] would leave the footprint pinched against static geometry.
@@ -103,10 +196,11 @@ static func cardinal_step_blocked(
   direction: Vector3,
   static_obs: Array,
   min_clearance: float,
+  probe_min: float = 40.0,
 ) -> bool:
   if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
-  var step := motor_cardinal_probe_step(he_xy)
+  var step := motor_cardinal_probe_step(he_xy, probe_min)
   var probe_pos := creature_pos + direction.normalized() * step
   return footprint_static_clearance(probe_pos, he_xy, static_obs) < min_clearance
 
@@ -118,13 +212,15 @@ static func cardinal_step_blocked_for_escape(
   direction: Vector3,
   static_obs: Array,
   min_clearance: float,
+  probe_min: float = 40.0,
+  near_probe_min: float = 10.0,
 ) -> bool:
-  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance):
+  if cardinal_step_blocked(creature_pos, he_xy, direction, static_obs, min_clearance, probe_min):
     return true
   if direction.length_squared() < 1e-12 or static_obs.is_empty() or min_clearance <= 0.0:
     return false
   var clr_now := footprint_static_clearance(creature_pos, he_xy, static_obs)
-  var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, 10.0)
+  var near_step := maxf(maxf(he_xy.x, he_xy.y) * 0.65, near_probe_min)
   var near_pos := creature_pos + direction.normalized() * near_step
   var clr_near := footprint_static_clearance(near_pos, he_xy, static_obs)
   if clr_near < min_clearance:
@@ -286,6 +382,7 @@ static func intent_candidate_blocked_by_geometry(
   block_min_clr: float,
   filter_seek_wall_hits: bool,
   filter_blocked_cardinals: bool,
+  probe_min: float = 40.0,
 ) -> bool:
   if d.length_squared() < 1e-14:
     return false
@@ -305,7 +402,7 @@ static func intent_candidate_blocked_by_geometry(
     return true
   return (
     filter_blocked_cardinals
-    and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr)
+    and cardinal_step_blocked(creature_pos, footprint_half, d, static_obs, block_min_clr, probe_min)
   )
 
 
@@ -403,6 +500,25 @@ static func effective_awareness_reach(
   if cone_extra > 0.0 and in_forward_cone:
     reach = base_radius + cone_extra
   return reach
+
+
+## Pinch influence by awareness gate distance: 1 at [param full_weight_dist], 0 at [param eff_reach].
+static func pinch_obstacle_influence_weight(
+  gate_dist: float,
+  eff_reach: float,
+  full_weight_dist: float,
+  eps: float = 1.0,
+) -> float:
+  if eff_reach <= eps:
+    return 1.0
+  if gate_dist >= eff_reach:
+    return 0.0
+  if gate_dist <= full_weight_dist:
+    return 1.0
+  var span := eff_reach - full_weight_dist
+  if span <= eps:
+    return 0.0
+  return clampf((eff_reach - gate_dist) / span, 0.0, 1.0)
 
 
 ## Builds evaluation order: fixed [member _tie_order] or **shuffled** 8-way directions + idle last ([param tie_shuffle_seed] mixes ties without new RNG state each call).
@@ -514,6 +630,59 @@ static func food_seek_cost_at_prediction(
   if not is_finite(best_d):
     return 0.0
   return weight * best_d
+
+
+## Extra cost when direct LoS to [param goal_pos] is blocked: penalize into-goal steps, reward lateral flank headings.
+static func seek_occlusion_step_cost(
+  creature_pos: Vector3,
+  step_dir: Vector3,
+  goal_pos: Vector3,
+  los_ctx: Dictionary,
+  half: Vector2,
+  static_obs: Array,
+  step_length: float,
+  weight: float,
+) -> float:
+  if weight <= 0.0 or goal_pos == Vector3.ZERO or step_dir.length_squared() < 1e-12:
+    return 0.0
+  if not bool(los_ctx.get("enabled", false)):
+    return 0.0
+  var space: PhysicsDirectSpaceState3D = los_ctx.get("space_state")
+  if space == null:
+    return 0.0
+  var eye_h := float(los_ctx.get("eye_height", 1.0))
+  var exclude: Array = los_ctx.get("exclude_rids", []) as Array
+  var los_flags: Dictionary = _LoS.line_of_sight_clear(
+    space, creature_pos, eye_h, goal_pos, exclude
+  )
+  if bool(los_flags.get("line_of_sight_clear", true)):
+    return 0.0
+  var toward := goal_pos - creature_pos
+  toward.y = 0.0
+  if toward.length_squared() < 1e-12:
+    return 0.0
+  var goal_u := toward.normalized()
+  var step_u := step_dir.normalized()
+  var cost := weight * maxf(0.0, step_u.dot(goal_u)) * 92.0
+  var flank_u := Vector3(-goal_u.z, 0.0, goal_u.x)
+  cost -= weight * absf(step_u.dot(flank_u)) * 42.0
+  if step_length > 0.0 and not static_obs.is_empty():
+    var predicted := creature_pos + step_u * step_length
+    var clr_now := footprint_static_clearance(creature_pos, half, static_obs)
+    var clr_pred := footprint_static_clearance(predicted, half, static_obs)
+    cost -= weight * maxf(0.0, clr_pred - clr_now) * 18.0
+  return cost
+
+
+## Minimum footprint clearance to playfield AABB edges (motor-plane XZ).
+static func footprint_edge_margin(
+  creature_pos: Vector3, half: Vector2, bounds_min: Vector2, bounds_max: Vector2
+) -> float:
+  var left := creature_pos.x - half.x - bounds_min.x
+  var right := bounds_max.x - (creature_pos.x + half.x)
+  var top := creature_pos.z - half.y - bounds_min.y
+  var bottom := bounds_max.y - (creature_pos.z + half.y)
+  return minf(minf(left, right), minf(top, bottom))
 
 
 ## Unified goal seek linear pull ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); same math as [method food_seek_cost_at_prediction].
@@ -688,6 +857,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     if typeof(half_ext_raw) != TYPE_VECTOR2
     else half_ext_raw as Vector2
   )
+  var cardinal_probe_min := float(ctx.get("motor_cardinal_probe_min", 40.0))
   var awareness_r: float = float(ctx.get("awareness_radius", 0.0))
   var cone_extra: float = float(ctx.get("awareness_cone_extra", 0.0))
   var cone_cos: float = float(ctx.get("awareness_cone_cos_threshold", -2.0))
@@ -773,6 +943,11 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   filter_blocked_cardinals = (
     filter_blocked_cardinals or (not has_active_goal)
   ) and block_min_clr > 0.0 and not static_obs.is_empty()
+  var obstacle_corridor_p := {
+    "peripheral_mul": float(ctx.get("weight_obstacle_peripheral_mul", 0.2)),
+    "cone_edge_mul": float(ctx.get("weight_obstacle_cone_edge_mul", 0.5)),
+    "block_min_clearance": block_min_clr,
+  }
   var filter_seek_wall_hits := bool(ctx.get("motor_seek_filter_wall_hits", false))
   var w_seek_backtrack := float(ctx.get("weight_seek_backtrack", 0.0))
   var last_move_raw: Variant = ctx.get("creature_last_move_direction", facing_v)
@@ -802,6 +977,10 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       var seek_goal := _nearest_vector3_target(creature_pos, goal_seek_targets)
       if seek_goal == Vector3.ZERO:
         seek_goal = _nearest_vector3_target(creature_pos, prey_seek_targets)
+      if seek_goal == Vector3.ZERO and bool(ctx.get("nav_patrol_escape_active", false)):
+        var patrol_goal_v: Variant = ctx.get("nav_patrol_escape_goal", Vector3.ZERO)
+        if typeof(patrol_goal_v) == TYPE_VECTOR3:
+          seek_goal = patrol_goal_v as Vector3
       if seek_goal != Vector3.ZERO:
         var toward := (seek_goal - creature_pos)
         toward.y = 0.0
@@ -818,6 +997,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
             block_min_clr,
             filter_seek_wall_hits,
             filter_blocked_cardinals,
+            cardinal_probe_min,
           ):
             var agent_r := float(ctx.get("nav_agent_radius", maxf(footprint_half.x, footprint_half.y)))
             nav_bias_dir = _NavHint.unit_direction_to_next_waypoint(
@@ -829,6 +1009,13 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   var terrain_body: CharacterBody3D = ctx.get("terrain_physics_body")
   var terrain_sampler = ctx.get("terrain_sampler")
   var terrain_motor_p: Dictionary = ctx.get("terrain_motor_params", {})
+  var los_ctx: Dictionary = ctx.get("motor_los_ctx", {}) as Dictionary
+  var seek_goal_pos: Vector3 = _motor_read_pos(ctx.get("motor_seek_goal_pos", _motor_horizontal_zero()))
+  var w_seek_occlusion := float(ctx.get("motor_seek_occlusion_penalty_weight", 0.0))
+  if seek_goal_pos == Vector3.ZERO and has_active_goal:
+    seek_goal_pos = _nearest_vector3_target(creature_pos, goal_seek_targets)
+    if seek_goal_pos == Vector3.ZERO:
+      seek_goal_pos = _nearest_vector3_target(creature_pos, prey_seek_targets)
 
   var order := evaluation_order_from_ctx(ctx)
   var skip_backtrack := (
@@ -855,7 +1042,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
   for d in order:
     if d.length_squared() > 1e-14:
       if terrain_active and terrain_space != null and terrain_body != null:
-        var terrain_probe := motor_cardinal_probe_step(footprint_half)
+        var terrain_probe := motor_cardinal_probe_step(footprint_half, cardinal_probe_min)
         if _TerrainMotor.cardinal_blocked_by_terrain(
           terrain_space, terrain_body, creature_pos, d, terrain_probe
         ):
@@ -871,6 +1058,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         block_min_clr,
         filter_seek_wall_hits,
         filter_blocked_cardinals,
+        cardinal_probe_min,
       ):
         continue
       if (
@@ -926,6 +1114,8 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       prey_seek_targets,
       w_seek_prey_raw,
       forward_cone_only,
+      d,
+      obstacle_corridor_p,
     )
     if nav_w > 0.0 and nav_bias_dir.length_squared() > 1e-12 and d.length_squared() > 1e-14:
       cost -= nav_w * maxf(0.0, d.normalized().dot(nav_bias_dir))
@@ -953,6 +1143,48 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
         predicted, footprint_half, trail_centers, w_trail_rep, eps
       )
     cost += believed_goal_step_cost(d, ctx)
+    if w_seek_occlusion > 0.0 and seek_goal_pos != Vector3.ZERO and d.length_squared() > 1e-14:
+      cost += seek_occlusion_step_cost(
+        creature_pos,
+        d,
+        seek_goal_pos,
+        los_ctx,
+        footprint_half,
+        static_obs,
+        step_len,
+        w_seek_occlusion,
+      )
+    var w_patrol_occlusion := float(ctx.get("motor_patrol_occlusion_penalty_weight", 0.0))
+    if (
+      bool(ctx.get("motor_patrol_occlusion_active", false))
+      and w_patrol_occlusion > 0.0
+      and d.length_squared() > 1e-14
+    ):
+      var patrol_hint_raw: Variant = ctx.get("expanding_explore_hint", _motor_horizontal_zero())
+      var patrol_hint := _motor_read_pos(patrol_hint_raw)
+      if patrol_hint.length_squared() > 1e-12:
+        var patrol_goal := creature_pos + patrol_hint.normalized() * maxf(step_len * 6.0, 12.0)
+        cost += seek_occlusion_step_cost(
+          creature_pos,
+          d,
+          patrol_goal,
+          los_ctx,
+          footprint_half,
+          static_obs,
+          step_len,
+          w_patrol_occlusion,
+        )
+    var w_patrol_edge_gain := float(ctx.get("motor_patrol_edge_margin_gain_weight", 0.0))
+    if (
+      bool(ctx.get("motor_patrol_occlusion_active", false))
+      and w_patrol_edge_gain > 0.0
+      and d.length_squared() > 1e-14
+      and bounds_max.x > bounds_min.x
+      and bounds_max.y > bounds_min.y
+    ):
+      var cur_edge_m := footprint_edge_margin(creature_pos, footprint_half, bounds_min, bounds_max)
+      var pred_edge_m := footprint_edge_margin(predicted, footprint_half, bounds_min, bounds_max)
+      cost -= w_patrol_edge_gain * maxf(0.0, pred_edge_m - cur_edge_m)
     if w_blocked_backtrack > 1e-8 and filter_blocked_approach and d.length_squared() > 1e-14:
       cost += blocked_approach_step_cost(
         d, blocked_approach_v, w_blocked_backtrack, backtrack_dot
@@ -981,11 +1213,14 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
             &"elevation_at_cardinal_probe",
             creature_pos,
             d,
-            motor_cardinal_probe_step(footprint_half),
+            motor_cardinal_probe_step(footprint_half, cardinal_probe_min),
           )
         )
         cost += _TerrainMotor.elevation_cost_delta(
           cur_elev, probe_elev, dep_terrain, terrain_motor_p
+        )
+        cost += _TerrainMotor.elevation_drop_cost(
+          cur_elev, probe_elev, terrain_motor_p
         )
     if chaos_amp > 1e-10 and d.length_squared() > 1e-14:
       var dir_rng := RandomNumberGenerator.new()
@@ -1012,7 +1247,7 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
       if dir_v.length_squared() < 1e-14:
         continue
       if filter_blocked_cardinals and cardinal_step_blocked(
-        creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+        creature_pos, footprint_half, dir_v, static_obs, block_min_clr, cardinal_probe_min
       ):
         continue
       tied_dirs.append(dir_v)
@@ -1021,7 +1256,15 @@ static func pick_best_move_intent(ctx: Dictionary) -> Vector3:
     if tied_dirs.size() == 1:
       return tied_dirs[0]
   if hunt_active and best_d.length_squared() < 1e-14:
-    return _best_non_idle_from_scored(scored, creature_pos, footprint_half, static_obs, block_min_clr, filter_blocked_cardinals)
+    return _best_non_idle_from_scored(
+      scored,
+      creature_pos,
+      footprint_half,
+      static_obs,
+      block_min_clr,
+      filter_blocked_cardinals,
+      cardinal_probe_min,
+    )
   return best_d
 
 
@@ -1041,6 +1284,7 @@ static func _best_non_idle_from_scored(
   static_obs: Array,
   block_min_clr: float,
   filter_blocked_cardinals: bool,
+  probe_min: float = 40.0,
 ) -> Vector3:
   var alt_cost := INF
   var alt_d := _motor_horizontal_zero()
@@ -1055,7 +1299,7 @@ static func _best_non_idle_from_scored(
     if dir_v.length_squared() < 1e-14:
       continue
     if filter_blocked_cardinals and cardinal_step_blocked(
-      creature_pos, footprint_half, dir_v, static_obs, block_min_clr
+      creature_pos, footprint_half, dir_v, static_obs, block_min_clr, probe_min
     ):
       continue
     if c_cost < alt_cost:
@@ -1290,6 +1534,8 @@ static func cost_at_prediction(
   prey_seek_targets: Array = [],
   weight_seek_prey: float = 0.0,
   awareness_forward_cone_only: bool = false,
+  step_direction: Vector3 = Vector3.ZERO,
+  obstacle_corridor_params: Dictionary = {},
 ) -> float:
   var half := creature_half_extents
   if half.x <= 0.0 or half.y <= 0.0:
@@ -1365,19 +1611,38 @@ static func cost_at_prediction(
     )
 
   if weight_obstacle > 0.0:
-    for ob in static_obstacles:
-      if typeof(ob) != TYPE_DICTIONARY:
-        continue
-      var op: Vector3 = _motor_read_pos(ob.get("position", _motor_horizontal_zero()))
-      var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
-      var ohe := Vector2.ZERO
-      if typeof(ohe_raw) == TYPE_VECTOR2:
-        ohe = ohe_raw as Vector2
-      if ohe.x <= 0.0 or ohe.y <= 0.0:
-        continue
-      total += _add_mob_cost_terms(
-        predicted, half, op, _motor_horizontal_zero(), w_dist, w_close, weight_dist_sq, eps, weight_obstacle
+    if step_direction.length_squared() > 1e-12:
+      total += static_obstacle_step_cost(
+        creature_center_aware,
+        predicted,
+        half,
+        static_obstacles,
+        weight_obstacle,
+        w_dist,
+        w_close,
+        weight_dist_sq,
+        eps,
+        awareness_radius,
+        awareness_cone_extra,
+        awareness_cone_cos_threshold,
+        creature_facing,
+        awareness_forward_cone_only,
+        obstacle_corridor_params,
       )
+    else:
+      for ob in static_obstacles:
+        if typeof(ob) != TYPE_DICTIONARY:
+          continue
+        var op: Vector3 = _motor_read_pos(ob.get("position", _motor_horizontal_zero()))
+        var ohe_raw: Variant = ob.get("half_extents", Vector2.ZERO)
+        var ohe := Vector2.ZERO
+        if typeof(ohe_raw) == TYPE_VECTOR2:
+          ohe = ohe_raw as Vector2
+        if ohe.x <= 0.0 or ohe.y <= 0.0:
+          continue
+        total += _add_mob_cost_terms(
+          predicted, half, op, _motor_horizontal_zero(), w_dist, w_close, weight_dist_sq, eps, weight_obstacle
+        )
 
   total += _interior_posture_cost(predicted, bounds_min, bounds_max, weight_interior, eps)
   total += _edge_clearance_cost(predicted, half, bounds_min, bounds_max, weight_edge, eps)
@@ -1459,6 +1724,8 @@ static func cost_at_prediction_aware(
   prey_seek_targets: Array = [],
   weight_seek_prey: float = 0.0,
   awareness_forward_cone_only: bool = false,
+  step_direction: Vector3 = Vector3.ZERO,
+  obstacle_corridor_params: Dictionary = {},
 ) -> float:
   return cost_at_prediction(
     predicted,
@@ -1502,6 +1769,8 @@ static func cost_at_prediction_aware(
     prey_seek_targets,
     weight_seek_prey,
     awareness_forward_cone_only,
+    step_direction,
+    obstacle_corridor_params,
   )
 
 

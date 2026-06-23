@@ -1,0 +1,12 @@
+
+Now challenge your own requirements.
+What have you assumed that I haven't confirmed?
+What edge cases have you ignored?
+What constraint in the existing SPEC makes part of this harder than it looks?
+-----
+Review the implementation you just delivered.
+Answer honestly:
+1. What could go wrong in production?
+2. <context specific questions> ...
+3. What did you NOT test that you should have?
+4. Rate your confidence from 1-10. Explain why it's not 10>

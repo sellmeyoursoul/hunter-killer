@@ -121,7 +121,7 @@ static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Di
     if str(key).ends_with("_px"):
       out[key] = float(out[key]) * scale
   return out"""
-    new = """## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Draft_Features/CONVERT_TO_3D.md)).
+    new = """## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Dictionary:
   if is_equal_approx(scale, 1.0):
     return motor_p
