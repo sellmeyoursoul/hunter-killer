@@ -168,13 +168,16 @@ outside_influence_key : String  # optional: config key for location/item modifie
 
 **Reaction definition:**
 ```
-cost_stat        : String    # pool spent to execute this reaction
-cost_amount      : float     # base pool cost
-mitigation_stat  : String    # which defender stat drives damage reduction (e.g. "dex")
-coverage         : Dictionary # target_region → mitigation_multiplier (e.g. {"head": 1.0, "leg": 0.4})
-trait_tags       : Array     # pole affinities for AI queuing preference
-cooldown_ticks   : int
-context_set      : String    # "combat", "social", etc. — which interaction type loads this reaction
+cost_stat           : String     # pool spent to execute this reaction
+cost_amount         : float      # base pool cost
+mitigation_stat     : String     # which defender stat drives damage reduction (e.g. "dex")
+coverage            : Dictionary # target_region → mitigation_multiplier (e.g. {"head": 1.0, "leg": 0.4})
+trait_tags          : Array      # pole affinities for AI queuing preference
+cooldown_ticks      : int
+context_set         : String     # "combat", "social", etc. — which interaction type loads this reaction
+trigger_predicates  : Array      # typed predicate dicts; ALL must pass for the reaction to fire
+                                 # e.g. [{"type": "positional_awareness"}, {"type": "composure_floor", "min": 0.2}]
+                                 # first-phase only implements "positional_awareness"; others reserved
 ```
 
 ---
@@ -400,6 +403,7 @@ AiDriver._physics_process()
 | 2026-06-22 | Initial draft created. Queued behind V3 motor refactor. |
 | 2026-06-22 | Removed all references to CREATURE_MOVEMENT_V2 (dead end). Updated all motor pipeline references to CREATURE_MOVEMENT_V3. Added explicit implementation gate. |
 | 2026-06-22 | Major design session. Replaced placeholder formula with full resolution model. Added: generalized conflict model (initiator/responder), action/reaction queue system, stat wheel with overflow, pool_scale curve, coverage multiplier, feints, observation-unlocked actions, persistence model, illustrative fox/rabbit example. Stat role table added per CREATURE_ATTRIBUTES_USAGE.md. |
+| 2026-06-23 | §11.1 expanded: gates 1–3 confirmed. Gate 4 reframed as typed positional predicates with awareness zone terminology locked (plain language: "awareness zone", "awareness arc", "flanked"). Predicate list design extended to cover non-positional gates (composure threshold, interaction context, future negotiation factors). `trigger_predicates : Array` field proposed for reaction definition; pending confirmation. |
 
 ---
 
@@ -407,15 +411,30 @@ AiDriver._physics_process()
 
 The following topics were identified during the design session but not fully resolved. Resume here in the next session.
 
-### 11.1 Reaction trigger predicates (partially discussed)
+### 11.1 Reaction trigger predicates (design in progress)
 
-Three conditions for a reaction to fire were proposed but not confirmed:
+The following gates must all pass for a queued reaction to fire. Gates 1–3 are confirmed. Gate 4 and the open predicate extension point are in progress.
+
+**Confirmed gates:**
 1. The action's `target_region` is in the reaction's `coverage` dict with a non-zero value.
 2. The responder has a reaction queued (chose one this tick).
 3. The reaction's cooldown has expired.
-4. (Optional gate) Observation check: if the attacker flanks (outside the responder's awareness cone), the reaction does not trigger.
 
-**Needs:** user confirmation of these four gates, and whether any others apply (e.g. composure threshold below which reactions fail regardless of queue state).
+**Gate 4 — positional / spatial predicates (confirmed in principle; naming pending):**
+A reaction definition may declare one or more **positional predicates** that describe spatial conditions the responder must satisfy for the reaction to be valid. The first concrete instance is the **awareness check**: the attacker must be within the responder's **awareness zone** (a configurable arc — config key `awareness_zone_arc_deg`, label "Awareness Arc") for the reaction to trigger. Outside that zone the responder is considered flanked and the reaction does not fire.
+
+- Awareness zone terminology (config keys, debug overlay, doc references) uses plain language: "awareness zone", "awareness arc", "flanked" — not implementation terms like "observation cone" or "coverage cone".
+- Positional predicates on action/reaction definitions are a **typed predicate list**, not a single hardcoded check. Each predicate has a `type` (e.g. `"positional_awareness"`) and its own config-driven parameters. This makes the gate extensible: additional spatial conditions (e.g. elevation, terrain adjacency) can be added without changing the resolution formula.
+
+**Open extension point — non-positional reaction predicates:**
+Positional predicates are one predicate type. The same typed list should accommodate non-positional gates that affect whether a reaction is valid in context. Confirmed candidates to specify as the system grows:
+- **Composure threshold:** reaction fails if responder's `curr_point_comp` is below a configured floor (creature is too rattled to react reliably).
+- **Interaction context match:** the reaction's `context_set` must match the active interaction type (already in the reaction definition as a string field — this is effectively a predicate already).
+- **Negotiation / social predicates:** in future non-combat conflict types, additional factors (relationship state, prior concession history, etc.) could gate reactions the same way.
+
+**Design decision:** The reaction definition's predicate list (`trigger_predicates : Array`) should be structured as typed dicts from the start, even if only `positional_awareness` is implemented in this phase. This avoids retrofitting the data shape later.
+
+**Resolved:** `trigger_predicates : Array` confirmed. §4.3 updated.
 
 ### 11.2 Motor behavior during active combat
 
