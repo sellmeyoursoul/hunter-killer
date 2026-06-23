@@ -73,8 +73,10 @@
 | `seed_cal_req` | float | Minimum `current_calories` on spread day to release seeds |
 | `seed_choke_rate` | float | Rate at which this species displaces existing plants in target cell |
 | `movement_impact` | float | % speed reduction for creatures passing through |
-| `fit_size` | float | Creatures smaller than this bypass slowdown |
+| `fit_size` | float | Creatures smaller than this bypass slowdown | 
+<<Comment: Need to think about this. It should always be smaller than `size`, but is it a % or a defined number?>>
 | `crush_weight` | float | Creature weight above this destroys plant (0 = indestructible by crush—clarify vs ENVIRONMENT) |
+<<Comment: Need to define how plants absorb damage once combat lands. Do they have physical stats or some other method?>>
 
 ### Methods
 
