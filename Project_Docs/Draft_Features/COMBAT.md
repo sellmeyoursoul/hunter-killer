@@ -32,7 +32,7 @@
 - Full action/reaction library (skill trees) — see §11.
 - Graduated partial-deal resolution for barter-type interactions — explicitly deferred.
 
-<<Question: What is the canonical name for the generalized conflict system of which combat is one instance? Candidates: "conflict resolution", "goal negotiation", "interaction contest". This name will appear in file names, class names, and doc section headers — resolve before implementation begins.>>
+**Canonical name: Resisted Actions subsystem.** See §11.5 for naming conventions and file/class prefix rules.
 
 ---
 
@@ -57,8 +57,10 @@
 | planned | `res://creature/combat/combat_math.gd` | Pure stat → damage formulas (no Node state); headless-testable |
 | planned | `res://creature/stat_math.gd` | `stat_to_point()` — per [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md); may already exist |
 | planned | `res://creature/motor/combat_classifier.gd` | Sets `tactic_fight_active` on `MotorContext`; feeds salient emitter |
-| planned | `res://creature/combat/action_definition.gd` | Data resource: cost stat, outcome stat, target region, trait affinities, threshold, cooldown |
+| planned | `res://creature/combat/action_definition.gd` | Data resource: cost stat, outcome stat, target region, trait affinities, threshold, cooldown, positional criteria |
 | planned | `res://creature/combat/reaction_definition.gd` | Data resource: cost stat, mitigation stat, coverage profile, trait affinities, cooldown, context set |
+| planned | `res://creature/combat/combat_position_resolver.gd` | Pure function: action criteria + positions → target `Vector3` for seek planner and positional modifier float |
+| planned | `res://creature/combat/combat_experience_table.gd` | Per-creature transition pair table (`prev_action_id → curr_action_id → weight`); updated from combat outcome signals |
 
 **Existing patterns to follow:**
 - Pure-function math modules (no Node refs) → headless unit tests in `tests/run_all.gd`.
@@ -155,29 +157,43 @@ Every action and reaction is a data resource with these fields:
 
 **Action definition:**
 ```
-cost_stat        : String    # which pool is spent to perform this action (e.g. "end")
-cost_amount      : float     # base pool cost before modifiers
-outcome_stat     : String    # which attacker stat drives damage (e.g. "fit")
-target_region    : String    # body region targeted (e.g. "head", "leg", "body")
-trait_tags       : Array     # pole affinities — creature prefers this action when aligned (e.g. ["self_interest"])
-threshold        : float     # hardcoded minimum net result for the action to land
-cooldown_ticks   : int       # ticks before this action can be queued again
-observation_unlock_sec : float  # seconds of active combat before this action becomes available (0 = always)
-outside_influence_key : String  # optional: config key for location/item modifier
+action_id             : StringName  # stable key used by experience table and memory writer
+costs                 : Array       # [{stat: String, amount: float}, ...] — multi-stat cost support
+outcome_stat          : String      # which attacker stat drives damage (e.g. "fit")
+secondary_effects     : Array       # [{pool: String, amount: float}, ...] — flat pool damage on landing
+                                    # target_region removed (specific point targets out of scope this phase)
+trait_tags            : Array       # pole affinities — creature prefers this action when aligned (e.g. ["self_interest"])
+threshold             : float       # minimum net result for the action to land
+cooldown_ticks        : int         # ticks before this action can be queued again
+observation_unlock_sec : float      # seconds of active combat before this action becomes available (0 = always)
+outside_influence_key : String      # optional: config key for location/item modifier
+preferred_range       : float       # optimal distance from opponent centre (metres); 0 = no preference
+preferred_arc_deg     : float       # angular window centred on attacker's forward; 0 = any angle
+arc_required          : bool        # true → not queueable until attacker is within preferred_arc_deg of opponent
+requires_flanking     : bool        # true → not queueable unless attacker is outside defender's awareness arc
+position_weight       : float       # urgency multiplier applied to combat positioning goal while this action is queued
 ```
 
 **Reaction definition:**
 ```
-cost_stat           : String     # pool spent to execute this reaction
-cost_amount         : float      # base pool cost
-mitigation_stat     : String     # which defender stat drives damage reduction (e.g. "dex")
-coverage            : Dictionary # target_region → mitigation_multiplier (e.g. {"head": 1.0, "leg": 0.4})
-trait_tags          : Array      # pole affinities for AI queuing preference
-cooldown_ticks      : int
-context_set         : String     # "combat", "social", etc. — which interaction type loads this reaction
-trigger_predicates  : Array      # typed predicate dicts; ALL must pass for the reaction to fire
-                                 # e.g. [{"type": "positional_awareness"}, {"type": "composure_floor", "min": 0.2}]
-                                 # first-phase only implements "positional_awareness"; others reserved
+reaction_id              : StringName  # stable key used by experience table
+costs                    : Array       # [{stat: String, amount: float}, ...] — multi-stat cost support
+cost_incoming_fraction   : float       # when non-zero: cost = incoming_damage × this; overrides costs entries
+mitigation_stats         : Array       # stats contributing to defender_raw (may be empty)
+mitigation_type          : String      # formula path: "stat_modifier" | "pool_ratio" | "stat_modifier_sum"
+mitigation_cap           : float       # upper bound for "pool_ratio" type; ignored by other types
+mitigation_coverage      : float       # flat 0.0–1.0 multiplier on reaction effectiveness (replaces region coverage dict)
+                                       # coverage dict removed (specific point targets out of scope this phase)
+secondary_effects        : Array       # [{pool: String, amount: float}, ...] — flat pool effect dealt to attacker on fire
+damage_reduction_per_sec : float       # flat damage reduction per second of fight duration (0 = disabled)
+damage_reduction_max     : float       # cap on the above
+embeds_queued_action     : bool        # true → queued action fires as part of this reaction; both cooldown independently
+trait_tags               : Array       # pole affinities for AI queuing preference
+cooldown_ticks           : int
+context_set              : String      # "combat", "social", etc.
+trigger_predicates       : Array       # typed predicate dicts; ALL must pass for the reaction to fire
+                                       # implemented this phase: "positional_awareness", "incoming_damage_nonzero"
+                                       # reserved: "composure_floor", "interaction_context", negotiation predicates
 ```
 
 ---
@@ -205,8 +221,12 @@ outside_def       = config.get(reaction.outside_influence_key, 0.0)
 
 defender_raw = (stat_max_mod_def + stat_max_mod_def * curr_scale_def + outside_def) * coverage_mult
 
+# Positional modifier (1.0 at ideal range/arc; attenuates to combat_position_mod_floor when off-position)
+# arc_required = true → action not queueable outside arc; this modifier only applies to soft-gated actions
+position_mod = CombatPositionResolver.positional_modifier(attacker_pos, opponent_pos, action)
+
 # Resolution
-net       = attacker_raw - defender_raw
+net       = (attacker_raw - defender_raw) * position_mod
 result    = net + randf_range(-variability, variability)        # variability configured per action tier
 lands     = result > action.threshold
 damage    = result if lands else 0.0
@@ -275,27 +295,38 @@ The motor system does not need a "flee from combat" special path. When `avoid_ho
 ### 4.8 Architecture / data flow
 
 ```
+── Established goal→objective→action pipeline (unchanged) ──────────────────
+AiDriver._physics_process()
+  ├─ evaluates all goal weights each tick (urgency channels, trait modifiers,
+  │   pool states, tactic_fight_active multiplier from MotorContext)
+  ├─ dominant goal resolves into sub-step objectives (seek target, motor intent)
+  │    └─ when fight/flight is dominant:
+  │         CombatPositionResolver.resolve_combat_target(pos, opponent_pos, queued_action)
+  │         → Vector3 fed to SeekPlanner as ultimate_goal this tick
+  └─ sub-step objectives resolve into queued action/reaction:
+       candidate actions filtered by: cooldown elapsed, observation_unlock_sec, arc_required
+       selection weight = trait_affinity + experience_table.weight(prev_action_id, candidate.action_id)
+       → action/reaction slots written to CreatureCombatComponent
+
+── Combat mechanical resolution (reads from the above; does not drive goals) ─
 CreatureKinematicBody3D._physics_process()
   └─ CreatureCombatComponent._on_physics_tick()
        ├─ contact_test(other_body) → bool
-       ├─ if contact && initiator.action_cooldown_elapsed:
-       │    result = CombatMath.resolve(action, reaction, attacker_stats, defender_stats, config)
+       ├─ if contact && action_cooldown_elapsed:
+       │    pos_mod = CombatPositionResolver.positional_modifier(pos, opponent_pos, action)
+       │    result  = CombatMath.resolve(action, reaction, attacker_stats, defender_stats, config, pos_mod)
        │    if result.lands:
        │      defender.spend_pool(result.target_pool, result.damage)
+       │      experience_table.record(prev_action_id, action.action_id, result.outcome_score)
        │    set tactic_fight_active = true on MotorContext (V3 struct)
        │    emit signal: combat_hit(attacker, defender, result)
-       ├─ each creature queues next action/reaction this tick (AI/goal system decides)
        └─ if any pool hits 0 with no overflow path:
             emit signal: creature_defeated(creature)
             → main_3d.gd._on_creature_defeated()
-
-AiDriver._physics_process()
-  ├─ reads tactic_fight_active from MotorContext (V3)
-  ├─ raises urgency_avoid_hostiles via trait_tier2_mapper
-  └─ on combat episode end → goal_source_memory.try_salient_write(...)
-       GoalKind: avoid_hostiles (loser) or future fight_won (winner)
-       modality_tags: [fight]
-       outcome_envelope: defeat / victory
+            → AiDriver: goal_source_memory.try_salient_write(...)
+                 GoalKind: avoid_hostiles (loser) or future fight_won (winner)
+                 modality_tags: [fight]
+                 outcome_envelope: defeat / victory
 ```
 
 ---
@@ -322,7 +353,9 @@ AiDriver._physics_process()
 6. **Wire pool spend and overflow** — implement `spend_pool(pool_id, amount)` with stat wheel overflow at 2:1.
 7. **Wire `creature_defeated` signal** in `main_3d.gd` — replace or extend existing predation-based round-end path.
 8. **Create `combat_classifier.gd`** — sets `tactic_fight_active` on the V3 MotorContext struct while combat contact is active; clears on timeout or defeat.
-9. **Enable `fight` modality salient write** — add `fight` to core modality resource; confirm `goal_source_memory.try_salient_write` emits correct `GoalKind` at episode end.
+9. **Create `combat_position_resolver.gd`** — pure functions: `resolve_combat_target(creature_pos, opponent_pos, action_def) -> Vector3` (closest valid arc point); `positional_modifier(creature_pos, opponent_pos, action_def) -> float` (1.0 at ideal position, attenuates to `combat_position_mod_floor`). Wire into action queuing (hard gate for `arc_required`) and into `combat_math.resolve` as `pos_mod` argument. Unit tests: ideal position → 1.0; outside arc → floor; `arc_required` gate blocks queue.
+10. **Create `combat_experience_table.gd`** — per-creature instance; `record(prev_id, curr_id, outcome_score)` via EMA; `weight(prev_id, curr_id) -> float` defaulting to `1.0`. Wire `record()` call into `creature_combat_component` after each action resolves. Wire `weight()` into action selection in the goal→objective→action pipeline. Unit tests: weight converges toward repeated outcome; unknown pair returns 1.0.
+11. **Enable `fight` modality salient write** — add `fight` to core modality resource; confirm `goal_source_memory.try_salient_write` emits correct `GoalKind` at episode end.
 10. **Raise jeopardy urgency on active combat** — verify `URGENCY_JEOPARDY` bitmask contributor fires when `tactic_fight_active` is set (per **[CREATURE_GOAL_DRIVERS.md §5.1.3](CREATURE_GOAL_DRIVERS.md)**).
 11. **Wire observation-unlocked actions** — implement `observation_unlock_sec` gating in the queue system; wire `stat_observation` reduction formula.
 12. **Update `CREATURE_ATTRIBUTES_USAGE.md`** — promote each stat pool entry from Semantic/Reserved to Specified or Live as it is wired.
@@ -385,7 +418,7 @@ AiDriver._physics_process()
 
 ## 9. Open questions
 
-- <<Question: What is the canonical name for the generalized conflict system? (See §1 — blocking for file/class naming.)>>
+- ~~What is the canonical name for the generalized conflict system?~~ **RESOLVED: Resisted Actions subsystem. See §11.5.**
 - <<Question: Contact detection — `Area3D` child node on creature template vs. polling `get_slide_collision_count()` results? Area3D is cleaner for radius-based melee but adds a node per creature.>>
 - <<Question: What happens to the existing `creature_predation_math.gd` calorie-transfer logic (predator gains calories on kill)? Should `creature_defeated` replace the predation clamp entirely, or run alongside it?>>
 - <<Question: Should combat define a new pack-extension `GoalKind` (e.g. `fight_won`) for the winner's salient write, or map winning combat to `find_food` (predator ate) at the kill moment?>>
@@ -403,6 +436,9 @@ AiDriver._physics_process()
 | 2026-06-22 | Initial draft created. Queued behind V3 motor refactor. |
 | 2026-06-22 | Removed all references to CREATURE_MOVEMENT_V2 (dead end). Updated all motor pipeline references to CREATURE_MOVEMENT_V3. Added explicit implementation gate. |
 | 2026-06-22 | Major design session. Replaced placeholder formula with full resolution model. Added: generalized conflict model (initiator/responder), action/reaction queue system, stat wheel with overflow, pool_scale curve, coverage multiplier, feints, observation-unlocked actions, persistence model, illustrative fox/rabbit example. Stat role table added per CREATURE_ATTRIBUTES_USAGE.md. |
+| 2026-06-24 | §11.6 resolved: test action/reaction set defined (Bite, Ankle Bite, Absorb, Dodge, Bite Back, Counter Strike). Data shape updated: costs array replaces singular cost_stat/cost_amount; target_region and coverage dict removed (out of scope); secondary_effects, requires_flanking, mitigation_type, mitigation_cap, cost_incoming_fraction, embeds_queued_action, damage_reduction_per_sec/max added. Three mitigation types defined: stat_modifier, pool_ratio, stat_modifier_sum. incoming_damage_nonzero added as new trigger predicate type. §4.3 action and reaction data shapes updated to match.
+| 2026-06-24 | §11.3 resolved: continuous per-second pool recovery; 4 activity states with config multipliers; fill_time curve (exponent 0.25, base 100s at stat 10) yields 56s–126s range across stat 1–25; full rate table documented. §11.8 added: stat_to_point prep work itemized as blocking prerequisite — edge case resolution, loop verification, and stat_math.gd creation. Recovery and position resolver implementation steps added to §5.
+| 2026-06-24 | §11.2 resolved: no combat motor sub-mode; positioning driven by action definitions via CombatPositionResolver feeding SeekPlanner unchanged; hard/soft arc gate design. §4.3 action definition extended with `action_id`, `preferred_range`, `preferred_arc_deg`, `arc_required`, `position_weight`. §4.4 resolution formula adds positional modifier. §4.8 data flow updated to show established goal→objective→action pipeline as primary layer; combat resolution as mechanical consumer. §11.7 added: per-creature transition pair experience table (EMA update, cold start, future inheritance via reproduction). Planned files table updated. |
 | 2026-06-23 | §11.1 expanded: gates 1–3 confirmed. Gate 4 reframed as typed positional predicates with awareness zone terminology locked (plain language: "awareness zone", "awareness arc", "flanked"). Predicate list design extended to cover non-positional gates (composure threshold, interaction context, future negotiation factors). `trigger_predicates : Array` field proposed for reaction definition; pending confirmation. |
 
 ---
@@ -436,30 +472,276 @@ Positional predicates are one predicate type. The same typed list should accommo
 
 **Resolved:** `trigger_predicates : Array` confirmed. §4.3 updated.
 
-### 11.2 Motor behavior during active combat
+### 11.2 Motor behavior during active combat — RESOLVED
 
-When `tactic_fight_active` is set, what does the motor system actually do?
-- Does normal seek/avoidance pause?
-- Does the creature hold position, circle, close distance?
-- Is there a combat-specific motor sub-mode, or do existing urgency channels handle it naturally?
+Normal goal evaluation continues every tick unchanged. There is no combat-specific motor sub-mode. `tactic_fight_active` applies a configured urgency multiplier to fight/flight goal weights so they dominate over incidental goals (e.g. foraging) unless a competing goal reaches higher urgency (e.g. imminent starvation).
 
-This needs to be defined before `combat_classifier.gd` can be fully specified.
+**Positioning is driven by the queued action, not by a separate motor mode:**
+Each action definition carries `preferred_range`, `preferred_arc_deg`, `arc_required`, and `position_weight`. While an action is queued, `CombatPositionResolver.resolve_combat_target()` computes a target `Vector3` — the closest valid point on the preferred-range arc — and feeds it to `SeekPlanner` as the tick's `ultimate_goal`. SeekPlanner is unchanged; it moves toward a point as always.
 
-### 11.3 Pool recovery
+**Hard vs. soft positioning:**
+- `arc_required = true`: action is not queueable until positional criteria are met. Each tick the goal system re-evaluates: the creature repositions toward the action's target point until in position, or until a higher-urgency goal or a different action takes precedence and replaces the queued slot.
+- `arc_required = false`: action can fire from any position; `CombatPositionResolver.positional_modifier()` attenuates the resolution result toward `combat_position_mod_floor` (config, default `0.5`) when off-position. A sub-optimal attack can still land.
 
-No decisions were made on pool recovery:
-- Do pools recover between combat episodes (rest) or only across rounds?
-- Is there in-combat recovery (slow endurance regen while not actively attacking)?
-- What rate governs recovery, and which config key controls it?
+**Flanking as emergent behavior:**
+Because being outside an opponent's awareness arc degrades their reaction (§4.4), creatures have an implicit incentive to queue flanking-arc actions. No explicit "circle" motor mode is needed — the position resolver picks the closest valid arc point, which will naturally be off to the side when that is what the queued action prefers.
 
-### 11.4 Scope: 1v1 only confirmation
+### 11.3 Pool recovery — RESOLVED
 
-The fox-vs-rabbit duel is 1v1. Confirm explicitly: **multi-creature combat (2v1, pack scenarios) is out of scope for this implementation.** The design should not block it architecturally, but no multi-creature logic ships in this phase.
+Recovery is continuous and per-second (not per physics tick — keeps it frame-rate independent). All pools recover at all times outside of strenuous activity; the activity state and the stat value together determine the rate.
 
-### 11.5 System name (blocking)
+**Activity states and rate multipliers:**
 
-The generalized conflict system needs a canonical name before file and class names are locked (see §1 and §9 first question). This blocks implementation naming.
+| State | Multiplier | Examples |
+|-------|-----------|---------|
+| Strenuous | 0.0 | Combat contact, sprinting |
+| Light activity | 0.4 | Walking, social interactions |
+| No activity | 1.0 | STAY action, turning in place (on watch) |
+| Rest | 2.5 | REST action |
 
-### 11.6 Action/reaction library (separate project)
+Multipliers are config keys (`recovery_mult_strenuous`, `recovery_mult_light`, `recovery_mult_idle`, `recovery_mult_rest`). Strenuous may go negative in a future phase (active drain beyond pool spend) but defaults to 0 for this implementation.
 
-The full skill tree and action/reaction definitions for fox and rabbit are explicitly deferred to a separate design project. The minimum needed for this phase is one illustrative action/reaction pair (bite + duck/dodge) to validate the formula and component plumbing. That minimum set can be authored as hardcoded data resources for the first pass.
+**Recovery rate formula:**
+
+```
+fill_time(stat)   = recovery_base_fill_sec × (stat / 10.0) ^ recovery_time_exponent
+recovery_rate     = stat_to_point(stat) / fill_time(stat)          # pts/sec at full activity multiplier
+actual_rate       = recovery_rate × activity_multiplier
+```
+
+Config keys: `recovery_base_fill_sec` (default `100.0`), `recovery_time_exponent` (default `0.25`).
+
+**What this produces at key stat values (no-activity state, multiplier 1.0):**
+
+| stat | stat_to_point | fill_time | pts/sec |
+|------|--------------|-----------|---------|
+| 1    | 132.82       | 56s       | 2.37    |
+| 5    | 254.54       | 84s       | 3.03    |
+| 10   | 500.00       | 100s      | 5.00    |
+| 15   | 745.46       | 111s      | 6.71    |
+| 20   | 890.40       | 119s      | 7.48    |
+| 25   | 975.99       | 126s      | 7.75    |
+
+Higher stat → more absolute points per second, but pool grows faster than rate, so fill time increases. The curve is intentionally shallow (stat 1 fills in ~56s, stat 25 in ~126s) — a strong creature is not punished harshly for having large pools.
+
+**Recovery scope:** applies between combat episodes within a round, not only between rounds. A creature that disengages and rests mid-round recovers. In-combat recovery is zero (strenuous state). No cross-session persistence of pool state in this phase.
+
+**Dependency:** `stat_to_point(stat)` from `res://creature/stat_math.gd` must exist before recovery can be implemented. See §11.8.
+
+### 11.4 Scope: 1v1 only — RESOLVED
+
+This phase targets the existing fox-vs-rabbit 1v1 duel only. Multi-creature combat (XvY, pack scenarios) is out of scope for implementation.
+
+The design must not architecturally block XvY combat, but no multi-creature logic ships in this phase. Any design decision that would need revisiting or extension to support XvY (e.g. action target selection, experience table keying, combat position resolver assuming a single opponent) must be called out explicitly at the point of that decision and approved or addressed before implementation proceeds. Do not silently make 1v1 assumptions that would require refactoring later.
+
+### 11.5 System name — RESOLVED
+
+The generalized conflict system is named the **Resisted Actions** subsystem. This name captures the core mechanic (one creature's action is actively resisted by another creature's queued reaction) and abstracts cleanly beyond combat — mating contests, social challenges, and future interaction types all fit the same pattern of one creature attempting an action that another creature can resist.
+
+**Naming conventions flowing from this decision:**
+- File prefix: `resisted_action_*` for subsystem-level scripts (e.g. `resisted_action_resolver.gd` if the combat math is ever generalized beyond combat)
+- Class names: `ResistableAction`, `ResistableReaction` when promoted from combat-specific resources
+- Doc references: use "Resisted Actions subsystem" in headers and cross-references
+
+For this phase, combat-specific files (`combat_math.gd`, `creature_combat_component.gd`, etc.) retain the `combat_` prefix since they are the first and only instance. The `resisted_action_*` namespace is reserved for when the substrate is lifted out of combat into a shared layer.
+
+### 11.8 stat_to_point prerequisite prep (blocking)
+
+`stat_math.gd` does not yet exist. Combat cannot implement pool initialization (§5 step 1) or pool recovery (§11.3) without it. The following gaps in [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md) must be resolved before combat implementation begins:
+
+1. **`stat_num < 1` edge case** — current creature design has stat 1 as the floor (stat 0 is not a valid creature state). Resolution: clamp to 1 and return `132.82`. Add an assertion in debug builds. Update SHARED_STATTOPOINT_PLAN.md §4 edge cases table.
+2. **`stat_num > 25` loop verification** — the pseudocode loop in SHARED_STATTOPOINT_PLAN.md §4 needs test vectors for stat 26, 30, and 40 to confirm loop order matches design intent before the function is used in production paths.
+3. **Create `res://creature/stat_math.gd`** — implement `stat_to_point(stat_num: int) -> float` with the lookup table (indices 1–25) and the `>25` extrapolation loop. Pass golden-value headless tests for stat 1, 10, 25, 26, 30 before wiring into any other system.
+
+This work is captured as step 1 of the §5 implementation plan. It should be treated as a standalone deliverable that unblocks both combat and recovery.
+
+### 11.7 Combat experience table (deferred — post first-phase)
+
+**Goal:** Let creatures learn which action sequences are effective without ever hardcoding "do B after A." The full action set (A–E) remains available; experience shifts selection weights so discovered effective transitions become more probable over time.
+
+**Data shape — transition pair table:**
+Each creature instance owns a `CombatExperienceTable`: a dictionary keyed on `prev_action_id → curr_action_id → weight`. Weights are initialized to `1.0` (neutral) for all pairs at spawn. Only transition pairs the creature has actually attempted accumulate meaningful signal.
+
+**Recording:** After each action resolves, `experience_table.record(prev_action_id, curr_action_id, outcome_score)` updates the weight using a configurable exponential moving average (`combat_exp_ema_alpha`, default `0.2`): `weight = (1 - alpha) * weight + alpha * outcome_score`. `outcome_score` is a normalized float derived from damage dealt vs. pool cost paid — positive when the exchange was favorable, negative when costly.
+
+**Consumption:** During action queuing (§4.8 goal→objective→action pipeline), the selection weight for each candidate action is: `trait_affinity_score + experience_table.weight(prev_action_id, candidate.action_id)`. Experience is additive, not replacing trait affinity — a creature's nature still biases it, but demonstrated results adjust the margin.
+
+**Cold start:** New creatures start with all weights at `1.0`. No prior is inherited at spawn. Experience is per-creature-instance and persists only for the creature's lifetime.
+
+**Future — inheritance via reproduction (deferred):**
+When the reproduction subsystem ships, a child creature's starting experience table will be seeded from a blend of its parents' tables at a configured dilution factor. Over generations, populations will develop regionally distinct action-chain tendencies reflecting their local opponents and terrain — without any explicit encoding of "which chain is best." Populations in different regions of the map may converge on entirely different strategies even for the same species pairing.
+
+**Scope boundary:** This phase implements only the per-instance table and EMA update. Inheritance, persistence across sessions, and cross-creature comparison are explicitly deferred.
+
+### 11.6 Test action/reaction set
+
+The full action/reaction library for fox and rabbit is deferred to a separate design project. The following minimal set is defined for this phase to validate the mechanical plumbing. These are test examples only and are not guaranteed to ship in the final implementation.
+
+---
+
+#### Data shape revisions (driven by this example set)
+
+These examples collectively require the following changes to the data shapes in §4.3:
+
+**Action definition changes:**
+- `cost_stat / cost_amount` (singular) → `costs: Array` of `{stat: String, amount: float}` pairs — multi-stat action costs
+- `target_region: String` — **removed from this phase** (specific point targets are out of scope; reserved as a future extension)
+- `secondary_effects: Array` added — list of `{pool: String, amount: float}`; additional pools drained on landing, applied as flat amounts after the primary resolution
+- `requires_flanking: bool` added — hard gate: action is not queueable unless the attacker is outside the defender's awareness arc; distinct from `arc_required` (which governs the attacker's own facing to the opponent)
+
+**Reaction definition changes:**
+- `coverage: Dictionary` (region → multiplier) — **removed from this phase**; replaced by `mitigation_coverage: float` (flat 0.0–1.0 multiplier on the reaction's effectiveness applied to all incoming damage)
+- `mitigation_stat: String` → `mitigation_stats: Array` — supports multiple stats contributing to `defender_raw`
+- `mitigation_type: String` added — controls which formula path is used:
+  - `"stat_modifier"` — standard §4.4 formula (sum of stat modifiers × pool scale × coverage)
+  - `"pool_ratio"` — mitigation = `(curr_pool / max_pool) × mitigation_cap` (Absorb); costs applied before the ratio is sampled
+  - `"stat_modifier_sum"` — sum of all `mitigation_stats` modifiers and pool scales × coverage (Dodge)
+- `mitigation_cap: float` — upper bound for `"pool_ratio"` mitigation type
+- `cost_incoming_fraction: float` added — when non-zero, cost = `incoming_damage × cost_incoming_fraction`; overrides static cost entries (Bite Back)
+- `embeds_queued_action: bool` added — when true, the creature's currently queued action fires as part of this reaction; both the reaction and the embedded action enter cooldown independently (Counter Strike)
+- `damage_reduction_per_sec: float` added — flat damage reduction applied per second of fight duration before resolution; applies when this reaction fires (Counter Strike)
+- `damage_reduction_max: float` added — cap on the above
+
+---
+
+#### Actions
+
+**Bite**
+```
+action_id             : &"bite"
+costs                 : [{stat: "end", amount: 5}]
+outcome_stat          : "fit"
+secondary_effects     : [{pool: "comp", amount: 3}]
+threshold             : 0.0                        # TBD during balance pass
+cooldown_ticks        : 120                        # 2 seconds at 60 ticks/sec
+preferred_range       : 0.0                        # no positional preference
+preferred_arc_deg     : 0.0
+arc_required          : false
+requires_flanking     : false
+position_weight       : 0.0
+observation_unlock_sec: 0.0
+```
+*Tests:* primary stat damage (Fit pool), secondary flat damage (Composure), no positional requirement, basic cooldown.
+
+---
+
+**Ankle Bite**
+```
+action_id             : &"ankle_bite"
+costs                 : [{stat: "end", amount: 5}]
+outcome_stat          : "dex"
+secondary_effects     : [{pool: "comp", amount: 5}]
+threshold             : 0.0
+cooldown_ticks        : 180                        # 3 seconds
+preferred_range       : 0.0
+preferred_arc_deg     : 0.0
+arc_required          : false
+requires_flanking     : true                       # hard gate: must be outside defender's awareness arc
+position_weight       : 1.5                        # strong incentive to seek flanking position
+observation_unlock_sec: 0.0
+```
+*Tests:* flanking hard gate (`requires_flanking`), secondary flat damage, Dex as primary outcome stat.
+
+---
+
+#### Reactions
+
+**Absorb** *(renamed from Dodge)*
+```
+reaction_id           : &"absorb"
+costs                 : [{stat: "end", amount: 3}, {stat: "dex", amount: 2}]
+mitigation_stats      : ["dex"]
+mitigation_type       : "pool_ratio"               # (curr_point_dex / max_point_dex) × mitigation_cap
+mitigation_cap        : 0.9                        # max 90% reduction at full pool
+mitigation_coverage   : 1.0
+cost_incoming_fraction: 0.0
+cooldown_ticks        : 120                        # 2 seconds
+context_set           : "combat"
+trigger_predicates    : []
+```
+*Cost applied first, then ratio sampled — so mitigation is always slightly below 90% and degrades as the Dex pool depletes from use.*
+
+*Tests:* pool-ratio mitigation type, multi-stat cost, mitigation degradation under repeated use.
+
+---
+
+**Dodge** *(new)*
+```
+reaction_id           : &"dodge"
+costs                 : [{stat: "dex", amount: 3}, {stat: "wit", amount: 3}]
+mitigation_stats      : ["dex", "wit"]
+mitigation_type       : "stat_modifier_sum"        # both stat modifiers contribute to defender_raw
+mitigation_coverage   : 1.0
+cost_incoming_fraction: 0.0
+cooldown_ticks        : 120                        # TBD
+context_set           : "combat"
+trigger_predicates    : []
+```
+*By combining Dex and Wit modifiers, a creature with high scores in both stats can raise `defender_raw` enough that the net result falls below the action threshold — a clean miss rather than reduced damage.*
+
+*Tests:* multi-stat mitigation (`stat_modifier_sum`), chance of complete miss via high defender_raw.
+
+---
+
+**Bite Back**
+```
+reaction_id           : &"bite_back"
+costs                 : []
+cost_incoming_fraction: 0.2                        # cost = incoming_damage × 0.2; pool TBD (see open question)
+mitigation_stats      : []
+mitigation_type       : "stat_modifier"
+mitigation_coverage   : 0.0                        # does not reduce incoming damage
+secondary_effects     : [{pool: "comp", amount: 10}]   # deals 10 Composure to attacker on firing
+cooldown_ticks        : 180                        # 3 seconds
+context_set           : "combat"
+trigger_predicates    : [{type: "positional_awareness"}]   # attacker must be within defender's awareness arc (face-to-face)
+```
+*Tests:* dynamic cost (`cost_incoming_fraction`), zero damage mitigation, secondary effect dealt to attacker, positional trigger predicate (face-to-face — inverse of flanking).*
+
+<<Question: Which pool does `cost_incoming_fraction` drain from for Bite Back? Suggest Endurance as the primary action resource — confirm before implementation.>>
+
+---
+
+**Counter Strike**
+```
+reaction_id              : &"counter_strike"
+costs                    : [{stat: "wit", amount: 2}]
+                           # queued action's cost also applies if it fires (via embeds_queued_action)
+mitigation_stats         : []
+mitigation_type          : "stat_modifier"
+mitigation_coverage      : 0.0
+damage_reduction_per_sec : 0.1                      # reduces incoming damage 0.1 per second of fight duration
+damage_reduction_max     : 0.5                      # capped at 50%
+embeds_queued_action     : true                     # queued action fires; both cooldowns activate independently
+cooldown_ticks           : 60                       # 1 second for Counter Strike itself
+context_set              : "combat"
+trigger_predicates       : [{type: "incoming_damage_nonzero"}]   # only fires when opponent action would deal damage
+```
+*The embedded action fires using its own cooldown. If the queued action is on cooldown when Counter Strike triggers, the action does not fire but Counter Strike's Wit cost and damage reduction still apply.*
+
+*Tests:* time-based damage reduction, embedded action mechanic, dual cooldown, `incoming_damage_nonzero` trigger predicate (new predicate type — add to predicate registry before implementation).
+
+---
+
+#### Coverage by this test set
+
+| Mechanic | Covered by |
+|----------|-----------|
+| Basic stat damage | Bite |
+| Secondary flat damage | Bite, Ankle Bite |
+| Multi-stat cost | Absorb, Dodge |
+| Flanking hard gate (`requires_flanking`) | Ankle Bite |
+| Pool-ratio mitigation | Absorb |
+| Mitigation degrades under use | Absorb (cost applied before ratio sampled) |
+| Multi-stat defender_raw / chance of clean miss | Dodge |
+| Dynamic reactive cost | Bite Back |
+| Face-to-face trigger predicate | Bite Back |
+| Time-based damage reduction | Counter Strike |
+| Embedded action fires as reaction | Counter Strike |
+| Dual independent cooldown | Counter Strike |
+
+| Mechanic | **Not covered — explicitly noted** |
+|----------|-----------------------------------|
+| `observation_unlock_sec > 0` | Timed action-unlock untested in this set |
+| Feint (wit vs wit, reaction slot burn) | §4.5 — deferred |
+| Stat wheel overflow (2:1 neighbor drain) | Needs a scenario that drives a pool to 0 |
