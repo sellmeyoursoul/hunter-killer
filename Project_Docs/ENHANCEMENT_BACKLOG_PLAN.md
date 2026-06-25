@@ -41,6 +41,17 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
+## Combat — Resisted Actions subsystem
+
+| Item | Priority | Draft plan | Notes |
+|------|----------|------------|--------|
+| **Opponent observation table: full-rate skill gate** | Medium | [Draft_Features/COMBAT.md](Draft_Features/COMBAT.md) §11.9 | Base impl uses 25% of `combat_exp_ema_alpha`. Full-rate learning requires an observation skill unlock. `stat_observation` is the natural gating stat; exact skill definition deferred until skill tree ships. |
+| **Opponent observation table: scalability cap** | Low | [Draft_Features/COMBAT.md](Draft_Features/COMBAT.md) §11.9 | Per-creature-lifetime tables become a memory concern at large population counts. Add fixed-size cap (evict LRU pairs) or sparse representation before large-population milestones. |
+| **Positional response overlay (Option B)** | Medium | [Draft_Features/COMBAT.md](Draft_Features/COMBAT.md) §11.9 | Separate spatial preference overlay per creature: named positional bias keys derived from action definition positional fields, updated via EMA when opponent positional actions resolve, read by `CombatPositionResolver` as additive weights. Two open questions in §11.9 must be resolved first. |
+| **Action context-class flags** | Low | [Draft_Features/COMBAT.md](Draft_Features/COMBAT.md) §11.9 | As Resisted Actions expands beyond combat, tag actions with context-class flags (combat, social, mating) to scope observation tables and reaction sets. Not required while only one interaction type exists. |
+
+---
+
 ## Death / game-over differentiation
 
 | Item | Priority | Draft plan | Notes |

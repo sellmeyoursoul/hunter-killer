@@ -81,6 +81,17 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 - **Crossover:** two parents → child: per-gene blend on **`creature_motor`** and independently on **motivation traits** (same operators; no mandatory correlation until a spec adds one).
 - **Speciation (optional):** cluster genomes by behavior vectors (e.g. mean `weight_edge`, principal components of motivation traits) to preserve diversity.
 
+**Combat experience tables (deferred — cross-ref [COMBAT.md](COMBAT.md) §11.7 and §11.9):**
+When the combat experience system ships, two per-creature-lifetime tables are candidates for hereditary inheritance:
+
+1. **Self-experience table** (§11.7) — keyed on `prev_action_id → curr_action_id → weight`. Child inherits a diluted blend of both parents' tables at a configured dilution factor (`combat_exp_inherit_dilution`, default TBD). Over generations, populations develop locally distinct action-chain tendencies without explicit encoding.
+
+2. **Opponent observation table** (§11.9) — keyed on `opponent_action_id → own_response_id → weight`, plus a **spatial preference overlay** (named positional bias dict). Child inherits a blend of parents' opponent tables and overlay values. Populations in fox-heavy areas may accumulate elevated `maintain_awareness_arc` bias across generations — an emergent population-level tactical memory.
+
+Both tables use the same per-gene EMA-blend crossover operator as the motor genome (normalize → blend → clamp). The dilution factor is a separate config key from `combat_exp_ema_alpha` since it governs cross-generation transfer, not within-lifetime learning.
+
+**Inheritance is deferred** until the base table implementations (§11.7, §11.9) are stable. Do not implement the inheritance path before the tables themselves are wired and unit-tested.
+
 ## Risks and mitigations
 
 | Risk | Mitigation |
@@ -101,5 +112,6 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 
 | Date | Change |
 |------|--------|
+| 2026-06-25 | §C Heredity extended: combat self-experience table and opponent observation table (including spatial overlay) added as heritable structures. Dilution factor config key stubbed. Deferred until base table implementations stable. Cross-ref COMBAT.md §11.7 / §11.9. |
 | 2026-05-12 | Trait–motor: deferred **`explorer_builder`** scaling for interior slow vs unknown ([OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §8.2.5); multi-motivation hook. |
 | 2026-05-12 | Motivation traits ([CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md) §4): dual genome, phased trait–motor coupling, heredity/fitness; bidirectional cross-links. |

@@ -439,6 +439,8 @@ CreatureKinematicBody3D._physics_process()
 | 2026-06-24 | §11.6 resolved: test action/reaction set defined (Bite, Ankle Bite, Absorb, Dodge, Bite Back, Counter Strike). Data shape updated: costs array replaces singular cost_stat/cost_amount; target_region and coverage dict removed (out of scope); secondary_effects, requires_flanking, mitigation_type, mitigation_cap, cost_incoming_fraction, embeds_queued_action, damage_reduction_per_sec/max added. Three mitigation types defined: stat_modifier, pool_ratio, stat_modifier_sum. incoming_damage_nonzero added as new trigger predicate type. §4.3 action and reaction data shapes updated to match.
 | 2026-06-24 | §11.3 resolved: continuous per-second pool recovery; 4 activity states with config multipliers; fill_time curve (exponent 0.25, base 100s at stat 10) yields 56s–126s range across stat 1–25; full rate table documented. §11.8 added: stat_to_point prep work itemized as blocking prerequisite — edge case resolution, loop verification, and stat_math.gd creation. Recovery and position resolver implementation steps added to §5.
 | 2026-06-24 | §11.2 resolved: no combat motor sub-mode; positioning driven by action definitions via CombatPositionResolver feeding SeekPlanner unchanged; hard/soft arc gate design. §4.3 action definition extended with `action_id`, `preferred_range`, `preferred_arc_deg`, `arc_required`, `position_weight`. §4.4 resolution formula adds positional modifier. §4.8 data flow updated to show established goal→objective→action pipeline as primary layer; combat resolution as mechanical consumer. §11.7 added: per-creature transition pair experience table (EMA update, cold start, future inheritance via reproduction). Planned files table updated. |
+| 2026-06-25 | §11.9 spatial overlay open questions resolved: update trigger is on action resolve (landed or failed, outcome score drives EMA direction); bias keys derived from action definition positional fields at runtime; initial value 0.0 for all keys. |
+| 2026-06-25 | §11.9 added: opponent observation table design stub. Covers write trigger (on action resolve, not awareness-gated), per-creature-lifetime scope, 25%-rate EMA stub, action-id agnostic keying, separate-but-aligned interface with self-table, positional overlay Option B with two open questions, inheritance cross-ref. Enhancement backlog entries added for: full-rate skill gate, scalability cap, spatial overlay implementation. |
 | 2026-06-23 | §11.1 expanded: gates 1–3 confirmed. Gate 4 reframed as typed positional predicates with awareness zone terminology locked (plain language: "awareness zone", "awareness arc", "flanked"). Predicate list design extended to cover non-positional gates (composure threshold, interaction context, future negotiation factors). `trigger_predicates : Array` field proposed for reaction definition; pending confirmation. |
 
 ---
@@ -457,7 +459,7 @@ The following gates must all pass for a queued reaction to fire. Gates 1–3 are
 3. The reaction's cooldown has expired.
 
 **Gate 4 — positional / spatial predicates (confirmed in principle; naming pending):**
-A reaction definition may declare one or more **positional predicates** that describe spatial conditions the responder must satisfy for the reaction to be valid. The first concrete instance is the **awareness check**: the attacker must be within the responder's **awareness zone** (a configurable arc — config key `awareness_zone_arc_deg`, label "Awareness Arc") for the reaction to trigger. Outside that zone the responder is considered flanked and the reaction does not fire.
+A reaction definition may declare one or more **positional predicates** that describe spatial conditions the responder must satisfy for the reaction to be valid. 
 
 - Awareness zone terminology (config keys, debug overlay, doc references) uses plain language: "awareness zone", "awareness arc", "flanked" — not implementation terms like "observation cone" or "coverage cone".
 - Positional predicates on action/reaction definitions are a **typed predicate list**, not a single hardcoded check. Each predicate has a `type` (e.g. `"positional_awareness"`) and its own config-driven parameters. This makes the gate extensible: additional spatial conditions (e.g. elevation, terrain adjacency) can be added without changing the resolution formula.
@@ -554,6 +556,37 @@ For this phase, combat-specific files (`combat_math.gd`, `creature_combat_compon
 3. **Create `res://creature/stat_math.gd`** — implement `stat_to_point(stat_num: int) -> float` with the lookup table (indices 1–25) and the `>25` extrapolation loop. Pass golden-value headless tests for stat 1, 10, 25, 26, 30 before wiring into any other system.
 
 This work is captured as step 1 of the §5 implementation plan. It should be treated as a standalone deliverable that unblocks both combat and recovery.
+
+### 11.9 Opponent observation table (design stub)
+
+A symmetric counterpart to the self-referential experience table (§11.7): each creature maintains a per-creature-lifetime record of what its opponent has done and what response the creature used in reply. The goal is to let a creature learn response tendencies against observed opponent action patterns — without any explicit encoding of strategy.
+
+**Write trigger:**
+An observation record is written whenever an opponent action resolves (landed or not), using the outcome score (damage dealt relative to cost paid) as the EMA signal. Positional awareness of the attacker is not required — a creature does not need to see an attack to experience its outcome. The `trigger_predicates` system governs *reaction firing*; observation writes have their own simpler trigger.
+
+**Scope — per-creature-lifetime, per action (not per species):**
+The table is keyed on `opponent_action_id → own_response_id → weight`, scoped per creature instance. A creature that dies takes its table with it.
+
+**Observation stat gating — 25% rate stub:**
+In the base implementation the EMA update rate is set at **25% of `combat_exp_ema_alpha`**. Full-rate observation learning is deferred to the skill system (see enhancement backlog). `stat_observation` is the natural stat to gate that unlock, but the exact mechanism is not specified here.
+
+**Action-id agnostic:**
+The table works with any `action_id` StringName regardless of interaction context (combat, social, mating). Context-class flags are deferred; the `context_set` field already on reaction definitions provides scoping when needed.
+
+**Separate tables, aligned interface:**
+The self-experience table (§11.7) and the opponent observation table are separate data structures. Both expose the same `record(prev_id, curr_id, outcome_score)` / `weight(prev_id, curr_id) -> float` contract so they can be merged in a future refactor without breaking call sites.
+
+**Positional response overlay — Option B (open):**
+The action table covers action/reaction id responses only. Positional learning ("I should stay face-to-face more") is handled by a separate spatial preference overlay — a per-creature dict of named positional biases updated via EMA when opponent actions with positional criteria resolve. CombatPositionResolver reads these as additive weights on top of the queued action's `position_weight`. The overlay is a distinct data structure with the same per-creature-lifetime scoping and 25%-rate rule.
+
+**Resolved — spatial overlay update trigger:** Bias updates fire on action resolve regardless of outcome (landed or failed). Outcome score is used as the EMA signal, so a failed attack contributes a negative signal and a landed attack contributes a positive one — no separate landed/failed branching needed.
+
+**Resolved — spatial overlay bias keys:** Keys are derived at runtime from the positional fields on action definitions (e.g. `requires_flanking = true` → `maintain_awareness_arc` key; future positional fields map to their own keys). All biases initialize to `0.0`. Tuning of initial values is deferred to a balance pass.
+
+**Inheritance:**
+The opponent observation table and spatial overlay are heritable. See [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) §Heredity. Deferred to the same timeline as self-table inheritance.
+
+---
 
 ### 11.7 Combat experience table (deferred — post first-phase)
 
