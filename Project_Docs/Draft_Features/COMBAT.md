@@ -61,6 +61,7 @@
 | planned | `res://creature/combat/reaction_definition.gd` | Data resource: cost stat, mitigation stat, coverage profile, trait affinities, cooldown, context set |
 | planned | `res://creature/combat/combat_position_resolver.gd` | Pure function: action criteria + positions → target `Vector3` for seek planner and positional modifier float |
 | planned | `res://creature/combat/combat_experience_table.gd` | Per-creature transition pair table (`prev_action_id → curr_action_id → weight`); updated from combat outcome signals |
+| planned (tentative — see §11.10 `<<Question>>`) | `res://creature/combat/combat_experience_math.gd` | Pure `rank_score(weight, attempt_count, success_count, marginal_attempt_count, marginal_success_count, traits, axis_config, n_sat, n_min) -> float`; shared novelty-vs-proven ranking formula (with pair/marginal hierarchical backoff), reused by the self-experience table, opponent-observation table, and spatial overlay via a generalized `trait_rank_bias(traits, axis_config)` sub-helper — each table supplies its own `axis_config` (primary axis + optional gated modifier axes) instead of forking the formula |
 
 **Existing patterns to follow:**
 - Pure-function math modules (no Node refs) → headless unit tests in `tests/run_all.gd`.
@@ -305,7 +306,7 @@ AiDriver._physics_process()
   │         → Vector3 fed to SeekPlanner as ultimate_goal this tick
   └─ sub-step objectives resolve into queued action/reaction:
        candidate actions filtered by: cooldown elapsed, observation_unlock_sec, arc_required
-       selection weight = trait_affinity + experience_table.weight(prev_action_id, candidate.action_id)
+       selection: highest combat_rank_score(trait_affinity, experience_table entry, change_stability) — §11.10
        → action/reaction slots written to CreatureCombatComponent
 
 ── Combat mechanical resolution (reads from the above; does not drive goals) ─
@@ -354,7 +355,7 @@ CreatureKinematicBody3D._physics_process()
 7. **Wire `creature_defeated` signal** in `main_3d.gd` — replace or extend existing predation-based round-end path.
 8. **Create `combat_classifier.gd`** — sets `tactic_fight_active` on the V3 MotorContext struct while combat contact is active; clears on timeout or defeat.
 9. **Create `combat_position_resolver.gd`** — pure functions: `resolve_combat_target(creature_pos, opponent_pos, action_def) -> Vector3` (closest valid arc point); `positional_modifier(creature_pos, opponent_pos, action_def) -> float` (1.0 at ideal position, attenuates to `combat_position_mod_floor`). Wire into action queuing (hard gate for `arc_required`) and into `combat_math.resolve` as `pos_mod` argument. Unit tests: ideal position → 1.0; outside arc → floor; `arc_required` gate blocks queue.
-10. **Create `combat_experience_table.gd`** — per-creature instance; `record(prev_id, curr_id, outcome_score)` via EMA; `weight(prev_id, curr_id) -> float` defaulting to `1.0`. Wire `record()` call into `creature_combat_component` after each action resolves. Wire `weight()` into action selection in the goal→objective→action pipeline. Unit tests: weight converges toward repeated outcome; unknown pair returns 1.0.
+10. **Create `combat_experience_table.gd`** — per-creature instance; `record(prev_id, curr_id, outcome_score)` via EMA; entries carry `weight` (EMA), `attempt_count`, `success_count` per §11.10. Wire `record()` call into `creature_combat_component` after each action resolves. Wire `combat_rank_score()` (§11.10, not raw `weight`) into action selection in the goal→objective→action pipeline, so novelty-vs-proven bias and confidence gate candidate ranking from the start rather than being retrofitted later. Unit tests: weight converges toward repeated outcome; unknown pair returns 1.0; rank score favors low-`attempt_count` candidates under a Change-leaning creature and favors high-`attempt_count`/high-success candidates under a Stability-leaning creature (§11.10 worked example).
 11. **Enable `fight` modality salient write** — add `fight` to core modality resource; confirm `goal_source_memory.try_salient_write` emits correct `GoalKind` at episode end.
 10. **Raise jeopardy urgency on active combat** — verify `URGENCY_JEOPARDY` bitmask contributor fires when `tactic_fight_active` is set (per **[CREATURE_GOAL_DRIVERS.md §5.1.3](CREATURE_GOAL_DRIVERS.md)**).
 11. **Wire observation-unlocked actions** — implement `observation_unlock_sec` gating in the queue system; wire `stat_observation` reduction formula.
@@ -442,6 +443,14 @@ CreatureKinematicBody3D._physics_process()
 | 2026-06-25 | §11.9 spatial overlay open questions resolved: update trigger is on action resolve (landed or failed, outcome score drives EMA direction); bias keys derived from action definition positional fields at runtime; initial value 0.0 for all keys. |
 | 2026-06-25 | §11.9 added: opponent observation table design stub. Covers write trigger (on action resolve, not awareness-gated), per-creature-lifetime scope, 25%-rate EMA stub, action-id agnostic keying, separate-but-aligned interface with self-table, positional overlay Option B with two open questions, inheritance cross-ref. Enhancement backlog entries added for: full-rate skill gate, scalability cap, spatial overlay implementation. |
 | 2026-06-23 | §11.1 expanded: gates 1–3 confirmed. Gate 4 reframed as typed positional predicates with awareness zone terminology locked (plain language: "awareness zone", "awareness arc", "flanked"). Predicate list design extended to cover non-positional gates (composure threshold, interaction context, future negotiation factors). `trigger_predicates : Array` field proposed for reaction definition; pending confirmation. |
+| 2026-07-01 | §11.10 added: novelty-vs-proven exploration bias brought into scope (no longer deferred) — new/unlocked actions were at risk of being permanently starved by an already-reinforced favorite under naive argmax selection. Resolved to transplant the existing `change_stability` Slot B rank-bias + confidence formula (CREATURE_GOAL_DRIVERS.md §5.1.2) rather than invent a new mechanism; selection-rule options (ranked argmax / softmax / epsilon-greedy) evaluated, ranked argmax recommended. Same mechanism proposed for reuse across self-experience table (§11.7), opponent-observation table, and spatial overlay (§11.9), with per-table saturation constants and other differences flagged as open questions. §11.7 header/prose updated to drop stale "deferred — post first-phase" framing (contradicted §5 step 10, which already schedules it this phase). §4.8 and §5 step 10 updated to reference `combat_rank_score` instead of raw weight. Planned-files table (§2) gets a tentative shared-math-module row pending an open question on file/class shape. |
+| 2026-07-01 | §11.10 tie-break resolved: reused `CREATURE_MOVEMENT_V3`'s `blocked_objective_chaos` / `goal_consideration_chaos` precedent — new `combat_rank_chaos` key applies RNG jitter on near-tied `combat_rank_score` values, not just exact ties. Explicitly scoped: chaos resolves close calls only, does not override a large persistent gap (which is what `trait_rank_bias` is meant to produce for a strongly Stability-leaning creature). Noted a high-Stability creature never trying new actions is intended personality expression, not a bug — deferred any stronger forced-exploration mechanism (decay term, wider chaos band, forced-trial floor) until playtesting shows it's actually a problem. |
+| 2026-07-01 | §11.9/§11.10 saturation-constant question resolved: confirmed the opponent-observation/spatial-overlay 25%-rate throttle (§11.9) is an alpha dampener on `weight` only — `attempt_count`/`success_count` still increment 1:1 with real occurrences. Since `evidence`/`thin_cap` key off `attempt_count`, not `weight`, all three tables (self, opponent-observation, spatial overlay) share `combat_exp_n_sat` / `combat_exp_n_min` with no per-table scaled variants needed. Removed the now-resolved `<<Question>>`; the spatial overlay's remaining open question is narrowed to whether the novelty/proven lerp is meaningful for a continuous signed bias, not saturation scaling. |
+| 2026-07-01 | §11.10 pair-vs-action-level tracking resolved: adopted hierarchical backoff (Option C) — pair table stays the source of truth for `weight` and ranking, but a lightweight `curr_action_id`-keyed marginal aggregate (`O(actions)`, updated incrementally alongside pair writes) supplies fallback `evidence`/`success_rate` when a pair is thin, blended via the pair's own `thin_cap` as blend weight (no new tunable). Solves the scalability fragmentation concern (a proven action reached from many priors no longer reads as permanently novel on each individual pair) while keeping sequence-specific `weight` untouched. `combat_experience_math.gd`'s planned signature (§2) updated to take marginal counts. Two new `<<Question>>`s opened: whether `weight` itself should also warm-start from the marginal, and whether the opponent-observation table needs the same marginal treatment (spatial overlay likely exempt — not pair-keyed). |
+| 2026-07-01 | §11.10 two follow-up questions resolved. (1) Option C (hierarchical backoff) confirmed as the selected design, not just recommended; `weight` confirmed to stay un-blended (no marginal warm-start) — a new pair still initializes at neutral `1.0` regardless of the marginal. (2) `success_count` changed from a binary "`outcome_score > 0`" increment to a graduated `effectiveness` accumulator (`0..1`, `float` not `int`): derived from `damage_ratio` against the action's own best-case ceiling (`ceiling_damage`, reusing §4.4 resolution math, no new `action_definition` field), scaled so hitting the expected/full-strength ceiling reads as `0.75` — leaving headroom above it for outperformance from variability, position, or a depleted defender. Applied to both the pair table and the marginal aggregate. New `<<Question>>` opened on how this cost-agnostic `effectiveness` reconciles with the separately-defined, cost-adjusted `outcome_score` that feeds `weight`'s EMA. |
+| 2026-07-01 | §11.10 `outcome_score` formalized as `benefit_score - cost_ratio`: `benefit_score` is a domain-specific plug-in (combat's is `effectiveness`, already defined); `cost_ratio` is domain-general, reusing the existing `costs: Array` pool-drain pattern (§4.3) — no new fields for either side. §11.7/§11.9's loose "damage dealt relative to cost paid" phrasing updated to reference this. New "Generalization beyond Resisted Actions" subsection documents the sprint-vs-walk (non-combat, non-resisted) motivating case and notes `CREATURE_MEMORY.md §14` already deliberately defers magnitude-based reward shaping (boolean/tiered `reward_scalar` only, phase-1) pending playtest, with a "hybrid" option already anticipated in that doc's own backlog comment. Decision: when Slot B eventually gains cost-awareness, add `outcome_score` as a new parallel EWMA magnitude track alongside the existing tiered `reward_scalar`/`success_count`/`success_delta` (not a replacement). Explicitly **not implemented in `CREATURE_GOAL_DRIVERS.md`/`CREATURE_MEMORY.md` now** — deferred to combat's own implementation phase so it doesn't interfere with concurrent V3 motor refactor work in those docs. One new `<<Question>>` opened (Slot B magnitude-track config shape), scoped to that future implementation step. |
+| 2026-07-01 | §11.10 marginal/backoff-reuse question resolved: spatial overlay confirmed exempt (not pair-keyed). Opponent-observation table confirmed **in** — and for a stronger reason than the self-table's fragmentation concern: a reaction is queued before the opponent's action is known (§4.1), so reaction *selection* can never condition on the specific incoming `opponent_action_id` in the first place, only on the responder's overall history against this opponent. The marginal over `own_response_id` already encodes that (it implicitly reflects the opponent's real historical action mix), making it close to the primary decision-relevant signal here rather than just a thin-pair fallback. Shares the self-table's `combat_exp_n_sat`/`combat_exp_n_min` — no new constants. Flagged, not decided: the pair-level breakdown's main value for this table may end up being record-keeping / a future opponent-prediction model rather than driving today's `combat_rank_score` directly. |
+| 2026-07-01 | §11.10 spatial-overlay novelty/proven-lerp question resolved: **yes**, it applies, but not via combat's `change_stability`-only formula. Generalized into a shared `trait_rank_bias(traits, config)` helper — a primary axis sets the base lerp, and optional secondary axes modulate it gated by how strongly the primary leans toward its second pole. Combat's config (`primary_axis: change_stability`, no modifiers) reproduces its existing formula unchanged; the spatial overlay's config (`primary_axis: explorer_builder`, modifier: `change_stability` gated by Builder-lean) captures the discussed intuitions: Explorer favors novelty regardless of stability; Builder+Stability favors the strongest proven bias; Builder+Change opens back up toward neutral (new methods/relocating without abandoning the optimize-in-place goal). `community_individual`/`compassion_self_interest` explicitly left unwired in both configs — the community-axis behavior discussed (leave a location with no buffer for others) is a separate stay/leave resource-margin mechanic, not this lerp — but both remain available `modifiers` slots for a future decision with an established intuition, addable via config alone. §2 planned-files row updated: `combat_experience_math.gd`'s `rank_score` now takes `traits`/`axis_config` instead of a bare `change_stability` float. New `<<Question>>`: default value for `spatial_cs_modulation`. |
 
 ---
 
@@ -562,13 +571,15 @@ This work is captured as step 1 of the §5 implementation plan. It should be tre
 A symmetric counterpart to the self-referential experience table (§11.7): each creature maintains a per-creature-lifetime record of what its opponent has done and what response the creature used in reply. The goal is to let a creature learn response tendencies against observed opponent action patterns — without any explicit encoding of strategy.
 
 **Write trigger:**
-An observation record is written whenever an opponent action resolves (landed or not), using the outcome score (damage dealt relative to cost paid) as the EMA signal. Positional awareness of the attacker is not required — a creature does not need to see an attack to experience its outcome. The `trigger_predicates` system governs *reaction firing*; observation writes have their own simpler trigger.
+An observation record is written whenever an opponent action resolves (landed or not), using `outcome_score` (`benefit_score - cost_ratio` — §11.10) as the EMA signal. Positional awareness of the attacker is not required — a creature does not need to see an attack to experience its outcome. The `trigger_predicates` system governs *reaction firing*; observation writes have their own simpler trigger.
 
 **Scope — per-creature-lifetime, per action (not per species):**
 The table is keyed on `opponent_action_id → own_response_id → weight`, scoped per creature instance. A creature that dies takes its table with it.
 
 **Observation stat gating — 25% rate stub:**
 In the base implementation the EMA update rate is set at **25% of `combat_exp_ema_alpha`**. Full-rate observation learning is deferred to the skill system (see enhancement backlog). `stat_observation` is the natural stat to gate that unlock, but the exact mechanism is not specified here.
+
+**Resolved — the 25% rate is an alpha dampener, not a sampling gate:** `record()` still fires on every opponent-action resolve — `attempt_count` / `success_count` increment 1:1 with real occurrences, same as the self-table. The 25% figure only scales how far `weight` moves per event (secondhand outcome data should shift the outcome-magnitude estimate more cautiously than a self-attempted action would). It does **not** mean this table "sees" a pattern less often — only that it trusts each individual data point's contribution to `weight` less. See §11.10 for why this means `combat_exp_n_sat` / `combat_exp_n_min` (the confidence/evidence constants) are shared across all three tables rather than needing separate scaled versions.
 
 **Action-id agnostic:**
 The table works with any `action_id` StringName regardless of interaction context (combat, social, mating). Context-class flags are deferred; the `context_set` field already on reaction definitions provides scoping when needed.
@@ -588,18 +599,18 @@ The opponent observation table and spatial overlay are heritable. See [CREATURE_
 
 ---
 
-### 11.7 Combat experience table (deferred — post first-phase)
+### 11.7 Combat experience table
 
 **Goal:** Let creatures learn which action sequences are effective without ever hardcoding "do B after A." The full action set (A–E) remains available; experience shifts selection weights so discovered effective transitions become more probable over time.
 
 **Data shape — transition pair table:**
-Each creature instance owns a `CombatExperienceTable`: a dictionary keyed on `prev_action_id → curr_action_id → weight`. Weights are initialized to `1.0` (neutral) for all pairs at spawn. Only transition pairs the creature has actually attempted accumulate meaningful signal.
+Each creature instance owns a `CombatExperienceTable`: a dictionary keyed on `prev_action_id → curr_action_id → { weight, attempt_count, success_count }` (fields beyond `weight` added by §11.10). Weights are initialized to `1.0` (neutral) for all pairs at spawn. Only transition pairs the creature has actually attempted accumulate meaningful signal.
 
-**Recording:** After each action resolves, `experience_table.record(prev_action_id, curr_action_id, outcome_score)` updates the weight using a configurable exponential moving average (`combat_exp_ema_alpha`, default `0.2`): `weight = (1 - alpha) * weight + alpha * outcome_score`. `outcome_score` is a normalized float derived from damage dealt vs. pool cost paid — positive when the exchange was favorable, negative when costly.
+**Recording:** After each action resolves, `experience_table.record(prev_action_id, curr_action_id, outcome_score)` updates the weight using a configurable exponential moving average (`combat_exp_ema_alpha`, default `0.2`): `weight = (1 - alpha) * weight + alpha * outcome_score`. `outcome_score = benefit_score - cost_ratio` (§11.10) — positive when the exchange was favorable, negative when costly. `attempt_count` and `success_count` are updated the same tick per §11.10.
 
-**Consumption:** During action queuing (§4.8 goal→objective→action pipeline), the selection weight for each candidate action is: `trait_affinity_score + experience_table.weight(prev_action_id, candidate.action_id)`. Experience is additive, not replacing trait affinity — a creature's nature still biases it, but demonstrated results adjust the margin.
+**Consumption:** During action queuing (§4.8 goal→objective→action pipeline), candidates are ranked by `combat_rank_score` (§11.10) — not raw `trait_affinity_score + weight`. This is **in scope for this phase, not deferred**: see §11.10 for why selecting on raw weight alone risks starving newly-available actions, and for the selection-rule options considered.
 
-**Cold start:** New creatures start with all weights at `1.0`. No prior is inherited at spawn. Experience is per-creature-instance and persists only for the creature's lifetime.
+**Cold start:** New creatures start with all weights at `1.0`, `attempt_count = 0`, `success_count = 0`. No prior is inherited at spawn. Experience is per-creature-instance and persists only for the creature's lifetime.
 
 **Future — inheritance via reproduction (deferred):**
 When the reproduction subsystem ships, a child creature's starting experience table will be seeded from a blend of its parents' tables at a configured dilution factor. Over generations, populations will develop regionally distinct action-chain tendencies reflecting their local opponents and terrain — without any explicit encoding of "which chain is best." Populations in different regions of the map may converge on entirely different strategies even for the same species pairing.
@@ -731,7 +742,7 @@ trigger_predicates    : [{type: "positional_awareness"}]   # attacker must be wi
 ```
 *Tests:* dynamic cost (`cost_incoming_fraction`), zero damage mitigation, secondary effect dealt to attacker, positional trigger predicate (face-to-face — inverse of flanking).*
 
-<<Question: Which pool does `cost_incoming_fraction` drain from for Bite Back? Suggest Endurance as the primary action resource — confirm before implementation.>>
+<<Question: Which pool does `cost_incoming_fraction` drain from for Bite Back? Suggest Endurance as the primary action resource — confirm before implementation.>> <<Answer: This modifier should apply to all incoming damage from the action this is reacting to. >>
 
 ---
 
@@ -778,3 +789,207 @@ trigger_predicates       : [{type: "incoming_damage_nonzero"}]   # only fires wh
 | `observation_unlock_sec > 0` | Timed action-unlock untested in this set |
 | Feint (wit vs wit, reaction slot burn) | §4.5 — deferred |
 | Stat wheel overflow (2:1 neighbor drain) | Needs a scenario that drives a pool to 0 |
+
+---
+
+### 11.10 Selection-rule / novelty-vs-proven exploration bias — in scope this phase
+
+**Problem:** `combat_experience_table` (§11.7) initializes every `prev_action_id → curr_action_id` pair to a neutral weight of `1.0` and only moves via EMA on pairs actually attempted. A newly unlocked action (future skill-tree growth, out of scope for this phase but not for this design) enters at the same neutral `1.0` as any other untried pair, while an already-reinforced favorite sits above it. If selection is a naive argmax on `trait_affinity_score + weight`, a large action pool risks permanently starving new options — the incumbent keeps winning, and the gap never closes because EMA only updates on use, never on disuse. This is addressed now rather than deferred, since it shapes how the transition-pair table and its two siblings (§11.9) select and reinforce behavior from the first tick they exist.
+
+**Resolved direction:** Do not invent a new mechanism. `goal_source_memory.gd`'s Slot B replay already solves the identical class of problem — ranking competing candidate records by blending a sample-count confidence term with a `change_stability`-driven novelty-vs-proven lerp (CREATURE_GOAL_DRIVERS.md §5.1.2, "Slot B — confidence" and "`change_stability` rank bias"). Combat reuses that formula shape rather than forking a second exploration paradigm.
+
+#### Selection-rule options considered
+
+| Option | Mechanism | Fit with existing engine pattern | Trade-offs |
+|--------|-----------|-----------------------------------|------------|
+| **A — Ranked argmax (recommended)** | Compute a `combat_rank_score` per candidate (confidence × novelty/proven bias, same shape as `replay_rank_score`); pick the highest-scoring queueable candidate | **Direct transplant** of the shipped, tested Slot B formula; stays pure/deterministic, matching the project convention that motor/selection logic be headlessly unit-testable with golden values | Still deterministic: on a genuine tie, or for a Stability-leaning creature whose `novelty_score` never clears the incumbent, a candidate can go unpicked indefinitely. This may be *correct* for a Stability creature, but needs an explicit tie-break rule |
+| **B — Softmax / weighted-random over rank score** | Convert `combat_rank_score` into a probability distribution and sample | Guarantees nonzero trial probability for every candidate, even under a Stability-heavy creature | **Breaks from precedent** — Slot B is pure ranking, never stochastic sampling. Introduces RNG into a subsystem the project otherwise keeps pure and deterministic; existing test style ("weight converges toward repeated outcome", golden values) would need to become seeded/statistical — a real testing-cost regression |
+| **C — Epsilon-greedy bolt-on** | Argmax normally; with probability ε pick uniformly at random | Simple, well-understood bandit pattern | **Least reuse** — a third exploration paradigm alongside Slot B's lerp and Option A's rank score; needs its own tunable (ε) and its own trait-scaling rule, duplicating work Option A already does via `novelty_score` |
+
+**Recommendation: Option A.** It answers the starvation concern (new actions get a `novelty_score` boost from low `attempt_count`, scaled by how Change-leaning the creature is) using a formula already shipped, already trait-aware, and already fitting this codebase's pure-function/headless-test convention (`CLAUDE.md`: "Motor and vitals logic must be pure ... to remain unit-testable headlessly"). Revisit Option B only if playtesting shows a Stability-leaning creature never tries a candidate even once across its lifetime — that is a tuning problem to observe first, not a reason to abandon Option A up front.
+
+#### Adapted formula (transplanted from CREATURE_GOAL_DRIVERS.md §5.1.2)
+
+Each transition-pair table entry gains two fields alongside the existing EMA `weight`:
+
+```
+weight         : float   # existing EMA of outcome_score — unchanged meaning, init 1.0
+attempt_count  : int     # times this pair has been recorded — init 0
+success_count  : float   # graduated landing-quality accumulator (see "Resolved — landing-quality mapping" below) — init 0.0
+```
+
+```
+evidence        = 1 - exp(-attempt_count / combat_exp_n_sat)     # config; mirrors replay_n_sat
+success_rate    = success_count / max(attempt_count, 1)
+thin_cap        = min(1.0, attempt_count / combat_exp_n_min)     # config; mirrors replay_n_min
+mixed_penalty   = 4 * success_rate * (1 - success_rate)
+failures        = attempt_count - success_count
+streak_bonus    = (failures == 0 && attempt_count > 0) ? (1 - evidence) : 0
+novelty_score   = (1 - evidence) * (1 - mixed_penalty) + streak_bonus
+proven_score    = evidence * (0.5 + 0.5 * success_rate)
+
+t               = (change_stability + 100) / 200.0    # 0 = Change ... 1 = Stability — same axis, same read as Slot B
+trait_rank_bias = lerp(novelty_score, proven_score, t)
+confidence      = clamp(evidence * (0.5 + 0.5 * success_rate) * thin_cap, 0, 1)
+
+combat_rank_score = (trait_affinity_score + weight) * confidence * trait_rank_bias
+```
+
+Candidate selection: among actions passing the existing cooldown / `observation_unlock_sec` / arc gates (§4.8), pick the highest `combat_rank_score`. This replaces the plain `trait_affinity_score + weight` selection previously described in §4.8 and §5 step 10 — `weight` still carries the outcome signal as magnitude, but confidence and trait-driven novelty now gate *which* candidate that magnitude gets to compete with.
+
+Slot B's `delta_factor` (recent-trend term from `success_delta`) is dropped from this transplant — there is no windowed trend signal at the pair level yet. See `<<Question>>` below.
+
+#### Reuse across the self-table, opponent-observation table, and spatial overlay
+
+§11.9's opponent-observation table and spatial-position overlay already commit to the same `record()` / `weight()` interface as the self-experience table, so extending both to carry `attempt_count` / `success_count` and compute `combat_rank_score` the same way is a natural fit — but not a drop-in without adjustment:
+
+- **Opponent-observation table:** `attempt_count` here means "times I've faced this specific opponent action," bounded by the *opponent's* behavior rather than the creature's own choices. `novelty_score` still means something coherent ("I've rarely seen this move — try a different response").
+- **Spatial overlay:** the overlay already updates via EMA "regardless of outcome" (§11.9) and initializes biases to `0.0`, not `1.0` — a different neutral point than the tables. The `success_rate` term assumes a `[0,1]`-bounded quantity derived from discrete success/attempt counts; the overlay's signal is a continuous, possibly-negative bias. The confidence/evidence gate is unaffected by sign and should transplant cleanly, but whether the *novelty/proven lerp specifically* is meaningful for positioning (vs. just gating on confidence with no lerp) is a genuine open design question, not just a mechanical one.
+
+**Resolved — shared saturation constants, no per-table scaling:** The 25%-rate throttle on the opponent-observation table and spatial overlay is an alpha dampener on `weight` only (§11.9) — `attempt_count` still increments 1:1 with real occurrences, exactly like the self-table. Since `evidence`/`thin_cap` are driven by `attempt_count`, not `weight`, all three tables read genuine, unthrottled exposure counts and share the same `combat_exp_n_sat` / `combat_exp_n_min`. No separate `combat_obs_n_sat` / `combat_spatial_n_sat` family is needed. The remaining open question for the spatial overlay is not saturation scaling but whether the novelty/proven lerp applies to a continuous signed bias at all (previous bullet) — the confidence/evidence gate itself transplants unchanged.
+
+#### Pair-level vs. action-level tracking — resolved via hierarchical backoff
+
+**Problem:** Pure pair-level `attempt_count`/`success_count` (keyed on the exact `(prev_action_id, curr_action_id)` combination) fragments evidence as the action pool grows — a `curr_action_id` that's genuinely proven overall, but reachable from five different `prev_action_id`s, may never clear `combat_exp_n_min` on any *single* pair, permanently reading as thin/novel even though the creature has effectively tried it many times. Pure action-level tracking (drop `prev_action_id` from the key entirely) converges fast and sidesteps the fragmentation, but throws away the sequence-specific learning that's the entire point of a transition-pair table — "B works well after A, but poorly after C" collapses to a single number.
+
+**Options considered:**
+
+| Option | Mechanism | Trade-offs |
+|--------|-----------|------------|
+| **A — Pure pair-level (status quo)** | Key strictly on `(prev_action_id, curr_action_id)` | Full sequence specificity; fragments badly as the pool grows — the exact scalability concern this question raises |
+| **B — Pure action-level** | Drop `prev_action_id`; key on `curr_action_id` only | Scales cleanly, converges fast; loses sequence learning entirely — defeats the purpose of a transition-pair table |
+| **C — Hierarchical backoff (selected)** | Keep the pair table as the source of truth for `weight` and ranking, but maintain a lightweight marginal `curr_action_id → {attempt_count, success_count}` aggregate alongside it. When a pair is thin, blend its `evidence`/`success_rate` toward the marginal's — using the pair's own `thin_cap` as the blend weight, so evidence gracefully backs off to "how proven is this action in general" instead of resetting to "totally novel" every time it's reached from a new prior | Keeps full specificity where data supports it and degrades gracefully where it doesn't; the one genuinely new piece of math in this transplant — no existing precedent in this codebase (unlike the rest of §11.10, which reuses Slot B outright). It's a standard statistical pattern (hierarchical shrinkage / n-gram backoff), just new to this project |
+
+**Selected: Option C.** It directly answers the scalability concern (marginal table is `O(actions)`, not `O(actions²)`, and is cheap to maintain incrementally) without giving up the sequence-specific signal that motivated a pair table in the first place.
+
+**Adapted formula (extends §11.10's existing formula):**
+
+```
+# per creature, maintained alongside the existing pair table:
+marginal_table : curr_action_id -> { attempt_count, success_count }
+
+# on every record(prev_action_id, curr_action_id, outcome_score, effectiveness):
+pair.attempt_count      += 1
+pair.success_count      += effectiveness                         # graduated 0..1, not binary — see "landing-quality mapping" below
+marginal[curr_action_id].attempt_count += 1                      # same tick, O(1)
+marginal[curr_action_id].success_count += effectiveness
+
+# at read time, for a candidate (prev_action_id, curr_action_id):
+pair_evidence      = 1 - exp(-pair.attempt_count / combat_exp_n_sat)
+marginal_evidence  = 1 - exp(-marginal.attempt_count / combat_exp_n_sat)
+backoff_weight     = min(1.0, pair.attempt_count / combat_exp_n_min)   # reuses thin_cap, no new tunable
+evidence           = lerp(marginal_evidence, pair_evidence, backoff_weight)
+
+pair_success_rate     = pair.success_count / max(pair.attempt_count, 1)
+marginal_success_rate = marginal.success_count / max(marginal.attempt_count, 1)
+success_rate          = lerp(marginal_success_rate, pair_success_rate, backoff_weight)
+
+# thin_cap, mixed_penalty, novelty_score, proven_score, trait_rank_bias, confidence
+# all unchanged downstream — they just consume the blended evidence/success_rate above
+# instead of pure pair-level values.
+```
+
+`weight` (the EMA outcome-magnitude estimate feeding `combat_rank_score` directly) is **not** blended — it stays pair-specific and initializes at `1.0` regardless of the marginal. Backoff only affects *how much the creature trusts* the confidence/novelty read for a thin pair, not the outcome estimate itself, which should only ever reflect what actually happened on that specific pair.
+
+**Resolved — `weight` stays un-blended.** No warm-start from the marginal. A brand-new pair for an otherwise well-proven action still initializes `weight` at the flat neutral `1.0`; only `evidence`/`success_rate` (via the backoff above) benefit from the marginal's data. `weight` continues to reflect only what actually happened on that specific pair. Revisit only if playtesting shows new pairs of an already-proven action are picked too rarely even with the evidence backoff in place.
+
+**Resolved — landing-quality mapping (`success_count` is graduated, not binary):** A hit doing little-to-no damage should read close to a failure, a moderate hit partial credit, and a large hit close to full success — a hard `outcome_score > 0` threshold collapses that whole spectrum to a single bit and was rejected. Instead, `success_count` accumulates a graduated `effectiveness` value in `[0, 1]` per attempt, derived from damage relative to the action's own best-case ceiling, reusing the existing §4.4 resolution math rather than adding a new field to `action_definition`:
+
+```
+# ceiling_damage: same §4.4 formula, evaluated at this action's best case —
+# full attacker pool (curr_scale_att = 1.0), undefended (defender_raw = 0), no variability roll.
+# Pure function of action + attacker stats; no new action_definition fields needed.
+expected_max_damage = ceiling_damage(action, attacker_stats)
+
+damage_ratio  = damage / max(expected_max_damage, EPSILON)   # `damage` = §4.4's `result if lands else 0.0`
+effectiveness = clamp(damage_ratio * 0.75, 0.0, 1.0)          # hitting the expected/full-strength ceiling reads as 0.75, not 1.0 —
+                                                               # leaves headroom above 0.75 for outperformance (depleted defender,
+                                                               # favorable position, a lucky variability roll)
+
+success_count += effectiveness   # float accumulator (see field-type update above), not a binary +1
+```
+
+A non-landing action (`damage = 0`) contributes `effectiveness = 0` — a full failure, consistent with the original binary proposal's floor case. `success_rate = success_count / max(attempt_count, 1)` (§11.10's existing formula) needs no further change: it already treats `success_count` generically as an accumulator, so making it graduated instead of binary is a drop-in swap.
+
+#### Resolved — `outcome_score` formula (benefit minus cost, domain-general shape)
+
+`outcome_score` (feeding `weight`'s EMA) was loosely defined as "damage dealt relative to cost paid" (§11.9). Formalized now as a two-part split so the same shape can eventually generalize beyond Resisted Actions (see below), rather than being combat-specific math:
+
+```
+outcome_score = benefit_score - cost_ratio
+```
+
+- **`benefit_score`** — domain-specific plug-in, `[0, 1]`-ish. For combat, this **is** `effectiveness` (above) — the graduated damage-ratio-to-ceiling quality signal.
+- **`cost_ratio`** — domain-general, reuses the existing pool/stat pattern already on every action (`costs: Array` of `{stat, amount}`, §4.3): `cost_ratio = sum_over_costs(amount / max_pool_for_stat)`. No new fields — every action already declares its costs this way.
+
+For combat specifically: `outcome_score = effectiveness - cost_ratio`, where `effectiveness` already reuses §4.4's resolution math and `cost_ratio` reuses the existing `costs` array — both sides of the formula are transplants of existing machinery, nothing net-new is invented for combat's own use.
+
+A costly action that completely fails (`effectiveness = 0`, `cost_ratio > 0`) correctly nets a strongly negative `outcome_score`, discouraging that pair via `weight`'s EMA — while `success_count`'s `effectiveness` accumulation (above) stays cost-agnostic by design, since "was this pair worth trying at all" (confidence/novelty) and "was this specific attempt worth its cost" (`weight`) are deliberately separate questions.
+
+#### Generalization beyond Resisted Actions (documented now, not built now)
+
+This `benefit_score - cost_ratio` shape was deliberately generalized past combat because the *action-id agnostic* design of the opponent-observation table (§11.9: "works with any `action_id`... combat, social, mating") already anticipates non-combat use, and the same tradeoff shows up outside any resisted/opponent context too — e.g. a creature choosing to sprint vs. walk toward a food source: sprinting costs more calories per tick (`cost_ratio`, same pool-drain shape) but may arrive sooner (a `benefit_score` proxy — e.g. a `time_to_goal_ratio` against a baseline pace). Note that "arriving sooner enables visiting a second food source" is a multi-step, downstream benefit that can't be scored at the moment a single action resolves — any future `benefit_score` for movement should stick to something measurable immediately (time-to-goal), not compound opportunity value, which is a separate credit-assignment problem this formula does not solve.
+
+**Sprint-vs-walk is not a Resisted Action** (§11.5 — no opponent resisting), so this generalization sits outside combat's own scope. `CREATURE_GOAL_DRIVERS.md`'s Slot B already has a conceptually equivalent experience mechanism for goal-pursuit tactics (`current_fit` × `stored_strength`, `attempt_count`/`success_count`/`success_delta` confidence stats) — but `CREATURE_MEMORY.md §14` currently uses a **boolean/tiered `reward_scalar` ∈ {-1, 0, +1}** only, and explicitly defers magnitude-based reward shaping until after playtest (`CREATURE_MEMORY.md:568` "Resolved (Outcome → reward shaping — phase 1)", plus the standing `<<Comment>>` at line 588 naming a **"hybrid (tier for counts + bounded magnitude for EWMA)"** as the anticipated future option).
+
+**Decision: hybrid, deferred to combat-implementation time.** When Slot B eventually gains cost-awareness, it should be additive, not a replacement of the tiered system: keep `reward_scalar`/`success_count`/`success_delta` exactly as they are today (driving confidence/counts, unchanged), and add this `outcome_score` shape as a new, parallel EWMA magnitude track (`stored_magnitude`) that modulates ranking alongside — not instead of — `confidence`. This is intentionally **not** designed or implemented in `CREATURE_GOAL_DRIVERS.md`/`CREATURE_MEMORY.md` as part of this combat design pass — those docs are active ground for the concurrent V3 motor refactor work, and this generalization idea should only be picked up as its own step within combat's implementation phase (§5), once V3 has landed, rather than edited speculatively now.
+
+<<Question: When combat implementation reaches the point of wiring Slot B's hybrid magnitude track, does `stored_magnitude`'s EWMA use the same `combat_exp_ema_alpha`-style config key, or its own? And does `f(stored_magnitude)` in `replay_rank_score = slot_b_base * confidence * trait_rank_bias * f(stored_magnitude)` need its own saturation/clamping shape, or a straight linear scale? Deferred until that implementation step — not a decision for this design pass.>>
+
+**Resolved — marginal/backoff applies to the opponent-observation table; spatial overlay is exempt.**
+
+**Spatial overlay: does not apply.** It isn't pair-keyed at all — a flat dict of positional bias keys (`maintain_awareness_arc`, etc.), not `prev → curr`. There is no pair-fragmentation problem to back off against.
+
+**Opponent-observation table: applies, and the marginal here carries more weight than in the self-table, not less.** The key mechanical detail: a reaction is queued *before* the opponent's action is known — the responder commits `own_response_id` each tick and it fires "when triggered" (§4.1), not in reaction to a specific, already-observed `opponent_action_id`. That means reaction *selection* can never condition on the specific incoming move — only on what the creature has learned about this opponent overall. The marginal over `own_response_id` (summed across every past encounter with this opponent, regardless of which move preceded it) already **is** that: since it aggregates over the opponent's actual historical action mix, a marginal built from real encounters implicitly reflects "how often does this opponent do each thing" without needing a separate predictive model of opponent behavior. A response that fares well against an opponent who mostly throws headshots will show that in the marginal even though the marginal was never told the opponent's tendency directly.
+
+This is a different (and stronger) justification than the self-table's: there, backoff is a *fallback* for when the pair is thin. Here, the pair dimension is largely unusable at decision time anyway (the opponent's move isn't known yet), so the marginal is close to the primary decision-relevant signal, not just a compensating mechanism for sparse data. Apply the same `marginal_table : curr_key -> {attempt_count, success_count}` shape as the self-table, keyed on `own_response_id`. Per the earlier saturation-constant resolution (§11.9/§11.10 above), this table already shares `combat_exp_n_sat`/`combat_exp_n_min` with the self-table — no new constants needed for the marginal either.
+
+**A related note, not a decision:** since selection can't act on the pair-specific `(opponent_action_id, own_response_id)` dimension until the opponent's move is revealed, the pair-level breakdown's main value for this table is record-keeping (and any future opponent-prediction model), rather than driving today's `combat_rank_score` directly. That's a bigger architectural question than this one and isn't being decided here — just flagged so a future reader isn't surprised the marginal ends up doing most of the practical work for this particular table.
+
+**Resolved — the novelty/proven lerp applies to the spatial overlay, via a generalized `trait_rank_bias` helper (not a spatial-specific formula).**
+
+Combat's existing `t = (change_stability + 100) / 200` (above) turns out to be a single-axis case of a more general pattern: a **primary trait axis** sets a base lerp position, and zero or more **secondary axes** modulate it, gated by how strongly the primary already leans toward its second pole. Generalizing to that shape — rather than writing bespoke math per table every time a new decision needs this bias — means combat and the spatial overlay share one function and differ only in configuration:
+
+```
+trait_rank_bias(traits: Dictionary, config: Dictionary, novelty_score: float, proven_score: float) -> float
+
+config = {
+    primary_axis : String   # e.g. "change_stability" or "explorer_builder"
+    modifiers    : Array    # [{axis: String, strength: float}, ...] — [] = none
+}
+
+primary    = traits[config.primary_axis] / 100.0   # -1 (first pole) .. +1 (second pole)
+base_t     = (primary + 1.0) / 2.0                  # 0 = first pole, 1 = second pole
+gate       = max(primary, 0.0)                       # only a second-pole lean gates modifiers — see rationale below
+
+modulation = 0.0
+for m in config.modifiers:
+    modulation += (traits[m.axis] / 100.0) * gate * m.strength
+
+t = clamp(base_t + modulation, 0.0, 1.0)
+return lerp(novelty_score, proven_score, t)
+```
+
+**Combat's config reproduces its existing formula exactly — nothing about combat's already-resolved behavior changes:** `{primary_axis: "change_stability", modifiers: []}` collapses `gate`/`modulation` to `0`, leaving `t = (change_stability + 100) / 200`.
+
+**Spatial overlay's config:** `{primary_axis: "explorer_builder", modifiers: [{axis: "change_stability", strength: spatial_cs_modulation}]}`. Walking the four cases discussed:
+- **Full Explorer** (`explorer_builder = -100`): `base_t = 0`, `gate = 0` → `t = 0` (full novelty) regardless of `change_stability` — an explorer's pull toward covering new ground isn't tempered by stability.
+- **Full Builder + full Stability**: `base_t = 1`, `gate = 1`; the modifier pushes further positive but clamps at `1` — the strongest proven/"tried-and-true" bias, matching a high-builder high-stability creature sticking with a known (even suboptimal) location and methods.
+- **Full Builder + full Change**: `base_t = 1`, `gate = 1`, `change_stability = -100` → `t = clamp(1 - spatial_cs_modulation, 0, 1)`. With a default like `0.5`, `t` lands near neutral — more proven-leaning than a pure explorer, but genuinely open to new optimization methods or relocating if a fundamentally better spot is found.
+- **Neutral `explorer_builder = 0`**: `gate = 0` → `t = 0.5` regardless of `change_stability` — stability alone doesn't move a creature with no explore/build lean.
+
+**`community_individual` and `compassion_self_interest` are not wired into either table's config.** The community-axis behavior raised in discussion — biasing toward leaving a location that only meets basic needs with no buffer for others — is a stay/leave resource-margin threshold, not a bias about *how* to engage with a known-vs-new position, so it doesn't belong in this lerp; it's flagged as a separate, out-of-scope mechanic. Both axes remain valid `modifiers` slots for some future decision that does have an established intuition for them — adding one later is a new `axis_config`, not a code change.
+
+<<Question: Default value for `spatial_cs_modulation` (strength of `change_stability`'s gated modulation on the spatial overlay's `explorer_builder`-primary lerp). TBD during a balance pass — `0.5` used above for illustration only.>>
+
+<<Question: Shared implementation shape — one pure module (`combat_experience_math.gd`, tentative row added to §2 planned-files table) exposing `rank_score(weight, attempt_count, success_count, marginal_attempt_count, marginal_success_count, change_stability, n_sat, n_min) -> float`, called by three separate table classes — or one generic table class parameterized per use (self / opponent / spatial)? Should be settled before §5 step 10 is implemented.>>
+
+**Resolved — tie-break / near-tie chaos (reuses V3 precedent):** `CREATURE_MOVEMENT_V3` already solves this class of problem for `blocked_objective_chaos` and `goal_consideration_chaos` (both default `0.15`, `0.0` disables) — "break symmetry with RNG" when scores tie **or are within a small epsilon after rounding." That's broader than a strict tie-break, and is reused here rather than inventing a new mechanism. Add `combat_rank_chaos` (config key, same naming convention as its V3 siblings): when two or more candidates' `combat_rank_score` values fall within an epsilon band of each other, apply light RNG jitter to decide among them instead of always resolving to the same winner.
+
+**Scope of what this does and does not fix:** `combat_rank_chaos` only perturbs choices between near-equal candidates — it does not help when the gap is large and persistent, which is exactly what a strongly Stability-leaning creature's `trait_rank_bias` is designed to produce (a wide, deliberate gap favoring the proven action over an untried one). `novelty_score` / `trait_rank_bias` narrows that gap; `combat_rank_chaos` only decides the outcome once the gap is already narrow.
+
+**A high-Stability creature persistently avoiding new actions is not, on its face, a bug.** Resistance to novelty is the intended personality expression of that trait axis, not an oversight. Do not add a stronger forced-exploration mechanism (Option B/C, or widening the chaos band to cover large gaps) preemptively. If playtesting shows this becomes a real problem (e.g. a newly-available action never gets exercised across a creature's entire lifetime, or populations never discover an objectively better tactic), address it then with a targeted mechanism — candidates include a decay term that erodes `weight`/`proven_score` over time when a pair goes unused, a wider or `stat_observation`-gated chaos band, or a hard floor forcing at least N trials of any newly-available action regardless of trait. Do not build any of these speculatively now.
+
+<<Question: Epsilon-band width for "near-tie" (e.g. within X% of the higher score, or an absolute delta?) and whether `combat_rank_chaos` shares the `0.15` default with `blocked_objective_chaos` / `goal_consideration_chaos` or is tuned independently, since `combat_rank_score` has a different scale/shape than motor cost or goal-weight scores. Default TBD during a balance pass.>>
+
+<<Question: Slot B's `delta_factor` (recent-trend bonus/penalty from `success_delta`) was dropped from this transplant for simplicity — no windowed trend signal exists at the pair level yet. Add a rolling-window trend term later, or intentionally omit it from the combat variant?>>
