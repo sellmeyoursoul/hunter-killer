@@ -4,6 +4,9 @@ class_name MemoryAdapter
 
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
+const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
+const _DeadEnd := preload("res://creature/motor/dead_end_memory.gd")
+const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
@@ -12,6 +15,8 @@ const FEASIBILITY_COARSE := 0.45
 const FEASIBILITY_LOCALE := 0.25
 
 var _beliefs: Dictionary = {}
+var _kind_profile: Dictionary = {}
+var _dead_end_marks: Array = []
 var _locale_store: RefCounted
 var _pack_root: String = ""
 var _traits: Dictionary = {}
@@ -37,9 +42,11 @@ func set_goal_catalog(goal_catalog: Dictionary) -> void:
   _goal_catalog = goal_catalog.duplicate(true) if typeof(goal_catalog) == TYPE_DICTIONARY else {}
 
 
-## Clears instance beliefs and locale rows — duel/session reset (6d.2 slice 0).
+## Clears instance beliefs, kind profile, dead-end marks, and locale rows.
 func reset() -> void:
   _beliefs.clear()
+  _kind_profile.clear()
+  _dead_end_marks.clear()
   if _locale_store != null and _locale_store.has_method(&"reset"):
     _locale_store.call(&"reset")
 
@@ -50,17 +57,20 @@ func sync_after_scan(food_split: Dictionary, threat_samples: Array, now_ms: int)
   _beliefs = _GoalBelief.sync_from_threat_samples(_beliefs, threat_samples, now_ms)
 
 
-## TTL, precise→coarse promotion, and cap eviction on stack-owned beliefs (§8.3).
+## TTL, precise→coarse promotion, cap eviction, and dead-end mark maintenance (§8.3).
 func maintain_beliefs(creature_pos: Vector3, now_ms: int, motor_v3: Dictionary) -> void:
   _beliefs = _GoalBelief.maintain(_beliefs, creature_pos, now_ms, motor_v3)
+  _dead_end_marks = _DeadEnd.maintain(_dead_end_marks, now_ms, motor_v3)
 
 
-## Records find_food locale prior after EAT outcome — stack store only (§6.2, §8.4).
+## Records find_food locale prior + kind EWMA after EAT outcome (§6.2, §8.4).
 func notify_food_consumption_outcome(
   food_anchor: Vector3,
   insufficient_yield: bool,
   motor_v3: Dictionary,
   env_grid: Variant = null,
+  stimulus_kind_id: StringName = &"",
+  calories_gained: int = 0,
 ) -> void:
   if _locale_store == null:
     return
@@ -81,6 +91,16 @@ func notify_food_consumption_outcome(
     _goal_catalog,
   )
   _locale_store.clear_salient_continuation()
+  if stimulus_kind_id != &"" and calories_gained > 0:
+    var normalized := _KindProfile.nutrition_yield_observation(
+      calories_gained, insufficient_yield, motor_v3
+    )
+    record_observation(
+      _LearnReg.TOPIC_NUTRITION_YIELD,
+      stimulus_kind_id,
+      normalized,
+      motor_v3,
+    )
 
 
 ## Returns the internal locale-prior store (salient writes land in 6d.2).
@@ -91,6 +111,88 @@ func get_locale_store() -> RefCounted:
 ## Returns a shallow copy of instance belief rows keyed by [code]instance_id[/code].
 func get_beliefs() -> Dictionary:
   return _beliefs.duplicate(true)
+
+
+func get_kind_profile() -> Dictionary:
+  return _KindProfile.duplicate_profile(_kind_profile)
+
+
+func get_dead_end_marks() -> Array:
+  return _dead_end_marks.duplicate(true)
+
+
+## EWMA kind-profile update per learn-topic registry (§5.7).
+func record_observation(
+  topic_id: StringName,
+  stimulus_kind_id: StringName,
+  value: float,
+  motor_v3: Dictionary,
+) -> void:
+  _kind_profile = _KindProfile.record_observation(
+    _kind_profile,
+    topic_id,
+    stimulus_kind_id,
+    value,
+    Time.get_ticks_msec(),
+    motor_v3,
+  )
+
+
+## Returns one kind facet value; neutral prior when unseen (§6.2).
+func consult_kind_facet(facet_key: StringName, stimulus_kind_id: StringName, motor_v3: Dictionary) -> float:
+  var neutral := float(motor_v3.get("kind_profile_neutral_prior", 0.5))
+  return _KindProfile.facet_value(_kind_profile, facet_key, stimulus_kind_id, neutral)
+
+
+## Records geographic cul-de-sac mark after blocked approach (§3 **B**).
+func record_dead_end_mark(
+  world_pos: Vector3,
+  approach_heading: Vector3,
+  goal_kind: StringName,
+  instance_id: int,
+  now_ms: int,
+) -> void:
+  _dead_end_marks = _DeadEnd.record_mark(
+    _dead_end_marks, world_pos, approach_heading, goal_kind, instance_id, now_ms
+  )
+
+
+## True when [param waypoint] matches a remembered dead-end for [param goal_kind].
+func is_waypoint_dead_end(
+  creature_pos: Vector3,
+  waypoint: Vector3,
+  goal_kind: StringName,
+  motor_v3: Dictionary,
+) -> bool:
+  return _DeadEnd.is_waypoint_blocked(
+    _dead_end_marks, creature_pos, waypoint, goal_kind, motor_v3
+  )
+
+
+## Clears dead-end marks after successful traverse near [param world_pos].
+func clear_dead_end_near(world_pos: Vector3, motor_v3: Dictionary) -> void:
+  _dead_end_marks = _DeadEnd.clear_near_success(_dead_end_marks, world_pos, motor_v3)
+
+
+## Increments passibility_fail_count on incumbent instance belief (§3 **C**).
+func increment_passibility_fail(instance_id: int, now_ms: int) -> void:
+  _beliefs = _GoalBelief.increment_passibility_fail(_beliefs, instance_id, now_ms)
+
+
+## Injects [code]kind_yield[/code] on live food entries from kind profile consult.
+func enrich_food_split_with_kind_yield(food_split: Dictionary, motor_v3: Dictionary) -> Dictionary:
+  var out := food_split.duplicate(true)
+  for key in ["ready", "unready"]:
+    var enriched: Array = []
+    for entry_v in out.get(key, []) as Array:
+      if typeof(entry_v) != TYPE_DICTIONARY:
+        continue
+      var entry: Dictionary = (entry_v as Dictionary).duplicate(true)
+      var kind_id: StringName = entry.get("stimulus_kind_id", &"")
+      entry["kind_yield"] = consult_kind_facet(_LearnReg.FACET_NUTRITION_YIELD, kind_id, motor_v3)
+      enriched.append(entry)
+    out[key] = enriched
+  return out
 
 
 ## Replaces instance beliefs — test harness only for 6d.1 read slices.
@@ -115,6 +217,8 @@ func seed_precise_food_belief(
     "consumable_now": consumable,
     "is_moving": false,
     "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": 0,
+    "last_passibility_fail_ms": 0,
   }
 
 
@@ -130,6 +234,8 @@ func seed_coarse_food_belief(instance_id: int, world_pos: Vector3, now_ms: int) 
     "consumable_now": true,
     "is_moving": false,
     "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": 0,
+    "last_passibility_fail_ms": 0,
   }
 
 
@@ -204,6 +310,7 @@ func consult_precise_food(
     "active": true,
     "pos": best_pos,
     "instance_id": best_iid,
+    "stimulus_kind_id": _beliefs.get(best_iid, {}).get("stimulus_kind_id", &""),
     "source": &"precise",
   }
 

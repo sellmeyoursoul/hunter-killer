@@ -148,6 +148,8 @@ static func _upsert_row(
       "last_merged_ms": 0,
       "is_moving": is_moving,
       "last_velocity": velocity,
+      "passibility_fail_count": 0,
+      "last_passibility_fail_ms": 0,
     }
   else:
     row["goal_kind"] = goal_kind
@@ -158,7 +160,24 @@ static func _upsert_row(
     row["consumable_now"] = consumable_now
     row["is_moving"] = is_moving
     row["last_velocity"] = velocity
+    row["passibility_fail_count"] = 0
+    row["last_passibility_fail_ms"] = 0
   beliefs[instance_id] = row
+
+
+## Increments passibility failure count on one belief row (§3 **C**).
+static func increment_passibility_fail(
+  beliefs: Dictionary,
+  instance_id: int,
+  now_ms: int,
+) -> Dictionary:
+  if instance_id == 0 or not beliefs.has(instance_id):
+    return beliefs
+  var row: Dictionary = beliefs[instance_id]
+  row["passibility_fail_count"] = int(row.get("passibility_fail_count", 0)) + 1
+  row["last_passibility_fail_ms"] = now_ms
+  beliefs[instance_id] = row
+  return beliefs
 
 
 ## Upsert beliefs for bushes seen this tick; returns updated belief table.
@@ -178,6 +197,8 @@ static func sync_from_scene(
         continue
       var pos: Vector3 = _read_pos_v3(ent.get("pos", Vector3.ZERO))
       _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, false, Vector3.ZERO, consumable)
+      if ent.has("stimulus_kind_id"):
+        beliefs[iid]["stimulus_kind_id"] = ent.get("stimulus_kind_id", &"")
       if ent.has("anticipated_calories"):
         beliefs[iid]["anticipated_calories"] = float(ent["anticipated_calories"])
   return beliefs

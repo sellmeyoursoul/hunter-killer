@@ -47,6 +47,11 @@ const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
 const _MotorPathFixture := preload("res://tests/motor_path_fixture.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
+const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
+const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
+const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
+const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
+const _BushFoodScr := preload("res://assets/plants/bush_food_3d.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -121,7 +126,9 @@ func _run_all() -> void:
   _test_creature_motor_v3_merge_defaults()
   _test_creature_pack_motor_overlays()
   _test_creature_motor_v3_pack_overlays()
+  _test_creature_motor_v3_playfield_distance_scale()
   _test_locomotion_executor_turn_facing()
+  _test_motor_planner_turn_alignment_no_flip_flop()
   await _test_locomotion_executor_move_forward()
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
@@ -151,6 +158,14 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_maintain_coarse_ttl()
   _test_creature_motor_stack_memory_eat_locale_write()
   _test_creature_motor_stack_memory_write_dual_isolation()
+  _test_creature_motor_stack_sated_stay()
+  _test_creature_motor_stack_debug_snapshot()
+  _test_creature_motor_stack_memory_kind_ewma()
+  _test_creature_motor_stack_memory_dead_end_filter()
+  _test_creature_motor_stack_memory_passibility_switch()
+  _test_creature_motor_stack_memory_blocked_objective()
+  await _test_creature_motor_stack_blocked_memory_writes()
+  _test_food_plant_missing_stimulus_kind_id()
   _test_goal_source_memory()
   _test_goal_kind_phase_c_replay()
   _test_creature_trait_usage_wiring()
@@ -692,6 +707,34 @@ func _test_creature_motor_v3_pack_overlays() -> void:
   var explicit_v3 := _PackRes.load_creature_motor_v3_overlay("res://assets/creatures/rabbit")
   _assert(not explicit_v3.is_empty(), "rabbit pack defines creature_motor_v3 block")
 
+
+func _test_creature_motor_v3_playfield_distance_scale() -> void:
+  var rabbit_v3 := _Merge.merge_creature_motor_v3_pack_overlay(
+    _Merge.default_creature_motor_v3_params(),
+    "res://assets/creatures/rabbit",
+  )
+  var expected_scale := 189.0 / _MotorPlane.REFERENCE_MOTOR_PLAYFIELD_EDGE
+  var scaled := _MotorPlane.scale_motor_distance_params(rabbit_v3, expected_scale)
+  _assert(
+    is_equal_approx(float(scaled.get("awareness_radius", 0.0)), 150.0 * expected_scale),
+    "v3 awareness_radius scales with playfield factor",
+  )
+  _assert(
+    is_equal_approx(float(scaled.get("flight_acute_panic_radius", 0.0)), 220.0 * expected_scale),
+    "v3 flight_acute_panic_radius scales with playfield factor",
+  )
+  var body := CharacterBody3D.new()
+  body.set_script(load("res://creature/capabilities/creature_kinematic_body_3d.gd"))
+  body.screen_size = Vector2(189.0, 189.0)
+  var pf := _MotorPlane.playfield_size_for_body(body, null)
+  _assert(is_equal_approx(pf.x, 189.0), "body screen_size drives playfield size for v3 scale")
+  var from_body := _MotorPlane.scale_creature_motor_v3_for_playfield(rabbit_v3, body, null)
+  _assert(
+    is_equal_approx(float(from_body.get("awareness_radius", 0.0)), 150.0 * expected_scale),
+    "scale_creature_motor_v3_for_playfield matches body screen_size",
+  )
+
+
 func _motor_v3_test_params() -> Dictionary:
   var p := _Merge.default_creature_motor_v3_params()
   p["awareness_radius"] = 500.0
@@ -1145,6 +1188,205 @@ func _test_creature_motor_stack_memory_write_dual_isolation() -> void:
   main.queue_free()
 
 
+func _test_creature_motor_stack_sated_stay() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.tick(1.0 / 60.0)
+  var outcome: ActionOutcome = stack.tick(1.0 / 60.0)
+  _assert(stack.get_incumbent().is_empty(), "sated creature clears incumbent when hub weights are zero")
+  _assert(int(outcome.action) == _MotorAction.STAY, "sated idle emits STAY")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_debug_snapshot() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.tick(1.0 / 60.0)
+  var snap: Dictionary = stack.get_debug_snapshot()
+  _assert(snap.has("action"), "debug snapshot includes action")
+  _assert(snap.has("step_source"), "debug snapshot includes step_source")
+  _assert(snap.has("physics_tick"), "debug snapshot includes physics_tick")
+  _assert(int(snap.get("physics_tick", 0)) >= 1, "debug snapshot reflects ticks after tick")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_kind_ewma() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  motor_p["kind_nutrition_yield_reference_calories"] = 5.0
+  _assert(
+    is_equal_approx(_KindProfile.nutrition_yield_observation(5, false, motor_p), 1.0),
+    "full reference bite normalizes nutrition_yield to 1.0",
+  )
+  adapter.notify_food_consumption_outcome(
+    Vector3.ZERO, false, motor_p, null, &"shrub_berries", 5
+  )
+  var v1 := adapter.consult_kind_facet(_LearnReg.FACET_NUTRITION_YIELD, &"shrub_berries", motor_p)
+  _assert(v1 > 0.5, "EAT notify raises nutrition_yield above neutral")
+  var split := {
+    "ready": [
+      {
+        "pos": Vector3(0.0, 0.0, -10.0),
+        "instance_id": 101,
+        "stimulus_kind_id": &"shrub_berries",
+        "kind_yield": v1,
+      },
+      {
+        "pos": Vector3(0.0, 0.0, -8.0),
+        "instance_id": 102,
+        "stimulus_kind_id": &"shrub_low",
+        "kind_yield": 0.3,
+      },
+    ],
+    "unready": [],
+  }
+  var best := _AwarenessScan.best_ready_food_target(split, Vector3.ZERO)
+  _assert(int(best.get("instance_id", 0)) == 101, "kind yield ranks higher-yield bush first")
+
+
+func _test_creature_motor_stack_memory_dead_end_filter() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  var now_ms := Time.get_ticks_msec()
+  adapter.record_dead_end_mark(
+    Vector3(0.0, 0.0, 20.0),
+    Vector3(0.0, 0.0, 1.0),
+    _GkReg.GK_FIND_FOOD,
+    0,
+    now_ms,
+  )
+  _assert(
+    adapter.is_waypoint_dead_end(Vector3.ZERO, Vector3(0.0, 0.0, 20.0), _GkReg.GK_FIND_FOOD, motor_p),
+    "dead-end mark blocks matching waypoint",
+  )
+  _assert(
+    not adapter.is_waypoint_dead_end(Vector3.ZERO, Vector3(20.0, 0.0, 0.0), _GkReg.GK_FIND_FOOD, motor_p),
+    "dead-end mark ignores orthogonal waypoint",
+  )
+
+
+func _test_creature_motor_stack_memory_passibility_switch() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  motor_p["passibility_fail_switch_threshold"] = 2
+  adapter.seed_precise_food_belief(42, Vector3(10.0, 0.0, 10.0), Time.get_ticks_msec())
+  adapter.increment_passibility_fail(42, Time.get_ticks_msec())
+  adapter.increment_passibility_fail(42, Time.get_ticks_msec())
+  var ctx := {
+    "memory_adapter": adapter,
+    "creature_pos": Vector3.ZERO,
+    "food_split": {"ready": [], "unready": []},
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  var res := _BlockedObjective.resolve(ctx, 42, &"shrub_berries", motor_p)
+  _assert(
+    res.get("action", &"") != _BlockedObjective.ACTION_PERSIST or float(res.get("instance_score", 1.0)) < 0.5,
+    "passibility_fail_count biases away from persist",
+  )
+
+
+func _test_creature_motor_stack_memory_blocked_objective() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  adapter.seed_locale_prior_for_test(10, 10, 2.0)
+  var ctx := {
+    "memory_adapter": adapter,
+    "creature_pos": Vector3.ZERO,
+    "food_split": {"ready": [], "unready": []},
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": _motor_stack_test_env_grid(),
+  }
+  var res := _BlockedObjective.resolve(ctx, 99, &"shrub_low", motor_p)
+  _assert(res.has("action"), "blocked objective resolver returns action")
+  _assert(
+    res.get("action") in [_BlockedObjective.ACTION_PERSIST, _BlockedObjective.ACTION_SWITCH, _BlockedObjective.ACTION_SEEK],
+    "blocked objective action is persist switch or seek",
+  )
+
+
+func _test_creature_motor_stack_blocked_memory_writes() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(0.5, 4.0, 4.0)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  wall.add_child(col)
+  wall.collision_layer = 1
+  wall.collision_mask = 1
+  main.add_child(wall)
+  wall.global_position = Vector3(1.2, 1.0, 0.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 10.0
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  await physics_frame
+  var motor_p := _motor_v3_test_params()
+  motor_p["dead_end_record_min_blocked_ticks"] = 1
+  var stack := _CreatureMotorStack.new()
+  stack.configure(body, null, motor_p, "", {})
+  body.set_use_v3_action_calories(true)
+  body.set_motor_stack_drives_physics(true)
+  body.set_control_mode(_ControlMode.engine_as_int())
+  const FOOD_IID := 88001
+  stack.set_live_scan_for_test({
+    "food_split": {
+      "ready": [{
+        "pos": Vector3(5.0, 1.0, 0.0),
+        "instance_id": FOOD_IID,
+        "stimulus_kind_id": &"shrub_berries",
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+      }],
+      "unready": [],
+    },
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  })
+  stack.tick(1.0 / 60.0)
+  var wrote_memory := false
+  for _i in 40:
+    stack.tick(1.0 / 60.0)
+    await physics_frame
+    var adapter: _MemoryAdapter = stack.get_memory_adapter()
+    var beliefs: Dictionary = adapter.get_beliefs()
+    if beliefs.has(FOOD_IID):
+      var row: Dictionary = beliefs[FOOD_IID]
+      if int(row.get("passibility_fail_count", 0)) >= 1:
+        wrote_memory = true
+        break
+    if adapter.get_dead_end_marks().size() >= 1:
+      wrote_memory = true
+      break
+    if stack.get_planner_blocked_objective_action() != &"":
+      wrote_memory = true
+      break
+  _assert(wrote_memory, "stack blocked move writes passibility, dead-end, or §9 action")
+  main.queue_free()
+
+
+func _test_food_plant_missing_stimulus_kind_id() -> void:
+  var plant := Node3D.new()
+  plant.set_script(_BushFoodScr)
+  plant.set("stimulus_kind_id", &"")
+  plant.name = "BadBush"
+  root.add_child(plant)
+  await process_frame
+  _assert(not is_instance_valid(plant) or not plant.is_inside_tree(), "missing stimulus_kind_id plant is removed")
+  if is_instance_valid(plant):
+    plant.queue_free()
+
+
 func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
   var floor_body := StaticBody3D.new()
   var floor_col := CollisionShape3D.new()
@@ -1178,6 +1420,69 @@ func _test_locomotion_executor_turn_facing() -> void:
     is_equal_approx(end_facing.length_squared(), 1.0),
     "facing stays normalized after turns",
   )
+  main.queue_free()
+
+func _test_motor_planner_turn_alignment_no_flip_flop() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var remembered := Vector3(-20.0, 1.0, 0.0)
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(88099, remembered, now_ms)
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 0,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": now_ms,
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  _assert(state.get("step_source", &"") == &"precise", "planner uses precise step source for fixed goal")
+  var actions: Array[int] = []
+  var saw_move := false
+  for _i in 8:
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      break
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+  _assert(saw_move, "planner emits MOVE_FORWARD within 8 ticks for 180 deg misalignment")
+  var turn_actions: Array[int] = []
+  for act in actions:
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      turn_actions.append(act)
+  _assert(turn_actions.size() >= 1, "planner turns before moving toward fixed precise goal")
+  var first_turn: int = turn_actions[0]
+  for act in turn_actions:
+    _assert(
+      act == first_turn,
+      "all pre-move turns share one direction (no TURN_L/TURN_R flip-flop)",
+    )
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "no adjacent opposite turn pair while step goal is fixed")
   main.queue_free()
 
 func _test_locomotion_executor_move_forward() -> void:
@@ -2044,6 +2349,10 @@ func _test_hunter_killer_debug_project_settings() -> void:
   _assert(
     ProjectSettings.has_setting("hunter_killer_debug/use_ship_motor_profile"),
     "project defines hunter_killer_debug/use_ship_motor_profile",
+  )
+  _assert(
+    ProjectSettings.has_setting("hunter_killer_debug/draw_motor_planner_hud"),
+    "project defines hunter_killer_debug/draw_motor_planner_hud",
   )
   # This is an editor-only QA toggle whose value is a per-developer choice, so assert it is
   # a defined boolean rather than pinning a specific state (see game_config_merge.use_ship_motor_profile).

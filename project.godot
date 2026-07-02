@@ -36,6 +36,7 @@ version_control/autoload_on_startup=true
 
 use_ship_motor_profile=true
 draw_awareness=true
+draw_motor_planner_hud=true
 
 [input]
 

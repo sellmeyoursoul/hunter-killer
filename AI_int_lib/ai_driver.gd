@@ -394,6 +394,13 @@ func get_debug_motor_params_for_body(body: Node) -> Dictionary:
   return _creature_motor_params_for_body(body)
 
 
+## Scaled [code]creature_motor_v3[/code] for debug overlay — matches V3 stack perception ([CREATURE_MOVEMENT_V3.md §8.1](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+func get_debug_motor_v3_params_for_body(body: Node) -> Dictionary:
+  if body == null:
+    return {}
+  return _creature_motor_v3_params_for_body(body)
+
+
 func get_armed_handshake_user() -> String:
   return _ARMED_HANDSHAKE_USER
 
@@ -478,6 +485,33 @@ func _creature_motor_params_for_body(body: Node) -> Dictionary:
     playfield = _viewport_playfield_size(body)
   var dist_scale := _MotorPlane.motor_distance_scale_for_main(_main, playfield)
   return _MotorPlane.scale_motor_distance_params(motor_p, dist_scale)
+
+
+func _creature_motor_v3_params_for_body(body: Node) -> Dictionary:
+  var motor_v3: Dictionary = _Merge.default_creature_motor_v3_params()
+  var g := get_node_or_null("/root/GameConfig")
+  if g != null and g.has_method(&"get_creature_motor_v3_params"):
+    motor_v3 = g.call(&"get_creature_motor_v3_params") as Dictionary
+  var def_v: Variant = _MotorPlane.definition_for_body(body)
+  if def_v != null and def_v is Resource:
+    var def_res := def_v as Resource
+    if def_res.get_script() == _CreatureDefinition:
+      var pack_v: Variant = def_res.get("asset_pack_root")
+      var pack_root := str(pack_v).strip_edges() if pack_v != null else ""
+      if not pack_root.is_empty():
+        if g != null and g.has_method(&"get_creature_motor_v3_params_for_pack"):
+          motor_v3 = g.call(&"get_creature_motor_v3_params_for_pack", pack_root) as Dictionary
+        else:
+          motor_v3 = _Merge.merge_creature_motor_v3_pack_overlay(
+            motor_v3.duplicate(true),
+            pack_root,
+          )
+  var ss: Variant = body.get("screen_size")
+  var playfield := ss as Vector2 if typeof(ss) == TYPE_VECTOR2 else Vector2.ZERO
+  if playfield == Vector2.ZERO:
+    playfield = _viewport_playfield_size(body)
+  var dist_scale := _MotorPlane.motor_distance_scale_for_main(_main, playfield)
+  return _MotorPlane.scale_motor_distance_params(motor_v3, dist_scale)
 
 
 func _live_perception_params() -> Dictionary:

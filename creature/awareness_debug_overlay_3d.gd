@@ -3,6 +3,7 @@ extends Node3D
 ## Under herbivore Body: gated live + ghost mob samples ([method AiDriver.get_debug_motor_mobs_snapshot]).
 ## Under carnivore Body: prey positions inside carnivore reach ([method AiDriver.get_debug_carnivore_prey_snapshot]).
 ## Enable via Project Settings [code]hunter_killer_debug/draw_awareness[/code], or press **F9** in debug builds.
+## Geometry uses scaled [code]creature_motor_v3[/code] — same as [code]CreatureMotorStack[/code] live scan.
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PLAYING_STATE: int = 2
@@ -59,16 +60,35 @@ func _awareness_debug_allowed(ad: Node) -> bool:
 
 
 func _motor_params_for_parent(ad: Node, par: Node) -> Dictionary:
-  if par != null and ad != null and ad.has_method(&"get_debug_motor_params_for_body"):
-    var pack_motor: Variant = ad.call("get_debug_motor_params_for_body", par)
+  if par != null and ad != null and ad.has_method(&"get_debug_motor_v3_params_for_body"):
+    var pack_motor: Variant = ad.call("get_debug_motor_v3_params_for_body", par)
     if typeof(pack_motor) == TYPE_DICTIONARY:
       return pack_motor as Dictionary
   var gc := get_node_or_null("/root/GameConfig")
-  if gc != null and gc.has_method(&"get_creature_motor_params"):
-    var global_motor: Variant = gc.call("get_creature_motor_params")
-    if typeof(global_motor) == TYPE_DICTIONARY:
-      return global_motor as Dictionary
+  if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
+    var global_v3: Variant = gc.call("get_creature_motor_v3_params")
+    if typeof(global_v3) == TYPE_DICTIONARY and par != null:
+      var main: Node = get_tree().current_scene if is_inside_tree() else null
+      var playfield := _playfield_size_for_overlay(par, main)
+      var dist_scale := _MotorPlane.motor_distance_scale_for_main(main, playfield)
+      return _MotorPlane.scale_motor_distance_params(global_v3 as Dictionary, dist_scale)
   return {}
+
+
+## Playfield bounds for overlay fallback when [code]AiDriver[/code] debug params are unavailable.
+func _playfield_size_for_overlay(body: Node, main: Node) -> Vector2:
+  var ss: Variant = body.get("screen_size")
+  if typeof(ss) == TYPE_VECTOR2:
+    var pf := ss as Vector2
+    if pf.x > 0.0 and pf.y > 0.0:
+      return pf
+  if main != null and main.has_method(&"get_motor_playfield_size"):
+    var mps: Variant = main.call(&"get_motor_playfield_size")
+    if typeof(mps) == TYPE_VECTOR2:
+      var mv := mps as Vector2
+      if mv.x > 0.0 and mv.y > 0.0:
+        return mv
+  return Vector2.ZERO
 
 
 ## Builds a flat sector mesh on the XZ plane at local [param lift].

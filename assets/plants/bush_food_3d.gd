@@ -17,6 +17,10 @@ var _player_visit_locked: bool = false
 
 func _ready() -> void:
   add_to_group(&"food_plants")
+  if stimulus_kind_id == &"":
+    OLog.error("bush_food_3d missing stimulus_kind_id on %s — fix scene before spawn" % name, false, "FoodPlant")
+    queue_free()
+    return
   _ready_visual = get_node_or_null("Visual/ReadyVisual") as Node3D
   if _ready_visual == null:
     _ready_visual = get_node_or_null("ReadyVisual") as Node3D
@@ -86,7 +90,7 @@ func try_grant_engine_creature(body: Node3D) -> int:
   if body == null or not body.has_method(&"add_calories_from_food"):
     return 0
   var grant: int = maxi(0, max_calories)
-  body.call(&"add_calories_from_food", grant, global_position)
+  body.call(&"add_calories_from_food", grant, global_position, stimulus_kind_id)
   current_calories = 0.0
   _refresh_visual()
   calories_changed.emit()
@@ -157,7 +161,7 @@ func _try_grant_pickup(body: Node3D) -> void:
   if not body.has_method(&"add_calories_from_food"):
     return
   var grant: int = maxi(0, max_calories)
-  body.call(&"add_calories_from_food", grant, global_position)
+  body.call(&"add_calories_from_food", grant, global_position, stimulus_kind_id)
   current_calories = 0.0
   _player_visit_locked = true
   _refresh_visual()

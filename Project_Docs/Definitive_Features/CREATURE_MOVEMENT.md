@@ -451,7 +451,9 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 | Obstacles | `obstacles` + plant static bodies | Sample points filtered by awareness radius | repulsion + strategy |
 | Environment grid | `Main.environment_grid` | Cell at predicted point | player ENGINE interior cost |
 
-**Debug (3D):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`.
+**Debug (3D):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`. Draws scaled **`creature_motor_v3`** zone geometry (same playfield distance scale as [`CreatureMotorStack`](../../creature/motor/creature_motor_stack.gd) via [`motor_plane.gd`](../../creature/motor/motor_plane.gd) `scale_creature_motor_v3_for_playfield`).
+
+**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Shows last action, incumbent, `step_source`, scan counts per creature.
 
 ---
 

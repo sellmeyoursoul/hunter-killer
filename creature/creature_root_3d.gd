@@ -5,6 +5,7 @@ class_name CreatureRoot3D
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 const _CreatureMotorStack := preload("res://creature/motor/creature_motor_stack.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 var _motor_stack: RefCounted
 
@@ -44,6 +45,8 @@ func configure_motor_stack() -> void:
   var vitals := get_node_or_null("Vitals")
   var pack_root := str(definition.get("asset_pack_root")).strip_edges()
   var motor_v3 := _merged_creature_motor_v3(pack_root)
+  var main: Node = get_tree().current_scene if is_inside_tree() else null
+  motor_v3 = _MotorPlane.scale_creature_motor_v3_for_playfield(motor_v3, body, main)
   if _motor_stack == null:
     _motor_stack = _CreatureMotorStack.new()
   var catalog := _GkReg.goal_kind_catalog_for_pack(pack_root)
@@ -67,8 +70,13 @@ func reset_motor_memory() -> void:
     _motor_stack.call(&"reset_memory")
 
 
-## EAT outcome locale write — routes to this creature's stack adapter (§6.2).
-func notify_food_consumption_outcome(food_anchor: Vector2, insufficient_yield: bool = false) -> void:
+## EAT outcome locale write + kind EWMA — routes to this creature's stack adapter (§6.2).
+func notify_food_consumption_outcome(
+  food_anchor: Vector2,
+  insufficient_yield: bool = false,
+  stimulus_kind_id: StringName = &"",
+  calories_gained: int = 0,
+) -> void:
   if _motor_stack == null:
     return
   if _motor_stack.has_method(&"notify_food_consumption_outcome"):
@@ -76,6 +84,8 @@ func notify_food_consumption_outcome(food_anchor: Vector2, insufficient_yield: b
       &"notify_food_consumption_outcome",
       Vector3(food_anchor.x, 0.0, food_anchor.y),
       insufficient_yield,
+      stimulus_kind_id,
+      calories_gained,
     )
 
 

@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://d0hahp21scs4a" path="res://hud.gd" id="1_64ctp"]
 [ext_resource type="FontFile" uid="uid://dmnv4rxtk5c2s" path="res://fonts/Xolonium-Regular.ttf" id="2_8sq4i"]
+[ext_resource type="Script" path="res://creature/motor/motor_planner_debug_hud.gd" id="3_motor_dbg"]
 
 [sub_resource type="InputEventAction" id="InputEventAction_64ctp"]
 action = &"start_game"
@@ -115,6 +116,40 @@ grow_horizontal = 0
 theme_override_fonts/font = ExtResource("2_8sq4i")
 theme_override_font_sizes/font_size = 28
 text = ""
+horizontal_alignment = 2
+
+[node name="MotorPlannerDebugHud" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("3_motor_dbg")
+
+[node name="HerbivoreLabel" type="Label" parent="MotorPlannerDebugHud"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 64.0
+offset_right = 520.0
+offset_bottom = 220.0
+theme_override_fonts/font = ExtResource("2_8sq4i")
+theme_override_font_sizes/font_size = 18
+text = "Herb motor"
+
+[node name="CarnivoreLabel" type="Label" parent="MotorPlannerDebugHud"]
+layout_mode = 0
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -520.0
+offset_top = 64.0
+offset_right = -16.0
+offset_bottom = 220.0
+grow_horizontal = 0
+theme_override_fonts/font = ExtResource("2_8sq4i")
+theme_override_font_sizes/font_size = 18
+text = "Carn motor"
 horizontal_alignment = 2
 
 [node name="MessageTimer" type="Timer" parent="." unique_id=1993260872]

@@ -236,7 +236,11 @@ func was_defeated_by_starvation() -> bool:
   return _starvation_fired
 
 
-func add_calories_from_food(amount: int, food_anchor: Variant = Vector2.ZERO) -> void:
+func add_calories_from_food(
+  amount: int,
+  food_anchor: Variant = Vector2.ZERO,
+  stimulus_kind_id: StringName = &"",
+) -> void:
   current_calories = _CreatureVitalsMath.add_food_clamped(current_calories, amount, caloric_needs)
   _push_calories_to_vitals()
   var anchor2 := Vector2.ZERO
@@ -252,7 +256,13 @@ func add_calories_from_food(amount: int, food_anchor: Variant = Vector2.ZERO) ->
   if _motor_stack_drives_physics:
     var creature_root := get_parent()
     if creature_root != null and creature_root.has_method(&"notify_food_consumption_outcome"):
-      creature_root.call(&"notify_food_consumption_outcome", anchor2, insufficient)
+      creature_root.call(
+        &"notify_food_consumption_outcome",
+        anchor2,
+        insufficient,
+        stimulus_kind_id,
+        amount,
+      )
       return
   var ad := get_node_or_null("/root/AiDriver")
   if ad == null or not ad.has_method(&"notify_food_consumption_outcome"):

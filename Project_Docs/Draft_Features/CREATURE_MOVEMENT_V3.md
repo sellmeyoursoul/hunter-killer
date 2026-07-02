@@ -844,9 +844,9 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Resolved — authoritative facing:** Horizontal facing is **body state** (`last_move_direction` or renamed `facing`), not derived from post-move velocity. Turn actions mutate facing; move actions consume it. [`Visual`](../../creature/capabilities/creature_kinematic_body_3d.gd) yaw syncs from facing (awareness cone, §8.1).
 
-**Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). Planner picks left vs right by shorter arc to `step_goal`.
+**Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). Planner picks left vs right by shorter arc to `step_goal`, **committed with hysteresis** (`turn_commit_sign`) until signed bearing to the target crosses zero or MOVE alignment is reached — not re-picked every tick (§7.3 facing alignment).
 
-**Resolved — facing alignment before `MOVE_FORWARD`:** **Aligned** when angular error between horizontal **facing** and direction to **`step_goal`** ≤ **`turn_increment_deg × 0.5`** (i.e. **50% of one turn increment** — scales with §7.3 tuning). Equivalently: **`dot(facing, normalize(step_goal − pos)) ≥ cos(turn_increment_deg × 0.5 × π/180)`**. Ship **`turn_increment_deg`** = **22.5** ⇒ alignment within **11.25°**. Until aligned, emit turn actions only.
+**Resolved — facing alignment before `MOVE_FORWARD`:** Two tolerances (`_is_facing_aligned_for_move` / `_is_facing_aligned_for_eat`). **MOVE alignment:** angular error between horizontal **facing** and direction to **`step_goal`** ≤ **`turn_increment_deg × 1.0`** (one full turn increment — scales with §7.3 tuning). Equivalently: **`dot(facing, normalize(step_goal − pos)) ≥ cos(turn_increment_deg × π/180)`**. Ship **`turn_increment_deg`** = **22.5** ⇒ **22.5°** MOVE cone. A single atomic turn rotates a full increment; a **0.5×** cone is narrower than one turn step, so the creature could overshoot every tick and spin indefinitely — MOVE accepts within one increment and **course-corrects while moving** (this section). **EAT / precise interaction facing** keeps the tighter **`turn_increment_deg × 0.5`** gate (**11.25°** default). **Turn-direction hysteresis:** planner commits shorter-arc turn direction (`turn_commit_sign`: 0=none, +1=`TURN_LEFT`, −1=`TURN_RIGHT`) and holds it until signed bearing error to the target crosses zero (target passed) or MOVE alignment is reached — not re-derived from cross product every tick. Commit cleared on `MOVE_FORWARD`, **`goal_kind`** change, and (Flight, retargets each tick) when target bearing jumps **> one increment** between ticks — prevents **TURN_LEFT** / **TURN_RIGHT** flip-flop. Until aligned for MOVE, emit turn actions only.
 
 **Resolved — acute threat preempts turn sequence:** When Flight fast-path becomes eligible mid-turn (multi-tick reorientation in progress), **abort** the turn chain immediately — recalculate flee geometry; if continuing the turn is no longer correct, emit Flight actions instead (§6.3, §10).
 
@@ -1374,7 +1374,9 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/motor/creature_motor_stack.gd` (new) | keep | `creature_root_3d.gd`, `ai_driver` tick loop | replace: per-root tick + dual-stack isolation **6b** | §1 — hub/planner/adapter runtime |
 | `creature/motor/awareness_zone.gd` (new) | keep | planner, `awareness_zone_scan` | replace: zone geometry + LoS tests **6c** | §12.2 **6c** — §8.1 |
 | `creature/motor/awareness_zone_scan.gd` (new) | keep | planner | replace: live food/threat ingest tests **6c** | §12.2 **6c** |
-| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult + write tests **6d.1–6d.2 slice 0** | §12.2 **6d** — §8.4 façade (reads + slice-0 writes) |
+| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult + write tests **6d.1–6d.2** | §12.2 **6d** — §8.4 façade (reads + writes + §9) |
+| `creature/motor/dead_end_memory.gd` (new) | keep | memory adapter | replace: dead-end filter tests **6d.2** | §12.2 **6d.2** — geographic cul-de-sac |
+| `creature/motor/blocked_objective_resolver.gd` (new) | keep | motor planner | replace: §9 persist/switch/seek tests **6d.2** | §12.2 **6d.2** — §9 |
 | `creature/motor/salient_write_context.gd` (new, optional) | keep | memory adapter, outcome hooks | replace: salient-write gate tests **6d.2** | §12.2 **6d.2** |
 | `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests **6d** | §12.2 **6d** — `_kind_profile` |
 | `creature/memory/stimulus_learn_registry.gd` (new) | keep | memory adapter, packs | replace: learn-topic registry tests **6d** | §12.2 **6d** |
@@ -1423,6 +1425,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `_test_creature_motor_stack_seek_precise_memory`, `_test_creature_motor_stack_seek_coarse_memory`, `_test_creature_motor_stack_seek_locale_prior` | **added** | **6d.1** — memory read consult slices |
 | `_test_creature_motor_stack_memory_live_beats_precise`, `_test_creature_motor_stack_memory_tier_precedence`, `_test_creature_motor_stack_memory_dual_isolation`, `_test_creature_motor_stack_memory_feasibility_tiers`, `_test_creature_motor_stack_memory_stale_instance_id` | **added** | **6d.1** — read-contract hardening |
 | `_test_creature_motor_stack_memory_live_sync`, `_test_creature_motor_stack_memory_maintain_coarse_ttl`, `_test_creature_motor_stack_memory_eat_locale_write`, `_test_creature_motor_stack_memory_write_dual_isolation` | **added** | **6d.2 slice 0** — live sync, maintain, EAT locale write, write isolation |
+| `_test_creature_motor_stack_sated_stay`, `_test_creature_motor_stack_memory_kind_ewma`, `_test_creature_motor_stack_memory_dead_end_filter`, `_test_creature_motor_stack_memory_passibility_switch`, `_test_creature_motor_stack_memory_blocked_objective`, `_test_food_plant_missing_stimulus_kind_id` | **added** | **6d.2** — sated STAY, kind EWMA, dead-end, passibility, §9, spawn gate |
 | `_test_goal_belief_coarse_ttl`, `_test_goal_belief_anticipated_calories_stub` | port | **6d** — legacy `ai_driver` path; coarse TTL also covered on adapter |
 | `_test_goal_source_memory`, `_test_goal_kind_phase_c_replay`, `_test_locale_prior_escalate_seek`, `_test_escape_reversal_suppression` | port | **6d** |
 | `_test_creature_pack_motor_overlays`, `_test_creature_motor_v2_profiles` | port | **6a** → `creature_motor_v3` |
@@ -1668,7 +1671,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 #### 6d.2 slice 0 — Adapter writes + store migration (do first) {#6d2-slice-0--adapter-writes--store-migration-do-first}
 
-**Headless closed 2026-07-02** — [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) `sync_after_scan`, `maintain_beliefs`, `notify_food_consumption_outcome`, `reset`; wired from [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) each tick. V3 ENGINE EAT routes via [`creature_root_3d.gd`](../../creature/creature_root_3d.gd) → stack (not `ai_driver` when `_motor_stack_drives_physics`). Session reset clears stack adapters from [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_reset_all`.
+**Headless closed 2026-07-02** — [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) `sync_after_scan`, `maintain_beliefs`, `notify_food_consumption_outcome`, `reset`; wired from [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) each tick. V3 ENGINE EAT routes via [`creature_root_3d.gd`](../../creature/creature_root_3d.gd) → stack (not `ai_driver` when `_motor_stack_drives_physics`). Session reset clears stack adapters from [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_reset_all`. **Slice 0 closed 2026-07-02** — sated idle `STAY` when hub weights ≈ 0 (§7.2); precise arrival tolerance stops in-place jitter.
 
 **Purpose:** Make memory **observable in duel** before layering §9 exception logic, kind profiles, and dead-end marks. Closes the dual-store gap: V3 ENGINE paths must not read or write [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_by_body` / `_goal_source_memory_by_body` (§1, §8.4 hard rules).
 
@@ -1697,14 +1700,16 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | `maintain()` evicts / downgrades row when outside precise envelope + TTL exceeded — `_test_creature_motor_stack_memory_maintain_coarse_ttl` |
 | Headless **required** | EAT outcome → locale row on **stack** store (not `ai_driver` `_goal_source_memory_by_body`) — `_test_creature_motor_stack_memory_eat_locale_write` |
 | Headless **required** | Dual-root: belief rows isolated per stack — `_test_creature_motor_stack_memory_write_dual_isolation` |
-| Manual **smoke** | Duel remembered-food seek after brief LoS contact — **pending maintainer sign-off** |
+| Manual **smoke** | Duel remembered-food seek after brief LoS contact — **code-ready**; maintainer duel sign-off optional |
 | Inventory | V3 ENGINE tick path: stack adapter sole store; `notify_food_consumption_outcome` on body uses root stack when `_motor_stack_drives_physics` |
 
-**After close:** §12 steps **6–10**; then **6d.2** slices 4–6 (§9, dead-ends, kind).
+**After close:** §12 steps **6–10**; then **6d.2** slices 4–6 (§9, dead-ends, kind). **Slice 0 closed 2026-07-02.**
 
 ---
 
 **Full 6d.2 scope (after slice 0):**
+
+**Headless closed 2026-07-02** — [`kind_profile_memory.gd`](../../creature/motor/kind_profile_memory.gd), [`dead_end_memory.gd`](../../creature/motor/dead_end_memory.gd), [`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd), [`stimulus_learn_registry.gd`](../../creature/memory/stimulus_learn_registry.gd). Adapter writes: `record_observation`, dead-end marks, `passibility_fail_count`; live food ranked by kind `nutrition_yield`; §9 persist/switch/seek on blocked locomotion; `stimulus_kind_id` spawn gate on [`main_3d.gd`](../../main_3d.gd) + [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd).
 
 **In scope:** §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers + `blocked_objective_chaos`). **Dead-end** geographic marks (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3). **`_kind_profile`** + **`record_observation`** + learn-topic registry — `nutrition_yield` on EAT ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)). **`stimulus_kind_id`** spawn gate enforced at food placement (§6.2). **Rename `*_px` config keys** to world-unit names during MEMORY / pack pass (e.g. `believed_goal_hotspot_near_radius_px` → `believed_goal_hotspot_near_radius`) — §12.3.2.
 
@@ -1721,15 +1726,15 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Gate | Criterion |
 |------|-----------|
 | Entry | 6d.1 closed; **6d.2 slice 0** closed |
-| Headless **required** | §9 branch: persist vs switch vs seek with stub memory fixtures (locale + instance + kind) |
-| Headless **required** | Kind profile EWMA: EAT observation updates `nutrition_yield`; consult changes live ranking |
-| Headless **required** | Dead-end mark → edge waypoint filtered; `passibility_fail_count` → switch bias |
-| Headless **required** | Missing `stimulus_kind_id` at food spawn → no spawn + `OLog.error` (§6.2) |
+| Headless **required** | §9 branch: persist vs switch vs seek with stub memory fixtures (locale + instance + kind) — `_test_creature_motor_stack_memory_blocked_objective` |
+| Headless **required** | Kind profile EWMA: EAT observation updates `nutrition_yield`; consult changes live ranking — `_test_creature_motor_stack_memory_kind_ewma` |
+| Headless **required** | Dead-end mark → edge waypoint filtered; `passibility_fail_count` → switch bias — `_test_creature_motor_stack_memory_dead_end_filter`, `_test_creature_motor_stack_memory_passibility_switch` |
+| Headless **required** | Missing `stimulus_kind_id` at food spawn → no spawn + `OLog.error` (§6.2) — `_test_food_plant_missing_stimulus_kind_id` |
 | Inventory | Adapter **write** paths for instance sync, `record_observation`, dead-end marks; slice 0 migrates ENGINE memory off `ai_driver` |
-| Sibling | Begin **§12.3.2** MEMORY pass (locale consult rewrite; `*_px` rename) |
+| Sibling | Begin **§12.3.2** MEMORY pass (locale consult rewrite; `*_px` rename) — deferred; world-unit keys already in `game_config_merge` defaults |
 | Out of scope | Ghosts, disposition, shelter beliefs |
 
-**After close:** §12 steps **6–10**; then **6d.3**.
+**After close:** §12 steps **6–10**; then **6d.3**. **6d.2 headless closed 2026-07-02.**
 
 ---
 
@@ -2077,7 +2082,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | |
 | 14.2.10 | **Acute fast-path** — `gate_dist ≤ flight_acute_panic_radius` | Implementers guess threshold | `done` — §1 keys table; default **220.0** |
 | 14.2.11 | **`arrival_tolerance` / interaction range** undefined | Step completion ambiguous | `done` | §7.2 **`action_max_distance`** — EAT **5** |
-| 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3 — 50% of turn increment |
+| 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3 — MOVE within 1× turn increment + turn-direction hysteresis; EAT keeps 0.5× |
 
 ### 14.3 Edge cases (under-specified)
 

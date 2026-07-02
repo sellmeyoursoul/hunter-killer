@@ -97,6 +97,14 @@ func get_herbivore_motor_body() -> Node:
   return _herb_body
 
 
+func get_herbivore_creature_root() -> Node3D:
+  return _herbivore_root
+
+
+func get_carnivore_creature_root() -> Node3D:
+  return _carnivore_root
+
+
 ## Baked ground-elevation grid for rim spawn placement and terrain-aware motor (null when invalid).
 func get_ground_sampler() -> PlayfieldGroundSampler:
   return _ground_sampler
@@ -604,14 +612,33 @@ func _ensure_food_plants() -> void:
     if _solid_shrub_scene == null:
       break
     var s: Node3D = _solid_shrub_scene.instantiate() as Node3D
+    if not _validate_food_plant_kind_id(s):
+      s.queue_free()
+      continue
     _food_root.add_child(s)
     s.global_position = _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
   for frac in open_fracs:
     if _open_shrub_scene == null:
       break
     var o: Node3D = _open_shrub_scene.instantiate() as Node3D
+    if not _validate_food_plant_kind_id(o):
+      o.queue_free()
+      continue
     _food_root.add_child(o)
     o.global_position = _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
+
+
+func _validate_food_plant_kind_id(plant: Node) -> bool:
+  var kind_v: Variant = plant.get("stimulus_kind_id")
+  var kind_id := &""
+  if typeof(kind_v) == TYPE_STRING_NAME:
+    kind_id = kind_v as StringName
+  elif typeof(kind_v) == TYPE_STRING and not str(kind_v).strip_edges().is_empty():
+    kind_id = StringName(str(kind_v).strip_edges())
+  if kind_id == &"":
+    OLog.error("Food plant spawn blocked — missing stimulus_kind_id on %s" % plant.name, false, "Main3D")
+    return false
+  return true
 
 
 func _reset_food_plants() -> void:

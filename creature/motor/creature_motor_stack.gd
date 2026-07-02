@@ -37,6 +37,7 @@ var _use_scan_test_override: bool = false
 var _env_grid_test_override: Variant = null
 var _use_env_grid_test_override: bool = false
 var _memory_adapter: _MemoryAdapter
+var _last_outcome: _ActionOutcome
 
 
 ## Wires body, vitals, merged [code]creature_motor_v3[/code], and goal catalog at spawn.
@@ -50,6 +51,8 @@ func configure(
   _body = body
   _vitals = vitals
   _motor_v3 = motor_v3.duplicate(true)
+  if body != null:
+    _motor_v3["caloric_needs_hint"] = maxf(1.0, float(body.get("caloric_needs")))
   _pack_root = str(pack_root).strip_edges()
   _goal_catalog = goal_catalog.duplicate(true) if typeof(goal_catalog) == TYPE_DICTIONARY else {}
   _stat_observation = _resolve_stat_observation()
@@ -86,9 +89,18 @@ func tick(delta: float) -> _ActionOutcome:
   var planner_ctx := _build_planner_context(ctx, delta)
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
   var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(_body, action, delta, _motor_v3)
+  _last_outcome = outcome
   if int(outcome.action) == _MotorAction.EAT:
     _try_complete_eat()
   _MotorPlanner.note_outcome(_planner_state, _body, outcome, _motor_v3, _physics_tick_count)
+  if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
+    if _memory_adapter != null:
+      _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
+  elif outcome != null and outcome.blocked:
+    var blocked_ctx := _build_planner_context(ctx, delta)
+    _MotorPlanner.apply_blocked_objective_resolution(
+      blocked_ctx, _planner_state, _body, _motor_v3
+    )
   _apply_gravity_if_stationary(action, delta)
   _clamp_playfield_if_needed()
   return outcome
@@ -126,6 +138,63 @@ func get_planner_step_source() -> StringName:
   return _planner_state.get("step_source", &"")
 
 
+func get_planner_blocked_objective_action() -> StringName:
+  return _planner_state.get("blocked_objective_action", &"")
+
+
+## Read-only motor planner snapshot for duel debug HUD ([code]motor_planner_debug_hud.gd[/code]).
+func get_debug_snapshot() -> Dictionary:
+  var ps := _planner_state.duplicate(true)
+  var step_goal: Vector3 = ps.get("step_goal", Vector3.ZERO)
+  var ready: Array = _food_split.get("ready", [])
+  var action_label := "?"
+  var blocked := false
+  if _last_outcome != null:
+    action_label = _motor_action_debug_label(int(_last_outcome.action))
+    blocked = _last_outcome.blocked
+  return {
+    "action": action_label,
+    "blocked": blocked,
+    "calorie_ratio": _calorie_ratio(),
+    "incumbent_goal": str(_incumbent.get("goal_kind", "")),
+    "incumbent_weight": float(_incumbent.get("weight", 0.0)),
+    "goal_kind": str(ps.get("goal_kind", "")),
+    "step_source": str(ps.get("step_source", "")),
+    "step_goal_xz": Vector2(step_goal.x, step_goal.z),
+    "step_instance_id": int(ps.get("step_instance_id", 0)),
+    "stimulus_kind_id": str(ps.get("step_stimulus_kind_id", "")),
+    "blocked_objective_action": str(ps.get("blocked_objective_action", "")),
+    "consecutive_blocked": int(ps.get("consecutive_blocked", 0)),
+    "physics_tick": _physics_tick_count,
+    "consideration_interval": _consideration_interval,
+    "flight_fast_path": _flight_fast_path_active,
+    "ready_food": ready.size(),
+    "threat_count": _threat_samples.size(),
+    "incumbent_empty": _incumbent.is_empty(),
+  }
+
+
+## Short debug label for a [MotorAction] id ([code]-1[/code] → [code]"?"[/code]).
+func _motor_action_debug_label(act: int) -> String:
+  match act:
+    _MotorAction.TURN_LEFT:
+      return "TURN_L"
+    _MotorAction.TURN_RIGHT:
+      return "TURN_R"
+    _MotorAction.MOVE_FORWARD:
+      return "MOVE_F"
+    _MotorAction.MOVE_BACKWARD:
+      return "MOVE_B"
+    _MotorAction.STAY:
+      return "STAY"
+    _MotorAction.REST:
+      return "REST"
+    _MotorAction.EAT:
+      return "EAT"
+    _:
+      return "?"
+
+
 func get_memory_adapter() -> _MemoryAdapter:
   return _memory_adapter
 
@@ -136,8 +205,13 @@ func reset_memory() -> void:
     _memory_adapter.reset()
 
 
-## Records find_food locale prior after EAT — routes to this stack's adapter (§6.2).
-func notify_food_consumption_outcome(food_anchor: Vector3, insufficient_yield: bool = false) -> void:
+## Records find_food locale prior + kind EWMA after EAT — routes to this stack's adapter (§6.2).
+func notify_food_consumption_outcome(
+  food_anchor: Vector3,
+  insufficient_yield: bool = false,
+  stimulus_kind_id: StringName = &"",
+  calories_gained: int = 0,
+) -> void:
   if _memory_adapter == null:
     return
   _memory_adapter.notify_food_consumption_outcome(
@@ -145,6 +219,8 @@ func notify_food_consumption_outcome(food_anchor: Vector3, insufficient_yield: b
     insufficient_yield,
     _motor_v3,
     _resolve_environment_grid(),
+    stimulus_kind_id,
+    calories_gained,
   )
 
 
@@ -209,6 +285,8 @@ func _apply_scan_dict(scan: Dictionary) -> void:
   var split: Variant = scan.get("food_split", {})
   if typeof(split) == TYPE_DICTIONARY:
     _food_split = (split as Dictionary).duplicate(true)
+  if _memory_adapter != null:
+    _food_split = _memory_adapter.enrich_food_split_with_kind_yield(_food_split, _motor_v3)
   if scan.has("food_map_confidence"):
     _food_map_confidence = float(scan.get("food_map_confidence", _food_map_confidence))
   if scan.has("threat_samples") and not _threat_samples_test_override:
@@ -345,6 +423,10 @@ func _run_consideration(ctx: Dictionary) -> void:
   _active_goals = scored
   var winner := _MotorGoalHub.pick_winner(scored, _motor_v3)
   if winner.is_empty():
+    _incumbent = {}
+    return
+  var weight_eps := 1e-4
+  if float(winner.get("weight", 0.0)) <= weight_eps:
     _incumbent = {}
     return
   if _incumbent.get("goal_kind", &"") != winner.get("goal_kind", &""):

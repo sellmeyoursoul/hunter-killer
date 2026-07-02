@@ -107,16 +107,24 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   return he_xy
 
 
-## Multiplier for legacy reference-playfield-tuned motor distances when [param main] reports world-meter playfield bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
-static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -> float:
-  if main == null or not main.has_method(&"get_motor_playfield_size"):
-    return 1.0
+## Multiplier for reference-playfield-tuned motor distances from [param playfield_size] world bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
+static func motor_distance_scale_for_playfield(playfield_size: Vector2) -> float:
   if playfield_size.x <= 0.0 or playfield_size.y <= 0.0:
     return 1.0
   var long_edge := maxf(playfield_size.x, playfield_size.y)
   if long_edge >= REFERENCE_MOTOR_PLAYFIELD_EDGE * 0.25:
     return 1.0
   return minf(playfield_size.x, playfield_size.y) / REFERENCE_MOTOR_PLAYFIELD_EDGE
+
+
+## Multiplier using [param playfield_size] when set, else [param main] [code]get_motor_playfield_size()[/code].
+static func motor_distance_scale_for_main(main: Node, playfield_size: Vector2) -> float:
+  var pf := playfield_size
+  if pf == Vector2.ZERO and main != null and main.has_method(&"get_motor_playfield_size"):
+    var mps: Variant = main.call(&"get_motor_playfield_size")
+    if typeof(mps) == TYPE_VECTOR2:
+      pf = mps as Vector2
+  return motor_distance_scale_for_playfield(pf)
 
 
 ## Scales distance-like [code]creature_motor[/code] keys for 3D world units ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
@@ -128,6 +136,36 @@ static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Di
         out[key] = float(out[key]) * scale
   _inject_cardinal_probe_mins(out, scale)
   return out
+
+
+## Playfield size from duel body [code]screen_size[/code] or [param main] [code]get_motor_playfield_size()[/code].
+static func playfield_size_for_body(body: Node, main: Node = null) -> Vector2:
+  if body != null:
+    var ss: Variant = body.get("screen_size")
+    if typeof(ss) == TYPE_VECTOR2:
+      var pf := ss as Vector2
+      if pf.x > 0.0 and pf.y > 0.0:
+        return pf
+  if main == null and body != null and body.is_inside_tree():
+    main = body.get_tree().current_scene
+  if main != null and main.has_method(&"get_motor_playfield_size"):
+    var mps: Variant = main.call(&"get_motor_playfield_size")
+    if typeof(mps) == TYPE_VECTOR2:
+      var mv := mps as Vector2
+      if mv.x > 0.0 and mv.y > 0.0:
+        return mv
+  return Vector2.ZERO
+
+
+## Scales [code]creature_motor_v3[/code] distance keys to match playfield world units (overlay + V3 stack).
+static func scale_creature_motor_v3_for_playfield(motor_v3: Dictionary, body: Node, main: Node = null) -> Dictionary:
+  if motor_v3.is_empty():
+    return motor_v3
+  if main == null and body != null and body.is_inside_tree():
+    main = body.get_tree().current_scene
+  var playfield := playfield_size_for_body(body, main)
+  var scale := motor_distance_scale_for_main(main, playfield)
+  return scale_motor_distance_params(motor_v3, scale)
 
 
 ## Playfield-scaled cardinal lookahead floors ([code]cardinal_avoidance.gd[/code] stuck / edge escape).
@@ -148,6 +186,8 @@ static func _is_distance_motor_param_key(key: Variant) -> bool:
     "interior_env_near_mob",
     "calorie_cost_per_unit_moved",
     "motor_stuck_move_epsilon",
+    "eat_action_max_distance",
+    "arrival_tolerance",
   ]:
     return true
   for suffix in [
