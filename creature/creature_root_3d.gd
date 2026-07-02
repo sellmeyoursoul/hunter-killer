@@ -61,6 +61,28 @@ func motor_stack_tick(delta: float) -> ActionOutcome:
   return _motor_stack.tick(delta) as ActionOutcome
 
 
+## Stack-owned memory reset — called on duel/session teardown (6d.2 slice 0).
+func reset_motor_memory() -> void:
+  if _motor_stack != null and _motor_stack.has_method(&"reset_memory"):
+    _motor_stack.call(&"reset_memory")
+
+
+## EAT outcome locale write — routes to this creature's stack adapter (§6.2).
+func notify_food_consumption_outcome(food_anchor: Vector2, insufficient_yield: bool = false) -> void:
+  if _motor_stack == null:
+    return
+  if _motor_stack.has_method(&"notify_food_consumption_outcome"):
+    _motor_stack.call(
+      &"notify_food_consumption_outcome",
+      Vector3(food_anchor.x, 0.0, food_anchor.y),
+      insufficient_yield,
+    )
+
+
+func get_motor_stack() -> RefCounted:
+  return _motor_stack
+
+
 func get_motor_body() -> CharacterBody3D:
   var body := get_node_or_null("Body")
   return body as CharacterBody3D if body is CharacterBody3D else null

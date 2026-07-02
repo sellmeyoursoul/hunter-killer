@@ -31,6 +31,11 @@ const _NAME_TO_ACTION := {
 }
 
 
+## True when [param act] is a defined [enum Action] id (TURN_LEFT..EAT).
+static func is_valid_action(act: int) -> bool:
+  return act >= int(Action.TURN_LEFT) and act <= int(Action.EAT)
+
+
 ## Coerces [param action] ([code]int[/code] or [code]StringName[/code]) to [enum Action]; [code]-1[/code] when unknown.
 static func normalize(action: Variant) -> int:
   if typeof(action) == TYPE_INT:

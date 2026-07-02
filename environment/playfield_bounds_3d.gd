@@ -75,7 +75,7 @@ static func _accumulate_collision_shape(cs: CollisionShape3D, acc: Array) -> voi
   var sh: Shape3D = cs.shape
   if sh == null:
     return
-  var xf: Transform3D = cs.global_transform
+  var xf: Transform3D = _node_global_transform(cs)
   if sh is BoxShape3D:
     _accumulate_box(xf, (sh as BoxShape3D).size, acc)
   elif sh is SphereShape3D:
@@ -95,10 +95,11 @@ static func _accumulate_mesh_instance(mi: MeshInstance3D, acc: Array) -> void:
   var local_aabb := mesh.get_aabb()
   var corners := _box_corners_local(local_aabb.size)
   var origin := local_aabb.position
+  var mi_xf := _node_global_transform(mi)
   var mn: Vector3 = acc[0]
   var mx: Vector3 = acc[1]
   for c in corners:
-    var w: Vector3 = mi.global_transform * (origin + c)
+    var w: Vector3 = mi_xf * (origin + c)
     mn.x = minf(mn.x, w.x)
     mn.y = minf(mn.y, w.y)
     mn.z = minf(mn.z, w.z)
@@ -176,6 +177,22 @@ static func _accumulate_capsule(xf: Transform3D, radius: float, height: float, a
 
 static func _accumulate_cylinder(xf: Transform3D, radius: float, height: float, acc: Array) -> void:
   _accumulate_capsule(xf, radius, height, acc)
+
+
+## Global transform for bounds walks — uses scene graph when not yet in-tree (headless fixtures).
+static func _node_global_transform(node: Node3D) -> Transform3D:
+  if node.is_inside_tree():
+    return node.global_transform
+  var chain: Array[Node3D] = []
+  var cur: Node = node
+  while cur is Node3D:
+    chain.append(cur as Node3D)
+    cur = cur.get_parent()
+  chain.reverse()
+  var xf := Transform3D.IDENTITY
+  for n in chain:
+    xf = xf * n.transform
+  return xf
 
 
 ## Maps a normalized playfield fraction ([code]0..1[/code] on XZ) to a grounded world position.

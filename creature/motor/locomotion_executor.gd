@@ -7,6 +7,8 @@ const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 
 const _BLOCKED_DISPLACEMENT_FRAC := 0.15
+## Min forward progress (world units) along intent before a move is considered to have advanced.
+const _BLOCKED_PROGRESS_EPS := 0.001
 
 
 ## Applies [param action] to [param body] for one tick; debits calories on the body when supported.
@@ -68,19 +70,14 @@ static func _displace_along_facing(
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
-  var intent := facing * sign
-  var expected := _expected_horizontal_speed(body) * delta
+  var intent := (facing * sign).normalized()
   if body.has_method(&"apply_horizontal_move_intent"):
     body.call(&"apply_horizontal_move_intent", intent, delta)
   else:
     var spd := _expected_horizontal_speed(body)
     body.velocity = Vector3(intent.x * spd, body.velocity.y, intent.z * spd)
     body.move_and_slide()
-  var travelled := Vector2(
-    body.global_position.x - pos_before.x,
-    body.global_position.z - pos_before.z,
-  ).length()
-  return _is_move_blocked(body, travelled, expected)
+  return _is_move_blocked(body, intent, pos_before)
 
 
 static func _expected_horizontal_speed(body: CharacterBody3D) -> float:
@@ -91,10 +88,20 @@ static func _expected_horizontal_speed(body: CharacterBody3D) -> float:
   return maxf(0.0, float(body.get("speed")))
 
 
-static func _is_move_blocked(body: CharacterBody3D, travelled: float, expected: float) -> bool:
-  if expected <= 1e-6:
+## Blocked when the body hits a wall opposing [param intent_dir] and made negligible progress along it.
+## Collision-driven so open-floor moves (no wall contact) are never flagged blocked, independent of physics delta.
+static func _is_move_blocked(body: CharacterBody3D, intent_dir: Vector3, pos_before: Vector3) -> bool:
+  var moved := body.global_position - pos_before
+  moved.y = 0.0
+  var progress := moved.dot(intent_dir)
+  if progress > _BLOCKED_PROGRESS_EPS:
     return false
-  var negligible := travelled < expected * _BLOCKED_DISPLACEMENT_FRAC
-  if not negligible:
+  if not body.is_on_wall():
     return false
-  return body.is_on_wall() or body.get_last_slide_collision() != null
+  var normal := body.get_wall_normal()
+  if normal.length_squared() < 1e-8:
+    return true
+  var flat_normal := Vector3(normal.x, 0.0, normal.z)
+  if flat_normal.length_squared() < 1e-8:
+    return false
+  return flat_normal.normalized().dot(intent_dir) < -_BLOCKED_DISPLACEMENT_FRAC

@@ -1,0 +1,20 @@
+WARNING: Property agent_radius is ceiled to cell_size voxel units and loses precision.
+   at: generator_bake_from_source_geometry_data (modules/navigation_3d/3d/nav_mesh_generator_3d.cpp:373)
+WARNING: skip _test_escape_reversal_suppression — V3 Step 3 stub; port at §12.2 6d
+   at: push_warning (core/variant/variant_utility.cpp:1033)
+   GDScript backtrace (most recent call first):
+       [0] _test_escape_reversal_suppression (res://tests/run_all.gd:1239)
+       [1] _run_all (res://tests/run_all.gd:143)
+       [2] _test_creature_motor_stack_seek_live_food (res://tests/run_all.gd:742)
+WARNING: skip _test_seek_wall_filter_and_backtrack — cardinal seek removed Step 3; port at §12.2 6c
+   at: push_warning (core/variant/variant_utility.cpp:1033)
+   GDScript backtrace (most recent call first):
+       [0] _test_seek_wall_filter_and_backtrack (res://tests/run_all.gd:2110)
+       [1] _run_all (res://tests/run_all.gd:188)
+       [2] _test_line_of_sight_wall_occlusion (res://tests/run_all.gd:1672)
+WARNING: 3 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2535)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: 1 resources still in use at exit.
+   at: clear (core/io/resource.cpp:817)

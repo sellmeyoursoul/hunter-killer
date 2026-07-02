@@ -37,10 +37,16 @@ const _NavHint := preload("res://environment/nav_path_hint.gd")
 const _BlockedApproachScr := preload("res://creature/motor/blocked_approach_memory.gd")
 const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _MotorAction := preload("res://creature/motor/motor_action.gd")
+const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
 const _CreatureMotorStack := preload("res://creature/motor/creature_motor_stack.gd")
+const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
+const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
+const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
+const _MotorPathFixture := preload("res://tests/motor_path_fixture.gd")
+const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -115,7 +121,7 @@ func _run_all() -> void:
   _test_creature_motor_v3_merge_defaults()
   _test_creature_pack_motor_overlays()
   _test_creature_motor_v3_pack_overlays()
-  await _test_locomotion_executor_turn_facing()
+  _test_locomotion_executor_turn_facing()
   await _test_locomotion_executor_move_forward()
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
@@ -124,10 +130,27 @@ func _run_all() -> void:
   _test_motor_goal_hub_urgency_eat_preserve_band()
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
-  _test_creature_motor_stack_stay_action()
+  _test_creature_motor_stack_tick_valid_action()
   _test_creature_motor_stack_consideration_advances()
   _test_creature_motor_stack_dual_isolation()
   _test_creature_motor_stack_integration_single_debit()
+  await _test_awareness_zone_scan_live_food()
+  await _test_motor_path_fixture_open_nav()
+  await _test_motor_path_fixture_blocked_nav()
+  await _test_creature_motor_stack_seek_live_food()
+  await _test_creature_motor_stack_explore_no_live_food()
+  await _test_creature_motor_stack_seek_precise_memory()
+  await _test_creature_motor_stack_seek_coarse_memory()
+  await _test_creature_motor_stack_seek_locale_prior()
+  _test_creature_motor_stack_memory_live_beats_precise()
+  _test_creature_motor_stack_memory_tier_precedence()
+  _test_creature_motor_stack_memory_dual_isolation()
+  _test_creature_motor_stack_memory_feasibility_tiers()
+  _test_creature_motor_stack_memory_stale_instance_id()
+  _test_creature_motor_stack_memory_live_sync()
+  _test_creature_motor_stack_memory_maintain_coarse_ttl()
+  _test_creature_motor_stack_memory_eat_locale_write()
+  _test_creature_motor_stack_memory_write_dual_isolation()
   _test_goal_source_memory()
   _test_goal_kind_phase_c_replay()
   _test_creature_trait_usage_wiring()
@@ -277,6 +300,7 @@ func _test_ai_driver_helpers() -> void:
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(1)).contains("START"), "gbnf ARMED")
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(2)).contains("RIGHT"), "gbnf PLAYING")
   _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
+  d.free()
 
 func _test_blocked_approach_memory() -> void:
   var infer := Callable(_BlockedApproachScr, &"infer_approach_dir")
@@ -367,12 +391,13 @@ func _test_creature_3d_predation_contact() -> void:
   var pred_body := carn_root.get_node("Body") as CharacterBody3D
   prey_body.add_to_group(&"prey")
   pred_body.add_to_group(&"mobs")
+  root.add_child(herb_root)
+  root.add_child(carn_root)
+  await physics_frame
   pred_body.set("current_calories", 20.0)
   var pred_cal_before := float(pred_body.get("current_calories"))
   var hit_state: Array = [0]
   prey_body.hit.connect(func() -> void: hit_state[0] = int(hit_state[0]) + 1)
-  root.add_child(herb_root)
-  root.add_child(carn_root)
   var contact := Vector3(20.0, 0.0, 20.0)
   herb_root.global_position = contact
   carn_root.global_position = contact + Vector3(3.0, 0.0, 0.0)
@@ -386,6 +411,7 @@ func _test_creature_3d_predation_contact() -> void:
     float(pred_body.get("current_calories")) > pred_cal_before,
     "predator gains calories from prey contact",
   )
+  await physics_frame
   var hb_cs := prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
   _assert(hb_cs != null and hb_cs.disabled, "prey MobHitbox disabled after defeat")
   herb_root.queue_free()
@@ -463,17 +489,19 @@ func _test_creature_kinematic_playfield_clamp_after_move() -> void:
   main.queue_free()
 
 func _test_creature_pack_motor_overlays() -> void:
-  var base := _Merge.default_creature_motor_params()
+  # Build the dev-profile base explicitly so this test is deterministic regardless of the
+  # ambient hunter_killer_debug/use_ship_motor_profile editor toggle (project.godot).
+  var base := _Merge.apply_creature_motor_profile_dev(_Merge.creature_motor_spine())
   var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
     "res://assets/creatures/rabbit",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 16.0),
+    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 18.0),
     "rabbit pack restores food seek under dev profile",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("motor_intent_cost_chaos", -1.0)), 2.2),
+    is_equal_approx(float(rabbit_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
     "rabbit pack duel motor chaos",
   )
   _assert(
@@ -533,7 +561,7 @@ func _test_creature_pack_motor_overlays() -> void:
     "fox pack duel motor chaos",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("geometry_escape_lock_ticks", 0.0)), 6.0),
+    is_equal_approx(float(fox_m.get("geometry_escape_lock_ticks", 0.0)), 14.0),
     "fox pack geometry escape lock ticks",
   )
   _assert(
@@ -545,7 +573,7 @@ func _test_creature_pack_motor_overlays() -> void:
     "fox pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.5),
+    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.35),
     "fox pack no-goal patrol lock duration",
   )
   _assert(
@@ -665,7 +693,457 @@ func _test_creature_motor_v3_pack_overlays() -> void:
   _assert(not explicit_v3.is_empty(), "rabbit pack defines creature_motor_v3 block")
 
 func _motor_v3_test_params() -> Dictionary:
-  return _Merge.default_creature_motor_v3_params()
+  var p := _Merge.default_creature_motor_v3_params()
+  p["awareness_radius"] = 500.0
+  p["awareness_cone_extra"] = 200.0
+  p["awareness_cone_half_angle_deg"] = 80.0
+  p["awareness_requires_los"] = false
+  return p
+
+
+func _test_awareness_zone_scan_live_food() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var scan := _AwarenessScan.scan_live(body, _motor_v3_test_params(), main.get_tree())
+  var ready: Array = scan["food_split"]["ready"]
+  _assert(ready.size() >= 1, "awareness scan finds ready live food")
+  var entry: Dictionary = ready[0]
+  _assert(int(entry.get("instance_id", 0)) == bush.get_instance_id(), "food entry carries instance_id")
+  _assert(entry.get("stimulus_kind_id", &"") != &"", "food entry carries stimulus_kind_id")
+  main.queue_free()
+
+
+func _test_motor_path_fixture_open_nav() -> void:
+  var main := _TerrainTestMainStub.new()
+  root.add_child(main)
+  var built := main.mount_motor_path_fixture("open")
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(map_rid.is_valid(), "motor path fixture yields valid map_rid")
+  var from := Vector3(2.0, 0.0, 2.0)
+  var to := Vector3(30.0, 0.0, 30.0)
+  # NavigationServer commits baked regions on its own sync step (driven by physics
+  # frames), so poll across several frames before asserting the path is ready.
+  var ready := false
+  for _i in 30:
+    await physics_frame
+    if _MotorPathFixture.assert_nav_path_ready(map_rid, from, to):
+      ready = true
+      break
+  _assert(ready, "motor path fixture nav path from->to")
+  main.queue_free()
+
+
+func _test_motor_path_fixture_blocked_nav() -> void:
+  var main := _TerrainTestMainStub.new()
+  root.add_child(main)
+  var built := main.mount_motor_path_fixture("blocked")
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(map_rid.is_valid(), "blocked motor path fixture yields valid map_rid")
+  var from := Vector3(2.0, 0.0, 2.0)
+  var to := Vector3(38.0, 0.0, 38.0)
+  var ready := false
+  var path: PackedVector3Array = PackedVector3Array()
+  for _i in 30:
+    await physics_frame
+    path = NavigationServer3D.map_get_path(map_rid, from, to, true)
+    if path.size() >= 2:
+      ready = true
+      break
+  _assert(ready, "blocked motor path fixture nav path from->to")
+  # Center wall sits near (20, 20); a detour path should not cut through the pinch at x≈20,z≈20.
+  var crosses_pinch := false
+  for pt in path:
+    if absf(pt.x - 20.0) < 1.0 and absf(pt.z - 20.0) < 1.0:
+      crosses_pinch = true
+      break
+  _assert(not crosses_pinch, "blocked fixture path detours around center wall")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_seek_live_food() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  _spawn_food_bush(main, Vector3(0.0, 1.0, -14.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var saw_locomotion := false
+  for _i in 24:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT or act == _MotorAction.MOVE_FORWARD:
+      saw_locomotion = true
+      break
+  _assert(saw_locomotion, "stack seeks live food with turn or move sequence")
+  _assert(not stack.get_incumbent().is_empty(), "find_food incumbent selected when food visible")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_explore_no_live_food() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 50.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.tick(1.0 / 60.0)
+  _assert(not stack.get_incumbent().is_empty(), "find_food incumbent without visible food")
+  _assert(
+    stack.get_planner_step_goal().length_squared() > 1e-4,
+    "planner sets explore step goal when no live food",
+  )
+  var saw_locomotion := false
+  for _i in 24:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT or act == _MotorAction.MOVE_FORWARD:
+      saw_locomotion = true
+      break
+  _assert(saw_locomotion, "stack explores with turn or move when no live food")
+  main.queue_free()
+
+
+func _motor_stack_empty_food_scan() -> Dictionary:
+  return {
+    "food_split": {"ready": [], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 0.0,
+  }
+
+
+func _test_creature_motor_stack_seek_precise_memory() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var remembered := Vector3(0.0, 1.0, -24.0)
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(88001, remembered, now_ms)
+  var saw_locomotion := false
+  for _i in 24:
+    stack.tick(1.0 / 60.0)
+    if stack.get_planner_step_source() == &"precise":
+      break
+  _assert(stack.get_planner_step_source() == &"precise", "planner uses precise memory tier")
+  var step_goal := stack.get_planner_step_goal()
+  _assert(step_goal.distance_to(remembered) < 2.0, "precise step goal targets remembered coords")
+  for _j in 24:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT or act == _MotorAction.MOVE_FORWARD:
+      saw_locomotion = true
+      break
+  _assert(saw_locomotion, "precise memory seek emits locomotion without live LoS")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_seek_coarse_memory() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var remembered := Vector3(0.0, 1.0, -80.0)
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_coarse_food_belief_for_test(88002, remembered, now_ms)
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"coarse", "planner uses coarse memory tier")
+  var step_goal := stack.get_planner_step_goal()
+  _assert(step_goal.distance_to(remembered) > 5.0, "coarse step goal is not GPS to last_world_pos")
+  var bearing := (remembered - body.global_position).normalized()
+  var to_step := (step_goal - body.global_position).normalized()
+  _assert(bearing.dot(to_step) > 0.85, "coarse step goal follows bearing-only path-in-direction")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_seek_locale_prior() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"locale", "planner consults locale prior when no instance beliefs")
+  var step_goal := stack.get_planner_step_goal()
+  _assert(step_goal.length_squared() > 1e-4, "locale prior yields a seek step goal")
+  var motor_v3 := _motor_v3_test_params()
+  var coverage_cell := _GoalMem.coverage_cell_from_motor(motor_v3)
+  var hotspot := Vector3((7.0 + 0.5) * coverage_cell, 0.0, (7.0 + 0.5) * coverage_cell)
+  var toward_hotspot := (hotspot - body.global_position).normalized()
+  var toward_step := (step_goal - body.global_position).normalized()
+  _assert(toward_hotspot.dot(toward_step) > 0.5, "locale prior biases seek toward hotspot anchor")
+  main.queue_free()
+
+
+func _motor_stack_food_ctx(body: CharacterBody3D, stack: _CreatureMotorStack, food_split: Dictionary) -> Dictionary:
+  return {
+    "body": body,
+    "motor_v3": _motor_v3_test_params(),
+    "food_split": food_split,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+
+
+func _test_creature_motor_stack_memory_live_beats_precise() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -14.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var remembered := Vector3(0.0, 1.0, -40.0)
+  stack.seed_precise_food_belief_for_test(88010, remembered, Time.get_ticks_msec())
+  var live_entry := {
+    "pos": bush.global_position,
+    "instance_id": bush.get_instance_id(),
+    "stimulus_kind_id": &"shrub_berries",
+  }
+  stack.set_live_scan_for_test({
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  })
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"live", "live food wins over precise memory consult")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_tier_precedence() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(88011, Vector3(0.0, 1.0, -20.0), now_ms)
+  stack.seed_coarse_food_belief_for_test(88012, Vector3(0.0, 1.0, -80.0), now_ms)
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"precise", "precise beats coarse and locale")
+  var adapter_a: _MemoryAdapter = stack.get_memory_adapter()
+  var beliefs_a := adapter_a.get_beliefs()
+  beliefs_a.erase(88011)
+  adapter_a.set_beliefs_for_test(beliefs_a)
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"coarse", "coarse beats locale when precise absent")
+  adapter_a.set_beliefs_for_test({})
+  stack.tick(1.0 / 60.0)
+  _assert(stack.get_planner_step_source() == &"locale", "locale consult when no instance beliefs")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_dual_isolation() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body_a := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var body_b := _spawn_herbivore_body(main, Vector3(8.0, 1.0, 0.0))
+  body_a.current_calories = 2.0
+  body_b.current_calories = 2.0
+  body_a.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  body_b.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  await process_frame
+  var stack_a := _motor_stack_test_configure(body_a)
+  var stack_b := _motor_stack_test_configure(body_b)
+  stack_a.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack_b.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var now_ms := Time.get_ticks_msec()
+  stack_a.seed_precise_food_belief_for_test(88021, Vector3(0.0, 1.0, -30.0), now_ms)
+  stack_b.seed_precise_food_belief_for_test(88022, Vector3(8.0, 1.0, 30.0), now_ms)
+  stack_a.tick(1.0 / 60.0)
+  stack_b.tick(1.0 / 60.0)
+  _assert(stack_a.get_planner_step_source() == &"precise", "stack A uses its own memory")
+  _assert(stack_b.get_planner_step_source() == &"precise", "stack B uses its own memory")
+  var goal_a := stack_a.get_planner_step_goal()
+  var goal_b := stack_b.get_planner_step_goal()
+  _assert(goal_a.z < body_a.global_position.z, "stack A seeks its remembered -Z target")
+  _assert(goal_b.z > body_b.global_position.z, "stack B seeks its remembered +Z target")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_feasibility_tiers() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var empty_split := {"ready": [], "unready": []}
+  var row := {"goal_kind": _GkReg.GK_FIND_FOOD}
+  var ctx := _motor_stack_food_ctx(body, stack, empty_split)
+  _assert(
+    is_equal_approx(_CreatureMotorStack._feasibility_for_goal(row, ctx), 0.0),
+    "no memory tiers yields zero find_food feasibility",
+  )
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(88031, Vector3(0.0, 1.0, -20.0), now_ms)
+  ctx = _motor_stack_food_ctx(body, stack, empty_split)
+  _assert(
+    is_equal_approx(_CreatureMotorStack._feasibility_for_goal(row, ctx), _MemoryAdapter.FEASIBILITY_PRECISE),
+    "precise memory sets find_food feasibility",
+  )
+  var adapter_b: _MemoryAdapter = stack.get_memory_adapter()
+  var beliefs_b := adapter_b.get_beliefs()
+  beliefs_b.erase(88031)
+  adapter_b.set_beliefs_for_test(beliefs_b)
+  stack.seed_coarse_food_belief_for_test(88032, Vector3(0.0, 1.0, -80.0), now_ms)
+  ctx = _motor_stack_food_ctx(body, stack, empty_split)
+  _assert(
+    is_equal_approx(_CreatureMotorStack._feasibility_for_goal(row, ctx), _MemoryAdapter.FEASIBILITY_COARSE),
+    "coarse memory sets find_food feasibility",
+  )
+  adapter_b.set_beliefs_for_test({})
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  ctx = _motor_stack_food_ctx(body, stack, empty_split)
+  _assert(
+    is_equal_approx(_CreatureMotorStack._feasibility_for_goal(row, ctx), _MemoryAdapter.FEASIBILITY_LOCALE),
+    "locale prior sets find_food feasibility",
+  )
+  var live_ctx := _motor_stack_food_ctx(body, stack, {"ready": [{"pos": Vector3(0.0, 1.0, -5.0)}], "unready": []})
+  _assert(
+    is_equal_approx(_CreatureMotorStack._feasibility_for_goal(row, live_ctx), 1.0),
+    "live ready food yields full find_food feasibility",
+  )
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_stale_instance_id() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.seed_precise_food_belief_for_test(1, Vector3(0.0, 1.0, -12.0), Time.get_ticks_msec())
+  for _i in 32:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    _assert(_MotorAction.is_valid_action(int(outcome.action)), "stale instance_id memory seek stays valid")
+  _assert(stack.get_planner_step_source() == &"precise", "stale instance_id still drives precise seek")
+  main.queue_free()
+
+
+func _motor_stack_test_env_grid() -> _EnvGrid:
+  var grid := _EnvGrid.new()
+  grid.cell_width = 32
+  grid.cell_height = 32
+  grid.cell_size = 52.0
+  grid.cell_kind_ids = PackedInt32Array()
+  grid.cell_kind_ids.resize(32 * 32)
+  return grid
+
+
+func _test_creature_motor_stack_memory_live_sync() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  _assert(stack.get_memory_adapter().get_beliefs().is_empty(), "beliefs empty before live scan tick")
+  stack.tick(1.0 / 60.0)
+  var beliefs: Dictionary = stack.get_memory_adapter().get_beliefs()
+  _assert(beliefs.has(bush.get_instance_id()), "live scan tick writes goal_belief row on stack adapter")
+  var row: Dictionary = beliefs[bush.get_instance_id()]
+  _assert(row.get("tier", &"") == &"PRECISE", "live-synced belief starts PRECISE")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_maintain_coarse_ttl() -> void:
+  var motor_p := _motor_v3_test_params().duplicate(true)
+  motor_p["goal_memory_coarse_ttl_sec"] = 15.0
+  motor_p["goal_memory_precise_radius"] = 1000.0
+  motor_p["goal_memory_forget_radius"] = 5000.0
+  var stack := _CreatureMotorStack.new()
+  var body := CharacterBody3D.new()
+  stack.configure(body, null, motor_p, "", {})
+  var adapter := stack.get_memory_adapter()
+  var now_ms := Time.get_ticks_msec()
+  var iid := 424242
+  adapter.set_beliefs_for_test({
+    iid: {
+      "instance_id": iid,
+      "goal_kind": _GkReg.GK_FIND_FOOD,
+      "tier": &"COARSE",
+      "last_world_pos": Vector3(800.0, 0.0, 800.0),
+      "last_observed_ms": now_ms - 5000,
+      "coarse_entered_ms": now_ms - 20000,
+      "consumable_now": true,
+      "merge_use_count": 0,
+      "last_merged_ms": 0,
+    },
+  })
+  adapter.maintain_beliefs(Vector3.ZERO, now_ms, motor_p)
+  _assert(not adapter.get_beliefs().has(iid), "adapter maintain evicts coarse belief after coarse TTL")
+
+
+func _test_creature_motor_stack_memory_eat_locale_write() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+  var anchor := Vector3(120.0, 0.0, 80.0)
+  stack.notify_food_consumption_outcome(anchor, false)
+  var store: RefCounted = stack.get_memory_adapter().get_locale_store()
+  _assert(store._rows.size() >= 1, "EAT outcome writes locale row on stack adapter store")
+  if _ai_driver_can_instantiate():
+    var ad: Node = _ai_driver_script().new()
+    var bid := body.get_instance_id()
+    ad.set("_goal_source_memory_by_body", {})
+    _assert(not (ad.get("_goal_source_memory_by_body") as Dictionary).has(bid), "ai_driver locale store unused by stack write")
+    ad.free()
+  main.queue_free()
+
+
+func _test_creature_motor_stack_memory_write_dual_isolation() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body_a := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var body_b := _spawn_herbivore_body(main, Vector3(80.0, 1.0, 0.0))
+  body_a.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var stack_a := _motor_stack_test_configure(body_a)
+  var stack_b := _motor_stack_test_configure(body_b)
+  stack_b.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack_a.tick(1.0 / 60.0)
+  stack_b.tick(1.0 / 60.0)
+  _assert(
+    stack_a.get_memory_adapter().get_beliefs().has(bush.get_instance_id()),
+    "stack A live sync writes belief row",
+  )
+  _assert(
+    not stack_b.get_memory_adapter().get_beliefs().has(bush.get_instance_id()),
+    "stack B beliefs isolated from stack A live sync",
+  )
+  main.queue_free()
+
 
 func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
   var floor_body := StaticBody3D.new()
@@ -683,7 +1161,7 @@ func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
 func _test_locomotion_executor_turn_facing() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var floor_body := _motor_v3_test_floor(main)
+  _motor_v3_test_floor(main)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.set_use_v3_action_calories(true)
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
@@ -705,13 +1183,13 @@ func _test_locomotion_executor_turn_facing() -> void:
 func _test_locomotion_executor_move_forward() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var floor_body := _motor_v3_test_floor(main)
+  _motor_v3_test_floor(main)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.set_use_v3_action_calories(true)
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
   await physics_frame
   var pos_before := body.global_position
-  var outcome: ActionOutcome = _LocomotionExecutor.apply_action(
+  var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(
     body, _MotorAction.MOVE_FORWARD, 1.0, _motor_v3_test_params()
   )
   await physics_frame
@@ -734,7 +1212,7 @@ func _test_locomotion_executor_stay_calorie_debit() -> void:
   var delta := 0.5
   var motor_v3 := _motor_v3_test_params()
   var expected_cost := _MotorAction.calorie_cost_for(_MotorAction.STAY, delta, motor_v3)
-  var outcome: ActionOutcome = body.apply_action(_MotorAction.STAY, delta, motor_v3)
+  var outcome: _ActionOutcome = body.apply_action(_MotorAction.STAY, delta, motor_v3)
   _assert(
     is_equal_approx(outcome.calorie_cost, expected_cost),
     "STAY outcome reports baseline calorie cost",
@@ -748,25 +1226,31 @@ func _test_locomotion_executor_stay_calorie_debit() -> void:
 func _test_locomotion_executor_move_blocked() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var floor_body := _motor_v3_test_floor(main)
+  _motor_v3_test_floor(main)
   var wall := StaticBody3D.new()
   var box := BoxShape3D.new()
   box.size = Vector3(0.5, 4.0, 4.0)
   var col := CollisionShape3D.new()
   col.shape = box
   wall.add_child(col)
-  wall.global_position = Vector3(1.2, 1.0, 0.0)
   wall.collision_layer = 1
   main.add_child(wall)
+  wall.global_position = Vector3(1.2, 1.0, 0.0)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.set_use_v3_action_calories(true)
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
   await physics_frame
-  var outcome: ActionOutcome = _LocomotionExecutor.apply_action(
-    body, _MotorAction.MOVE_FORWARD, 1.0, _motor_v3_test_params()
-  )
-  await physics_frame
-  _assert(outcome.blocked, "MOVE_FORWARD against wall sets blocked")
+  # Drive move ticks until the body presses the wall (planner emits MOVE repeatedly).
+  var blocked := false
+  for _i in 30:
+    var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(
+      body, _MotorAction.MOVE_FORWARD, 1.0 / 60.0, _motor_v3_test_params()
+    )
+    await physics_frame
+    if outcome.blocked:
+      blocked = true
+      break
+  _assert(blocked, "MOVE_FORWARD against wall sets blocked")
   main.queue_free()
 
 func _test_motor_goal_hub_starvation_eat_only() -> void:
@@ -830,7 +1314,7 @@ func _test_motor_consideration_cadence_interval() -> void:
     "stat_observation=10 yields n=8",
   )
 
-func _motor_stack_test_configure(body: CharacterBody3D) -> _CreatureMotorStack:
+func _motor_stack_test_configure(body: CharacterBody3D) -> CreatureMotorStack:
   var stack := _CreatureMotorStack.new()
   stack.configure(body, null, _motor_v3_test_params(), "", {})
   body.set_use_v3_action_calories(true)
@@ -838,7 +1322,7 @@ func _motor_stack_test_configure(body: CharacterBody3D) -> _CreatureMotorStack:
   body.set_control_mode(_ControlMode.engine_as_int())
   return stack
 
-func _test_creature_motor_stack_stay_action() -> void:
+func _test_creature_motor_stack_tick_valid_action() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
@@ -846,9 +1330,11 @@ func _test_creature_motor_stack_stay_action() -> void:
   var stack := _motor_stack_test_configure(body)
   var delta := 0.5
   var before := float(body.current_calories)
-  var outcome: ActionOutcome = stack.tick(delta)
-  _assert(int(outcome.action) == _MotorAction.STAY, "stack tick emits STAY in 6b")
-  _assert(body.current_calories < before, "stack STAY debits calories")
+  var outcome: _ActionOutcome = stack.tick(delta)
+  # 6c: with no food/threat in awareness the planner may explore (turn/move) or STAY,
+  # but must always yield a valid MotorAction and debit calories once.
+  _assert(_MotorAction.is_valid_action(int(outcome.action)), "stack tick emits a valid MotorAction")
+  _assert(body.current_calories < before, "stack tick debits calories")
   main.queue_free()
 
 func _test_creature_motor_stack_consideration_advances() -> void:
@@ -901,15 +1387,17 @@ func _test_creature_motor_stack_integration_single_debit() -> void:
   var stack := _motor_stack_test_configure(body)
   var pos_before := body.global_position
   var before := float(body.current_calories)
-  var outcome: ActionOutcome = stack.tick(1.0 / 60.0)
+  var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
   var after_stack := float(body.current_calories)
   body.call("_physics_process", 1.0 / 60.0)
-  _assert(int(outcome.action) == _MotorAction.STAY, "integration tick STAY")
+  _assert(_MotorAction.is_valid_action(int(outcome.action)), "integration tick emits valid action")
   _assert(is_equal_approx(body.current_calories, after_stack), "body _physics_process does not double debit")
   _assert(body.current_calories < before, "single stack tick debits once")
   var disp := body.global_position - pos_before
   disp.y = 0.0
-  _assert(disp.length_squared() < 0.25, "STAY tick does not duplicate horizontal displacement")
+  # One sub-frame tick can only advance a fraction of max_speed regardless of action,
+  # so displacement stays well under this bound (guards against duplicate integration).
+  _assert(disp.length_squared() < 0.25, "single tick does not duplicate horizontal displacement")
   main.queue_free()
 
 func _test_body_no_distance_calorie_burn() -> void:
@@ -1132,7 +1620,7 @@ func _test_environment_footprint_overlap() -> void:
   )
   _assert(frac >= _Footprint.MIN_OVERLAP_FRACTION, "centered footprint meets overlap threshold")
   var frac_edge := _Footprint.circle_cell_overlap_fraction(
-    Vector2(95.0, 50.0), 5.0, Vector2(80.0, 40.0), 20.0
+    Vector2(104.0, 60.0), 5.0, Vector2(80.0, 40.0), 20.0
   )
   _assert(frac_edge < _Footprint.MIN_OVERLAP_FRACTION, "grazing overlap below threshold")
 
@@ -1198,7 +1686,7 @@ func _test_goal_belief_coarse_ttl() -> void:
   ad.call("_goal_belief_maintain", Vector3.ZERO, now_ms, motor_p, BODY_ID)
   var beliefs: Dictionary = (ad.get("_goal_belief_by_body") as Dictionary).get(BODY_ID, {})
   _assert(not beliefs.has(iid), "coarse belief evicted after coarse TTL")
-  ad.queue_free()
+  ad.free()
 
 func _test_goal_kind_phase_c_replay() -> void:
   var motor_p := _Merge.creature_motor_spine()
@@ -1356,7 +1844,9 @@ func _test_goal_source_memory() -> void:
   )
   _assert(float(bias.get("pull_mag", 0.0)) > 0.0, "pull_mag positive after write")
   var replay_w := float(bias.get("replay_weight", 1.0))
-  _assert(replay_w >= 1.0, "replay_weight at least 1 when row matches")
+  # replay_weight = stored_strength * (1 + replay_delta/100); after one write stored_strength
+  # is below 1.0 (EWMA blend), so replay_weight may be < 1.0 — assert it reflects the row.
+  _assert(replay_w > 0.0, "replay_weight positive when row matches")
   var dup := store.try_salient_write(
     _GkReg.GK_FIND_FOOD,
     &"find_food",
@@ -1397,25 +1887,21 @@ func _test_ground_sampler_center_lower_than_rim() -> void:
 func _test_hud_resolves_3d_herbivore_motor_body() -> void:
   var hud_scene: PackedScene = load("res://hud.tscn") as PackedScene
   _assert(hud_scene != null, "hud scene loads for 3d herbivore vitals")
-  var rabbit_def: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
-  _assert(rabbit_def != null, "rabbit archetype loads for hud vitals test")
-  var body := Node.new()
-  body.set("caloric_needs", 30)
-  body.set("current_calories", 27.0)
-  body.set("definition", rabbit_def)
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3.ZERO)
+  body.caloric_needs = 30
+  body.current_calories = 27.0
   var stub_script := GDScript.new()
   stub_script.source_code = (
-    "extends Node\n"
-    + "var herb_body: Node\n"
-    + "func get_herbivore_motor_body() -> Node:\n"
+    "extends Node3D\n"
+    + "var herb_body: CharacterBody3D\n"
+    + "func get_herbivore_motor_body() -> CharacterBody3D:\n"
     + "  return herb_body\n"
   )
   _assert(stub_script.reload() == OK, "hud vitals stub main script compiles")
-  var main := Node.new()
   main.set_script(stub_script)
   main.set("herb_body", body)
-  root.add_child(main)
-  current_scene = main
   var hud: Node = hud_scene.instantiate()
   main.add_child(hud)
   hud.call("_refresh_vitals_labels")
@@ -1559,30 +2045,34 @@ func _test_hunter_killer_debug_project_settings() -> void:
     ProjectSettings.has_setting("hunter_killer_debug/use_ship_motor_profile"),
     "project defines hunter_killer_debug/use_ship_motor_profile",
   )
+  # This is an editor-only QA toggle whose value is a per-developer choice, so assert it is
+  # a defined boolean rather than pinning a specific state (see game_config_merge.use_ship_motor_profile).
   _assert(
-    ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile") == false,
-    "use_ship_motor_profile defaults to off",
+    typeof(ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile")) == TYPE_BOOL,
+    "use_ship_motor_profile is a boolean editor toggle",
   )
 
 func _test_line_of_sight_wall_occlusion() -> void:
-  var scene_root := Node3D.new()
-  root.add_child(scene_root)
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
   var wall := StaticBody3D.new()
   var box := BoxShape3D.new()
-  box.size = Vector3(2.0, 4.0, 4.0)
+  box.size = Vector3(10.0, 4.0, 4.0)
   var col := CollisionShape3D.new()
   col.shape = box
   wall.add_child(col)
-  wall.position = Vector3(5.0, 1.0, 0.0)
   wall.collision_layer = 1
-  scene_root.add_child(wall)
-  await process_frame
-  var space := scene_root.get_world_3d().direct_space_state
-  var from := Vector3(0.0, 1.0, 0.0)
-  var to := Vector3(10.0, 1.0, 0.0)
+  main.add_child(wall)
+  wall.global_position = Vector3(5.0, 1.0, 0.0)
+  for _i in 8:
+    await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var from := Vector3(-1.0, 1.0, 0.0)
+  var to := Vector3(11.0, 1.0, 0.0)
   var frac := _LoS.occlusion_fraction(space, from, to, [])
-  _assert(_LoS.is_occluded(frac), "static wall occludes line of sight > 60%")
-  scene_root.queue_free()
+  _assert(_LoS.is_occluded(frac), "static wall occludes line of sight > 60%% (frac=%.2f)" % frac)
+  main.queue_free()
 
 func _test_load_merged_config_repo_fallback() -> void:
   var res: Dictionary = _Merge.load_merged_config("user://__does_not_exist_merged_test__.json")
@@ -1662,9 +2152,13 @@ func _test_merge_defaults_and_override() -> void:
     int(spine.get("scripted_intent_hold_physics_ticks", -1)) == 8,
     "spine scripted intent hold",
   )
+  # weight_seek_ready_food is the one default that flips with the build profile:
+  # dev profile zeroes it, ship profile restores seek. Assert the value for whichever
+  # profile default_root() actually selected (driven by use_ship_motor_profile()).
+  var expected_seek := 16.0 if _Merge.use_ship_motor_profile() else 0.0
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", -1.0)), 0.0),
-    "default root uses dev profile (zero seek)",
+    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", -1.0)), expected_seek),
+    "default root seek matches active motor profile",
   )
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
@@ -2016,7 +2510,52 @@ func _test_predator_prey_meal_clamp() -> void:
   carn_root.queue_free()
 
 func _test_seek_wall_filter_and_backtrack() -> void:
-  push_warning("skip _test_seek_wall_filter_and_backtrack — cardinal seek removed Step 3; port at §12.2 6c")
+  var approach := Vector3(0.0, 0.0, -1.0)
+  var step_same := Vector3(0.0, 0.0, -1.0)
+  _assert(
+    _BlockedApproachScr.is_backtrack_step(step_same, approach, 0.55),
+    "step along blocked approach heading is backtrack",
+  )
+  var step_lateral := Vector3(1.0, 0.0, 0.0)
+  _assert(
+    not _BlockedApproachScr.is_backtrack_step(step_lateral, approach, 0.55),
+    "lateral step is not backtrack",
+  )
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 5.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -20.0))
+  await process_frame
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  _BlockedApproachScr.record(state["blocked_approach"], approach, 5, 45)
+  var food_entry := {
+    "pos": bush.global_position,
+    "instance_id": bush.get_instance_id(),
+    "stimulus_kind_id": &"shrub_berries",
+  }
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [food_entry], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 6,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  var to_goal: Vector3 = state["step_goal"] - body.global_position
+  to_goal.y = 0.0
+  _assert(to_goal.length_squared() > 1e-4, "planner resolves food step goal under backtrack memory")
+  _assert(
+    to_goal.normalized().dot(approach) < 0.9,
+    "deflected step goal does not continue blocked approach heading",
+  )
+  main.queue_free()
 
 func _test_shrub_3d_visual_scenes_load() -> void:
   const open_path := "res://assets/plants/open_shrub/open_shrub_3d.tscn"

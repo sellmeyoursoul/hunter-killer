@@ -33,6 +33,7 @@ static func occlusion_fraction(
     var b := from.lerp(to, t1)
     var query := PhysicsRayQueryParameters3D.create(a, b)
     query.collision_mask = WORLD_STATIC_MASK
+    query.hit_from_inside = true
     for rid in exclude_rids:
       if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
         query.exclude.append(rid as RID)

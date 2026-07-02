@@ -1,0 +1,6 @@
+WARNING: skip _test_escape_reversal_suppression — V3 Step 3 stub; port at §12.2 6d
+   at: push_warning (core/variant/variant_utility.cpp:1033)
+   GDScript backtrace (most recent call first):
+       [0] _test_escape_reversal_suppression (res://tests/run_all.gd:1294)
+       [1] _run_all (res://tests/run_all.gd:145)
+       [2] _test_creature_motor_stack_explore_no_live_food (res://tests/run_all.gd:797)

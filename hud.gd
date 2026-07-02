@@ -1,7 +1,5 @@
 extends CanvasLayer
 
-const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
-
 @export var vitals_poll_frames: int = 10
 
 signal start_game
@@ -101,7 +99,18 @@ func set_ai_session_state(state: int) -> void:
 
 
 func _resolve_duel_creatures() -> void:
-  var m := get_tree().current_scene
+  var candidates: Array = []
+  var scene := get_tree().current_scene
+  if scene != null:
+    candidates.append(scene)
+  var parent := get_parent()
+  if parent != null and not candidates.has(parent):
+    candidates.append(parent)
+  var m: Node = null
+  for c in candidates:
+    if (c as Node).has_method(&"get_herbivore_motor_body"):
+      m = c as Node
+      break
   if m == null:
     return
   if _herbivore == null or not is_instance_valid(_herbivore):
@@ -126,16 +135,28 @@ func _format_vitals_line(role: String, cur_i: int, mx_i: int) -> String:
 func _creature_display_name(creature: Node) -> String:
   if creature == null:
     return "Creature"
-  var def_v: Variant = creature.get("definition")
-  if def_v != null and def_v.get_script() == _CreatureDefinition:
-    var def := def_v as Resource
-    var display := str(def.get("display_name")).strip_edges()
+  var def := _definition_from_creature(creature)
+  if def != null:
+    var display := str(def.display_name).strip_edges()
     if not display.is_empty():
       return display
-    var species := str(def.get("species_id")).strip_edges()
+    var species := str(def.species_id).strip_edges()
     if not species.is_empty():
       return species
   return creature.name
+
+
+func _definition_from_creature(creature: Node) -> CreatureDefinition:
+  var local: Variant = creature.get("definition")
+  if local is CreatureDefinition:
+    return local as CreatureDefinition
+  var p := creature.get_parent()
+  while p != null:
+    var pd: Variant = p.get("definition")
+    if pd is CreatureDefinition:
+      return pd as CreatureDefinition
+    p = p.get_parent()
+  return null
 
 
 func _refresh_vitals_labels() -> void:

@@ -105,7 +105,6 @@ var _latest_enqueued_request_id: int = -1
 var _inflight_request_id: int = -1
 var _next_inference_ms: int = 0
 var _last_inference_url: String = ""
-var _noop_diag_last_ms: int = 0
 var _last_request_used_completions: bool = false
 var _last_prompt_tail: String = ""
 var _last_user_head: String = ""
@@ -502,6 +501,9 @@ func _goal_belief_reset_all() -> void:
       store.call(&"reset")
   _goal_source_memory_by_body.clear()
   _goal_memory_meta_by_body.clear()
+  for root in _scripted_motor_roots():
+    if root != null and is_instance_valid(root) and root.has_method(&"reset_motor_memory"):
+      root.call(&"reset_motor_memory")
 
 
 func _goal_belief_for_body(body_id: int) -> Dictionary:

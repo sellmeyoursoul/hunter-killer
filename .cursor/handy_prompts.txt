@@ -8,5 +8,12 @@ Review the implementation you just delivered.
 Answer honestly:
 1. What could go wrong in production?
 2. What did you NOT test that you should have?
-3. Rate your confidence from 1-10. Explain why it's not 10>
+3. Rate your confidence from 1-10. Explain why it's not 10
 4. <context specific questions>
+
+------
+
+Summarize our progress, the current state of the code, 
+and what needs to be done next into a concise markdown 
+handoff document. Keep it dense and high-signal so I 
+can paste it into a fresh chat.

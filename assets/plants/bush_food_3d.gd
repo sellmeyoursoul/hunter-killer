@@ -5,6 +5,7 @@ signal calories_changed
 
 @export var max_calories: int = 5
 @export var growth_rate: float = 1.0
+@export var stimulus_kind_id: StringName = &"shrub_berries"
 
 var current_calories: float = 5.0
 
@@ -76,6 +77,20 @@ func is_pickup_ready_for_motor() -> bool:
   if _player_visit_locked:
     return false
   return current_calories >= float(max_calories) - 1e-3
+
+
+## ENGINE creature EAT completion — grants calories when in range ([CREATURE_MOVEMENT_V3.md §6.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+func try_grant_engine_creature(body: Node3D) -> int:
+  if not is_pickup_ready_for_motor():
+    return 0
+  if body == null or not body.has_method(&"add_calories_from_food"):
+    return 0
+  var grant: int = maxi(0, max_calories)
+  body.call(&"add_calories_from_food", grant, global_position)
+  current_calories = 0.0
+  _refresh_visual()
+  calories_changed.emit()
+  return grant
 
 
 func _on_calorie_body_entered(body: Node3D) -> void:

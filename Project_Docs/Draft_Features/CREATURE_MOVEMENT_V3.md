@@ -52,6 +52,16 @@ NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i
 
 **Resolved — goal scoring (architecture):** At each consideration cycle, each candidate goal computes `weight = effective_base × urgency × (feasibility_floor + feasibility) × trait_goal_mul`. **`effective_base`** = `goal_base_<wire_id>` for most goals; **Find shelter** uses §1 shelter base formula. **`feasibility_floor`** = per-goal `goal_feasibility_floor_<wire_id>` from `creature_motor_v3` (§1). Urgency is continuous 0…1 from vitals/threat proximity. Feasibility is 0…1 from best available target/step (live > precise > coarse > seek-only). **`trait_goal_mul`** — v1 **1.0** (§1 trait stub). Hard overrides: `calorie_ratio < starvation_override_food_ceiling` forces Eat-only eligibility (§1 eligibility matrix); acute Flight fast-path (§10) suppresses normal consideration — **Find shelter excluded entirely** during acute threat. **`replay_weight`** applies at **planner / memory consult** (§6d, §9) — **not** on hub `weight` in v1. **Single control plane:** hub **`build_eligible_goals`** (§1) decides which rows enter the table; **winner = max `weight`** among eligible rows. Memory salient-write **`parent_tier2`** comes from **`parent_tier2_for_goal_kind(winner.goal_kind)`** — **not** from [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd).
 
+**Resolved — `find_food` feasibility tiers (hub consult via memory adapter — ship v1):** Planner consult precedence matches feasibility ordering. Constants live on [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) (`FEASIBILITY_*`); tune in playtest if hub winners feel wrong.
+
+| Signal | `find_food` feasibility | Planner `step_source` when incumbent |
+|--------|-------------------------|--------------------------------------|
+| Live ready food in awareness | **1.0** | `live` |
+| Precise instance belief (§8.2) | **0.75** | `precise` |
+| Coarse bearing only (§8.3) | **0.45** | `coarse` |
+| Locale prior / hotspot (§9 tactic layer) | **0.25** | `locale` |
+| None (generic explore) | **0.0** | `explore` |
+
 **Resolved — per-goal `base` (`creature_motor_v3`):** Temperament multiplier (typical range **0…2**; ship profile uses **~0.5–1.0**). **Not** V2 `weight_seek_*` cardinal keys. Species packs may override.
 
 | Hub goal | Config key | Ship default |
@@ -1359,12 +1369,12 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/motor/goal_source_memory.gd` | adapter | `ai_driver.gd`, [CREATURE_MEMORY.md §14](CREATURE_MEMORY.md) | port: `_test_goal_source_memory`, `_test_goal_kind_phase_c_replay`, `_test_locale_prior_escalate_seek`; delete V2 `MotorContext` projection tests | §12.2 **6d** |
 | `creature/motor/line_of_sight.gd` | keep | `cardinal_avoidance.gd`, `motor_target_builder.gd`, `seek_planner.gd`, `tests/run_all.gd` | port: `_test_line_of_sight_wall_occlusion` | §12.2 **6c** — §3, §8.1 |
 | `creature/motor/threat_sample.gd` | keep | `motor_target_builder.gd`, `tests/run_all.gd` (preload) | port where ingest shape unchanged | §1 Flight, §6.3, **6c** scan |
-| `creature/motor/blocked_approach_memory.gd` | keep | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | port: `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack`, `_test_herbivore_food_seek_pinch_escape_backtrack` | §12.2 **6c** — §3 backtrack TTL |
+| `creature/motor/blocked_approach_memory.gd` | keep | `cardinal_avoidance.gd`, `ai_driver.gd`, `tests/run_all.gd` | **ported:** `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack`; `_test_herbivore_food_seek_pinch_escape_backtrack` deferred **6d** | §12.2 **6c** — §3 backtrack TTL |
 | `creature/motor/motor_plane.gd` | keep | `ai_driver.gd`, `creature_kinematic_body_3d.gd`, `awareness_debug_overlay_3d.gd`, `environment/nav_path_hint.gd`, `environment/playfield_bounds_3d.gd`, many motor modules | port: `_test_motor_plane_yaw_from_facing`; drop after full Vector3-native V3 paths if redundant | Utility — XZ projection / playfield scale until **6c** zone builder owns geometry |
 | `creature/motor/creature_motor_stack.gd` (new) | keep | `creature_root_3d.gd`, `ai_driver` tick loop | replace: per-root tick + dual-stack isolation **6b** | §1 — hub/planner/adapter runtime |
 | `creature/motor/awareness_zone.gd` (new) | keep | planner, `awareness_zone_scan` | replace: zone geometry + LoS tests **6c** | §12.2 **6c** — §8.1 |
 | `creature/motor/awareness_zone_scan.gd` (new) | keep | planner | replace: live food/threat ingest tests **6c** | §12.2 **6c** |
-| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult tests **6d** | §12.2 **6d** — §8.4 façade |
+| `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult + write tests **6d.1–6d.2 slice 0** | §12.2 **6d** — §8.4 façade (reads + slice-0 writes) |
 | `creature/motor/salient_write_context.gd` (new, optional) | keep | memory adapter, outcome hooks | replace: salient-write gate tests **6d.2** | §12.2 **6d.2** |
 | `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests **6d** | §12.2 **6d** — `_kind_profile` |
 | `creature/memory/stimulus_learn_registry.gd` (new) | keep | memory adapter, packs | replace: learn-topic registry tests **6d** | §12.2 **6d** |
@@ -1381,7 +1391,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `tests/debug_motor_pick.gd` | delete | manual cardinal debug | n/a | Step 3 |
 | `tests/run_motor_motivation_only.gd` | delete | dev wrapper for `_test_motor_motivation_wiring` | n/a | Step 3 — replace **6b** hub tests |
 | `tests/terrain_test_main_stub.gd` | keep | `tests/run_all.gd` | extend: `get_navigation_map_rid()` delegate | §3 fixture hook **6c** |
-| `tests/motor_path_fixture.gd` (new) | keep | `tests/run_all.gd`, `terrain_test_main_stub.gd` | replace: navmesh + blocked layout headless **6c** | §3 — not duel boot |
+| `tests/motor_path_fixture.gd` (new) | keep | `tests/run_all.gd`, `terrain_test_main_stub.gd` | **ported:** `_test_motor_path_fixture_open_nav`, `_test_motor_path_fixture_blocked_nav` (`agent_radius` 0.25) | §3 — not duel boot |
 
 #### 12.1.1 Motor test disposition (Step 2 grep — `tests/run_all.gd`)
 
@@ -1407,9 +1417,13 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `_test_wall_slide_pick`, `_test_obstacle_strategy_shield_pin`, `_test_pinch_obstacle_*`, `_test_terrain_physics_cardinal_blocked`, `_test_terrain_stuck_escape_prefers_uphill` | delete | Step 3 |
 | `_test_goal_visibility_latch_streak_and_engagement`, `_test_carnivore_pursuit_intent` | delete | Step 3 |
 | `_test_motor_cardinal_probe_scaled_for_small_playfield` | delete | Step 3 |
-| `_test_line_of_sight_wall_occlusion` | port | **6c** |
-| `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack` | port | **6c** |
-| `_test_goal_belief_coarse_ttl`, `_test_goal_belief_anticipated_calories_stub` | port | **6d** |
+| `_test_line_of_sight_wall_occlusion` | **ported** | **6c** — closed 2026-07-02 |
+| `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack` | **ported** | **6c** — closed 2026-07-02 |
+| `_test_motor_path_fixture_blocked_nav`, `_test_creature_motor_stack_explore_no_live_food` | **added** | **6c** — `build_blocked` + no-live-food seek |
+| `_test_creature_motor_stack_seek_precise_memory`, `_test_creature_motor_stack_seek_coarse_memory`, `_test_creature_motor_stack_seek_locale_prior` | **added** | **6d.1** — memory read consult slices |
+| `_test_creature_motor_stack_memory_live_beats_precise`, `_test_creature_motor_stack_memory_tier_precedence`, `_test_creature_motor_stack_memory_dual_isolation`, `_test_creature_motor_stack_memory_feasibility_tiers`, `_test_creature_motor_stack_memory_stale_instance_id` | **added** | **6d.1** — read-contract hardening |
+| `_test_creature_motor_stack_memory_live_sync`, `_test_creature_motor_stack_memory_maintain_coarse_ttl`, `_test_creature_motor_stack_memory_eat_locale_write`, `_test_creature_motor_stack_memory_write_dual_isolation` | **added** | **6d.2 slice 0** — live sync, maintain, EAT locale write, write isolation |
+| `_test_goal_belief_coarse_ttl`, `_test_goal_belief_anticipated_calories_stub` | port | **6d** — legacy `ai_driver` path; coarse TTL also covered on adapter |
 | `_test_goal_source_memory`, `_test_goal_kind_phase_c_replay`, `_test_locale_prior_escalate_seek`, `_test_escape_reversal_suppression` | port | **6d** |
 | `_test_creature_pack_motor_overlays`, `_test_creature_motor_v2_profiles` | port | **6a** → `creature_motor_v3` |
 | `_test_ai_driver_creature_registry`, `_test_hud_resolves_3d_herbivore_motor_body` | port | **6b** |
@@ -1417,7 +1431,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ### 12.2 Step 6 implementation sub-phases
 
-**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6d.1 Memory reads → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition.** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6d** splits into three reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts.
+**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6d.1 Memory reads → 6d.2 slice 0 (adapter writes + migration) → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition.** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6d** splits into reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts.
 
 <<Comment: **Alternative order (not adopted):** top-down **hub → planner → execution → memory adapter** matches §1→§3→§7 **document section** flow and the three-layer narrative in §11 (“goals → planner → execution”). **Downside:** hub/planner emit `Action`s long before `apply_action` exists — Step 5 “run game” stays broken; facing-relative turn-then-move and `ActionOutcome` → belief loops (§7.6) integrate in one late risky pass. **Memory adapter last** is the same in both orderings.>>
 
@@ -1532,6 +1546,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 #### 6b — Hub shell
 
+**Closed 2026-07-01** — hub module, consideration cadence, per-root [code]creature_motor_stack[/code], [code]AiDriver[/code] root iteration; eligibility + scoring; vertical slice wired through stack (planner deferred to **6c** until close).
+
 **Implementation started 2026-06-20** — hub module, consideration cadence, per-root [code]creature_motor_stack[/code], [code]AiDriver[/code] root iteration; 6b vertical slice emits [code]STAY[/code] only (planner deferred to **6c**).
 
 **Entry:** 6a acceptance closed. Complete **§12.2 6b pre-flight checklist** (all Blocker rows) before first hub/stack commit.
@@ -1564,6 +1580,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 #### 6c — Planner (live tier)
 
+**Closed 2026-07-01** — [code]awareness_zone.gd[/code], [code]awareness_zone_scan.gd[/code], [code]motor_planner.gd[/code], [code]motor_path_clear.gd[/code]; stack binds hub winner → turn/move/EAT; headless gates in [code]tests/run_all.gd[/code] + [code]tests/motor_path_fixture.gd[/code]. **6c headless checklist gaps closed 2026-07-02** — backtrack port, `build_blocked` nav assert, explore-without-food stack slice; harness leak cleanup (`ai_driver` fixture `free()`, goal-belief orphan `free()`).
+
 **Entry:** 6b acceptance closed.
 
 **In scope:** §3 movement + seek trees, §8.1 **live** zone / movement weighing (objective **in awareness** with LoS). **Greenfield** §8.1 zone builder (sphere + cone + LoS) — **not** [`motor_target_builder.gd`](../../creature/motor/motor_target_builder.gd) diet forks. Reuse **keep** [`line_of_sight.gd`](../../creature/motor/line_of_sight.gd), [`threat_sample.gd`](../../creature/motor/threat_sample.gd), `blocked_approach_memory.gd`, navmesh detour (§3). **Delete** `motor_target_builder.gd`, `seek_candidate.gd` when zone builder lands. **Live targets only** — **no occluded-in-zone ghosts**, no `_goal_belief` / `LocalePriorMap` / kind EWMA writes. **§6.2:** awareness ingest includes **`stimulus_kind_id`**; live food ranking uses kind consult with **neutral** priors. **Headless:** ship [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) at **6c slice 1** (§3 fixture contract).
@@ -1585,10 +1603,10 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Gate | Criterion |
 |------|-----------|
 | Entry | 6b closed |
-| Headless **required** | Live target fixture → planner emits turn/move sequence toward objective |
-| Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) |
-| Headless **required** | Seek when no live objective (no memory consult) |
-| Headless **required** | §3 **motor_path_fixture** — valid `map_rid` + nav path assert before navmesh-first slices; **`build_blocked`** for backtrack slice |
+| Headless **required** | Live target fixture → planner emits turn/move sequence toward objective — `_test_creature_motor_stack_seek_live_food` |
+| Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) — `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack` |
+| Headless **required** | Seek when no live objective (no memory consult) — `_test_creature_motor_stack_explore_no_live_food` |
+| Headless **required** | §3 **motor_path_fixture** — valid `map_rid` + nav path assert before navmesh-first slices; **`build_blocked`** for backtrack slice — `_test_motor_path_fixture_open_nav`, `_test_motor_path_fixture_blocked_nav` |
 | Manual **smoke** | Duel creature seeks **LoS-visible** shrub; pursuit movement plausible with live prey in zone only |
 | Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; **`motor_target_builder.gd`** **delete**d; **`awareness_zone.gd`** + **`awareness_zone_scan.gd`** + planner added per §3; **`tests/motor_path_fixture.gd`** added |
 | Out of scope | Remembered food, coarse bearing, §9 exceptions, **occluded-in-zone ghosts** |
@@ -1607,9 +1625,13 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ##### 6d.1 — Memory reads (precise + coarse + locale)
 
+**Headless closed 2026-07-02** — [code]memory_adapter.gd[/code] read façade on [code]CreatureMotorStack[/code]; planner consults precise → coarse → locale when no live food. Headless gates: [code]_test_creature_motor_stack_seek_*_memory[/code], [code]_test_creature_motor_stack_seek_locale_prior[/code], and read-contract tests [code]_test_creature_motor_stack_memory_*[/code] (live precedence, tier order, dual-stack isolation, feasibility tiers, stale [code]instance_id[/code]).
+
+**Sign-off note:** Duel **manual smoke** (remembered-food seek without test seeding) is **unblocked** after **6d.2 slice 0** — run before closing slice 0 sign-off.
+
 **In scope:** §8.2 precise instance belief consult; §8.3 coarse path-in-direction; `LocalePriorMap` / `replay_rank_score` consult in seek cycle (§3, §9). **Read-only** — no EWMA writes, no geographic dead-end persist, no ghosts.
 
-**Out of scope:** §9 blocked-objective persist/switch/seek writes; kind `record_observation`; occluded-in-zone ghosts; `threat_disposition_mod`; shelter belief writes.
+**Out of scope:** §9 blocked-objective persist/switch/seek writes; kind `record_observation`; occluded-in-zone ghosts; `threat_disposition_mod`; shelter belief writes; live sighting sync; `goal_belief_memory.maintain()`; migrating [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_by_body` / `_goal_source_memory_by_body` (→ **6d.2 slice 0**).
 
 **Vertical slices:**
 
@@ -1625,17 +1647,64 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | Precise belief fixture → movement without live LoS to remembered coords |
 | Headless **required** | Coarse tier → bearing-only locomotion (not GPS `ultimate_pos`) |
 | Headless **required** | Locale prior row → seek bias / alternate target ranking |
-| Manual **smoke** | Duel remembered-food seek (beliefs seeded or observed earlier in session) |
+| Headless **required** | Live ready food beats precise memory consult |
+| Headless **required** | Consult tier precedence: precise → coarse → locale |
+| Headless **required** | Dual-stack memory isolation (distinct beliefs / step goals) |
+| Headless **required** | Hub `find_food` feasibility matches §1 tier table |
+| Headless **required** | Stale `instance_id` on precise row — no crash; locomotion stays valid |
+| Manual **smoke** | Duel remembered-food seek — **ready for sign-off** after **6d.2 slice 0** headless gates |
 | Inventory | [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) read paths wired; hub/planner import adapter only — storage via internal delegates |
-| Out of scope | Writes, §9 exception layers, ghosts, disposition |
+| Out of scope | Writes, §9 exception layers, ghosts, disposition, slice 0 migration |
 
-**After close:** §12 steps **6–10**; then **6d.2**.
+**After close:** §12 steps **6–10**; then **6d.2 slice 0** (not full 6d.2 until slice 0 closes).
 
 ---
 
 ##### 6d.2 — Writes + kind + dead-ends + §9
 
-**Entry:** 6d.1 acceptance closed.
+**Entry:** 6d.1 headless acceptance closed.
+
+**Do not start** §9 / kind EWMA / dead-end slices until **6d.2 slice 0** headless checklist is green — **slice 0 headless closed 2026-07-02**; full slice 0 sign-off awaits duel manual smoke.
+
+#### 6d.2 slice 0 — Adapter writes + store migration (do first) {#6d2-slice-0--adapter-writes--store-migration-do-first}
+
+**Headless closed 2026-07-02** — [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) `sync_after_scan`, `maintain_beliefs`, `notify_food_consumption_outcome`, `reset`; wired from [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) each tick. V3 ENGINE EAT routes via [`creature_root_3d.gd`](../../creature/creature_root_3d.gd) → stack (not `ai_driver` when `_motor_stack_drives_physics`). Session reset clears stack adapters from [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_reset_all`.
+
+**Purpose:** Make memory **observable in duel** before layering §9 exception logic, kind profiles, and dead-end marks. Closes the dual-store gap: V3 ENGINE paths must not read or write [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) `_goal_belief_by_body` / `_goal_source_memory_by_body` (§1, §8.4 hard rules).
+
+**In scope:**
+
+| # | Deliverable | Spec anchor |
+|---|-------------|-------------|
+| S0.1 | **Live sighting sync** — after awareness scan, adapter writes `_goal_belief` from `food_split` (and threat samples when applicable) via `goal_belief_memory.sync_from_scene` / `sync_from_threat_samples` | §8.4 write table |
+| S0.2 | **`maintain()` each tick** — TTL, forget radius, PRECISE→COARSE promotion on stack-owned beliefs | [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md), §8.3 |
+| S0.3 | **EAT / salient write routing** — `notify_food_consumption_outcome` (or stack outcome hook) writes to **this creature’s** adapter `goal_source_memory`, not `ai_driver` dict | §6.2, §8.4 |
+| S0.4 | **Retire V3 ENGINE reads of driver memory dicts** — grep-clean: stack adapter is sole belief/locale store for [`CreatureRoot3D`](../../creature/creature_root_3d.gd) motor tick | §1, §15 #10 |
+| S0.5 | **Duel manual smoke** — creature sees bush, loses LoS, seeks remembered coords (no test seed) | 6d.1 deferred gate |
+
+**Out of scope for slice 0:** §9 persist/switch/seek branches; `record_observation` / kind EWMA; dead-end geographic marks; `SalientWriteContext`; §12.3.2 locale consult rewrite (may start in parallel but not a slice-0 blocker).
+
+**Vertical slice:**
+
+0. **See → remember → seek** — live food in awareness populates adapter; after leaving awareness, planner uses precise/coarse consult without headless seeding.
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | 6d.1 headless closed |
+| Headless **required** | Live scan tick → `_goal_belief` row exists on stack adapter (no manual seed) — `_test_creature_motor_stack_memory_live_sync` |
+| Headless **required** | `maintain()` evicts / downgrades row when outside precise envelope + TTL exceeded — `_test_creature_motor_stack_memory_maintain_coarse_ttl` |
+| Headless **required** | EAT outcome → locale row on **stack** store (not `ai_driver` `_goal_source_memory_by_body`) — `_test_creature_motor_stack_memory_eat_locale_write` |
+| Headless **required** | Dual-root: belief rows isolated per stack — `_test_creature_motor_stack_memory_write_dual_isolation` |
+| Manual **smoke** | Duel remembered-food seek after brief LoS contact — **pending maintainer sign-off** |
+| Inventory | V3 ENGINE tick path: stack adapter sole store; `notify_food_consumption_outcome` on body uses root stack when `_motor_stack_drives_physics` |
+
+**After close:** §12 steps **6–10**; then **6d.2** slices 4–6 (§9, dead-ends, kind).
+
+---
+
+**Full 6d.2 scope (after slice 0):**
 
 **In scope:** §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers + `blocked_objective_chaos`). **Dead-end** geographic marks (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3). **`_kind_profile`** + **`record_observation`** + learn-topic registry — `nutrition_yield` on EAT ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)). **`stimulus_kind_id`** spawn gate enforced at food placement (§6.2). **Rename `*_px` config keys** to world-unit names during MEMORY / pack pass (e.g. `believed_goal_hotspot_near_radius_px` → `believed_goal_hotspot_near_radius`) — §12.3.2.
 
@@ -1651,12 +1720,12 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 | Gate | Criterion |
 |------|-----------|
-| Entry | 6d.1 closed |
+| Entry | 6d.1 closed; **6d.2 slice 0** closed |
 | Headless **required** | §9 branch: persist vs switch vs seek with stub memory fixtures (locale + instance + kind) |
 | Headless **required** | Kind profile EWMA: EAT observation updates `nutrition_yield`; consult changes live ranking |
 | Headless **required** | Dead-end mark → edge waypoint filtered; `passibility_fail_count` → switch bias |
 | Headless **required** | Missing `stimulus_kind_id` at food spawn → no spawn + `OLog.error` (§6.2) |
-| Inventory | Adapter **write** paths for instance sync, `record_observation`, dead-end marks |
+| Inventory | Adapter **write** paths for instance sync, `record_observation`, dead-end marks; slice 0 migrates ENGINE memory off `ai_driver` |
 | Sibling | Begin **§12.3.2** MEMORY pass (locale consult rewrite; `*_px` rename) |
 | Out of scope | Ghosts, disposition, shelter beliefs |
 

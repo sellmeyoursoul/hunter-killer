@@ -246,16 +246,28 @@ func add_calories_from_food(amount: int, food_anchor: Variant = Vector2.ZERO) ->
     anchor2 = _MotorPlane.from_vec3(food_anchor as Vector3)
   if anchor2 == Vector2.ZERO:
     return
+  var cneed_f := maxf(1.0, float(caloric_needs))
+  var seek_ceil := _seek_priority_food_ceiling()
+  var insufficient := current_calories / cneed_f < seek_ceil
+  if _motor_stack_drives_physics:
+    var creature_root := get_parent()
+    if creature_root != null and creature_root.has_method(&"notify_food_consumption_outcome"):
+      creature_root.call(&"notify_food_consumption_outcome", anchor2, insufficient)
+      return
   var ad := get_node_or_null("/root/AiDriver")
   if ad == null or not ad.has_method(&"notify_food_consumption_outcome"):
     return
-  var cneed_f := maxf(1.0, float(caloric_needs))
+  ad.call(&"notify_food_consumption_outcome", self, anchor2, insufficient)
+
+
+func _seek_priority_food_ceiling() -> float:
   var seek_ceil := 0.80
   var gc := get_node_or_null("/root/GameConfig")
-  if gc != null and gc.has_method(&"get_creature_motor_params"):
+  if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
+    seek_ceil = float(gc.get_creature_motor_v3_params().get("seek_priority_food_ceiling", seek_ceil))
+  elif gc != null and gc.has_method(&"get_creature_motor_params"):
     seek_ceil = float(gc.get_creature_motor_params().get("seek_priority_food_ceiling", seek_ceil))
-  var insufficient := current_calories / cneed_f < seek_ceil
-  ad.call(&"notify_food_consumption_outcome", self, anchor2, insufficient)
+  return seek_ceil
 
 
 func add_calories_from_prey(amount: int) -> void:
