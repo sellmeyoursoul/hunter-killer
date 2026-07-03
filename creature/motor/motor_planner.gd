@@ -22,6 +22,7 @@ static func new_state() -> Dictionary:
     "blocked_approach": {},
     "consecutive_blocked": 0,
     "explore_dir": Vector3.ZERO,
+    "explore_waypoint": Vector3.ZERO,
     "last_outcome_blocked": false,
     "step_stimulus_kind_id": &"",
     "blocked_objective_action": &"",
@@ -67,15 +68,21 @@ static func note_outcome(
   state["last_outcome_blocked"] = blocked
   if blocked:
     state["consecutive_blocked"] = int(state.get("consecutive_blocked", 0)) + 1
+    var pos_after := body.global_position
+    var disp := outcome.displacement if outcome != null else Vector3.ZERO
+    disp.y = 0.0
+    var pos_before := pos_after - disp
     var approach := _BlockedApproach.infer_approach_dir(
-      body.global_position,
-      body.global_position,
+      pos_after,
+      pos_before,
       _MotorPlane.body_motor_velocity(body),
       [],
       _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO),
     )
     var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
     _BlockedApproach.record(state["blocked_approach"], approach, physics_tick, ttl)
+    if state.get("step_source", &"") == &"explore":
+      state["explore_waypoint"] = Vector3.ZERO
   else:
     state["consecutive_blocked"] = 0
 
@@ -86,6 +93,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["step_goal"] = Vector3.ZERO
     state["step_instance_id"] = 0
     state["explore_dir"] = Vector3.ZERO
+    state["explore_waypoint"] = Vector3.ZERO
     state["turn_commit_sign"] = 0
     state["turn_commit_bearing_deg"] = null
   var body: CharacterBody3D = ctx.get("body")
@@ -210,9 +218,25 @@ static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Di
 static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v3: Dictionary, ctx: Dictionary) -> Vector3:
   var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
   if explore.length_squared() < 1e-8:
-    explore = _MotorPlane.HORIZONTAL_FORWARD.rotated(Vector3.UP, randf_range(-PI, PI))
+    explore = _initial_explore_dir(ctx)
     state["explore_dir"] = explore.normalized()
   var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  if latched.length_squared() > 1e-8:
+    if creature_pos.distance_to(latched) <= arrival_tol:
+      state["explore_waypoint"] = Vector3.ZERO
+      latched = Vector3.ZERO
+    else:
+      var adapter_hold: RefCounted = ctx.get("memory_adapter")
+      if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
+        if adapter_hold.is_waypoint_dead_end(creature_pos, latched, _GkReg.GK_FIND_FOOD, motor_v3):
+          explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
+          state["explore_dir"] = explore.normalized()
+          state["explore_waypoint"] = Vector3.ZERO
+          latched = Vector3.ZERO
+      if latched.length_squared() > 1e-8:
+        return latched
   var waypoint := creature_pos + (state["explore_dir"] as Vector3).normalized() * reach
   var adapter: RefCounted = ctx.get("memory_adapter")
   if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
@@ -220,7 +244,18 @@ static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v
       explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
       state["explore_dir"] = explore.normalized()
       waypoint = creature_pos + state["explore_dir"] * reach
+  state["explore_waypoint"] = waypoint
   return waypoint
+
+
+## Horizontal facing at first explore pick — duel spawn facing, not random (§3 explore latch).
+static func _initial_explore_dir(ctx: Dictionary) -> Vector3:
+  var body: CharacterBody3D = ctx.get("body")
+  if body != null:
+    var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
+    if facing.length_squared() > 1e-12:
+      return facing.normalized()
+  return _MotorPlane.HORIZONTAL_FORWARD
 
 
 static func _can_eat_now(
@@ -250,21 +285,23 @@ static func _turn_or_move_toward(
   if to_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
   var move_dir := to_goal.normalized()
-  var blocked_dir := _BlockedApproach.active_dir(
-    state.get("blocked_approach", {}),
-    int(ctx.get("physics_tick", 0)),
-  )
-  var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
-  if (
-    blocked_dir.length_squared() > 1e-12
-    and _BlockedApproach.is_backtrack_step(move_dir, blocked_dir, backtrack_dot)
-  ):
-    move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
-    state["step_goal"] = creature_pos + move_dir * to_goal.length()
+  var step_source: StringName = state.get("step_source", &"live")
+  # Fixed GPS / latched explore: no backtrack detour rewrite (§7.3 / §8.2).
+  if not _is_latched_step_source(step_source):
+    var blocked_dir := _BlockedApproach.active_dir(
+      state.get("blocked_approach", {}),
+      int(ctx.get("physics_tick", 0)),
+    )
+    var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
+    if (
+      blocked_dir.length_squared() > 1e-12
+      and _BlockedApproach.is_backtrack_step(move_dir, blocked_dir, backtrack_dot)
+    ):
+      move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
+      state["step_goal"] = creature_pos + move_dir * to_goal.length()
   if not _is_facing_aligned_for_move(body, state["step_goal"], motor_v3):
     return _pick_turn_action(body, state["step_goal"], motor_v3, state)
-  var step_source: StringName = state.get("step_source", &"live")
-  if step_source != &"precise":
+  if not _is_latched_step_source(step_source):
     var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
     var eye_h := float(ctx.get("eye_height", 1.0))
     if not _PathClear.has_clear_los(space, creature_pos, eye_h, state["step_goal"], motor_v3):
@@ -305,6 +342,20 @@ static func _is_facing_aligned_for_move(body: CharacterBody3D, target: Vector3, 
   return _is_facing_aligned_with_tolerance(body, target, motor_v3, 1.0)
 
 
+static func _facing_dot_to_target(body: CharacterBody3D, target: Vector3) -> float:
+  var creature_pos := body.global_position
+  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
+  if to_target.length_squared() < 1e-8:
+    return 1.0
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
+  return clampf(facing.dot(to_target.normalized()), -1.0, 1.0)
+
+
+static func _move_alignment_min_dot(motor_v3: Dictionary) -> float:
+  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  return cos(deg_to_rad(turn_deg))
+
+
 static func _signed_bearing_error_deg(body: CharacterBody3D, target: Vector3) -> float:
   var creature_pos := body.global_position
   var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
@@ -335,22 +386,37 @@ static func _pick_turn_action(
   state: Dictionary,
 ) -> int:
   var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
-  var error_deg := _signed_bearing_error_deg(body, target)
   var creature_pos := body.global_position
   var bearing_deg := _flat_bearing_deg(creature_pos, target)
+  var step_source: StringName = state.get("step_source", &"live")
   var stored_bearing: Variant = state.get("turn_commit_bearing_deg", null)
-  # Flight/flee retargets each tick; drop stale commitment when bearing jumps > one increment.
-  if stored_bearing != null and absf(_angle_delta_deg(bearing_deg, stored_bearing)) > turn_deg:
+  # Flight/flee retargets each tick; latched precise/explore keep commit until MOVE cone (§7.3).
+  if (
+    stored_bearing != null
+    and not _is_latched_step_source(step_source)
+    and absf(_angle_delta_deg(bearing_deg, stored_bearing)) > turn_deg
+  ):
     state["turn_commit_sign"] = 0
+  var move_min_dot := _move_alignment_min_dot(motor_v3)
+  var facing_dot := _facing_dot_to_target(body, target)
   var commit := int(state.get("turn_commit_sign", 0))
   if commit != 0:
-    var crossed := (commit > 0 and error_deg <= 0.0) or (commit < 0 and error_deg >= 0.0)
-    if not crossed:
-      return _MotorAction.TURN_LEFT if commit > 0 else _MotorAction.TURN_RIGHT
+    # Hold committed turn until MOVE alignment — ignore atan2 sign flips near ±180°.
+    if facing_dot >= move_min_dot:
+      state["turn_commit_sign"] = 0
+      state["turn_commit_bearing_deg"] = null
+      return _MotorAction.MOVE_FORWARD
+    return _MotorAction.TURN_LEFT if commit > 0 else _MotorAction.TURN_RIGHT
+  var error_deg := _signed_bearing_error_deg(body, target)
   var new_commit := 1 if error_deg >= 0.0 else -1
   state["turn_commit_sign"] = new_commit
   state["turn_commit_bearing_deg"] = bearing_deg
   return _MotorAction.TURN_LEFT if new_commit > 0 else _MotorAction.TURN_RIGHT
+
+
+## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
+static func _is_latched_step_source(step_source: StringName) -> bool:
+  return step_source == &"precise" or step_source == &"explore"
 
 
 static func _agent_radius(body: CharacterBody3D) -> float:
@@ -405,9 +471,11 @@ static func apply_blocked_objective_resolution(
   match resolution.get("action", &"persist"):
     _BlockedObjective.ACTION_SWITCH:
       state["explore_dir"] = Vector3.ZERO
+      state["explore_waypoint"] = Vector3.ZERO
       state["step_goal"] = Vector3.ZERO
     _BlockedObjective.ACTION_SEEK:
       state["explore_dir"] = Vector3.ZERO
+      state["explore_waypoint"] = Vector3.ZERO
       state["step_goal"] = Vector3.ZERO
       state["step_instance_id"] = 0
       state["step_source"] = &"explore"

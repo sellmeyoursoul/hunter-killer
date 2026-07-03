@@ -50,27 +50,33 @@ static func _turn_increment_rad(motor_v3: Dictionary) -> float:
   return deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
 
 
-static func _rotate_facing(body: CharacterBody3D, motor_v3: Dictionary, sign: float) -> void:
+static func _rotate_facing(body: CharacterBody3D, motor_v3: Dictionary, direction_sign: float) -> void:
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
-  var angle := _turn_increment_rad(motor_v3) * sign
+  var angle := _turn_increment_rad(motor_v3) * direction_sign
   facing = facing.rotated(Vector3.UP, angle).normalized()
   body.set("last_move_direction", facing)
+  _clear_horizontal_velocity(body)
   if body.has_method(&"_sync_visual_facing"):
     body.call(&"_sync_visual_facing")
 
 
+## Stops stale horizontal velocity from fighting turn-facing on the next body physics step.
+static func _clear_horizontal_velocity(body: CharacterBody3D) -> void:
+  body.velocity = Vector3(0.0, body.velocity.y, 0.0)
+
+
 static func _displace_along_facing(
   body: CharacterBody3D,
-  sign: float,
+  direction_sign: float,
   delta: float,
   pos_before: Vector3,
 ) -> bool:
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
-  var intent := (facing * sign).normalized()
+  var intent := (facing * direction_sign).normalized()
   if body.has_method(&"apply_horizontal_move_intent"):
     body.call(&"apply_horizontal_move_intent", intent, delta)
   else:

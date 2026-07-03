@@ -453,7 +453,7 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 
 **Debug (3D):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`. Draws scaled **`creature_motor_v3`** zone geometry (same playfield distance scale as [`CreatureMotorStack`](../../creature/motor/creature_motor_stack.gd) via [`motor_plane.gd`](../../creature/motor/motor_plane.gd) `scale_creature_motor_v3_for_playfield`).
 
-**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Shows last action, incumbent, `step_source`, scan counts per creature.
+**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Shows last action, incumbent, `step_source`, turn commit (`cmt=L/R/0`), bearing error (`err`), facing·target dot (`dot`), scan counts per creature. **`cmt`** holds L/R until **`dot ≥ cos(turn_increment_deg)`** (MOVE cone); rear-hemisphere turns ignore **`err`** sign flips at ±180°.
 
 ---
 

@@ -594,7 +594,8 @@ func _sync_visual_facing() -> void:
 func _physics_process(delta: float) -> void:
   if _defeat_hidden:
     return
-  if _motor_stack_drives_physics and _should_skip_v3_legacy_calorie_drain():
+  # V3 stack owns facing + locomotion; legacy intent/velocity-facing must not run (§7.4).
+  if _motor_stack_drives_physics:
     return
   var pos_before := global_position
   var intent := _read_move_intent()

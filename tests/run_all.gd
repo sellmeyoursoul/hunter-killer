@@ -129,6 +129,12 @@ func _run_all() -> void:
   _test_creature_motor_v3_playfield_distance_scale()
   _test_locomotion_executor_turn_facing()
   _test_motor_planner_turn_alignment_no_flip_flop()
+  _test_motor_planner_precise_backtrack_ignored()
+  _test_motor_planner_explore_latch()
+  _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
+  await _test_creature_motor_stack_precise_turn_no_flip_flop()
+  _test_body_motor_stack_skips_legacy_physics()
+  _test_locomotion_executor_turn_clears_velocity()
   await _test_locomotion_executor_move_forward()
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
@@ -1213,6 +1219,9 @@ func _test_creature_motor_stack_debug_snapshot() -> void:
   _assert(snap.has("action"), "debug snapshot includes action")
   _assert(snap.has("step_source"), "debug snapshot includes step_source")
   _assert(snap.has("physics_tick"), "debug snapshot includes physics_tick")
+  _assert(snap.has("turn_commit_sign"), "debug snapshot includes turn_commit_sign")
+  _assert(snap.has("bearing_error_deg"), "debug snapshot includes bearing_error_deg")
+  _assert(snap.has("facing_dot_tgt"), "debug snapshot includes facing_dot_tgt")
   _assert(int(snap.get("physics_tick", 0)) >= 1, "debug snapshot reflects ticks after tick")
   main.queue_free()
 
@@ -1483,6 +1492,300 @@ func _test_motor_planner_turn_alignment_no_flip_flop() -> void:
       or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
     )
     _assert(not is_flip, "no adjacent opposite turn pair while step goal is fixed")
+  main.queue_free()
+
+func _test_motor_planner_precise_backtrack_ignored() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var remembered := Vector3(-20.0, 1.0, 0.0)
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(88100, remembered, now_ms)
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  state["blocked_approach"] = {
+    "dir": _MotorPlane.HORIZONTAL_RIGHT,
+    "sector": 2,
+    "until_tick": 99999,
+  }
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": now_ms,
+    "environment_grid": null,
+  }
+  var actions: Array[int] = []
+  var saw_move := false
+  for tick in 12:
+    ctx["physics_tick"] = tick
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    _assert(
+      state.get("step_source", &"") == &"precise",
+      "precise source kept while blocked-approach memory is active",
+    )
+    _assert(
+      (state.get("step_goal", Vector3.ZERO) as Vector3).distance_to(remembered) < 0.01,
+      "precise step_goal stays at GPS (no backtrack detour rewrite)",
+    )
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      break
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+  _assert(saw_move, "precise seek reaches MOVE_FORWARD despite blocked-approach memory")
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "precise + blocked-approach: no adjacent opposite turn pair")
+  main.queue_free()
+
+func _test_motor_planner_explore_latch() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  body.current_calories = 2.0
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  _assert(state.get("step_source", &"") == &"explore", "no food uses explore step source")
+  var explore_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    explore_dir.normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99,
+    "explore_dir seeds from body facing (east), not random",
+  )
+  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  _assert(latched.length_squared() > 1e-4, "explore latches a world waypoint")
+  body.global_position = Vector3(3.0, 1.0, 0.0)
+  ctx["physics_tick"] = 2
+  _MotorPlanner.select_action(ctx, state)
+  _assert(
+    (state.get("explore_waypoint", Vector3.ZERO) as Vector3).distance_to(latched) < 0.01,
+    "explore waypoint stays latched when creature moves",
+  )
+  var actions: Array[int] = []
+  var saw_move := false
+  for tick_i in 3:
+    ctx["physics_tick"] = tick_i
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      break
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+  _assert(saw_move, "explore latch converges to MOVE toward latched waypoint")
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "explore latch: no adjacent opposite turn pair")
+  main.queue_free()
+
+func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  _assert(latched.length_squared() > 1e-4, "explore rear test latches waypoint")
+  body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  body.global_position = Vector3(10.0, 1.0, 0.0)
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  var actions: Array[int] = []
+  var saw_move := false
+  var prev_dot := -2.0
+  for tick_i in 16:
+    ctx["physics_tick"] = tick_i
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    var facing: Vector3 = body.last_move_direction.normalized()
+    var to_n := (latched - body.global_position).normalized()
+    to_n.y = 0.0
+    var dot := facing.dot(to_n)
+    if prev_dot > -1.5:
+      _assert(dot >= prev_dot - 0.05, "rear explore: facing dot to latched waypoint non-decreasing")
+    prev_dot = dot
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      _assert(dot >= move_min_dot - 0.01, "rear explore MOVE when within turn increment cone")
+      break
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+  _assert(saw_move, "explore rear hemisphere converges to MOVE within 16 ticks")
+  var turn_actions: Array[int] = []
+  for act in actions:
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      turn_actions.append(act)
+  _assert(turn_actions.size() >= 1, "explore rear hemisphere turns before MOVE")
+  var first_turn: int = turn_actions[0]
+  for act in turn_actions:
+    _assert(
+      act == first_turn,
+      "explore rear hemisphere: all pre-move turns share one direction",
+    )
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "explore rear hemisphere: no adjacent opposite turn pair")
+  main.queue_free()
+
+func _test_creature_motor_stack_precise_turn_no_flip_flop() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.current_calories = 2.0
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  body.velocity = Vector3(8.0, 0.0, 6.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var remembered := Vector3(-20.0, 1.0, 0.0)
+  stack.seed_precise_food_belief_for_test(88101, remembered, Time.get_ticks_msec())
+  var start_pos := body.global_position
+  var actions: Array[int] = []
+  var saw_move := false
+  for _i in 32:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    actions.append(act)
+    _assert(
+      stack.get_planner_step_source() == &"precise",
+      "stack precise seek keeps step_source=precise",
+    )
+    _assert(
+      stack.get_planner_step_goal().distance_to(remembered) < 0.01,
+      "stack precise step_goal stays at remembered GPS",
+    )
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      break
+  _assert(saw_move, "stack emits MOVE_FORWARD toward precise belief within 32 ticks")
+  var turn_actions: Array[int] = []
+  for act in actions:
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      turn_actions.append(act)
+  _assert(turn_actions.size() >= 1, "stack turns before moving toward precise goal")
+  if turn_actions.size() > 0:
+    var first_turn: int = turn_actions[0]
+    for act in turn_actions:
+      _assert(
+        act == first_turn,
+        "stack pre-move turns share one direction (no TURN_L/TURN_R flip-flop)",
+      )
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "stack: no adjacent opposite turn pair on fixed precise tgt")
+  var disp := body.global_position - start_pos
+  disp.y = 0.0
+  _assert(disp.length_squared() > 1e-6, "stack precise seek produces net displacement after MOVE")
+  main.queue_free()
+
+func _test_body_motor_stack_skips_legacy_physics() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_control_mode(_ControlMode.engine_as_int())
+  body.set_motor_stack_drives_physics(true)
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  body.velocity = Vector3(12.0, 0.0, 5.0)
+  var facing_before: Vector3 = body.last_move_direction
+  body.call("_physics_process", 1.0 / 60.0)
+  _assert(
+    body.last_move_direction.is_equal_approx(facing_before),
+    "motor_stack_drives skips legacy velocity-facing overwrite",
+  )
+  _assert(
+    is_equal_approx(body.velocity.x, 12.0) and is_equal_approx(body.velocity.z, 5.0),
+    "motor_stack_drives skip does not integrate legacy move intent",
+  )
+  main.queue_free()
+
+func _test_locomotion_executor_turn_clears_velocity() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  body.velocity = Vector3(9.0, 2.0, -4.0)
+  _LocomotionExecutor.apply_action(body, _MotorAction.TURN_LEFT, 1.0 / 60.0, _motor_v3_test_params())
+  _assert(is_equal_approx(body.velocity.x, 0.0), "TURN_LEFT clears horizontal velocity x")
+  _assert(is_equal_approx(body.velocity.z, 0.0), "TURN_LEFT clears horizontal velocity z")
+  _assert(is_equal_approx(body.velocity.y, 2.0), "TURN_LEFT preserves vertical velocity")
   main.queue_free()
 
 func _test_locomotion_executor_move_forward() -> void:

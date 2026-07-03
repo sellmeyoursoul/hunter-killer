@@ -130,11 +130,18 @@ static func _format_snapshot(title: String, snap: Dictionary) -> String:
   var blk_act := str(snap.get("blocked_objective_action", ""))
   if blk_act.is_empty():
     blk_act = "-"
+  var commit := int(snap.get("turn_commit_sign", 0))
+  var commit_label := "0"
+  if commit > 0:
+    commit_label = "L"
+  elif commit < 0:
+    commit_label = "R"
   return (
     "%s motor\n"
     + "act=%s blk=%s cal=%d%%\n"
     + "inc=%s w=%.3f\n"
     + "src=%s gk=%s tgt=(%.1f,%.1f) id=%d\n"
+    + "cmt=%s err=%.1f dot=%.3f\n"
     + "blk_act=%s cblk=%d tick=%d/%d ff=%d food=%d thr=%d"
   ) % [
     title,
@@ -148,6 +155,9 @@ static func _format_snapshot(title: String, snap: Dictionary) -> String:
     tgt.x,
     tgt.y,
     int(snap.get("step_instance_id", 0)),
+    commit_label,
+    float(snap.get("bearing_error_deg", 0.0)),
+    float(snap.get("facing_dot_tgt", 0.0)),
     blk_act,
     int(snap.get("consecutive_blocked", 0)),
     int(snap.get("physics_tick", 0)),

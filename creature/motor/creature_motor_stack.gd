@@ -8,6 +8,7 @@ const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.g
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
 const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
@@ -152,6 +153,16 @@ func get_debug_snapshot() -> Dictionary:
   if _last_outcome != null:
     action_label = _motor_action_debug_label(int(_last_outcome.action))
     blocked = _last_outcome.blocked
+  var bearing := {"bearing_error_deg": 0.0, "facing_dot_tgt": 0.0}
+  if _body != null and step_goal.length_squared() > 1e-8:
+    var creature_pos := _body.global_position
+    var to_target := Vector3(step_goal.x - creature_pos.x, 0.0, step_goal.z - creature_pos.z)
+    var facing := _MotorPlane.read_dir(_body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
+    var to_n := to_target.normalized()
+    var cross := facing.x * to_n.z - facing.z * to_n.x
+    var dot := clampf(facing.dot(to_n), -1.0, 1.0)
+    bearing["bearing_error_deg"] = rad_to_deg(atan2(cross, dot))
+    bearing["facing_dot_tgt"] = facing.dot(to_n)
   return {
     "action": action_label,
     "blocked": blocked,
@@ -165,6 +176,9 @@ func get_debug_snapshot() -> Dictionary:
     "stimulus_kind_id": str(ps.get("step_stimulus_kind_id", "")),
     "blocked_objective_action": str(ps.get("blocked_objective_action", "")),
     "consecutive_blocked": int(ps.get("consecutive_blocked", 0)),
+    "turn_commit_sign": int(ps.get("turn_commit_sign", 0)),
+    "bearing_error_deg": float(bearing.get("bearing_error_deg", 0.0)),
+    "facing_dot_tgt": float(bearing.get("facing_dot_tgt", 0.0)),
     "physics_tick": _physics_tick_count,
     "consideration_interval": _consideration_interval,
     "flight_fast_path": _flight_fast_path_active,
