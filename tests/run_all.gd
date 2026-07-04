@@ -132,6 +132,7 @@ func _run_all() -> void:
   _test_motor_planner_precise_backtrack_ignored()
   _test_motor_planner_explore_latch()
   _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
+  _test_motor_planner_latched_stuck_replan()
   await _test_creature_motor_stack_precise_turn_no_flip_flop()
   _test_body_motor_stack_skips_legacy_physics()
   _test_locomotion_executor_turn_clears_velocity()
@@ -1409,6 +1410,28 @@ func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
   parent.add_child(floor_body)
   return floor_body
 
+
+func _motor_planner_note_outcome(
+  state: Dictionary,
+  body: CharacterBody3D,
+  outcome,
+  motor_v3: Dictionary,
+  physics_tick: int,
+  pos_before_tick: Vector3,
+  boundary_clamped: bool,
+) -> bool:
+  return (_MotorPlanner as GDScript).call(
+    "note_outcome",
+    state,
+    body,
+    outcome,
+    motor_v3,
+    physics_tick,
+    pos_before_tick,
+    boundary_clamped,
+  )
+
+
 func _test_locomotion_executor_turn_facing() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -1695,6 +1718,141 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
       or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
     )
     _assert(not is_flip, "explore rear hemisphere: no adjacent opposite turn pair")
+  main.queue_free()
+
+func _test_motor_planner_latched_stuck_replan() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var explore_state := _MotorPlanner.new_state()
+  explore_state["step_source"] = &"explore"
+  explore_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  explore_state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  explore_state["step_goal"] = explore_state["explore_waypoint"]
+  var start_dir: Vector3 = explore_state["explore_dir"]
+  var pos_before := body.global_position
+  for tick_i in 3:
+    var outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_RIGHT)
+    var run_s9: bool = _motor_planner_note_outcome(
+      explore_state,
+      body,
+      outcome,
+      motor_v3,
+      tick_i,
+      pos_before,
+      false,
+    )
+    _assert(not run_s9, "explore stuck replan handles explore without §9 call")
+  _assert(
+    explore_state.get("blocked_objective_action", &"") == &"explore_replan",
+    "explore stuck sets blocked_objective_action=explore_replan",
+  )
+  var new_dir: Vector3 = explore_state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    new_dir.normalized().dot(start_dir.normalized()) < 0.99,
+    "explore stuck rotates explore_dir (60 deg)",
+  )
+  _assert(
+    (explore_state.get("explore_waypoint", Vector3.ZERO) as Vector3).length_squared() < 1e-8,
+    "explore stuck clears latched waypoint",
+  )
+  _assert(
+    int(explore_state.get("consecutive_blocked", 99)) == 0,
+    "explore stuck replan resets consecutive_blocked",
+  )
+
+  var precise_state := _MotorPlanner.new_state()
+  precise_state["step_source"] = &"precise"
+  precise_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  precise_state["step_instance_id"] = 99001
+  for tick_i in 4:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+    var run_precise_s9: bool = _motor_planner_note_outcome(
+      precise_state,
+      body,
+      turn_outcome,
+      motor_v3,
+      tick_i + 10,
+      pos_before,
+      false,
+    )
+    if tick_i < 3:
+      _assert(not run_precise_s9, "precise position-stuck waits until min no-progress ticks")
+    else:
+      _assert(run_precise_s9, "precise position-stuck triggers §9 after min ticks")
+  _assert(
+    int(precise_state.get("precise_no_progress_ticks", 0)) >= 3,
+    "precise position-stuck increments precise_no_progress_ticks",
+  )
+  var move_stuck_state := _MotorPlanner.new_state()
+  move_stuck_state["step_source"] = &"precise"
+  move_stuck_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  move_stuck_state["step_instance_id"] = 99002
+  for tick_i in 3:
+    var blocked_move := _ActionOutcome.new(Vector3.ZERO, true, 0.0, _MotorAction.MOVE_FORWARD)
+    var run_move_s9: bool = _motor_planner_note_outcome(
+      move_stuck_state,
+      body,
+      blocked_move,
+      motor_v3,
+      tick_i + 20,
+      pos_before,
+      false,
+    )
+    if tick_i < 2:
+      _assert(not run_move_s9, "precise blocked MOVE waits until min stuck ticks")
+    else:
+      _assert(run_move_s9, "precise blocked MOVE triggers §9 resolution hook")
+  _assert(
+    int(move_stuck_state.get("consecutive_blocked", 0)) >= 3,
+    "precise blocked MOVE increments consecutive_blocked",
+  )
+
+  var boundary_state := _MotorPlanner.new_state()
+  boundary_state["step_source"] = &"explore"
+  boundary_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  boundary_state["turn_commit_sign"] = 1
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+  var edge_pos := body.global_position
+  for tick_i in 3:
+    var stuck_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
+    _motor_planner_note_outcome(
+      boundary_state,
+      body,
+      stuck_outcome,
+      motor_v3,
+      tick_i + 30,
+      edge_pos,
+      true,
+    )
+  _assert(
+    bool(boundary_state.get("boundary_scan_active", false)),
+    "playfield edge stuck enters boundary scan",
+  )
+  _assert(
+    boundary_state.get("blocked_objective_action", &"") == &"boundary_scan",
+    "playfield edge stuck sets blocked_objective_action=boundary_scan",
+  )
+  _assert(
+    int(boundary_state.get("turn_commit_sign", 0)) == 1,
+    "boundary scan preserves turn_commit_sign (no L/R stutter)",
+  )
+  _assert(
+    (boundary_state.get("explore_dir", Vector3.ZERO) as Vector3).normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99,
+    "boundary scan does not rotate explore_dir via 60 deg replan",
+  )
   main.queue_free()
 
 func _test_creature_motor_stack_precise_turn_no_flip_flop() -> void:

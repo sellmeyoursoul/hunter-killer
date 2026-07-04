@@ -4,6 +4,7 @@ class_name MotorPlane
 
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
+const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
@@ -105,6 +106,55 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
       maxf(0.0, cap3.radius + cap3.height * 0.5),
     )
   return he_xy
+
+
+## Playfield edge hug data for explore boundary scan ([code]PlayfieldClamp[/code] margins).
+## Returns [code]near[/code], horizontal [code]inbound_normal[/code] (toward interior), [code]min_margin[/code].
+static func playfield_boundary_hug(body: Node, motor_p: Dictionary, hug_band: float) -> Dictionary:
+  var inactive := {"near": false, "inbound_normal": Vector3.ZERO, "min_margin": INF}
+  if body == null:
+    return inactive
+  var bounds: Dictionary = {}
+  if body.has_method(&"_playfield_bounds_for_clamp"):
+    bounds = body.call(&"_playfield_bounds_for_clamp")
+  else:
+    var bounds_max_v: Variant = body.get("playfield_bounds_max")
+    var bounds_min_v: Variant = body.get("playfield_bounds_min")
+    var ss: Variant = body.get("screen_size")
+    var max_v := bounds_max_v as Vector2 if typeof(bounds_max_v) == TYPE_VECTOR2 else Vector2.ZERO
+    if max_v == Vector2.ZERO and typeof(ss) == TYPE_VECTOR2:
+      max_v = ss as Vector2
+    bounds = {
+      "min": bounds_min_v as Vector2 if typeof(bounds_min_v) == TYPE_VECTOR2 else Vector2.ZERO,
+      "max": max_v,
+    }
+  var bmax: Vector2 = bounds.get("max", Vector2.ZERO)
+  if bmax.x <= 0.0 or bmax.y <= 0.0:
+    return inactive
+  var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
+  var he := footprint_half_extents(body, motor_p)
+  var pos2 := from_vec3(body.global_position if body is Node3D else Vector3.ZERO)
+  var min_m := _PlayfieldClamp.min_edge_margin(pos2, he, bmax, bmin)
+  if min_m > hug_band:
+    return inactive
+  var margins := _PlayfieldClamp.edge_margins(pos2, he, bmax, bmin)
+  var inbound2 := Vector2.ZERO
+  var tightest := min_m
+  if margins.x <= tightest + 0.01:
+    inbound2 = Vector2.RIGHT
+  elif margins.y <= tightest + 0.01:
+    inbound2 = Vector2.LEFT
+  elif margins.z <= tightest + 0.01:
+    inbound2 = Vector2.DOWN
+  elif margins.w <= tightest + 0.01:
+    inbound2 = Vector2.UP
+  if inbound2.length_squared() < 1e-12:
+    return inactive
+  return {
+    "near": true,
+    "inbound_normal": Vector3(inbound2.x, 0.0, inbound2.y).normalized(),
+    "min_margin": min_m,
+  }
 
 
 ## Multiplier for reference-playfield-tuned motor distances from [param playfield_size] world bounds ([CONVERT_TO_3D.md §4 D7](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).

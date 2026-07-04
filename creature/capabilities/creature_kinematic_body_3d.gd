@@ -488,20 +488,28 @@ func apply_horizontal_move_intent(intent: Vector3, delta: float) -> void:
 
 
 ## Snaps world XZ inside playfield AABB after movement (row 55 safety net).
-func _clamp_playfield_position() -> void:
+## Returns true when [member global_position] XZ was adjusted.
+func _clamp_playfield_position() -> bool:
   var half := _footprint_half_for_clamp()
   var pos2 := _MotorPlane.from_vec3(global_position)
   var bounds: Dictionary = _playfield_bounds_for_clamp()
   var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
   var bmax: Vector2 = bounds.get("max", screen_size)
   if bmax == Vector2.ZERO or (bmax.x <= bmin.x and bmax.y <= bmin.y):
-    return
+    return false
   var pos2_local := pos2 - bmin
   var bmax_local := bmax - bmin
   var clamped_local := _PlayfieldClamp.clamp_position(pos2_local, half, bmax_local, Vector2.ZERO)
   var clamped_world := clamped_local + bmin
   if not pos2.is_equal_approx(clamped_world):
     global_position = Vector3(clamped_world.x, global_position.y, clamped_world.y)
+    return true
+  return false
+
+
+## Public playfield clamp for [code]CreatureMotorStack[/code]; returns whether position changed.
+func clamp_playfield_position() -> bool:
+  return _clamp_playfield_position()
 
 
 func apply_jump_if_floor() -> void:

@@ -132,7 +132,14 @@ static func _format_snapshot(title: String, snap: Dictionary) -> String:
     blk_act = "-"
   var commit := int(snap.get("turn_commit_sign", 0))
   var commit_label := "0"
-  if commit > 0:
+  if bool(snap.get("boundary_scan_active", false)):
+    if commit > 0:
+      commit_label = "sL"
+    elif commit < 0:
+      commit_label = "sR"
+    else:
+      commit_label = "s0"
+  elif commit > 0:
     commit_label = "L"
   elif commit < 0:
     commit_label = "R"

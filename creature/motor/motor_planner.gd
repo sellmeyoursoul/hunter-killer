@@ -28,6 +28,12 @@ static func new_state() -> Dictionary:
     "blocked_objective_action": &"",
     "turn_commit_sign": 0,
     "turn_commit_bearing_deg": null,
+    "boundary_scan_active": false,
+    "boundary_scan_sign": 0,
+    "boundary_scan_turns": 0,
+    "precise_no_progress_ticks": 0,
+    "precise_last_bearing_err_deg": INF,
+    "precise_last_dist_sq": INF,
   }
 
 
@@ -46,6 +52,8 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   if goal_kind.is_empty():
     return _MotorAction.STAY
   _sync_step_objective(ctx, state, goal_kind)
+  if bool(state.get("boundary_scan_active", false)) and state.get("step_source") == &"explore":
+    return _boundary_scan_action(body, motor_v3, state)
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
@@ -56,35 +64,294 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   return _turn_or_move_toward(body, step_goal, motor_v3, state, ctx)
 
 
-## Updates [param state] after [param outcome] is applied.
-static func note_outcome(
+## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
+static func _is_latched_step_source(step_source: StringName) -> bool:
+  return step_source == &"precise" or step_source == &"explore"
+
+
+static func _latched_stuck_move_epsilon(motor_v3: Dictionary) -> float:
+  return maxf(0.01, float(motor_v3.get("motor_stuck_move_epsilon", 1.25)))
+
+
+static func _tick_had_meaningful_progress(
+  body: CharacterBody3D,
+  step_goal: Vector3,
+  tick_disp: Vector3,
+  act: int,
+  _motor_v3: Dictionary,
+  stuck_eps: float,
+) -> bool:
+  if act != _MotorAction.MOVE_FORWARD:
+    return false
+  if tick_disp.length_squared() < stuck_eps * stuck_eps:
+    return false
+  var creature_pos := body.global_position
+  var to_goal := Vector3(step_goal.x - creature_pos.x, 0.0, step_goal.z - creature_pos.z)
+  if to_goal.length_squared() < 1e-8:
+    return tick_disp.length_squared() >= stuck_eps * stuck_eps
+  return tick_disp.dot(to_goal.normalized()) >= stuck_eps * 0.5
+
+
+## Rotate explore bearing and clear latch after sustained stuck (interior / no progress).
+static func _apply_explore_stuck_replan(state: Dictionary) -> void:
+  var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  if explore.length_squared() < 1e-8:
+    explore = _MotorPlane.HORIZONTAL_FORWARD
+  state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
+  state["explore_waypoint"] = Vector3.ZERO
+  state["step_goal"] = Vector3.ZERO
+  state["turn_commit_sign"] = 0
+  state["turn_commit_bearing_deg"] = null
+  state["consecutive_blocked"] = 0
+
+
+static func _playfield_hug_band(motor_v3: Dictionary) -> float:
+  return maxf(4.0, float(motor_v3.get("playfield_hug_band", 14.0)))
+
+
+static func _playfield_hug_info(body: CharacterBody3D, motor_v3: Dictionary) -> Dictionary:
+  return _MotorPlane.playfield_boundary_hug(body, motor_v3, _playfield_hug_band(motor_v3))
+
+
+static func _is_near_playfield_boundary(body: CharacterBody3D, motor_v3: Dictionary) -> bool:
+  return bool(_playfield_hug_info(body, motor_v3).get("near", false))
+
+
+static func _boundary_scan_turn_budget(motor_v3: Dictionary) -> int:
+  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  if turn_deg <= 0.0:
+    return 16
+  return maxi(1, int(ceil(360.0 / turn_deg)))
+
+
+static func _pick_boundary_scan_sign(body: CharacterBody3D, hug: Dictionary, motor_v3: Dictionary) -> int:
+  var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
+  if inbound.length_squared() < 1e-12:
+    return 1
+  var tangent_ccw := inbound.cross(Vector3.UP).normalized()
+  var tangent_cw := -tangent_ccw
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), tangent_ccw)
+  if facing.length_squared() < 1e-12:
+    return 1
+  facing = facing.normalized()
+  var prefer := tangent_ccw if facing.dot(tangent_ccw) >= facing.dot(tangent_cw) else tangent_cw
+  var turn_rad := deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
+  var left_after := facing.rotated(Vector3.UP, turn_rad).dot(prefer)
+  var right_after := facing.rotated(Vector3.UP, -turn_rad).dot(prefer)
+  return 1 if left_after >= right_after else -1
+
+
+static func _begin_boundary_scan(
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  var hug := _playfield_hug_info(body, motor_v3)
+  var scan_sign := int(state.get("boundary_scan_sign", 0))
+  if scan_sign == 0:
+    scan_sign = int(state.get("turn_commit_sign", 0))
+  if scan_sign == 0:
+    scan_sign = _pick_boundary_scan_sign(body, hug, motor_v3)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = scan_sign
+  state["boundary_scan_turns"] = 0
+  state["turn_commit_sign"] = scan_sign
+  state["consecutive_blocked"] = 0
+  state["blocked_objective_action"] = &"boundary_scan"
+
+
+static func _end_boundary_scan(
+  state: Dictionary,
+  body: CharacterBody3D,
+  action: StringName,
+) -> void:
+  state["boundary_scan_active"] = false
+  state["boundary_scan_turns"] = 0
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
+  if facing.length_squared() > 1e-12:
+    state["explore_dir"] = facing.normalized()
+  state["explore_waypoint"] = Vector3.ZERO
+  state["step_goal"] = Vector3.ZERO
+  state["consecutive_blocked"] = 0
+  state["blocked_objective_action"] = action
+
+
+static func _boundary_scan_action(body: CharacterBody3D, motor_v3: Dictionary, state: Dictionary) -> int:
+  var scan_sign := int(state.get("boundary_scan_sign", 0))
+  if scan_sign == 0:
+    scan_sign = _pick_boundary_scan_sign(body, _playfield_hug_info(body, motor_v3), motor_v3)
+    state["boundary_scan_sign"] = scan_sign
+  state["turn_commit_sign"] = scan_sign
+  return _MotorAction.TURN_LEFT if scan_sign > 0 else _MotorAction.TURN_RIGHT
+
+
+static func _reset_precise_progress_state(state: Dictionary) -> void:
+  state["precise_no_progress_ticks"] = 0
+  state["precise_last_bearing_err_deg"] = INF
+  state["precise_last_dist_sq"] = INF
+
+
+static func _note_precise_position_progress(
+  state: Dictionary,
+  body: CharacterBody3D,
+  stuck_eps: float,
+) -> void:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
+    return
+  var err_deg := absf(_signed_bearing_error_deg(body, step_goal))
+  var dist_sq := body.global_position.distance_squared_to(step_goal)
+  var last_err := float(state.get("precise_last_bearing_err_deg", INF))
+  var last_dist := float(state.get("precise_last_dist_sq", INF))
+  if is_inf(last_err) or is_inf(last_dist):
+    state["precise_last_bearing_err_deg"] = err_deg
+    state["precise_last_dist_sq"] = dist_sq
+    return
+  var improve_thresh := stuck_eps * stuck_eps
+  var bearing_improved := err_deg + 0.25 < last_err
+  var dist_improved := dist_sq + improve_thresh < last_dist
+  if bearing_improved or dist_improved:
+    state["precise_no_progress_ticks"] = 0
+  else:
+    state["precise_no_progress_ticks"] = int(state.get("precise_no_progress_ticks", 0)) + 1
+  state["precise_last_bearing_err_deg"] = err_deg
+  state["precise_last_dist_sq"] = dist_sq
+
+
+static func _note_boundary_scan_progress(
+  state: Dictionary,
+  body: CharacterBody3D,
+  act: int,
+  motor_v3: Dictionary,
+  stuck_this_tick: bool,
+) -> void:
+  if not bool(state.get("boundary_scan_active", false)):
+    return
+  if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+    state["boundary_scan_turns"] = int(state.get("boundary_scan_turns", 0)) + 1
+  var budget := _boundary_scan_turn_budget(motor_v3)
+  if int(state.get("boundary_scan_turns", 0)) >= budget:
+    _end_boundary_scan(state, body, &"boundary_scan_done")
+  elif act == _MotorAction.MOVE_FORWARD and not stuck_this_tick:
+    _end_boundary_scan(state, body, &"boundary_scan_done")
+
+
+static func _record_blocked_approach(
   state: Dictionary,
   body: CharacterBody3D,
   outcome: _ActionOutcome,
   motor_v3: Dictionary,
   physics_tick: int,
 ) -> void:
-  var blocked := outcome != null and outcome.blocked
-  state["last_outcome_blocked"] = blocked
-  if blocked:
+  var pos_after := body.global_position
+  var disp := outcome.displacement if outcome != null else Vector3.ZERO
+  disp.y = 0.0
+  var pos_before := pos_after - disp
+  var approach := _BlockedApproach.infer_approach_dir(
+    pos_after,
+    pos_before,
+    _MotorPlane.body_motor_velocity(body),
+    [],
+    _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO),
+  )
+  var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
+  _BlockedApproach.record(state["blocked_approach"], approach, physics_tick, ttl)
+
+
+## Updates [param state] after locomotion + playfield clamp for this tick.
+## Returns true when blocked objective resolution should run (precise / live latched paths).
+static func note_outcome(
+  state: Dictionary,
+  body: CharacterBody3D,
+  outcome: _ActionOutcome,
+  motor_v3: Dictionary,
+  physics_tick: int,
+  pos_before_tick: Vector3 = Vector3.ZERO,
+  boundary_clamped: bool = false,
+) -> bool:
+  var act: int = _MotorAction.STAY
+  if outcome != null:
+    act = _MotorAction.normalize(outcome.action)
+  var step_source: StringName = state.get("step_source", &"live")
+  var is_latched := _is_latched_step_source(step_source)
+  var executor_blocked: bool = outcome != null and outcome.blocked
+  var pos_after := body.global_position
+  var tick_disp := Vector3(
+    pos_after.x - pos_before_tick.x, 0.0, pos_after.z - pos_before_tick.z
+  )
+  var stuck_eps := _latched_stuck_move_epsilon(motor_v3)
+  var no_progress := tick_disp.length_squared() < stuck_eps * stuck_eps
+  var boundary_stuck := boundary_clamped and act == _MotorAction.MOVE_FORWARD
+  var move_stuck: bool = executor_blocked or boundary_stuck
+  var scan_active := bool(state.get("boundary_scan_active", false))
+  var explore_idle_stuck := (
+    step_source == &"explore"
+    and is_latched
+    and no_progress
+    and not scan_active
+  )
+  var stuck_this_tick: bool = move_stuck or explore_idle_stuck
+
+  state["last_outcome_blocked"] = stuck_this_tick
+  if outcome != null and stuck_this_tick:
+    outcome.blocked = true
+
+  if step_source == &"precise" and is_latched:
+    _note_precise_position_progress(state, body, stuck_eps)
+
+  if stuck_this_tick:
     state["consecutive_blocked"] = int(state.get("consecutive_blocked", 0)) + 1
-    var pos_after := body.global_position
-    var disp := outcome.displacement if outcome != null else Vector3.ZERO
-    disp.y = 0.0
-    var pos_before := pos_after - disp
-    var approach := _BlockedApproach.infer_approach_dir(
-      pos_after,
-      pos_before,
-      _MotorPlane.body_motor_velocity(body),
-      [],
-      _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO),
-    )
-    var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
-    _BlockedApproach.record(state["blocked_approach"], approach, physics_tick, ttl)
-    if state.get("step_source", &"") == &"explore":
-      state["explore_waypoint"] = Vector3.ZERO
+    if move_stuck:
+      _record_blocked_approach(state, body, outcome, motor_v3, physics_tick)
+      if step_source == &"explore":
+        state["explore_waypoint"] = Vector3.ZERO
+  elif is_latched:
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    if _tick_had_meaningful_progress(body, step_goal, tick_disp, act, motor_v3, stuck_eps):
+      state["consecutive_blocked"] = 0
+      if step_source == &"precise":
+        _reset_precise_progress_state(state)
   else:
     state["consecutive_blocked"] = 0
+
+  _note_boundary_scan_progress(state, body, act, motor_v3, stuck_this_tick)
+
+  var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+  if step_source == &"precise" and int(state.get("precise_no_progress_ticks", 0)) >= min_ticks:
+    state["last_outcome_blocked"] = true
+    if outcome != null:
+      outcome.blocked = true
+    state["consecutive_blocked"] = maxi(int(state.get("consecutive_blocked", 0)), min_ticks)
+    return true
+
+  if int(state.get("consecutive_blocked", 0)) < min_ticks:
+    return false
+
+  if step_source == &"explore":
+    if _is_near_playfield_boundary(body, motor_v3):
+      if not bool(state.get("boundary_scan_active", false)):
+        _begin_boundary_scan(state, body, motor_v3)
+    else:
+      _apply_explore_stuck_replan(state)
+      state["blocked_objective_action"] = &"explore_replan"
+    return false
+
+  return true
+
+
+## Alias for [method note_outcome] with explicit tick-boundary arguments.
+static func note_tick_completion(
+  state: Dictionary,
+  body: CharacterBody3D,
+  outcome: _ActionOutcome,
+  motor_v3: Dictionary,
+  physics_tick: int,
+  pos_before_tick: Vector3,
+  boundary_clamped: bool,
+) -> bool:
+  return note_outcome(
+    state, body, outcome, motor_v3, physics_tick, pos_before_tick, boundary_clamped
+  )
 
 
 static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: StringName) -> void:
@@ -96,6 +363,10 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["explore_waypoint"] = Vector3.ZERO
     state["turn_commit_sign"] = 0
     state["turn_commit_bearing_deg"] = null
+    state["boundary_scan_active"] = false
+    state["boundary_scan_sign"] = 0
+    state["boundary_scan_turns"] = 0
+    _reset_precise_progress_state(state)
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   var scan: Dictionary = ctx.get("scan", {})
@@ -146,8 +417,11 @@ static func _sync_food_memory_objective(
   var motor_ctx: Dictionary = {}
   var precise: Dictionary = adapter.consult_precise_food(creature_pos, motor_v3, food_split, now_ms)
   if bool(precise.get("active", false)):
+    var new_iid := int(precise.get("instance_id", 0))
+    if int(state.get("step_instance_id", 0)) != new_iid:
+      _reset_precise_progress_state(state)
     state["step_goal"] = precise.get("pos", Vector3.ZERO)
-    state["step_instance_id"] = int(precise.get("instance_id", 0))
+    state["step_instance_id"] = new_iid
     state["step_stimulus_kind_id"] = precise.get("stimulus_kind_id", &"")
     state["step_source"] = &"precise"
     return true
@@ -412,11 +686,6 @@ static func _pick_turn_action(
   state["turn_commit_sign"] = new_commit
   state["turn_commit_bearing_deg"] = bearing_deg
   return _MotorAction.TURN_LEFT if new_commit > 0 else _MotorAction.TURN_RIGHT
-
-
-## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
-static func _is_latched_step_source(step_source: StringName) -> bool:
-  return step_source == &"precise" or step_source == &"explore"
 
 
 static func _agent_radius(body: CharacterBody3D) -> float:

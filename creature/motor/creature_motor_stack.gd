@@ -88,22 +88,34 @@ func tick(delta: float) -> _ActionOutcome:
     _run_consideration(ctx)
 
   var planner_ctx := _build_planner_context(ctx, delta)
+  var pos_before_tick := _body.global_position
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
   var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(_body, action, delta, _motor_v3)
+  var boundary_clamped := _clamp_playfield_if_needed()
+  var run_blocked_resolution: bool = (
+    _MotorPlanner as GDScript
+  ).call(
+    "note_tick_completion",
+    _planner_state,
+    _body,
+    outcome,
+    _motor_v3,
+    _physics_tick_count,
+    pos_before_tick,
+    boundary_clamped,
+  )
   _last_outcome = outcome
   if int(outcome.action) == _MotorAction.EAT:
     _try_complete_eat()
-  _MotorPlanner.note_outcome(_planner_state, _body, outcome, _motor_v3, _physics_tick_count)
   if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
     if _memory_adapter != null:
       _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
-  elif outcome != null and outcome.blocked:
+  elif run_blocked_resolution:
     var blocked_ctx := _build_planner_context(ctx, delta)
     _MotorPlanner.apply_blocked_objective_resolution(
       blocked_ctx, _planner_state, _body, _motor_v3
     )
   _apply_gravity_if_stationary(action, delta)
-  _clamp_playfield_if_needed()
   return outcome
 
 
@@ -147,6 +159,10 @@ func get_planner_blocked_objective_action() -> StringName:
 func get_debug_snapshot() -> Dictionary:
   var ps := _planner_state.duplicate(true)
   var step_goal: Vector3 = ps.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8 and str(ps.get("step_source", "")) == "explore":
+    var latched_wp: Vector3 = ps.get("explore_waypoint", Vector3.ZERO)
+    if latched_wp.length_squared() > 1e-8:
+      step_goal = latched_wp
   var ready: Array = _food_split.get("ready", [])
   var action_label := "?"
   var blocked := false
@@ -177,6 +193,7 @@ func get_debug_snapshot() -> Dictionary:
     "blocked_objective_action": str(ps.get("blocked_objective_action", "")),
     "consecutive_blocked": int(ps.get("consecutive_blocked", 0)),
     "turn_commit_sign": int(ps.get("turn_commit_sign", 0)),
+    "boundary_scan_active": bool(ps.get("boundary_scan_active", false)),
     "bearing_error_deg": float(bearing.get("bearing_error_deg", 0.0)),
     "facing_dot_tgt": float(bearing.get("facing_dot_tgt", 0.0)),
     "physics_tick": _physics_tick_count,
@@ -498,14 +515,15 @@ func _apply_gravity_if_stationary(action: int, delta: float) -> void:
         _body.call(&"apply_horizontal_move_intent", Vector3.ZERO, delta)
 
 
-func _clamp_playfield_if_needed() -> void:
+func _clamp_playfield_if_needed() -> bool:
   if _body == null:
-    return
+    return false
   var mode := int(_body.get("control_mode"))
   if mode != _ControlMode.engine_as_int() and mode != _ControlMode.ai_as_int():
-    return
-  if _body.has_method(&"_clamp_playfield_position"):
-    _body.call(&"_clamp_playfield_position")
+    return false
+  if _body.has_method(&"clamp_playfield_position"):
+    return bool(_body.call(&"clamp_playfield_position"))
+  return false
 
 
 func _traits_from_body() -> Dictionary:
