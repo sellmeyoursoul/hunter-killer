@@ -332,6 +332,8 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "motor_stuck_move_epsilon": 1.25,
     ## Playfield edge hug band for explore boundary scan ([code]PlayfieldClamp[/code] margins).
     "playfield_hug_band": 14.0,
+    ## Unscaled world margin for rim detection when scaled [code]playfield_hug_band[/code] is too tight.
+    "playfield_rim_margin": 2.0,
     "passibility_fail_switch_threshold": 2,
     "kind_profile_neutral_prior": 0.5,
     "kind_profile_ewma_alpha": 0.15,

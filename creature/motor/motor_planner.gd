@@ -34,6 +34,9 @@ static func new_state() -> Dictionary:
     "precise_no_progress_ticks": 0,
     "precise_last_bearing_err_deg": INF,
     "precise_last_dist_sq": INF,
+    "explore_no_progress_ticks": 0,
+    "explore_last_facing_dot": -2.0,
+    "playfield_clamp_latch_ticks": 0,
   }
 
 
@@ -103,6 +106,32 @@ static func _apply_explore_stuck_replan(state: Dictionary) -> void:
   state["turn_commit_sign"] = 0
   state["turn_commit_bearing_deg"] = null
   state["consecutive_blocked"] = 0
+  _reset_explore_align_progress_state(state)
+
+
+static func _reset_explore_align_progress_state(state: Dictionary) -> void:
+  state["explore_no_progress_ticks"] = 0
+  state["explore_last_facing_dot"] = -2.0
+
+
+static func _note_explore_align_progress(
+  state: Dictionary,
+  body: CharacterBody3D,
+  step_goal: Vector3,
+  explore_idle_stuck: bool,
+) -> void:
+  if step_goal.length_squared() < 1e-8:
+    return
+  var dot := _facing_dot_to_target(body, step_goal)
+  var last_dot := float(state.get("explore_last_facing_dot", -2.0))
+  if last_dot <= -1.5:
+    state["explore_last_facing_dot"] = dot
+    return
+  if dot > last_dot + 0.01:
+    state["explore_no_progress_ticks"] = 0
+  elif explore_idle_stuck:
+    state["explore_no_progress_ticks"] = int(state.get("explore_no_progress_ticks", 0)) + 1
+  state["explore_last_facing_dot"] = dot
 
 
 static func _playfield_hug_band(motor_v3: Dictionary) -> float:
@@ -115,6 +144,32 @@ static func _playfield_hug_info(body: CharacterBody3D, motor_v3: Dictionary) -> 
 
 static func _is_near_playfield_boundary(body: CharacterBody3D, motor_v3: Dictionary) -> bool:
   return bool(_playfield_hug_info(body, motor_v3).get("near", false))
+
+
+## Footprint within fixed world margin of playfield edge (clamp ground truth; not scaled hug band).
+static func _is_at_playfield_rim(body: CharacterBody3D, motor_v3: Dictionary) -> bool:
+  var rim_margin := maxf(0.5, float(motor_v3.get("playfield_rim_margin", 2.0)))
+  return bool(_MotorPlane.playfield_boundary_hug(body, motor_v3, rim_margin).get("near", false))
+
+
+static func _playfield_clamp_latch_ttl(motor_v3: Dictionary) -> int:
+  var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+  return min_ticks + _boundary_scan_turn_budget(motor_v3)
+
+
+static func _should_explore_boundary_scan(
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  state: Dictionary,
+  boundary_clamped: bool,
+) -> bool:
+  if boundary_clamped:
+    return true
+  if int(state.get("playfield_clamp_latch_ticks", 0)) > 0:
+    return true
+  if _is_at_playfield_rim(body, motor_v3):
+    return true
+  return _is_near_playfield_boundary(body, motor_v3)
 
 
 static func _boundary_scan_turn_budget(motor_v3: Dictionary) -> int:
@@ -157,6 +212,7 @@ static func _begin_boundary_scan(
   state["boundary_scan_turns"] = 0
   state["turn_commit_sign"] = scan_sign
   state["consecutive_blocked"] = 0
+  state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = &"boundary_scan"
 
 
@@ -173,6 +229,7 @@ static func _end_boundary_scan(
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["consecutive_blocked"] = 0
+  state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = action
 
 
@@ -280,6 +337,7 @@ static func note_outcome(
     pos_after.x - pos_before_tick.x, 0.0, pos_after.z - pos_before_tick.z
   )
   var stuck_eps := _latched_stuck_move_epsilon(motor_v3)
+  var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
   var no_progress := tick_disp.length_squared() < stuck_eps * stuck_eps
   var boundary_stuck := boundary_clamped and act == _MotorAction.MOVE_FORWARD
   var move_stuck: bool = executor_blocked or boundary_stuck
@@ -299,6 +357,21 @@ static func note_outcome(
   if step_source == &"precise" and is_latched:
     _note_precise_position_progress(state, body, stuck_eps)
 
+  if step_source == &"explore" and is_latched:
+    var align_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    _note_explore_align_progress(state, body, align_goal, explore_idle_stuck)
+    if move_stuck:
+      state["explore_no_progress_ticks"] = maxi(
+        int(state.get("explore_no_progress_ticks", 0)),
+        min_ticks,
+      )
+
+  if step_source == &"explore":
+    if boundary_clamped:
+      state["playfield_clamp_latch_ticks"] = _playfield_clamp_latch_ttl(motor_v3)
+    elif int(state.get("playfield_clamp_latch_ticks", 0)) > 0:
+      state["playfield_clamp_latch_ticks"] = int(state["playfield_clamp_latch_ticks"]) - 1
+
   if stuck_this_tick:
     state["consecutive_blocked"] = int(state.get("consecutive_blocked", 0)) + 1
     if move_stuck:
@@ -311,12 +384,14 @@ static func note_outcome(
       state["consecutive_blocked"] = 0
       if step_source == &"precise":
         _reset_precise_progress_state(state)
+      elif step_source == &"explore" and not boundary_clamped:
+        state["playfield_clamp_latch_ticks"] = 0
+        _reset_explore_align_progress_state(state)
   else:
     state["consecutive_blocked"] = 0
 
   _note_boundary_scan_progress(state, body, act, motor_v3, stuck_this_tick)
 
-  var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
   if step_source == &"precise" and int(state.get("precise_no_progress_ticks", 0)) >= min_ticks:
     state["last_outcome_blocked"] = true
     if outcome != null:
@@ -328,10 +403,10 @@ static func note_outcome(
     return false
 
   if step_source == &"explore":
-    if _is_near_playfield_boundary(body, motor_v3):
+    if _should_explore_boundary_scan(body, motor_v3, state, boundary_clamped):
       if not bool(state.get("boundary_scan_active", false)):
         _begin_boundary_scan(state, body, motor_v3)
-    else:
+    elif int(state.get("explore_no_progress_ticks", 0)) >= min_ticks:
       _apply_explore_stuck_replan(state)
       state["blocked_objective_action"] = &"explore_replan"
     return false
@@ -366,7 +441,9 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["boundary_scan_active"] = false
     state["boundary_scan_sign"] = 0
     state["boundary_scan_turns"] = 0
+    state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
+    _reset_explore_align_progress_state(state)
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   var scan: Dictionary = ctx.get("scan", {})

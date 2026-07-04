@@ -1,0 +1,25 @@
+---
+description: Summarizes the current session into chat_sum.md for token optimization.
+alwaysApply: true
+---
+
+# Slash Command: /stop
+
+When I type `/stop`, immediately execute this sequence:
+
+1. Analyze the current chat and create or overwrite `chat_sum.md` in the workspace root.
+2. Use this exact high-signal handoff structure:
+
+```markdown
+# Handoff Context
+
+**System State:** [Current architecture, active files, working code state]
+
+**Progress Made:**
+- [Dense, high-signal completed item]
+- [Dense, high-signal completed item]
+
+**Last Known Trajectory:** [What we were working on right before this handoff]
+```
+
+Keep it concise, current, and useful for a fresh `/go` chat.

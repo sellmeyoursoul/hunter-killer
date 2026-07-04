@@ -13,6 +13,7 @@ const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
+const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
 
 
 var _body: CharacterBody3D
@@ -73,6 +74,7 @@ func configure(
     _memory_adapter = _MemoryAdapter.new()
   _memory_adapter.configure(_pack_root, _traits_from_body())
   _memory_adapter.set_goal_catalog(_goal_catalog)
+  _ExploreLog.reset_session()
 
 
 ## One physics tick: awareness scan, consideration cadence, planner action, execution.
@@ -116,7 +118,31 @@ func tick(delta: float) -> _ActionOutcome:
       blocked_ctx, _planner_state, _body, _motor_v3
     )
   _apply_gravity_if_stationary(action, delta)
+  _maybe_log_explore_tick()
   return outcome
+
+
+func _maybe_log_explore_tick() -> void:
+  if str(_planner_state.get("step_source", &"")) != &"explore":
+    return
+  var snap := get_debug_snapshot()
+  _ExploreLog.maybe_log_tick(_creature_log_label(), snap)
+
+
+func _creature_log_label() -> String:
+  if _body == null:
+    return "creature"
+  var def_v: Variant = _body.get("definition")
+  if def_v is Resource:
+    var species := str((def_v as Resource).get("species_id")).strip_edges()
+    if not species.is_empty():
+      return species
+    var display := str((def_v as Resource).get("display_name")).strip_edges()
+    if not display.is_empty():
+      return display
+  if not _body.name.is_empty():
+    return str(_body.name)
+  return "creature"
 
 
 func get_physics_tick_count() -> int:
@@ -192,6 +218,7 @@ func get_debug_snapshot() -> Dictionary:
     "stimulus_kind_id": str(ps.get("step_stimulus_kind_id", "")),
     "blocked_objective_action": str(ps.get("blocked_objective_action", "")),
     "consecutive_blocked": int(ps.get("consecutive_blocked", 0)),
+    "explore_no_progress_ticks": int(ps.get("explore_no_progress_ticks", 0)),
     "turn_commit_sign": int(ps.get("turn_commit_sign", 0)),
     "boundary_scan_active": bool(ps.get("boundary_scan_active", false)),
     "bearing_error_deg": float(bearing.get("bearing_error_deg", 0.0)),

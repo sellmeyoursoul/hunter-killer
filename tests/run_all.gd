@@ -132,6 +132,8 @@ func _run_all() -> void:
   _test_motor_planner_precise_backtrack_ignored()
   _test_motor_planner_explore_latch()
   _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
+  _test_motor_planner_explore_align_no_premature_replan()
+  _test_motor_planner_explore_log_format()
   _test_motor_planner_latched_stuck_replan()
   await _test_creature_motor_stack_precise_turn_no_flip_flop()
   _test_body_motor_stack_skips_legacy_physics()
@@ -1223,6 +1225,7 @@ func _test_creature_motor_stack_debug_snapshot() -> void:
   _assert(snap.has("turn_commit_sign"), "debug snapshot includes turn_commit_sign")
   _assert(snap.has("bearing_error_deg"), "debug snapshot includes bearing_error_deg")
   _assert(snap.has("facing_dot_tgt"), "debug snapshot includes facing_dot_tgt")
+  _assert(snap.has("explore_no_progress_ticks"), "debug snapshot includes explore_no_progress_ticks")
   _assert(int(snap.get("physics_tick", 0)) >= 1, "debug snapshot reflects ticks after tick")
   main.queue_free()
 
@@ -1697,7 +1700,21 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
       _assert(dot >= move_min_dot - 0.01, "rear explore MOVE when within turn increment cone")
       break
     if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      var pos_before := body.global_position
       _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      _motor_planner_note_outcome(
+        state,
+        body,
+        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
+        motor_v3,
+        tick_i,
+        pos_before,
+        false,
+      )
+      _assert(
+        state.get("blocked_objective_action", &"") != &"explore_replan",
+        "rear explore: no interior replan while bearing improves",
+      )
   _assert(saw_move, "explore rear hemisphere converges to MOVE within 16 ticks")
   var turn_actions: Array[int] = []
   for act in actions:
@@ -1720,6 +1737,84 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
     _assert(not is_flip, "explore rear hemisphere: no adjacent opposite turn pair")
   main.queue_free()
 
+
+func _test_motor_planner_explore_align_no_premature_replan() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  state["step_goal"] = state["explore_waypoint"]
+  state["turn_commit_sign"] = 1
+  var pos_before := body.global_position
+  for tick_i in 4:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+    _LocomotionExecutor.apply_action(body, _MotorAction.TURN_LEFT, 1.0 / 60.0, motor_v3)
+    _motor_planner_note_outcome(
+      state,
+      body,
+      turn_outcome,
+      motor_v3,
+      tick_i,
+      pos_before,
+      false,
+    )
+    pos_before = body.global_position
+    _assert(
+      state.get("blocked_objective_action", &"") != &"explore_replan",
+      "explore turn-idle with improving bearing skips interior replan before min no-progress ticks",
+    )
+  _assert(
+    int(state.get("explore_no_progress_ticks", 99)) == 0,
+    "explore align progress stays reset while dot improves",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) == 1,
+    "explore align progress preserves turn commit during improving turns",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_log_format() -> void:
+  const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+  var snap := {
+    "physics_tick": 42,
+    "action": "TURN_L",
+    "blocked": true,
+    "calorie_ratio": 0.7,
+    "incumbent_goal": "find_food",
+    "incumbent_empty": false,
+    "incumbent_weight": 0.05,
+    "step_source": "explore",
+    "goal_kind": "find_food",
+    "step_goal_xz": Vector2(128.4, 94.2),
+    "step_instance_id": 0,
+    "turn_commit_sign": 1,
+    "boundary_scan_active": false,
+    "bearing_error_deg": 24.3,
+    "facing_dot_tgt": 0.901,
+    "explore_no_progress_ticks": 2,
+    "blocked_objective_action": "explore_replan",
+    "consecutive_blocked": 3,
+    "flight_fast_path": false,
+    "ready_food": 0,
+    "threat_count": 0,
+  }
+  var line := _ExploreLog.format_explore_tick_line(snap, "Fox")
+  _assert(line.contains("t=0042"), "explore log line includes zero-padded tick")
+  _assert(line.contains("act=TURN_L"), "explore log line includes action")
+  _assert(line.contains("enp=2"), "explore log line includes explore no-progress count")
+  _assert(line.contains("dot=  0.901") or line.contains("dot= 0.901"), "explore log fixed-width dot")
+  _assert(_ExploreLog.commit_label_from_snap(snap) == "L", "commit label L when turn_commit_sign positive")
+
+
 func _test_motor_planner_latched_stuck_replan() -> void:
   var motor_v3 := _motor_v3_test_params()
   motor_v3["dead_end_record_min_blocked_ticks"] = 3
@@ -1736,7 +1831,7 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   explore_state["step_goal"] = explore_state["explore_waypoint"]
   var start_dir: Vector3 = explore_state["explore_dir"]
   var pos_before := body.global_position
-  for tick_i in 3:
+  for tick_i in 4:
     var outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_RIGHT)
     var run_s9: bool = _motor_planner_note_outcome(
       explore_state,
@@ -1852,6 +1947,56 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   _assert(
     (boundary_state.get("explore_dir", Vector3.ZERO) as Vector3).normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99,
     "boundary scan does not rotate explore_dir via 60 deg replan",
+  )
+
+  var latch_state := _MotorPlanner.new_state()
+  latch_state["step_source"] = &"explore"
+  latch_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  latch_state["turn_commit_sign"] = 1
+  body.global_position = Vector3(50.0, 1.0, 50.0)
+  var center_pos := body.global_position
+  var clamp_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
+  _motor_planner_note_outcome(
+    latch_state,
+    body,
+    clamp_outcome,
+    motor_v3,
+    40,
+    center_pos,
+    true,
+  )
+  _assert(
+    int(latch_state.get("playfield_clamp_latch_ticks", 0)) > 0,
+    "explore playfield clamp sets playfield_clamp_latch_ticks",
+  )
+  for tick_i in 2:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+    _motor_planner_note_outcome(
+      latch_state,
+      body,
+      turn_outcome,
+      motor_v3,
+      tick_i + 41,
+      center_pos,
+      false,
+    )
+  var turn3 := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+  _motor_planner_note_outcome(
+    latch_state,
+    body,
+    turn3,
+    motor_v3,
+    43,
+    center_pos,
+    false,
+  )
+  _assert(
+    bool(latch_state.get("boundary_scan_active", false)),
+    "clamp latch + turn stuck enters boundary scan instead of explore_replan",
+  )
+  _assert(
+    latch_state.get("blocked_objective_action", &"") == &"boundary_scan",
+    "clamp latch path sets blocked_objective_action=boundary_scan",
   )
   main.queue_free()
 
