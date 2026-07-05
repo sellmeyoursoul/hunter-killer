@@ -1,8 +1,8 @@
 # Creature movement (2D duel / ENGINE motor)
 
-> **Superseded for 3D production (2026-06):** Production motor runs on [`main_3d.gd`](../../main_3d.gd) with unified **`CharacterBody3D`** duel templates ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)). This file is a **historical 2D inventory** (`player.gd` / `mob.gd` era). **Active design and refactor:** [CREATURE_MOVEMENT_V2.md](../Draft_Features/CREATURE_MOVEMENT_V2.md).
+> **Superseded for 3D production (2026-06):** Production motor runs on [`main_3d.gd`](../../main_3d.gd) with unified **`CharacterBody3D`** duel templates ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd)). This file is a **historical 2D inventory** (`player.gd` / `mob.gd` era). **Active ENGINE motor design and implementation:** [CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) (§7 planner / explore / debug).
 >
-> **Tier III contract — inventory of legacy 2D behavior.** This doc maps **where** movement was decided, **what** weights exist, and **every carnivore vs herbivore fork** in the pre-3D code path. It is intentionally verbose for refactor planning.
+> **Tier III contract — inventory of legacy 2D behavior.** This doc maps **where** movement was decided, **what** weights exist, and **every carnivore vs herbivore fork** in the pre-3D code path. It is intentionally verbose for refactor planning. **Do not** treat §10+ V3 pointers as a second motor spec — implement from **V3**.
 >
 > **Drift policy:** When code and this file disagree, **code wins** until this doc is updated in the same change set.
 >
@@ -441,7 +441,7 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 
 ---
 
-## 10. Sensing — what populates targets
+## 10. Sensing — what populates targets (legacy 2D)
 
 | Sense | Group | Gate | Consumers |
 |-------|-------|------|-----------|
@@ -451,9 +451,7 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 | Obstacles | `obstacles` + plant static bodies | Sample points filtered by awareness radius | repulsion + strategy |
 | Environment grid | `Main.environment_grid` | Cell at predicted point | player ENGINE interior cost |
 
-**Debug (3D):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`. Draws scaled **`creature_motor_v3`** zone geometry (same playfield distance scale as [`CreatureMotorStack`](../../creature/motor/creature_motor_stack.gd) via [`motor_plane.gd`](../../creature/motor/motor_plane.gd) `scale_creature_motor_v3_for_playfield`).
-
-**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Monospace **fixed-width** lines via [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd): last action, incumbent, `step_source`, turn commit (`cmt=L/R/0`, **`sL`/`sR`** during explore boundary scan), bearing error (`err`), facing·target dot (`dot`), **`enp`** (`explore_no_progress_ticks`), scan counts per creature. **`cmt`** holds L/R until **`dot ≥ cos(turn_increment_deg)`** (MOVE cone); rear-hemisphere turns ignore **`err`** sign flips at ±180°. **`blk`** / **`cblk`** reflect latched stuck detection (playfield clamp, no progress, wall block) — not wall collision alone. When `hunter_killer_debug/motor_explore_tick_log` is set (debug builds), each **`step_source == explore`** physics tick appends the same fixed-width line to **`user://logs/motor_explore_tick.log`** (cap 400 lines per duel configure).
+**V3 ENGINE motor (3D duel):** Zone geometry, planner explore/rim behavior, F9/F10 debug, and headless logging rules live in [CREATURE_MOVEMENT_V3.md §7.3 / §7.7](../Draft_Features/CREATURE_MOVEMENT_V3.md) — not duplicated here.
 
 ---
 
@@ -475,6 +473,8 @@ Identification in code uses **Godot groups**, not `CreatureDefinition.FeedingMod
 | `_test_diet_registry` | Herbivore vs carnivore policy |
 
 Run: `godot --path . --headless -s res://tests/run_all.gd`
+
+**V3 motor tests:** See [CREATURE_MOVEMENT_V3.md §12.2 6c](../Draft_Features/CREATURE_MOVEMENT_V3.md) for `_test_motor_planner_explore_*` and stack planner gates.
 
 ---
 
@@ -519,9 +519,9 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 
 ## 14. Maintenance
 
-- Update this file when adding/removing a cost term, config key, or group-based fork **in the legacy 2D inventory sections**.
-- When promoting behavior from draft docs, copy **contract** bullets here and link outward.
-- Trim §5–§9 once a replacement motor architecture is chosen.
+- Update this file when adding/removing a cost term, config key, or group-based fork **in the legacy 2D inventory sections (§2–§9)**.
+- **V3 ENGINE motor** behavior, debug, and acceptance tests → [CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) only; link from here, do not duplicate.
+- Trim §5–§9 once legacy 2D paths are fully retired from production.
 
 ---
 
@@ -529,4 +529,5 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 
 | Date | Change |
 |------|--------|
+| 2026-07-05 | Banner → V3 authority; removed duplicated V3 debug/planner prose from §10; §11/§14 point to V3 §7 / §12.2. |
 | 2026-06-08 | Supersession banner for 3D production; §1 executive summary notes 3D paths; debug overlay → `awareness_debug_overlay_3d.gd` (M3). |

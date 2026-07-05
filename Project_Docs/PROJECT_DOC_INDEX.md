@@ -76,7 +76,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | [Definitive_Features/CREATURE_3D_ARCHITECTURE.md](Definitive_Features/CREATURE_3D_ARCHITECTURE.md) | **3D creature stack:** [CreatureDefinition](res://creature/definition/creature_definition.gd), capabilities, templates, AI intent bridge. |
 | [Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md](Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) | **Stat pool → mechanics map:** `stat_*` / `curr_point_*` / `max_point_*` from [CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md); disambiguation vs `current_fit`, `creature_size`, awareness keys. |
 | [Definitive_Features/CREATURE_TRAIT_USAGE.md](Definitive_Features/CREATURE_TRAIT_USAGE.md) | **Motivation trait → code map:** four `CreatureDefinition` axes (−100…+100), Slot A/B replay live paths, Tier-2 urgency stub; semantics in [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3–§5. |
-| [Definitive_Features/CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md) | **2D creature movement inventory:** cardinal motor pipeline, config keys, AiDriver tools, carnivore vs herbivore forks (refactor anchor). |
+| [Definitive_Features/CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md) | **Legacy 2D movement inventory** (cardinal pipeline, config keys, carnivore vs herbivore forks). **Not** V3 motor authority — implement ENGINE motor from [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md). |
 | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) | Env catalog; **§6** = **2D layer/mask** (`project.godot`); **§7** acceptance checklist. |
 
 ---

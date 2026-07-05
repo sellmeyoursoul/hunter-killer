@@ -23,11 +23,11 @@ func _ready() -> void:
 func _apply_monospace_labels() -> void:
   var font := SystemFont.new()
   font.font_names = PackedStringArray(["Consolas", "Courier New", "DejaVu Sans Mono", "monospace"])
-  font.fixed_size = 13
   for node_name in ["HerbivoreLabel", "CarnivoreLabel"]:
     var lbl := get_node_or_null(node_name) as Label
     if lbl != null:
       lbl.add_theme_font_override("font", font)
+      lbl.add_theme_font_size_override("font_size", 13)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -136,6 +136,6 @@ func _creature_display_name(creature_root: Node, fallback: String) -> String:
 
 static func _format_snapshot(title: String, short_tag: String, snap: Dictionary) -> String:
   var header := _ExploreLog._fw(title, 12) + " motor"
-  var explore_line := _ExploreLog.format_explore_tick_line(snap, short_tag)
+  var explore_block: String = _ExploreLog.format_explore_tick_hud(snap, short_tag)
   var tick_iv := int(snap.get("consideration_interval", 0))
-  return header + "\n" + explore_line + " iv=%d" % tick_iv
+  return header + "\n" + explore_block + "\niv=%d" % tick_iv

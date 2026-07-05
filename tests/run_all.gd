@@ -52,6 +52,7 @@ const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
 const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _BushFoodScr := preload("res://assets/plants/bush_food_3d.gd")
+const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -134,7 +135,17 @@ func _run_all() -> void:
   _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
   _test_motor_planner_explore_align_no_premature_replan()
   _test_motor_planner_explore_log_format()
+  _test_motor_planner_explore_move_not_falsely_blocked()
   _test_motor_planner_latched_stuck_replan()
+  _test_motor_planner_explore_boundary_scan_inward_escape()
+  _test_motor_planner_explore_post_scan_egress_no_rescan()
+  _test_motor_planner_explore_post_scan_rim_move_keeps_egress()
+  _test_motor_planner_explore_post_scan_inward_align_no_flip_flop()
+  _test_motor_planner_explore_rim_waypoint_mints_inward()
+  _test_motor_planner_explore_rim_overshoot_replans_inward()
+  _test_motor_planner_explore_rim_stuck_replan_seeds_commit()
+  _test_motor_planner_explore_overshoot_replans()
+  _test_motor_planner_explore_seek_seeds_waypoint()
   await _test_creature_motor_stack_precise_turn_no_flip_flop()
   _test_body_motor_stack_skips_legacy_physics()
   _test_locomotion_executor_turn_clears_velocity()
@@ -1422,6 +1433,7 @@ func _motor_planner_note_outcome(
   physics_tick: int,
   pos_before_tick: Vector3,
   boundary_clamped: bool,
+  delta: float = 1.0 / 60.0,
 ) -> bool:
   return (_MotorPlanner as GDScript).call(
     "note_outcome",
@@ -1432,6 +1444,7 @@ func _motor_planner_note_outcome(
     physics_tick,
     pos_before_tick,
     boundary_clamped,
+    delta,
   )
 
 
@@ -1783,7 +1796,7 @@ func _test_motor_planner_explore_align_no_premature_replan() -> void:
 
 
 func _test_motor_planner_explore_log_format() -> void:
-  const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+  const _explore_log_script: GDScript = preload("res://creature/motor/motor_planner_explore_log.gd")
   var snap := {
     "physics_tick": 42,
     "action": "TURN_L",
@@ -1813,6 +1826,37 @@ func _test_motor_planner_explore_log_format() -> void:
   _assert(line.contains("enp=2"), "explore log line includes explore no-progress count")
   _assert(line.contains("dot=  0.901") or line.contains("dot= 0.901"), "explore log fixed-width dot")
   _assert(_ExploreLog.commit_label_from_snap(snap) == "L", "commit label L when turn_commit_sign positive")
+  var hud: String = _explore_log_script.call("format_explore_tick_hud", snap, "Fox")
+  _assert(hud.count("\n") >= 3, "explore HUD block uses multiple lines")
+
+
+func _test_motor_planner_explore_move_not_falsely_blocked() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  state["step_goal"] = state["explore_waypoint"]
+  var delta := 1.0 / 60.0
+  var pos_before := body.global_position
+  var outcome := _LocomotionExecutor.apply_action(body, _MotorAction.MOVE_FORWARD, delta, motor_v3)
+  _motor_planner_note_outcome(state, body, outcome, motor_v3, 1, pos_before, false, delta)
+  _assert(not outcome.blocked, "explore MOVE with normal displacement is not latched-stuck blocked")
+  _assert(
+    int(state.get("explore_no_progress_ticks", 99)) == 0,
+    "explore forward move does not increment no-progress when displacement exceeds scaled epsilon",
+  )
+  _assert(
+    int(state.get("consecutive_blocked", 99)) == 0,
+    "explore forward move clears consecutive_blocked on meaningful progress",
+  )
+  main.queue_free()
 
 
 func _test_motor_planner_latched_stuck_replan() -> void:
@@ -1999,6 +2043,544 @@ func _test_motor_planner_latched_stuck_replan() -> void:
     "clamp latch path sets blocked_objective_action=boundary_scan",
   )
   main.queue_free()
+
+
+func _test_motor_planner_explore_boundary_scan_inward_escape() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = -1
+  state["boundary_scan_turns"] = 16
+  (_MotorPlanner as GDScript).call(
+    "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
+  )
+  var escape_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    escape_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "boundary_scan_done sets explore_dir inward off east rim",
+  )
+  _assert(
+    absf(escape_dir.normalized().dot(Vector3(0.0, 0.0, -1.0))) < 0.5,
+    "boundary_scan_done does not keep rim-tangent explore_dir",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) != 0,
+    "boundary_scan_done seeds turn commit for inward realign",
+  )
+
+  state["blocked_objective_action"] = &"boundary_scan_done"
+  state["explore_waypoint"] = Vector3(101.0, 1.0, 50.0)
+  state["step_goal"] = state["explore_waypoint"]
+  var edge_pos := body.global_position
+  for tick_i in 3:
+    var clamp_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
+    _motor_planner_note_outcome(
+      state,
+      body,
+      clamp_outcome,
+      motor_v3,
+      tick_i + 1,
+      edge_pos,
+      true,
+    )
+  _assert(
+    not bool(state.get("boundary_scan_active", false)),
+    "post-scan playfield clamp uses rim escape replan instead of another boundary scan",
+  )
+  _assert(
+    state.get("blocked_objective_action", &"") == &"explore_replan",
+    "post-scan clamp sets blocked_objective_action=explore_replan",
+  )
+  var replan_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    replan_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "post-scan clamp replan keeps inward explore_dir",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_post_scan_egress_no_rescan() -> void:
+  # Fox rim regression: after boundary_scan_done the creature must be allowed to turn inward
+  # toward the new waypoint without the scan re-arming on turn-only (no-progress) ticks.
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  # Facing along the east rim tangent (south), inward normal points west (-x).
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = -1
+  state["boundary_scan_turns"] = 16
+  (_MotorPlanner as GDScript).call(
+    "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
+  )
+  _assert(
+    int(state.get("boundary_scan_egress_ticks", 0)) > 0,
+    "boundary_scan_done arms a post-scan egress grace window",
+  )
+
+  # Simulate turn-only inward-align ticks: creature turns toward inward waypoint, no forward
+  # displacement, not clamping. This must NOT re-arm the scan while egress is active.
+  state["blocked_objective_action"] = &"boundary_scan_done"
+  state["explore_waypoint"] = Vector3(0.0, 1.0, 50.0)
+  state["step_goal"] = state["explore_waypoint"]
+  var stall_pos := body.global_position
+  var rescanned := false
+  for tick_i in 6:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+    _motor_planner_note_outcome(
+      state,
+      body,
+      turn_outcome,
+      motor_v3,
+      tick_i + 1,
+      stall_pos,
+      false,
+    )
+    if bool(state.get("boundary_scan_active", false)):
+      rescanned = true
+      break
+  _assert(
+    not rescanned,
+    "post-scan turn-only inward align does not re-arm boundary scan during egress",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_post_scan_rim_move_keeps_egress() -> void:
+  # Fox duel t=706–709: MOVE_F at the rim with blk=0 must not clear egress while still inside
+  # playfield_rim_margin; otherwise blocked turn ticks re-arm boundary_scan immediately.
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(-1.0, 0.0, 0.0)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = -1
+  state["boundary_scan_turns"] = 16
+  (_MotorPlanner as GDScript).call(
+    "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
+  )
+  var egress_before := int(state.get("boundary_scan_egress_ticks", 0))
+  _assert(egress_before > 0, "post-scan rim move test starts with egress armed")
+
+  state["blocked_objective_action"] = &"boundary_scan_done"
+  state["explore_waypoint"] = Vector3(50.0, 1.0, 50.0)
+  state["step_goal"] = state["explore_waypoint"]
+  var pos_before := body.global_position
+  body.global_position = pos_before + Vector3(0.0, 0.0, -0.8)
+  _assert(
+    bool(
+      (_MotorPlanner as GDScript).call(
+        "_is_at_playfield_rim", body, motor_v3
+      )
+    ),
+    "rim move fixture stays inside playfield_rim_margin after tangent step",
+  )
+  var move_outcome := _ActionOutcome.new(
+    body.global_position - pos_before, false, 0.0, _MotorAction.MOVE_FORWARD
+  )
+  _motor_planner_note_outcome(state, body, move_outcome, motor_v3, 706, pos_before, false)
+  _assert(
+    int(state.get("boundary_scan_egress_ticks", 0)) == egress_before,
+    "MOVE_F while still at rim does not clear post-scan egress",
+  )
+
+  var stall_pos := body.global_position
+  var rescanned := false
+  for tick_i in 3:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, true, 0.0, _MotorAction.TURN_LEFT)
+    _motor_planner_note_outcome(
+      state,
+      body,
+      turn_outcome,
+      motor_v3,
+      707 + tick_i,
+      stall_pos,
+      false,
+    )
+    if bool(state.get("boundary_scan_active", false)):
+      rescanned = true
+      break
+  _assert(
+    not rescanned,
+    "blocked rim turns after partial MOVE_F do not re-arm boundary scan while egress active",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
+  # Fix 2 (Fox rim): after boundary_scan_done, inward align must not flip TURN_L/TURN_R when the
+  # inward waypoint sits in the rear hemisphere (outward facing at east rim).
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = -1
+  state["boundary_scan_turns"] = 16
+  (_MotorPlanner as GDScript).call(
+    "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) != 0,
+    "post-scan inward align seeds non-zero turn commit",
+  )
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  var actions: Array[int] = []
+  var saw_move := false
+  for tick_i in 16:
+    ctx["physics_tick"] = tick_i
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    if act == _MotorAction.MOVE_FORWARD:
+      saw_move = true
+      var inward: Vector3 = state.get("explore_dir", Vector3.ZERO).normalized()
+      _assert(body.last_move_direction.normalized().dot(inward) >= move_min_dot - 0.01, "post-scan MOVE faces inward")
+      break
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      var pos_before := body.global_position
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      _motor_planner_note_outcome(
+        state,
+        body,
+        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
+        motor_v3,
+        tick_i,
+        pos_before,
+        false,
+      )
+  _assert(saw_move, "post-scan inward align converges to MOVE within 16 ticks")
+  var turn_actions: Array[int] = []
+  for act in actions:
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      turn_actions.append(act)
+  _assert(turn_actions.size() >= 1, "post-scan inward align turns before MOVE")
+  var first_turn: int = turn_actions[0]
+  for act in turn_actions:
+    _assert(
+      act == first_turn,
+      "post-scan inward align: all pre-move turns share one direction",
+    )
+  for i in range(actions.size() - 1):
+    var a: int = actions[i]
+    var b: int = actions[i + 1]
+    var is_flip := (
+      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+    )
+    _assert(not is_flip, "post-scan inward align: no adjacent opposite turn pair")
+  main.queue_free()
+
+
+func _motor_planner_east_rim_fixture(main: Node3D) -> CharacterBody3D:
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
+  return body
+
+
+func _test_motor_planner_explore_rim_waypoint_mints_inward() -> void:
+  # Fix 3a: rim explore waypoint must bias inward, not along the rim tangent.
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_east_rim_fixture(main)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  var waypoint: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  _assert(waypoint.length_squared() > 1e-4, "rim explore mints a waypoint")
+  _assert(
+    waypoint.x < body.global_position.x - 1.0,
+    "rim waypoint is inward (west) off east edge, not on rim x≈max",
+  )
+  var explore_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    explore_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "rim waypoint mint stores inward explore_dir",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_rim_overshoot_replans_inward() -> void:
+  # Fix 3b: rim overshoot routes inward replan, not 60° interior stuck rotate.
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_east_rim_fixture(main)
+  var latched := Vector3(body.global_position.x, 1.0, 60.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  state["explore_waypoint"] = latched
+  state["step_goal"] = latched
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _assert(
+    (_MotorPlanner as GDScript).call("_passed_explore_waypoint", body, latched, state),
+    "rim overshoot: creature past latched waypoint along rim tangent",
+  )
+  _MotorPlanner.select_action(ctx, state)
+  _assert(
+    state.get("blocked_objective_action", &"") == &"explore_replan",
+    "rim overshoot sets blocked_objective_action=explore_replan",
+  )
+  var new_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    new_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "rim overshoot replan picks inward explore_dir, not 60° rotate",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) != 0,
+    "rim overshoot replan seeds turn commit for inward align",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_rim_stuck_replan_seeds_commit() -> void:
+  # Fix 3b/3c: rim stuck-or-rim replan helper picks inward bearing + seeded turn commit.
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_east_rim_fixture(main)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
+  (_MotorPlanner as GDScript).call(
+    "_apply_explore_stuck_or_rim_replan", state, body, motor_v3
+  )
+  _assert(
+    state.get("blocked_objective_action", &"") == &"explore_replan",
+    "rim stuck-or-rim replan sets blocked_objective_action=explore_replan",
+  )
+  var replan_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    replan_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "rim stuck-or-rim replan picks inward explore_dir",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) != 0,
+    "rim stuck-or-rim replan seeds turn commit",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_overshoot_replans() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(55.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var latched := Vector3(50.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  state["explore_waypoint"] = latched
+  state["step_goal"] = latched
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _assert(
+    (_MotorPlanner as GDScript).call("_passed_explore_waypoint", body, latched, state),
+    "overshoot: creature past latched waypoint along explore_dir",
+  )
+  _MotorPlanner.select_action(ctx, state)
+  var new_latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  _assert(new_latched.length_squared() > 1e-4, "overshoot mints a new explore waypoint")
+  _assert(new_latched.distance_to(latched) > 1.0, "overshoot does not keep stale latched waypoint")
+  _assert(
+    state.get("blocked_objective_action", &"") == &"explore_replan",
+    "overshoot sets blocked_objective_action=explore_replan",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 99)) == 0,
+    "overshoot clears turn commit for forward realign",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_seek_seeds_waypoint() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"precise"
+  state["step_goal"] = Vector3(20.0, 1.0, 0.0)
+  state["step_instance_id"] = 99001
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  (_MotorPlanner as GDScript).call("_seed_explore_after_seek", state, ctx)
+  _MotorPlanner.select_action(ctx, state)
+  _assert(state.get("step_source", &"") == &"explore", "seek fallback keeps explore step source")
+  var explore_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    explore_dir.normalized().dot(Vector3(0.0, 0.0, -1.0)) > 0.9,
+    "seek fallback seeds explore_dir from body facing",
+  )
+  _assert(
+    (state.get("explore_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
+    "seek fallback sync mints latched explore waypoint",
+  )
+  _assert(
+    (state.get("step_goal", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
+    "seek fallback sync sets non-zero step_goal",
+  )
+  main.queue_free()
+
 
 func _test_creature_motor_stack_precise_turn_no_flip_flop() -> void:
   var main := Node3D.new()

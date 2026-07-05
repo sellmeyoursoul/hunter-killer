@@ -105,6 +105,7 @@ func tick(delta: float) -> _ActionOutcome:
     _physics_tick_count,
     pos_before_tick,
     boundary_clamped,
+    delta,
   )
   _last_outcome = outcome
   if int(outcome.action) == _MotorAction.EAT:

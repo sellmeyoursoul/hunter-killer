@@ -1,15 +1,22 @@
 # Handoff Context
 
-**System State:** V3 duel locomotion stack is active: `AiDriver` drives `CreatureRoot3D.motor_stack_tick()` → `CreatureMotorStack.tick()` → `MotorPlanner.select_action()` → `LocomotionExecutor.apply_action()` → `MotorPlanner.note_tick_completion()`. Current live repro is **Fox spawn spin**, not a rim/NE-corner case: Fox never leaves spawn, HUD shows `inc=find_food`, `gk=find_food`, `src=explore`, `blk=1`, `cmt=L/R`, and steady/stale `blk_act=explore_replan`. Boundary scan correctly does not engage because Fox is not at the playfield rim. MOVE cone is `dot >= cos(22.5°) ~= 0.924`; smoke saw `dot` reach about `0.9` but never `act=MOVE_F`. The latest instrumentation adds fixed-width HUD/log lines with `enp` (`explore_no_progress_ticks`) and `user://logs/motor_explore_tick.log`.
+**System State:** Branch `Goal_Movement_RefactorV3`, **uncommitted** working tree. V3 ENGINE motor on per-root `creature_motor_stack` + `motor_planner.gd`. Duel explore debug log: `%APPDATA%\Godot\app_userdata\Hunter Killer\logs\motor_explore_tick.log` (400-line cap). **Headless:** `godot --path . --headless -s res://tests/run_all.gd` exits **0** (incl. new rim explore tests). **Doc authority:** implement from `Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md` §7.3 / §7.7; `Definitive_Features/CREATURE_MOVEMENT.md` = legacy 2D inventory + links only.
+
+**Active files:**
+- `creature/motor/motor_planner.gd` — explore latch, boundary scan, post-scan egress, turn commit, rim escape replan, `_apply_explore_stuck_or_rim_replan`, rim-aware waypoint mint
+- `creature/motor/motor_planner_explore_log.gd`, `motor_planner_debug_hud.gd`, `creature_motor_stack.gd`
+- `tests/run_all.gd` — `_test_motor_planner_explore_*` suite (latch, egress, rim waypoint/overshoot/replan, post-scan flip-flop, etc.)
+- `assets/plants/bush_food_3d.gd` — `_OLogSafe` for headless parse
+- `Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md` — §7.3 rim/explore contracts + §7.7 debug; §12.2 6c test row
+- `Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md` — banner → V3; §10 pointer only (no duplicated V3 prose)
+- `Project_Docs/PROJECT_DOC_INDEX.md`, `.cursor/rules/project-docs.mdc`, `.cursor/agents/creature-motor.md` — V3 vs definitive routing
 
 **Progress Made:**
-- Diagnosed earlier HUD zero-pin as display aliasing: `poll_frames=3` lined up with 3-tick replan cadence; `poll_frames=1` showed real `tgt`/`dot`/`cblk` flicker. HUD is now `poll_frames=4`.
-- Reclassified the main Fox repro from “NE/rim spin” to **interior explore spawn spin**: Fox stays at spawn, `cmt=L/R` only, no `sL/sR`, `blk=1`, `src=explore`, `blk_act=explore_replan`.
-- Added explore align-progress gating in `creature/motor/motor_planner.gd`: `explore_no_progress_ticks` and `explore_last_facing_dot`; interior `explore_replan` requires no-progress ticks instead of `consecutive_blocked` alone. Tests added/updated in `tests/run_all.gd`; docs synced in `Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md`.
-- Smoke after gating still shows Fox stuck at spawn in `L, L, R`; `tgt` changes regularly; `cmt=0` on `R`; `act` never `MOVE_F`; likely replan/target churn still resets commit before crossing the MOVE cone.
-- Added `creature/motor/motor_planner_explore_log.gd`: fixed-width formatter, `enp` field, 400-line per-configure log cap, writes `user://logs/motor_explore_tick.log` when `hunter_killer_debug/motor_explore_tick_log=true`, mirrors to OLog tag `MotorExplore`.
-- Updated `creature/motor/motor_planner_debug_hud.gd` to monospace fixed-width HUD using the shared formatter; `CreatureMotorStack.get_debug_snapshot()` now includes `explore_no_progress_ticks`; `project.godot` has `motor_explore_tick_log=true`; `Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md` documents the debug/log behavior.
-- Headless verification passed after the HUD/log slice: `python tools/check_gdscript_no_tabs.py; godot --path . --headless -s res://tests/run_all.gd 2>&1` returned exit 0, with Godot’s known Jolt RID leak message at exit.
-- Fixed `.cursor/rules/go.mdc` and `.cursor/rules/stop.mdc` into valid single-frontmatter always-applied rules. `/go` now instructs reading `chat_sum.md`; `/stop` now instructs overwriting `chat_sum.md` with this high-signal structure.
+- **Fix 3a–c (Fox NE-corner rim spin):** Rim waypoint mint uses `_rim_escape_explore_dir`; rim overshoot / dead-end / `_apply_explore_stuck_or_rim_replan` route to `_apply_explore_rim_escape_replan` (not 60° interior rotate); rim replan seeds `turn_commit_sign` via `_seed_inward_align_turn_commit`
+- **Fix 1–2 (prior in branch):** Post-scan `boundary_scan_egress_ticks`; `_end_boundary_scan` seeds inward `explore_dir` + turn commit; post-scan L/R flip fix via shorter-arc commit
+- **Partial rim egress:** `_rim_egress_move_cleared()` — egress clears on `MOVE_F` only when not `_is_at_playfield_rim`
+- **Headless OLog:** `bush_food_3d.gd` → `olog_safe.gd`; `logging.mdc` headless convention
+- **Tests added:** `_test_motor_planner_explore_rim_waypoint_mints_inward`, `_test_motor_planner_explore_rim_overshoot_replans_inward`, `_test_motor_planner_explore_rim_stuck_replan_seeds_commit` (+ prior egress / flip-flop / boundary-scan tests)
+- **Doc realignment:** V3 is implementation source of truth; definitive movement doc deduped; index + project-docs + creature-motor agent updated
 
-**Last Known Trajectory:** Run one smoke and inspect `user://logs/motor_explore_tick.log`. Key questions: does any Fox line reach `dot >= 0.924`; does `act=MOVE_F` ever appear; do `tgt` jumps align with `enp>=3` / `blk_act=explore_replan`; is `cmt=0` on the first opposite turn after replan. Likely next motor fix is to stop interior `explore_replan` from rotating/reminting `tgt` while near the MOVE cone or while bearing is improving, and/or preserve `turn_commit_sign` through interior replan. Rim boundary scan and post-scan stutter remain deferred until a separate repro actually reaches/clamps at the playfield edge.
+**Last Known Trajectory:** Doc authority fix completed (V3 vs definitive). **Next:** duel smoke — confirm Fox breaks rim turn-only / NE-corner `explore_replan` flip loop with Fix 3 in runtime logs. **Separate queue:** Rabbit seek `tgt=(0,0)` / `_seed_explore_after_seek` runtime path (Fix 3 Rabbit); optional explore log fields (`egress=`, `explore_dir` in `motor_planner_explore_log.gd`). Commit when ready. **6d.3** still blocked until duel explore locomotion validated in play.

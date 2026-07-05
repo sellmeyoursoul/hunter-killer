@@ -15,3 +15,8 @@ alwaysApply: false
 - `error()` — always; failures and violated assumptions.
 - `info()` — lifecycle / major state (subsystem start/stop).
 - `debug()` — branch tracing when needed; do not flood logs.
+
+## Headless / test harness
+
+- Scripts **preloaded** by [`tests/run_all.gd`](../../tests/run_all.gd) or attached to headless test fixtures must log through [`AI_int_lib/olog_safe.gd`](../../AI_int_lib/olog_safe.gd) (`const _OLogSafe := preload(...)`), **not** bare autoload `OLog` — autoload globals are not parse-time identifiers under `godot --headless -s`.
+- App-shell entry points that run after autoload init (e.g. [`main_3d.gd`](../../main_3d.gd)) may keep direct `OLog`.

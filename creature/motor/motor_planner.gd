@@ -10,6 +10,10 @@ const _PathClear := preload("res://creature/motor/motor_path_clear.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
+const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
+
+## V2 reference: ~400 px/s at 60 Hz — [code]motor_stuck_move_epsilon[/code] 1.25 ≈ 18.75% of that per-tick budget.
+const _LEGACY_REF_TICK_DISPLACEMENT := 400.0 / 60.0
 
 
 ## Fresh planner runtime state owned by [code]CreatureMotorStack[/code].
@@ -31,6 +35,7 @@ static func new_state() -> Dictionary:
     "boundary_scan_active": false,
     "boundary_scan_sign": 0,
     "boundary_scan_turns": 0,
+    "boundary_scan_egress_ticks": 0,
     "precise_no_progress_ticks": 0,
     "precise_last_bearing_err_deg": INF,
     "precise_last_dist_sq": INF,
@@ -72,8 +77,20 @@ static func _is_latched_step_source(step_source: StringName) -> bool:
   return step_source == &"precise" or step_source == &"explore"
 
 
-static func _latched_stuck_move_epsilon(motor_v3: Dictionary) -> float:
-  return maxf(0.01, float(motor_v3.get("motor_stuck_move_epsilon", 1.25)))
+## Minimum per-tick displacement that counts as progress (scales with body speed × delta).
+static func _latched_stuck_move_epsilon(
+  motor_v3: Dictionary,
+  body: CharacterBody3D,
+  delta: float,
+) -> float:
+  var config := maxf(0.01, float(motor_v3.get("motor_stuck_move_epsilon", 1.25)))
+  if body == null:
+    return config
+  var max_spd := _LocomotionExecutor._expected_horizontal_speed(body)
+  var dt := maxf(delta, 1.0 / 120.0)
+  var expected_per_tick := max_spd * dt
+  var frac := config / _LEGACY_REF_TICK_DISPLACEMENT
+  return maxf(0.01, expected_per_tick * frac)
 
 
 static func _tick_had_meaningful_progress(
@@ -109,6 +126,58 @@ static func _apply_explore_stuck_replan(state: Dictionary) -> void:
   _reset_explore_align_progress_state(state)
 
 
+## Rim hug band: use inward replan + turn commit; interior: 60° stuck replan.
+static func _apply_explore_stuck_or_rim_replan(
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  if body != null and _is_near_playfield_boundary(body, motor_v3):
+    _apply_explore_rim_escape_replan(state, body, motor_v3)
+  else:
+    _apply_explore_stuck_replan(state)
+  state["blocked_objective_action"] = &"explore_replan"
+
+
+## True when the creature has moved past [param latched] along latched [code]explore_dir[/code].
+static func _passed_explore_waypoint(
+  body: CharacterBody3D,
+  latched: Vector3,
+  state: Dictionary,
+) -> bool:
+  var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  if explore.length_squared() < 1e-12:
+    return _facing_dot_to_target(body, latched) < 0.0
+  explore = explore.normalized()
+  var travel := body.global_position - latched
+  travel.y = 0.0
+  if travel.length_squared() < 1e-12:
+    return true
+  return travel.dot(explore) > 0.0
+
+
+## Drop overshot explore latch; rim overshoot routes inward, interior rotates 60°.
+static func _apply_explore_waypoint_passed(
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  _apply_explore_stuck_or_rim_replan(state, body, motor_v3)
+
+
+## Resets explore fields after §9 seek fallback so the next sync can mint a waypoint.
+static func _seed_explore_after_seek(state: Dictionary, ctx: Dictionary) -> void:
+  state["explore_dir"] = _initial_explore_dir(ctx)
+  state["explore_waypoint"] = Vector3.ZERO
+  state["step_goal"] = Vector3.ZERO
+  state["step_instance_id"] = 0
+  state["step_source"] = &"explore"
+  state["turn_commit_sign"] = 0
+  state["turn_commit_bearing_deg"] = null
+  state["consecutive_blocked"] = 0
+  _reset_explore_align_progress_state(state)
+
+
 static func _reset_explore_align_progress_state(state: Dictionary) -> void:
   state["explore_no_progress_ticks"] = 0
   state["explore_last_facing_dot"] = -2.0
@@ -127,7 +196,10 @@ static func _note_explore_align_progress(
   if last_dot <= -1.5:
     state["explore_last_facing_dot"] = dot
     return
-  if dot > last_dot + 0.01:
+  if dot < 0.0:
+    if explore_idle_stuck:
+      state["explore_no_progress_ticks"] = int(state.get("explore_no_progress_ticks", 0)) + 1
+  elif dot > last_dot + 0.01:
     state["explore_no_progress_ticks"] = 0
   elif explore_idle_stuck:
     state["explore_no_progress_ticks"] = int(state.get("explore_no_progress_ticks", 0)) + 1
@@ -150,6 +222,11 @@ static func _is_near_playfield_boundary(body: CharacterBody3D, motor_v3: Diction
 static func _is_at_playfield_rim(body: CharacterBody3D, motor_v3: Dictionary) -> bool:
   var rim_margin := maxf(0.5, float(motor_v3.get("playfield_rim_margin", 2.0)))
   return bool(_MotorPlane.playfield_boundary_hug(body, motor_v3, rim_margin).get("near", false))
+
+
+## True when post-scan egress may end after a forward step (creature left the tight rim band).
+static func _rim_egress_move_cleared(body: CharacterBody3D, motor_v3: Dictionary) -> bool:
+  return not _is_at_playfield_rim(body, motor_v3)
 
 
 static func _playfield_clamp_latch_ttl(motor_v3: Dictionary) -> int:
@@ -179,6 +256,34 @@ static func _boundary_scan_turn_budget(motor_v3: Dictionary) -> int:
   return maxi(1, int(ceil(360.0 / turn_deg)))
 
 
+## Horizontal bearing toward playfield interior after rim boundary scan (inbound normal, not rim tangent).
+static func _rim_escape_explore_dir(body: CharacterBody3D, motor_v3: Dictionary) -> Vector3:
+  var hug := _playfield_hug_info(body, motor_v3)
+  var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
+  if inbound.length_squared() > 1e-12:
+    return inbound.normalized()
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
+  if facing.length_squared() > 1e-12:
+    return facing.normalized()
+  return _MotorPlane.HORIZONTAL_FORWARD
+
+
+## Clear explore latch and pick an interior bearing after rim clamp (avoids scan ↔ tangent loop).
+static func _apply_explore_rim_escape_replan(
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
+  state["explore_waypoint"] = Vector3.ZERO
+  state["step_goal"] = Vector3.ZERO
+  state["consecutive_blocked"] = 0
+  state["playfield_clamp_latch_ticks"] = 0
+  state["boundary_scan_egress_ticks"] = 0
+  _reset_explore_align_progress_state(state)
+  _seed_inward_align_turn_commit(state, body, motor_v3)
+
+
 static func _pick_boundary_scan_sign(body: CharacterBody3D, hug: Dictionary, motor_v3: Dictionary) -> int:
   var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
   if inbound.length_squared() < 1e-12:
@@ -194,6 +299,45 @@ static func _pick_boundary_scan_sign(body: CharacterBody3D, hug: Dictionary, mot
   var left_after := facing.rotated(Vector3.UP, turn_rad).dot(prefer)
   var right_after := facing.rotated(Vector3.UP, -turn_rad).dot(prefer)
   return 1 if left_after >= right_after else -1
+
+
+static func _pick_shorter_arc_turn_sign(
+  body: CharacterBody3D,
+  reference_dir: Vector3,
+  motor_v3: Dictionary,
+) -> int:
+  ## Pick turn direction that improves dot toward [param reference_dir] after one turn step.
+  ## Stable for rear-hemisphere targets where [code]_signed_bearing_error_deg[/code] sign flips.
+  var ref := reference_dir
+  if ref.length_squared() < 1e-12:
+    return 1
+  ref = ref.normalized()
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), ref)
+  if facing.length_squared() < 1e-12:
+    return 1
+  facing = facing.normalized()
+  var turn_rad := deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
+  var left_after := facing.rotated(Vector3.UP, turn_rad).dot(ref)
+  var right_after := facing.rotated(Vector3.UP, -turn_rad).dot(ref)
+  return 1 if left_after >= right_after else -1
+
+
+static func _seed_inward_align_turn_commit(
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  ## After rim boundary scan, commit shorter-arc turns toward [code]explore_dir[/code] (inward).
+  var inward: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  if inward.length_squared() < 1e-12:
+    state["turn_commit_sign"] = 0
+    state["turn_commit_bearing_deg"] = null
+    return
+  inward = inward.normalized()
+  var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+  var waypoint := body.global_position + inward * reach
+  state["turn_commit_sign"] = _pick_shorter_arc_turn_sign(body, inward, motor_v3)
+  state["turn_commit_bearing_deg"] = _flat_bearing_deg(body.global_position, waypoint)
 
 
 static func _begin_boundary_scan(
@@ -216,21 +360,33 @@ static func _begin_boundary_scan(
   state["blocked_objective_action"] = &"boundary_scan"
 
 
+## Ticks after [method _end_boundary_scan] during which inward-align turns don't re-arm the scan.
+## Sized to a full turn (align to inward waypoint) plus a short forward-egress margin.
+static func _boundary_scan_egress_budget(motor_v3: Dictionary) -> int:
+  return _boundary_scan_turn_budget(motor_v3) + int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+
+
 static func _end_boundary_scan(
   state: Dictionary,
   body: CharacterBody3D,
   action: StringName,
+  motor_v3: Dictionary,
 ) -> void:
   state["boundary_scan_active"] = false
   state["boundary_scan_turns"] = 0
-  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
-  if facing.length_squared() > 1e-12:
-    state["explore_dir"] = facing.normalized()
+  state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["consecutive_blocked"] = 0
   state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = action
+  if action == &"boundary_scan_done":
+    state["boundary_scan_egress_ticks"] = _boundary_scan_egress_budget(motor_v3)
+    _seed_inward_align_turn_commit(state, body, motor_v3)
+  else:
+    state["turn_commit_sign"] = 0
+    state["turn_commit_bearing_deg"] = null
+  _reset_explore_align_progress_state(state)
 
 
 static func _boundary_scan_action(body: CharacterBody3D, motor_v3: Dictionary, state: Dictionary) -> int:
@@ -288,9 +444,9 @@ static func _note_boundary_scan_progress(
     state["boundary_scan_turns"] = int(state.get("boundary_scan_turns", 0)) + 1
   var budget := _boundary_scan_turn_budget(motor_v3)
   if int(state.get("boundary_scan_turns", 0)) >= budget:
-    _end_boundary_scan(state, body, &"boundary_scan_done")
+    _end_boundary_scan(state, body, &"boundary_scan_done", motor_v3)
   elif act == _MotorAction.MOVE_FORWARD and not stuck_this_tick:
-    _end_boundary_scan(state, body, &"boundary_scan_done")
+    _end_boundary_scan(state, body, &"boundary_scan_done", motor_v3)
 
 
 static func _record_blocked_approach(
@@ -325,6 +481,7 @@ static func note_outcome(
   physics_tick: int,
   pos_before_tick: Vector3 = Vector3.ZERO,
   boundary_clamped: bool = false,
+  delta: float = 1.0 / 60.0,
 ) -> bool:
   var act: int = _MotorAction.STAY
   if outcome != null:
@@ -336,7 +493,7 @@ static func note_outcome(
   var tick_disp := Vector3(
     pos_after.x - pos_before_tick.x, 0.0, pos_after.z - pos_before_tick.z
   )
-  var stuck_eps := _latched_stuck_move_epsilon(motor_v3)
+  var stuck_eps := _latched_stuck_move_epsilon(motor_v3, body, delta)
   var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
   var no_progress := tick_disp.length_squared() < stuck_eps * stuck_eps
   var boundary_stuck := boundary_clamped and act == _MotorAction.MOVE_FORWARD
@@ -372,6 +529,20 @@ static func note_outcome(
     elif int(state.get("playfield_clamp_latch_ticks", 0)) > 0:
       state["playfield_clamp_latch_ticks"] = int(state["playfield_clamp_latch_ticks"]) - 1
 
+  # Post-scan inward-egress grace: run down while turning inward; clear on a real forward step
+  # off the tight rim band (not a tangent slide still at the wall) or on rim clamp / scan re-entry.
+  if step_source == &"explore" and int(state.get("boundary_scan_egress_ticks", 0)) > 0:
+    var egress_move_ok := (
+      act == _MotorAction.MOVE_FORWARD
+      and not move_stuck
+      and not no_progress
+      and _rim_egress_move_cleared(body, motor_v3)
+    )
+    if egress_move_ok or boundary_stuck or scan_active:
+      state["boundary_scan_egress_ticks"] = 0
+    else:
+      state["boundary_scan_egress_ticks"] = int(state["boundary_scan_egress_ticks"]) - 1
+
   if stuck_this_tick:
     state["consecutive_blocked"] = int(state.get("consecutive_blocked", 0)) + 1
     if move_stuck:
@@ -403,12 +574,23 @@ static func note_outcome(
     return false
 
   if step_source == &"explore":
+    # During post-scan inward egress, turning toward the inward waypoint must not re-arm the
+    # scan (that was the Fox turn-only scan-loop bug). Only a fresh rim clamp escapes here.
+    var in_egress := int(state.get("boundary_scan_egress_ticks", 0)) > 0
     if _should_explore_boundary_scan(body, motor_v3, state, boundary_clamped):
       if not bool(state.get("boundary_scan_active", false)):
-        _begin_boundary_scan(state, body, motor_v3)
-    elif int(state.get("explore_no_progress_ticks", 0)) >= min_ticks:
-      _apply_explore_stuck_replan(state)
-      state["blocked_objective_action"] = &"explore_replan"
+        var post_scan_clamp: bool = (
+          state.get("blocked_objective_action") == &"boundary_scan_done"
+          and boundary_clamped
+          and not executor_blocked
+        )
+        if post_scan_clamp:
+          _apply_explore_rim_escape_replan(state, body, motor_v3)
+          state["blocked_objective_action"] = &"explore_replan"
+        elif not in_egress:
+          _begin_boundary_scan(state, body, motor_v3)
+    elif not in_egress and int(state.get("explore_no_progress_ticks", 0)) >= min_ticks:
+      _apply_explore_stuck_or_rim_replan(state, body, motor_v3)
     return false
 
   return true
@@ -423,9 +605,10 @@ static func note_tick_completion(
   physics_tick: int,
   pos_before_tick: Vector3,
   boundary_clamped: bool,
+  delta: float = 1.0 / 60.0,
 ) -> bool:
   return note_outcome(
-    state, body, outcome, motor_v3, physics_tick, pos_before_tick, boundary_clamped
+    state, body, outcome, motor_v3, physics_tick, pos_before_tick, boundary_clamped, delta
   )
 
 
@@ -441,6 +624,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["boundary_scan_active"] = false
     state["boundary_scan_sign"] = 0
     state["boundary_scan_turns"] = 0
+    state["boundary_scan_egress_ticks"] = 0
     state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
     _reset_explore_align_progress_state(state)
@@ -574,26 +758,43 @@ static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v
   var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
   var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
   var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  var body: CharacterBody3D = ctx.get("body")
   if latched.length_squared() > 1e-8:
     if creature_pos.distance_to(latched) <= arrival_tol:
       state["explore_waypoint"] = Vector3.ZERO
+      latched = Vector3.ZERO
+    elif body != null and _passed_explore_waypoint(body, latched, state):
+      _apply_explore_waypoint_passed(state, body, motor_v3)
       latched = Vector3.ZERO
     else:
       var adapter_hold: RefCounted = ctx.get("memory_adapter")
       if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
         if adapter_hold.is_waypoint_dead_end(creature_pos, latched, _GkReg.GK_FIND_FOOD, motor_v3):
-          explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
-          state["explore_dir"] = explore.normalized()
+          if body != null and _is_near_playfield_boundary(body, motor_v3):
+            state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
+          else:
+            explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
+            state["explore_dir"] = explore.normalized()
           state["explore_waypoint"] = Vector3.ZERO
           latched = Vector3.ZERO
       if latched.length_squared() > 1e-8:
         return latched
-  var waypoint := creature_pos + (state["explore_dir"] as Vector3).normalized() * reach
+  explore = (state["explore_dir"] as Vector3).normalized()
+  if body != null and _is_near_playfield_boundary(body, motor_v3):
+    var inward := _rim_escape_explore_dir(body, motor_v3)
+    if inward.length_squared() > 1e-12:
+      explore = inward.normalized()
+      state["explore_dir"] = explore
+  var waypoint := creature_pos + explore * reach
   var adapter: RefCounted = ctx.get("memory_adapter")
   if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
     if adapter.is_waypoint_dead_end(creature_pos, waypoint, _GkReg.GK_FIND_FOOD, motor_v3):
-      explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
-      state["explore_dir"] = explore.normalized()
+      if body != null and _is_near_playfield_boundary(body, motor_v3):
+        explore = _rim_escape_explore_dir(body, motor_v3).normalized()
+        state["explore_dir"] = explore
+      else:
+        explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
+        state["explore_dir"] = explore.normalized()
       waypoint = creature_pos + state["explore_dir"] * reach
   state["explore_waypoint"] = waypoint
   return waypoint
@@ -820,10 +1021,6 @@ static func apply_blocked_objective_resolution(
       state["explore_waypoint"] = Vector3.ZERO
       state["step_goal"] = Vector3.ZERO
     _BlockedObjective.ACTION_SEEK:
-      state["explore_dir"] = Vector3.ZERO
-      state["explore_waypoint"] = Vector3.ZERO
-      state["step_goal"] = Vector3.ZERO
-      state["step_instance_id"] = 0
-      state["step_source"] = &"explore"
+      _seed_explore_after_seek(state, ctx)
     _:
       pass

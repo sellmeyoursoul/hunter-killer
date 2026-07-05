@@ -22,6 +22,6 @@ is_background: false
 - Always check local syntax and type definitions before declaring a task complete.
 - Do not dump modified source code back to the orchestrator; provide only a functional structural diff summary and status reports.
 - Follow `.cursor/rules/gdscript.mdc` (spaces only, no tabs).
-- When motor inventory rows or config keys change, flag orchestrator to sync `Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md` via the project-docs agent.
+- V3 motor behavior / debug contracts → sync [CREATURE_MOVEMENT_V3.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md) via project-docs agent; legacy 2D inventory rows only → [CREATURE_MOVEMENT.md](../../Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md).
 - Ask orchestrator to run motor-related `_test_*` functions from `tests/run_all.gd`; do not implement feature logic under `tests/` unless scope is expanded.
 - Do not edit `AI_int_lib/ai_driver.gd` or `creature/motor/` files outside this folder.

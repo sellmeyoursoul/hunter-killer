@@ -329,6 +329,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "dead_end_match_radius": 52.0,
     "dead_end_heading_dot": 0.55,
     "dead_end_record_min_blocked_ticks": 3,
+    ## Legacy ratio vs V2 ~400 u/s @ 60 Hz; planner scales per tick as [code]max_speed × delta × (epsilon / 6.67)[/code].
     "motor_stuck_move_epsilon": 1.25,
     ## Playfield edge hug band for explore boundary scan ([code]PlayfieldClamp[/code] margins).
     "playfield_hug_band": 14.0,

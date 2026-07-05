@@ -1,6 +1,8 @@
 extends Node3D
 ## 3D calorie pool + player-only pickup for food shrubs ([ENVIRONMENT_MODEL_PLAN.md §6](../../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)).
 
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
+
 signal calories_changed
 
 @export var max_calories: int = 5
@@ -18,7 +20,7 @@ var _player_visit_locked: bool = false
 func _ready() -> void:
   add_to_group(&"food_plants")
   if stimulus_kind_id == &"":
-    OLog.error("bush_food_3d missing stimulus_kind_id on %s — fix scene before spawn" % name, false, "FoodPlant")
+    _OLogSafe.error("bush_food_3d missing stimulus_kind_id on %s — fix scene before spawn" % name, false, "FoodPlant")
     queue_free()
     return
   _ready_visual = get_node_or_null("Visual/ReadyVisual") as Node3D

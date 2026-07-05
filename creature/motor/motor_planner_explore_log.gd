@@ -100,6 +100,49 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
   ]
 
 
+## Multi-line explore snapshot for on-screen HUD (log file keeps [method format_explore_tick_line]).
+static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "") -> String:
+  var tgt: Vector2 = snap.get("step_goal_xz", Vector2.ZERO)
+  var blk_act := str(snap.get("blocked_objective_action", ""))
+  if blk_act.is_empty():
+    blk_act = "-"
+  var inc_goal := str(snap.get("incumbent_goal", ""))
+  if bool(snap.get("incumbent_empty", true)):
+    inc_goal = "(none)"
+  var tag := ""
+  if not creature_label.is_empty():
+    tag = _fw(creature_label, 8) + " "
+  return (
+    tag
+    + "t=%04d act=%s blk=%s cal=%3d%% inc=%s w=%6.3f\n"
+    + "src=%s gk=%s\n"
+    + "tgt=(%8.1f,%8.1f) id=%5d\n"
+    + "cmt=%s err=%+7.1f dot=%7.3f enp=%d\n"
+    + "blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
+  ) % [
+    int(snap.get("physics_tick", 0)),
+    _fw(str(snap.get("action", "?")), 6),
+    "1" if bool(snap.get("blocked", false)) else "0",
+    int(round(float(snap.get("calorie_ratio", 0.0)) * 100.0)),
+    _fw(inc_goal, 10),
+    float(snap.get("incumbent_weight", 0.0)),
+    _fw(str(snap.get("step_source", "")), 7),
+    _fw(str(snap.get("goal_kind", "")), 10),
+    tgt.x,
+    tgt.y,
+    int(snap.get("step_instance_id", 0)),
+    _fw(commit_label_from_snap(snap), 2),
+    float(snap.get("bearing_error_deg", 0.0)),
+    float(snap.get("facing_dot_tgt", 0.0)),
+    int(snap.get("explore_no_progress_ticks", 0)),
+    _fw(blk_act, 16),
+    int(snap.get("consecutive_blocked", 0)),
+    1 if bool(snap.get("flight_fast_path", false)) else 0,
+    int(snap.get("ready_food", 0)),
+    int(snap.get("threat_count", 0)),
+  ]
+
+
 ## Append one explore tick line when logging is enabled and [param snap] [code]step_source[/code] is explore.
 static func maybe_log_tick(creature_label: String, snap: Dictionary) -> void:
   if not _logging_enabled():

@@ -40,7 +40,8 @@ When moving or adding docs, update **only** `PROJECT_DOC_INDEX.md` for path regi
 - New/changed `@export`, `pack_resources.json` keys, `project.godot` layers → definitive tables (e.g. [ENVIRONMENT_MODEL_PLAN.md §6](../../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md))
 - New consumer of a trait/stat/config → row in usage-map docs ([CREATURE_TRAIT_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_TRAIT_USAGE.md), [CREATURE_ATTRIBUTES_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md))
 - Shipped acceptance criterion → check box in draft §6 or definitive checklist
-- Behavior change under active refactor → [CREATURE_MOVEMENT_V3.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md) (design) **and** [CREATURE_MOVEMENT.md](../../Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md) (inventory) when the inventory is affected
+- V3 ENGINE motor behavior (planner, explore, debug) → [CREATURE_MOVEMENT_V3.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md) §7+ only; link from [CREATURE_MOVEMENT.md](../../Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md), do **not** duplicate prose there
+- Legacy 2D motor inventory rows / config keys in definitive [CREATURE_MOVEMENT.md](../../Project_Docs/Definitive_Features/CREATURE_MOVEMENT.md) when those sections are affected
 
 ### What not to do
 
