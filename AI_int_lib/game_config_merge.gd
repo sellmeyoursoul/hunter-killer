@@ -87,14 +87,10 @@ static func creature_motor_spine() -> Dictionary:
     "explore_coverage_cell": 52.0,
     "explore_trail_max_cells": 96,
     "weight_explore_trail_repulsion": 2.35,
-    ## Expanding 8-way explore ([code]expanding_cardinal_explore.gd[/code] → [code]Explore[/code]): initial dwell **n** per heading; doubles each full 8-leg cycle.
-    "expanding_explore_base_physics_ticks": 36,
     ## Active seek + patrol stay-still: physics ticks per 8-way heading while sweeping awareness ([code]seek_stationary_look.gd[/code]).
     "seek_stationary_look_segment_physics_ticks": 9,
     ## Active seek heading change: physics ticks per intermediate heading on shortest arc turn ([code]seek_direction_turn.gd[/code]); [code]0[/code] reuses [code]seek_stationary_look_segment_physics_ticks[/code].
     "seek_direction_turn_segment_physics_ticks": 0,
-    ## Herbivore ENGINE: cost bias toward expanding sweep when no ready-food in motor context ([code]CardinalAvoidance[/code]).
-    "weight_expanding_explore_hint": 0.12,
     ## Active goal seek (food/prey): eight headings (N..NW) and wall-clock lock per pick ([code]seek_direction_commit.gd[/code]).
     "motor_seek_direction_lock_sec": 1.0,
     ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
@@ -158,8 +154,6 @@ static func creature_motor_spine() -> Dictionary:
     "herbivore_flee_corner_edge": 48.0,
     "herbivore_flee_corner_threat_move": 120.0,
     "motor_playfield_corner_band": 56.0,
-    ## Legacy alias — prefer [code]expanding_explore_base_physics_ticks[/code].
-    "carnivore_explore_rotate_physics_ticks": 36,
     ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
     "preserve_bias_food_floor": 0.90,
     "seek_priority_food_ceiling": 0.80,
@@ -209,7 +203,6 @@ static func creature_motor_profile_dev() -> Dictionary:
     "weight_explore_turn_bias": 2.5,
     "weight_explore_idle_penalty": 0.5,
     "weight_explore_trail_repulsion": 0.15,
-    "weight_expanding_explore_hint": 3.0,
     "motor_intent_cost_chaos": 8.0,
     "scripted_intent_hold_physics_ticks": 1,
     "explore_intent_hold_extra_ticks": 0,

@@ -26,7 +26,6 @@ const _TopDownCameraScr := preload("res://environment/top_down_camera_control.gd
 const _PerimeterBoulders := preload("res://environment/playfield_perimeter_boulders.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
-const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
 const _RabbitArchetypeRes := preload("res://creature/species/rabbit_archetype.tres")
 const _FoxArchetypeRes := preload("res://creature/species/fox_archetype.tres")
@@ -144,6 +143,9 @@ func _run_all() -> void:
   _test_motor_planner_explore_rim_waypoint_mints_inward()
   _test_motor_planner_explore_rim_overshoot_replans_inward()
   _test_motor_planner_explore_rim_stuck_replan_seeds_commit()
+  _test_motor_plane_playfield_corner_inbound_diagonal()
+  _test_motor_planner_explore_rim_stale_tangent_latch_realigns()
+  _test_motor_planner_explore_post_scan_egress_survives_blocked_align_turns()
   _test_motor_planner_explore_overshoot_replans()
   _test_motor_planner_explore_seek_seeds_waypoint()
   await _test_creature_motor_stack_precise_turn_no_flip_flop()
@@ -191,7 +193,6 @@ func _run_all() -> void:
   _test_creature_trait_usage_wiring()
   _test_locale_prior_escalate_seek()
   _test_escape_reversal_suppression()
-  _test_goal_belief_coarse_ttl()
   _test_load_merged_config_repo_fallback()
   _test_hunter_killer_debug_project_settings()
   _test_tokens()
@@ -548,10 +549,6 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.65),
-    "rabbit pack no-goal patrol lock duration",
-  )
-  _assert(
     not bool(rabbit_m.get("plant_awareness_requires_los", true)),
     "rabbit pack allows occluded-in-zone plants for goal belief sync",
   )
@@ -580,10 +577,6 @@ func _test_creature_pack_motor_overlays() -> void:
     "rabbit pack stuck escape explore weight",
   )
   _assert(
-    is_equal_approx(float(rabbit_m.get("herbivore_expanding_explore_mul", 0.0)), 3.0),
-    "rabbit pack herbivore expanding explore mul",
-  )
-  _assert(
     is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 4.0),
     "rabbit pack restores intent hold ticks",
   )
@@ -608,16 +601,8 @@ func _test_creature_pack_motor_overlays() -> void:
     "fox pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
-    is_equal_approx(float(fox_m.get("motor_no_goal_patrol_lock_sec", 0.0)), 0.35),
-    "fox pack no-goal patrol lock duration",
-  )
-  _assert(
     is_equal_approx(float(fox_m.get("weight_explore_trail_repulsion", 0.0)), 2.35),
     "fox pack explore trail repulsion for patrol coverage",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("expanding_explore_base_physics_ticks", 0.0)), 48.0),
-    "fox pack expanding explore segment ticks for guided patrol",
   )
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
@@ -1157,8 +1142,6 @@ func _test_creature_motor_stack_memory_maintain_coarse_ttl() -> void:
       "last_observed_ms": now_ms - 5000,
       "coarse_entered_ms": now_ms - 20000,
       "consumable_now": true,
-      "merge_use_count": 0,
-      "last_merged_ms": 0,
     },
   })
   adapter.maintain_beliefs(Vector3.ZERO, now_ms, motor_p)
@@ -2367,6 +2350,141 @@ func _motor_planner_east_rim_fixture(main: Node3D) -> CharacterBody3D:
   return body
 
 
+func _motor_planner_ne_corner_fixture(main: Node3D) -> CharacterBody3D:
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var bounds_min := Vector2.ZERO
+  var bounds_max := Vector2(100.0, 100.0)
+  body.set("playfield_bounds_min", bounds_min)
+  body.set("playfield_bounds_max", bounds_max)
+  body.set("screen_size", bounds_max)
+  var motor_p := _Merge.default_creature_motor_params()
+  var he := _MotorPlane.footprint_half_extents(body, motor_p)
+  body.global_position = Vector3(
+    bounds_max.x - he.x - 0.5, 1.0, bounds_min.y + he.y + 0.5
+  )
+  return body
+
+
+func _test_motor_plane_playfield_corner_inbound_diagonal() -> void:
+  # Fix 4a: dual-edge NE corner sums inbound normals (SW), not a single-axis flip.
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_ne_corner_fixture(main)
+  var hug := _MotorPlane.playfield_boundary_hug(
+    body, _Merge.default_creature_motor_params(), float(motor_v3.get("playfield_hug_band", 14.0))
+  )
+  _assert(bool(hug.get("near", false)), "NE corner fixture is inside hug band")
+  var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
+  _assert(inbound.length_squared() > 1e-8, "NE corner has inbound normal")
+  var expected := Vector3(-1.0, 0.0, 1.0).normalized()
+  _assert(
+    inbound.normalized().dot(expected) > 0.99,
+    "NE corner inbound is diagonal SW (sum of −x and +z), got %s" % str(inbound),
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_rim_stale_tangent_latch_realigns() -> void:
+  # Fix 4b: latched rim-tangent waypoint realigns inward before continuing latch hold.
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_east_rim_fixture(main)
+  var tangent_wp := Vector3(body.global_position.x + 60.0, 1.0, body.global_position.z)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
+  state["explore_waypoint"] = tangent_wp
+  state["step_goal"] = tangent_wp
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  var waypoint: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  _assert(waypoint.length_squared() > 1e-4, "stale tangent latch remints waypoint")
+  _assert(
+    waypoint.x < body.global_position.x - 1.0,
+    "stale tangent latch remints inward off east edge",
+  )
+  var explore_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  _assert(
+    explore_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
+    "stale tangent latch stores inward explore_dir",
+  )
+  _assert(
+    int(state.get("turn_commit_sign", 0)) != 0,
+    "stale tangent latch seeds inward turn commit",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_explore_post_scan_egress_survives_blocked_align_turns() -> void:
+  # Fix 4c: blocked inward-align turns during egress must not expire the grace window.
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _motor_planner_ne_corner_fixture(main)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"explore"
+  state["explore_dir"] = Vector3(0.0, 0.0, 1.0)
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = -1
+  state["boundary_scan_turns"] = 16
+  (_MotorPlanner as GDScript).call(
+    "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
+  )
+  var egress_start := int(state.get("boundary_scan_egress_ticks", 0))
+  _assert(egress_start > 0, "blocked-align egress test starts with egress armed")
+  state["blocked_objective_action"] = &"boundary_scan_done"
+  state["explore_waypoint"] = Vector3(50.0, 1.0, 50.0)
+  state["step_goal"] = state["explore_waypoint"]
+  var stall_pos := body.global_position
+  var rescanned := false
+  for tick_i in 25:
+    var turn_outcome := _ActionOutcome.new(Vector3.ZERO, true, 0.0, _MotorAction.TURN_LEFT)
+    _motor_planner_note_outcome(
+      state,
+      body,
+      turn_outcome,
+      motor_v3,
+      tick_i + 1,
+      stall_pos,
+      false,
+    )
+    if bool(state.get("boundary_scan_active", false)):
+      rescanned = true
+      break
+  _assert(
+    not rescanned,
+    "25 blocked inward-align turns during egress do not re-arm boundary scan",
+  )
+  _assert(
+    int(state.get("boundary_scan_egress_ticks", 0)) > 0,
+    "blocked inward-align turns do not consume egress budget",
+  )
+  main.queue_free()
+
+
 func _test_motor_planner_explore_rim_waypoint_mints_inward() -> void:
   # Fix 3a: rim explore waypoint must bias inward, not along the rim tangent.
   var motor_v3 := _motor_v3_test_params()
@@ -3152,35 +3270,6 @@ func _test_footprint_geometry() -> void:
   )
   _assert(is_equal_approx(obs.distance_to(closest_obs), 20.0), "footprint point clearance uses AABB edge distance")
 
-func _test_goal_belief_coarse_ttl() -> void:
-  var ad: Node = _ai_driver_script().new()
-  var motor_p := _Merge.creature_motor_spine()
-  motor_p["goal_memory_coarse_ttl_sec"] = 15.0
-  motor_p["goal_memory_precise_radius"] = 1000.0
-  motor_p["goal_memory_forget_radius"] = 5000.0
-  var now_ms := Time.get_ticks_msec()
-  var iid := 424242
-  const BODY_ID := 4242
-  ad.set("_goal_belief_by_body", {
-    BODY_ID: {
-      iid: {
-        "instance_id": iid,
-        "goal_kind": _GkReg.GK_FIND_FOOD,
-        "tier": &"COARSE",
-        "last_world_pos": Vector3(800.0, 0.0, 800.0),
-        "last_observed_ms": now_ms - 5000,
-        "coarse_entered_ms": now_ms - 20000,
-        "consumable_now": true,
-        "merge_use_count": 0,
-        "last_merged_ms": 0,
-      },
-    },
-  })
-  ad.call("_goal_belief_maintain", Vector3.ZERO, now_ms, motor_p, BODY_ID)
-  var beliefs: Dictionary = (ad.get("_goal_belief_by_body") as Dictionary).get(BODY_ID, {})
-  _assert(not beliefs.has(iid), "coarse belief evicted after coarse TTL")
-  ad.free()
-
 func _test_goal_kind_phase_c_replay() -> void:
   var motor_p := _Merge.creature_motor_spine()
   var catalog := _GkReg.goal_kind_catalog_for_pack("")
@@ -3665,11 +3754,6 @@ func _test_merge_defaults_and_override() -> void:
   _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
   _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_radius", 0.0)), 1500.0), "default awareness_radius")
-  _assert(int(base["creature_motor"].get("expanding_explore_base_physics_ticks", -1)) == 36, "default expanding_explore_base_physics_ticks")
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_expanding_explore_hint", 0.0)), 0.12),
-    "default weight_expanding_explore_hint",
-  )
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_cone_extra", 0.0)), 3000.0), "default awareness_cone_extra")
   _assert(int(base["creature_motor"].get("awareness_memory_ticks", -1)) == 3, "default awareness_memory_ticks")
   _assert(is_equal_approx(float(base["creature_motor"].get("awareness_memory_weight", 0.0)), 0.35), "default awareness_memory_weight")
@@ -3690,10 +3774,6 @@ func _test_merge_defaults_and_override() -> void:
     "default calorie_cost_per_unit_moved",
   )
   _assert(int(base["creature_motor"].get("predator_prey_meal_calories", -1)) == 5, "default predator_prey_meal_calories")
-  _assert(
-    int(base["creature_motor"].get("carnivore_explore_rotate_physics_ticks", -1)) == 36,
-    "default carnivore_explore_rotate_physics_ticks",
-  )
   _assert(
     is_equal_approx(float(spine.get("weight_seek_ready_food", 0.0)), 16.0),
     "spine weight_seek_ready_food",

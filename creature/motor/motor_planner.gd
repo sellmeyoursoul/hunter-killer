@@ -257,6 +257,23 @@ static func _boundary_scan_turn_budget(motor_v3: Dictionary) -> int:
 
 
 ## Horizontal bearing toward playfield interior after rim boundary scan (inbound normal, not rim tangent).
+## True when a latched explore bearing at the rim is tangent/outward vs playfield inbound.
+static func _explore_latch_needs_rim_realign(
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  state: Dictionary,
+) -> bool:
+  if body == null or not _is_near_playfield_boundary(body, motor_v3):
+    return false
+  var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  if explore.length_squared() < 1e-12:
+    return true
+  var inward := _rim_escape_explore_dir(body, motor_v3)
+  if inward.length_squared() < 1e-12:
+    return false
+  return explore.normalized().dot(inward.normalized()) < _move_alignment_min_dot(motor_v3)
+
+
 static func _rim_escape_explore_dir(body: CharacterBody3D, motor_v3: Dictionary) -> Vector3:
   var hug := _playfield_hug_info(body, motor_v3)
   var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
@@ -538,9 +555,18 @@ static func note_outcome(
       and not no_progress
       and _rim_egress_move_cleared(body, motor_v3)
     )
+    var egress_align_turn := (
+      act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT
+    )
+    var egress_rim_move_hold := (
+      act == _MotorAction.MOVE_FORWARD
+      and body != null
+      and _is_at_playfield_rim(body, motor_v3)
+      and not egress_move_ok
+    )
     if egress_move_ok or boundary_stuck or scan_active:
       state["boundary_scan_egress_ticks"] = 0
-    else:
+    elif not egress_align_turn and not egress_rim_move_hold:
       state["boundary_scan_egress_ticks"] = int(state["boundary_scan_egress_ticks"]) - 1
 
   if stuck_this_tick:
@@ -765,6 +791,9 @@ static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v
       latched = Vector3.ZERO
     elif body != null and _passed_explore_waypoint(body, latched, state):
       _apply_explore_waypoint_passed(state, body, motor_v3)
+      latched = Vector3.ZERO
+    elif body != null and _explore_latch_needs_rim_realign(body, motor_v3, state):
+      _apply_explore_rim_escape_replan(state, body, motor_v3)
       latched = Vector3.ZERO
     else:
       var adapter_hold: RefCounted = ctx.get("memory_adapter")

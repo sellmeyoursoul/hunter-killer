@@ -138,18 +138,21 @@ static func playfield_boundary_hug(body: Node, motor_p: Dictionary, hug_band: fl
   if min_m > hug_band:
     return inactive
   var margins := _PlayfieldClamp.edge_margins(pos2, he, bmax, bmin)
+  # Inward per edge on motor plane (Vector2.x → world X, Vector2.y → world Z).
+  # Godot Vector2.DOWN = (0, +1) = +Z; Vector2.UP = (0, −1) = −Z.
+  const EDGE_INBOUND_2D: Array[Vector2] = [
+    Vector2.RIGHT, Vector2.LEFT, Vector2.DOWN, Vector2.UP,
+  ]
   var inbound2 := Vector2.ZERO
   var tightest := min_m
-  if margins.x <= tightest + 0.01:
-    inbound2 = Vector2.RIGHT
-  elif margins.y <= tightest + 0.01:
-    inbound2 = Vector2.LEFT
-  elif margins.z <= tightest + 0.01:
-    inbound2 = Vector2.DOWN
-  elif margins.w <= tightest + 0.01:
-    inbound2 = Vector2.UP
+  const EDGE_TIE_EPS := 0.01
+  var margin_vals: Array[float] = [margins.x, margins.y, margins.z, margins.w]
+  for i in margin_vals.size():
+    if margin_vals[i] <= tightest + EDGE_TIE_EPS:
+      inbound2 += EDGE_INBOUND_2D[i]
   if inbound2.length_squared() < 1e-12:
     return inactive
+  inbound2 = inbound2.normalized()
   return {
     "near": true,
     "inbound_normal": Vector3(inbound2.x, 0.0, inbound2.y).normalized(),
@@ -184,7 +187,6 @@ static func scale_motor_distance_params(motor_p: Dictionary, scale: float) -> Di
     for key in out.keys():
       if _is_distance_motor_param_key(key):
         out[key] = float(out[key]) * scale
-  _inject_cardinal_probe_mins(out, scale)
   return out
 
 
@@ -216,14 +218,6 @@ static func scale_creature_motor_v3_for_playfield(motor_v3: Dictionary, body: No
   var playfield := playfield_size_for_body(body, main)
   var scale := motor_distance_scale_for_main(main, playfield)
   return scale_motor_distance_params(motor_v3, scale)
-
-
-## Playfield-scaled cardinal lookahead floors ([code]cardinal_avoidance.gd[/code] stuck / edge escape).
-static func _inject_cardinal_probe_mins(motor_p: Dictionary, scale: float) -> void:
-  if not motor_p.has("motor_cardinal_probe_min"):
-    motor_p["motor_cardinal_probe_min"] = 40.0 * scale
-  if not motor_p.has("motor_cardinal_near_probe_min"):
-    motor_p["motor_cardinal_near_probe_min"] = 10.0 * scale
 
 
 ## True when [param key] is a motor distance tuned for playfield scale ([method scale_motor_distance_params]).

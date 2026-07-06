@@ -144,8 +144,6 @@ static func _upsert_row(
       "last_observed_ms": now_ms,
       "coarse_entered_ms": 0,
       "consumable_now": consumable_now,
-      "merge_use_count": 0,
-      "last_merged_ms": 0,
       "is_moving": is_moving,
       "last_velocity": velocity,
       "passibility_fail_count": 0,
@@ -391,15 +389,15 @@ static func maintain(
     beliefs.erase(iid)
   while beliefs.size() > max_entries:
     var worst_iid: Variant = null
-    var worst_use := 2147483647
-    var worst_merge := 2147483647
+    var worst_observed := 2147483647
     for iid2 in beliefs.keys():
       var row2: Dictionary = beliefs[iid2]
-      var mu := int(row2.get("merge_use_count", 0))
-      var lm := int(row2.get("last_merged_ms", 0))
-      if mu < worst_use or (mu == worst_use and lm < worst_merge):
-        worst_use = mu
-        worst_merge = lm
+      var observed := int(row2.get("last_observed_ms", 0))
+      var iid_int := int(iid2)
+      if observed < worst_observed:
+        worst_observed = observed
+        worst_iid = iid2
+      elif observed == worst_observed and (worst_iid == null or iid_int < int(worst_iid)):
         worst_iid = iid2
     if worst_iid == null:
       break
@@ -424,92 +422,3 @@ static func _append_pursuit_ghost(
       "cost_scale": cost_scale * 0.85,
     })
 
-
-## Merge precise beliefs into motor lists; accumulate coarse sector weights (normalized max=1).
-static func merge_into_motor_context(
-  beliefs: Dictionary,
-  ctx: Dictionary,
-  creature_pos: Vector3,
-  motor_p: Dictionary,
-  live_ids: Dictionary,
-  now_ms: int,
-  allow_moving_prey_memory: bool = true,
-) -> Dictionary:
-  var w_remember := float(motor_p.get("weight_seek_remembered_goal", 8.0))
-  var w_coarse := float(motor_p.get("weight_coarse_sector_goal_bias", 3.0))
-  var precise_r := float(motor_p.get("goal_memory_precise_radius", 1000.0))
-  var max_merge := 25
-  var merged_n := 0
-  var sector_acc: Array = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-  var ttl_ms := _moving_ttl_ms(motor_p)
-  if w_remember > 0.0:
-    var food_targets: Array = ctx.get("food_seek_targets", []) as Array
-    var unready_targets: Array = ctx.get("unready_food_avoid_targets", []) as Array
-    for iid in beliefs.keys():
-      if live_ids.has(iid):
-        continue
-      if merged_n >= max_merge:
-        break
-      var row: Dictionary = beliefs[iid]
-      if row.get("tier", TIER_COARSE) != TIER_PRECISE:
-        continue
-      var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
-      if creature_pos.distance_to(last_pos) > precise_r:
-        continue
-      var gk: StringName = row.get("goal_kind", &"")
-      var is_moving: bool = bool(row.get("is_moving", false))
-      if is_moving and gk == _GkReg.GK_FIND_FOOD:
-        if not allow_moving_prey_memory:
-          continue
-        var age_ms := now_ms - int(row.get("last_observed_ms", 0))
-        if age_ms > ttl_ms:
-          continue
-        var _vel: Vector3 = _read_vel_v3(row.get("last_velocity", Vector3.ZERO))
-        var strength := _memory_strength(age_ms, ttl_ms)
-        row["ghost_strength"] = strength
-      elif not is_moving and gk == _GkReg.GK_FIND_FOOD:
-        var consumable: bool = bool(row.get("consumable_now", true))
-        if consumable:
-          food_targets.append(last_pos)
-        else:
-          unready_targets.append(last_pos)
-      row["merge_use_count"] = int(row.get("merge_use_count", 0)) + 1
-      row["last_merged_ms"] = now_ms
-      beliefs[iid] = row
-      merged_n += 1
-    ctx["food_seek_targets"] = food_targets
-    ctx["unready_food_avoid_targets"] = unready_targets
-    if merged_n > 0:
-      var w_live := float(ctx.get("weight_seek_ready_food", 0.0))
-      if w_live > 0.0:
-        ctx["weight_seek_ready_food"] = w_live + w_remember * 0.5
-      else:
-        ctx["weight_seek_ready_food"] = w_remember * 0.5
-  if w_coarse > 0.0:
-    for iid in beliefs.keys():
-      if live_ids.has(iid):
-        continue
-      var row_c: Dictionary = beliefs[iid]
-      if row_c.get("tier", TIER_PRECISE) != TIER_COARSE:
-        continue
-      var last_c: Vector3 = _read_pos_v3(row_c.get("last_world_pos", Vector3.ZERO))
-      var delta := last_c - creature_pos
-      if delta.length_squared() < 1e-8:
-        continue
-      var s := sector_index_for_step(delta)
-      sector_acc[s] = float(sector_acc[s]) + 1.0
-      row_c["merge_use_count"] = int(row_c.get("merge_use_count", 0)) + 1
-      row_c["last_merged_ms"] = now_ms
-      beliefs[iid] = row_c
-    var peak := 0.0
-    for w in sector_acc:
-      peak = maxf(peak, float(w))
-    if peak > 1e-8:
-      for i in 8:
-        sector_acc[i] = float(sector_acc[i]) / peak
-  var bias: Dictionary = ctx.get("believed_goal_source_bias", {}) as Dictionary
-  if typeof(bias) != TYPE_DICTIONARY:
-    bias = {}
-  bias["sector_weights"] = sector_acc
-  ctx["believed_goal_source_bias"] = bias
-  return ctx

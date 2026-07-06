@@ -19,7 +19,6 @@ const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
-const _GoalBeliefScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _GoalMem := preload("res://creature/motor/goal_source_memory.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _LauncherScript := preload("res://AI_int_lib/bundled_inference_launcher.gd")
@@ -113,7 +112,6 @@ var _last_completion_grammar: String = ""
 var _bundled_launcher: Node
 var _warned_missing_creature_pack_by_id: Dictionary = {}
 
-var _goal_belief_by_body: Dictionary = {}
 var _goal_source_memory_by_body: Dictionary = {}
 var _goal_memory_meta_by_body: Dictionary = {}
 
@@ -529,7 +527,6 @@ func _live_inference_client() -> Dictionary:
 
 
 func _goal_belief_reset_all() -> void:
-  _goal_belief_by_body.clear()
   for store in _goal_source_memory_by_body.values():
     if store != null and store.has_method(&"reset"):
       store.call(&"reset")
@@ -538,12 +535,6 @@ func _goal_belief_reset_all() -> void:
   for root in _scripted_motor_roots():
     if root != null and is_instance_valid(root) and root.has_method(&"reset_motor_memory"):
       root.call(&"reset_motor_memory")
-
-
-func _goal_belief_for_body(body_id: int) -> Dictionary:
-  if not _goal_belief_by_body.has(body_id):
-    _goal_belief_by_body[body_id] = {}
-  return _goal_belief_by_body[body_id]
 
 
 func _goal_memory_meta_for_body(body: Node) -> Dictionary:
@@ -581,24 +572,6 @@ func _goal_memory_meta_for_body(body: Node) -> Dictionary:
 func _goal_source_store_for_body(body: Node) -> _GoalMem:
   _goal_memory_meta_for_body(body)
   return _goal_source_memory_by_body[body.get_instance_id()] as _GoalMem
-
-
-func _goal_belief_reset() -> void:
-  _goal_belief_reset_all()
-
-
-func _goal_belief_sync_from_scene(body_id: int, food_split: Dictionary) -> void:
-  var beliefs := _goal_belief_for_body(body_id)
-  _goal_belief_by_body[body_id] = _GoalBeliefScr.sync_from_scene(
-    beliefs, food_split, Time.get_ticks_msec()
-  )
-
-
-func _goal_belief_maintain(creature_pos: Vector3, now_ms: int, motor_p: Dictionary, body_id: int) -> void:
-  var beliefs := _goal_belief_for_body(body_id)
-  _goal_belief_by_body[body_id] = _GoalBeliefScr.maintain(
-    beliefs, creature_pos, now_ms, motor_p
-  )
 
 
 func notify_food_consumption_outcome(
