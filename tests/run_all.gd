@@ -142,7 +142,7 @@ func _run_all() -> void:
   _test_motor_planner_explore_post_scan_inward_align_no_flip_flop()
   _test_motor_planner_explore_rim_waypoint_mints_inward()
   _test_motor_planner_explore_rim_overshoot_replans_inward()
-  _test_motor_planner_explore_rim_stuck_replan_seeds_commit()
+  _test_motor_planner_explore_rim_stuck_replan_inward()
   _test_motor_plane_playfield_corner_inbound_diagonal()
   _test_motor_planner_explore_rim_stale_tangent_latch_realigns()
   _test_motor_planner_explore_post_scan_egress_survives_blocked_align_turns()
@@ -161,6 +161,9 @@ func _run_all() -> void:
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
   _test_creature_motor_stack_consideration_advances()
+  _test_motor_planner_path_clearance_gated_by_cadence()
+  _test_motor_planner_avoid_hostiles_refresh_on_consideration_only()
+  _test_motor_planner_blocked_move_immediate_path_reevaluation()
   _test_creature_motor_stack_dual_isolation()
   _test_creature_motor_stack_integration_single_debit()
   await _test_awareness_zone_scan_live_food()
@@ -1216,7 +1219,7 @@ func _test_creature_motor_stack_debug_snapshot() -> void:
   _assert(snap.has("action"), "debug snapshot includes action")
   _assert(snap.has("step_source"), "debug snapshot includes step_source")
   _assert(snap.has("physics_tick"), "debug snapshot includes physics_tick")
-  _assert(snap.has("turn_commit_sign"), "debug snapshot includes turn_commit_sign")
+  _assert(snap.has("boundary_scan_sign"), "debug snapshot includes boundary_scan_sign")
   _assert(snap.has("bearing_error_deg"), "debug snapshot includes bearing_error_deg")
   _assert(snap.has("facing_dot_tgt"), "debug snapshot includes facing_dot_tgt")
   _assert(snap.has("explore_no_progress_ticks"), "debug snapshot includes explore_no_progress_ticks")
@@ -1748,7 +1751,6 @@ func _test_motor_planner_explore_align_no_premature_replan() -> void:
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
   state["step_goal"] = state["explore_waypoint"]
-  state["turn_commit_sign"] = 1
   var pos_before := body.global_position
   for tick_i in 4:
     var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
@@ -1771,10 +1773,6 @@ func _test_motor_planner_explore_align_no_premature_replan() -> void:
     int(state.get("explore_no_progress_ticks", 99)) == 0,
     "explore align progress stays reset while dot improves",
   )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) == 1,
-    "explore align progress preserves turn commit during improving turns",
-  )
   main.queue_free()
 
 
@@ -1792,8 +1790,8 @@ func _test_motor_planner_explore_log_format() -> void:
     "goal_kind": "find_food",
     "step_goal_xz": Vector2(128.4, 94.2),
     "step_instance_id": 0,
-    "turn_commit_sign": 1,
-    "boundary_scan_active": false,
+    "boundary_scan_active": true,
+    "boundary_scan_sign": -1,
     "bearing_error_deg": 24.3,
     "facing_dot_tgt": 0.901,
     "explore_no_progress_ticks": 2,
@@ -1808,7 +1806,7 @@ func _test_motor_planner_explore_log_format() -> void:
   _assert(line.contains("act=TURN_L"), "explore log line includes action")
   _assert(line.contains("enp=2"), "explore log line includes explore no-progress count")
   _assert(line.contains("dot=  0.901") or line.contains("dot= 0.901"), "explore log fixed-width dot")
-  _assert(_ExploreLog.commit_label_from_snap(snap) == "L", "commit label L when turn_commit_sign positive")
+  _assert(_ExploreLog.scan_label_from_snap(snap) == "sR", "scan label sR when boundary_scan_sign negative")
   var hud: String = _explore_log_script.call("format_explore_tick_hud", snap, "Fox")
   _assert(hud.count("\n") >= 3, "explore HUD block uses multiple lines")
 
@@ -1938,7 +1936,6 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   var boundary_state := _MotorPlanner.new_state()
   boundary_state["step_source"] = &"explore"
   boundary_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
-  boundary_state["turn_commit_sign"] = 1
   var bounds_min := Vector2.ZERO
   var bounds_max := Vector2(100.0, 100.0)
   body.set("playfield_bounds_min", bounds_min)
@@ -1968,8 +1965,8 @@ func _test_motor_planner_latched_stuck_replan() -> void:
     "playfield edge stuck sets blocked_objective_action=boundary_scan",
   )
   _assert(
-    int(boundary_state.get("turn_commit_sign", 0)) == 1,
-    "boundary scan preserves turn_commit_sign (no L/R stutter)",
+    int(boundary_state.get("boundary_scan_sign", 0)) != 0,
+    "boundary scan picks non-zero boundary_scan_sign",
   )
   _assert(
     (boundary_state.get("explore_dir", Vector3.ZERO) as Vector3).normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99,
@@ -1979,7 +1976,6 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   var latch_state := _MotorPlanner.new_state()
   latch_state["step_source"] = &"explore"
   latch_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
-  latch_state["turn_commit_sign"] = 1
   body.global_position = Vector3(50.0, 1.0, 50.0)
   var center_pos := body.global_position
   var clamp_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
@@ -2063,10 +2059,6 @@ func _test_motor_planner_explore_boundary_scan_inward_escape() -> void:
   _assert(
     absf(escape_dir.normalized().dot(Vector3(0.0, 0.0, -1.0))) < 0.5,
     "boundary_scan_done does not keep rim-tangent explore_dir",
-  )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) != 0,
-    "boundary_scan_done seeds turn commit for inward realign",
   )
 
   state["blocked_objective_action"] = &"boundary_scan_done"
@@ -2269,10 +2261,6 @@ func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
   (_MotorPlanner as GDScript).call(
     "_end_boundary_scan", state, body, &"boundary_scan_done", motor_v3
   )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) != 0,
-    "post-scan inward align seeds non-zero turn commit",
-  )
   var ctx := {
     "body": body,
     "motor_v3": motor_v3,
@@ -2428,10 +2416,6 @@ func _test_motor_planner_explore_rim_stale_tangent_latch_realigns() -> void:
     explore_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
     "stale tangent latch stores inward explore_dir",
   )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) != 0,
-    "stale tangent latch seeds inward turn commit",
-  )
   main.queue_free()
 
 
@@ -2567,15 +2551,11 @@ func _test_motor_planner_explore_rim_overshoot_replans_inward() -> void:
     new_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
     "rim overshoot replan picks inward explore_dir, not 60° rotate",
   )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) != 0,
-    "rim overshoot replan seeds turn commit for inward align",
-  )
   main.queue_free()
 
 
-func _test_motor_planner_explore_rim_stuck_replan_seeds_commit() -> void:
-  # Fix 3b/3c: rim stuck-or-rim replan helper picks inward bearing + seeded turn commit.
+func _test_motor_planner_explore_rim_stuck_replan_inward() -> void:
+  # Fix 3b/3c: rim stuck-or-rim replan helper picks inward bearing (cone-only align after).
   var motor_v3 := _motor_v3_test_params()
   var main := Node3D.new()
   root.add_child(main)
@@ -2595,10 +2575,6 @@ func _test_motor_planner_explore_rim_stuck_replan_seeds_commit() -> void:
   _assert(
     replan_dir.normalized().dot(Vector3(-1.0, 0.0, 0.0)) > 0.9,
     "rim stuck-or-rim replan picks inward explore_dir",
-  )
-  _assert(
-    int(state.get("turn_commit_sign", 0)) != 0,
-    "rim stuck-or-rim replan seeds turn commit",
   )
   main.queue_free()
 
@@ -2643,10 +2619,6 @@ func _test_motor_planner_explore_overshoot_replans() -> void:
   _assert(
     state.get("blocked_objective_action", &"") == &"explore_replan",
     "overshoot sets blocked_objective_action=explore_replan",
-  )
-  _assert(
-    int(state.get("turn_commit_sign", 99)) == 0,
-    "overshoot clears turn commit for forward realign",
   )
   main.queue_free()
 
@@ -2957,11 +2929,130 @@ func _test_creature_motor_stack_consideration_advances() -> void:
   stack.tick(1.0 / 60.0)
   _assert(stack.get_physics_tick_count() == 1, "first tick increments counter")
   _assert(not stack.get_incumbent().is_empty(), "first tick runs consideration")
-  for _i in 6:
+  _assert(stack.get_ticks_since_consideration() == 1, "consideration timer restarts after hub pass")
+  for _i in 7:
     stack.tick(1.0 / 60.0)
-  _assert(stack.get_physics_tick_count() == 7, "tick counter advances between considerations")
+  _assert(stack.get_physics_tick_count() == 8, "tick counter advances between considerations")
+  _assert(
+    stack.get_ticks_since_consideration() == 8,
+    "per-objective timer counts physics ticks since last consideration",
+  )
   stack.tick(1.0 / 60.0)
-  _assert(stack.get_physics_tick_count() == 8, "cadence boundary tick")
+  _assert(stack.get_physics_tick_count() == 9, "cadence boundary tick")
+  _assert(
+    stack.get_ticks_since_consideration() == 1,
+    "consideration runs again when timer reaches interval",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_path_clearance_gated_by_cadence() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_goal"] = Vector3(40.0, 1.0, 0.0)
+  state["step_source"] = &"live"
+  var ctx := {
+    "run_path_clearance": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+  }
+  var goal_before: Vector3 = state["step_goal"]
+  _MotorPlanner.resolve_path_to_step_goal(body, motor_v3, state, ctx)
+  _assert(
+    state["step_goal"].distance_to(goal_before) < 0.01,
+    "path clearance skipped when run_path_clearance is false",
+  )
+  ctx["run_path_clearance"] = true
+  _MotorPlanner.resolve_path_to_step_goal(body, motor_v3, state, ctx)
+  _assert(
+    state["step_goal"].length_squared() > 1e-4,
+    "path clearance may run when cadence flag is set",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["awareness_radius"] = 150.0
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var threat := _ThreatSampleScr.make(Vector2(10.0, 0.0), 10.0, true)
+  threat["world_pos_3d"] = Vector3(10.0, 1.0, 0.0)
+  threat["in_awareness"] = true
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_AVOID_HOSTILES
+  state["step_goal"] = Vector3(-65.0, 1.0, 0.0)
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "refresh_step_objective": true,
+    "threat_samples": [threat],
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": [threat]},
+    "map_rid": RID(),
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
+  var first_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  _assert(first_goal.length_squared() > 1e-4, "initial flee objective minted")
+  threat["world_pos_3d"] = Vector3(30.0, 1.0, 0.0)
+  ctx["threat_samples"] = [threat]
+  ctx["scan"]["threat_samples"] = [threat]
+  ctx["refresh_step_objective"] = false
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(first_goal) < 0.01,
+    "flee step_goal held between consideration ticks",
+  )
+  ctx["refresh_step_objective"] = true
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(first_goal) > 1.0,
+    "flee step_goal refreshes on consideration tick",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_blocked_move_immediate_path_reevaluation() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var state := _MotorPlanner.new_state()
+  state["step_goal"] = Vector3(0.0, 1.0, 40.0)
+  state["step_source"] = &"live"
+  var approach := Vector3(0.0, 0.0, 1.0)
+  _BlockedApproachScr.record(state["blocked_approach"], approach, 1, 45)
+  var ctx := {
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 2,
+  }
+  var before: Vector3 = state["step_goal"]
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    state["step_goal"].distance_to(before) > 0.5,
+    "blocked MOVE immediate reeval applies §3.2 backtrack detour",
+  )
   main.queue_free()
 
 func _test_creature_motor_stack_dual_isolation() -> void:

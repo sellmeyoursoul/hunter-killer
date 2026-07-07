@@ -30,8 +30,6 @@ static func new_state() -> Dictionary:
     "last_outcome_blocked": false,
     "step_stimulus_kind_id": &"",
     "blocked_objective_action": &"",
-    "turn_commit_sign": 0,
-    "turn_commit_bearing_deg": null,
     "boundary_scan_active": false,
     "boundary_scan_sign": 0,
     "boundary_scan_turns": 0,
@@ -69,7 +67,7 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
     return _MotorAction.EAT
   if _at_arrival(body, step_goal, motor_v3):
     return _MotorAction.STAY
-  return _turn_or_move_toward(body, step_goal, motor_v3, state, ctx)
+  return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
 
 ## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
@@ -120,13 +118,11 @@ static func _apply_explore_stuck_replan(state: Dictionary) -> void:
   state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
-  state["turn_commit_sign"] = 0
-  state["turn_commit_bearing_deg"] = null
   state["consecutive_blocked"] = 0
   _reset_explore_align_progress_state(state)
 
 
-## Rim hug band: use inward replan + turn commit; interior: 60° stuck replan.
+## Rim hug band: inward replan; interior: 60° stuck replan.
 static func _apply_explore_stuck_or_rim_replan(
   state: Dictionary,
   body: CharacterBody3D,
@@ -172,8 +168,6 @@ static func _seed_explore_after_seek(state: Dictionary, ctx: Dictionary) -> void
   state["step_goal"] = Vector3.ZERO
   state["step_instance_id"] = 0
   state["step_source"] = &"explore"
-  state["turn_commit_sign"] = 0
-  state["turn_commit_bearing_deg"] = null
   state["consecutive_blocked"] = 0
   _reset_explore_align_progress_state(state)
 
@@ -298,7 +292,6 @@ static func _apply_explore_rim_escape_replan(
   state["playfield_clamp_latch_ticks"] = 0
   state["boundary_scan_egress_ticks"] = 0
   _reset_explore_align_progress_state(state)
-  _seed_inward_align_turn_commit(state, body, motor_v3)
 
 
 static func _pick_boundary_scan_sign(body: CharacterBody3D, hug: Dictionary, motor_v3: Dictionary) -> int:
@@ -324,7 +317,6 @@ static func _pick_shorter_arc_turn_sign(
   motor_v3: Dictionary,
 ) -> int:
   ## Pick turn direction that improves dot toward [param reference_dir] after one turn step.
-  ## Stable for rear-hemisphere targets where [code]_signed_bearing_error_deg[/code] sign flips.
   var ref := reference_dir
   if ref.length_squared() < 1e-12:
     return 1
@@ -336,25 +328,32 @@ static func _pick_shorter_arc_turn_sign(
   var turn_rad := deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
   var left_after := facing.rotated(Vector3.UP, turn_rad).dot(ref)
   var right_after := facing.rotated(Vector3.UP, -turn_rad).dot(ref)
-  return 1 if left_after >= right_after else -1
+  return _resolve_turn_sign_tie(left_after, right_after, motor_v3)
 
 
-static func _seed_inward_align_turn_commit(
-  state: Dictionary,
+## §7.3.0 align turn pick toward world [param target] (fewest-turn + chaos at ±180°).
+static func _pick_align_turn_sign(
   body: CharacterBody3D,
+  target: Vector3,
   motor_v3: Dictionary,
-) -> void:
-  ## After rim boundary scan, commit shorter-arc turns toward [code]explore_dir[/code] (inward).
-  var inward: Vector3 = state.get("explore_dir", Vector3.ZERO)
-  if inward.length_squared() < 1e-12:
-    state["turn_commit_sign"] = 0
-    state["turn_commit_bearing_deg"] = null
-    return
-  inward = inward.normalized()
-  var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
-  var waypoint := body.global_position + inward * reach
-  state["turn_commit_sign"] = _pick_shorter_arc_turn_sign(body, inward, motor_v3)
-  state["turn_commit_bearing_deg"] = _flat_bearing_deg(body.global_position, waypoint)
+) -> int:
+  var creature_pos := body.global_position
+  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
+  if to_target.length_squared() < 1e-12:
+    return 1
+  return _pick_shorter_arc_turn_sign(body, to_target, motor_v3)
+
+
+static func _resolve_turn_sign_tie(left_after: float, right_after: float, motor_v3: Dictionary) -> int:
+  const tie_eps := 1e-5
+  if left_after > right_after + tie_eps:
+    return 1
+  if right_after > left_after + tie_eps:
+    return -1
+  var chaos := clampf(float(motor_v3.get("goal_consideration_chaos", 0.15)), 0.0, 1.0)
+  if chaos > 0.0 and randf() < chaos:
+    return 1 if randf() < 0.5 else -1
+  return 1
 
 
 static func _begin_boundary_scan(
@@ -365,13 +364,10 @@ static func _begin_boundary_scan(
   var hug := _playfield_hug_info(body, motor_v3)
   var scan_sign := int(state.get("boundary_scan_sign", 0))
   if scan_sign == 0:
-    scan_sign = int(state.get("turn_commit_sign", 0))
-  if scan_sign == 0:
     scan_sign = _pick_boundary_scan_sign(body, hug, motor_v3)
   state["boundary_scan_active"] = true
   state["boundary_scan_sign"] = scan_sign
   state["boundary_scan_turns"] = 0
-  state["turn_commit_sign"] = scan_sign
   state["consecutive_blocked"] = 0
   state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = &"boundary_scan"
@@ -399,10 +395,6 @@ static func _end_boundary_scan(
   state["blocked_objective_action"] = action
   if action == &"boundary_scan_done":
     state["boundary_scan_egress_ticks"] = _boundary_scan_egress_budget(motor_v3)
-    _seed_inward_align_turn_commit(state, body, motor_v3)
-  else:
-    state["turn_commit_sign"] = 0
-    state["turn_commit_bearing_deg"] = null
   _reset_explore_align_progress_state(state)
 
 
@@ -411,7 +403,6 @@ static func _boundary_scan_action(body: CharacterBody3D, motor_v3: Dictionary, s
   if scan_sign == 0:
     scan_sign = _pick_boundary_scan_sign(body, _playfield_hug_info(body, motor_v3), motor_v3)
     state["boundary_scan_sign"] = scan_sign
-  state["turn_commit_sign"] = scan_sign
   return _MotorAction.TURN_LEFT if scan_sign > 0 else _MotorAction.TURN_RIGHT
 
 
@@ -645,8 +636,6 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["step_instance_id"] = 0
     state["explore_dir"] = Vector3.ZERO
     state["explore_waypoint"] = Vector3.ZERO
-    state["turn_commit_sign"] = 0
-    state["turn_commit_bearing_deg"] = null
     state["boundary_scan_active"] = false
     state["boundary_scan_sign"] = 0
     state["boundary_scan_turns"] = 0
@@ -654,6 +643,9 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
     _reset_explore_align_progress_state(state)
+  var refresh_targets := bool(ctx.get("refresh_step_objective", false))
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  var has_step_goal := step_goal.length_squared() > 1e-8
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   var scan: Dictionary = ctx.get("scan", {})
@@ -663,27 +655,86 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
 
   match goal_kind:
     _GkReg.GK_FIND_FOOD:
-      var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
-      if not food.is_empty():
-        var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
-        state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
-        state["step_instance_id"] = int(food.get("instance_id", 0))
-        state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
-        state["step_source"] = &"live"
-        return
-      if _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r):
-        return
-      state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
-      state["step_instance_id"] = 0
-      state["step_source"] = &"explore"
+      if refresh_targets or not has_step_goal:
+        _derive_find_food_step_objective(
+          ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+        )
+      elif state.get("step_source", &"") == &"explore":
+        _maintain_explore_latch(ctx, state, motor_v3)
     _GkReg.GK_AVOID_HOSTILES:
-      state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3)
-      state["step_instance_id"] = 0
-      state["step_source"] = &"live"
+      if refresh_targets or not has_step_goal:
+        state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3)
+        state["step_instance_id"] = 0
+        state["step_source"] = &"live"
     _:
-      state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
-      state["step_instance_id"] = 0
-      state["step_source"] = &"explore"
+      if refresh_targets or not has_step_goal:
+        state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
+        state["step_instance_id"] = 0
+        state["step_source"] = &"explore"
+
+
+static func _derive_find_food_step_objective(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> void:
+  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
+  if not food.is_empty():
+    var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
+    state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+    state["step_instance_id"] = int(food.get("instance_id", 0))
+    state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
+    state["step_source"] = &"live"
+    return
+  if _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r):
+    return
+  state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
+  state["step_instance_id"] = 0
+  state["step_source"] = &"explore"
+
+
+## Overshoot / rim / dead-end maintenance on a held explore latch (runs between consideration ticks).
+static func _maintain_explore_latch(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return
+  var creature_pos := body.global_position
+  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  if latched.length_squared() < 1e-8:
+    return
+  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  if creature_pos.distance_to(latched) <= arrival_tol:
+    state["explore_waypoint"] = Vector3.ZERO
+    state["step_goal"] = Vector3.ZERO
+    return
+  if _passed_explore_waypoint(body, latched, state):
+    _apply_explore_waypoint_passed(state, body, motor_v3)
+    return
+  if _explore_latch_needs_rim_realign(body, motor_v3, state):
+    _apply_explore_rim_escape_replan(state, body, motor_v3)
+    return
+  var adapter_hold: RefCounted = ctx.get("memory_adapter")
+  if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
+    if adapter_hold.is_waypoint_dead_end(creature_pos, latched, _GkReg.GK_FIND_FOOD, motor_v3):
+      if _is_near_playfield_boundary(body, motor_v3):
+        state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
+      else:
+        var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
+        if explore.length_squared() < 1e-8:
+          explore = _MotorPlane.HORIZONTAL_FORWARD
+        state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
+      state["explore_waypoint"] = Vector3.ZERO
+      state["step_goal"] = Vector3.ZERO
+      return
+  state["step_goal"] = latched
 
 
 static func _sync_food_memory_objective(
@@ -741,7 +792,7 @@ static func _select_flight_action(ctx: Dictionary, state: Dictionary) -> int:
   state["step_source"] = &"live"
   if state["step_goal"].length_squared() < 1e-8:
     return _MotorAction.STAY
-  return _turn_or_move_toward(body, state["step_goal"], motor_v3, state, ctx)
+  return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
 
 static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Dictionary) -> Vector3:
@@ -854,48 +905,104 @@ static func _can_eat_now(
   return int(state.get("step_instance_id", 0)) != 0
 
 
-static func _turn_or_move_toward(
+static func _locomote_toward_step_goal(
   body: CharacterBody3D,
-  step_goal: Vector3,
   motor_v3: Dictionary,
   state: Dictionary,
   ctx: Dictionary,
 ) -> int:
+  resolve_path_to_step_goal(body, motor_v3, state, ctx)
+  return align_and_move(body, motor_v3, state)
+
+
+## §3.1 path clearance — LoS + nav substep when [code]run_path_clearance[/code] is set (§6e.2 cadence).
+static func resolve_path_to_step_goal(
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  state: Dictionary,
+  ctx: Dictionary,
+) -> void:
+  if not bool(ctx.get("run_path_clearance", false)):
+    return
+  _run_path_clearance_los_nav(body, motor_v3, state, ctx)
+
+
+## §3.2 immediate blocked-MOVE recheck — backtrack detour + clearance (not on consideration cadence).
+static func apply_immediate_blocked_path_reevaluation(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
+    return
   var creature_pos := body.global_position
   var to_goal := Vector3(step_goal.x - creature_pos.x, 0.0, step_goal.z - creature_pos.z)
   if to_goal.length_squared() < 1e-8:
-    return _MotorAction.STAY
+    return
   var move_dir := to_goal.normalized()
-  var step_source: StringName = state.get("step_source", &"live")
-  # Fixed GPS / latched explore: no backtrack detour rewrite (§7.3 / §8.2).
-  if not _is_latched_step_source(step_source):
-    var blocked_dir := _BlockedApproach.active_dir(
-      state.get("blocked_approach", {}),
-      int(ctx.get("physics_tick", 0)),
+  var blocked_dir := _BlockedApproach.active_dir(
+    state.get("blocked_approach", {}),
+    int(ctx.get("physics_tick", 0)),
+  )
+  var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
+  if (
+    blocked_dir.length_squared() > 1e-12
+    and _BlockedApproach.is_backtrack_step(move_dir, blocked_dir, backtrack_dot)
+  ):
+    move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
+    state["step_goal"] = creature_pos + move_dir * to_goal.length()
+  _run_path_clearance_los_nav(body, motor_v3, state, ctx)
+
+
+static func _run_path_clearance_los_nav(
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  state: Dictionary,
+  ctx: Dictionary,
+) -> void:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
+    return
+  if not _is_facing_aligned_for_move(body, step_goal, motor_v3):
+    return
+  var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  var eye_h := float(ctx.get("eye_height", 1.0))
+  var creature_pos := body.global_position
+  if not _PathClear.has_clear_los(space, creature_pos, eye_h, step_goal, motor_v3):
+    var map_rid: RID = ctx.get("map_rid", RID())
+    var agent_r := _agent_radius(body)
+    state["step_goal"] = _PathClear.resolve_step_objective(
+      map_rid, creature_pos, step_goal, agent_r,
     )
-    var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
-    if (
-      blocked_dir.length_squared() > 1e-12
-      and _BlockedApproach.is_backtrack_step(move_dir, blocked_dir, backtrack_dot)
-    ):
-      move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
-      state["step_goal"] = creature_pos + move_dir * to_goal.length()
-  if not _is_facing_aligned_for_move(body, state["step_goal"], motor_v3):
-    return _pick_turn_action(body, state["step_goal"], motor_v3, state)
-  if not _is_latched_step_source(step_source):
-    var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
-    var eye_h := float(ctx.get("eye_height", 1.0))
-    if not _PathClear.has_clear_los(space, creature_pos, eye_h, state["step_goal"], motor_v3):
-      var map_rid: RID = ctx.get("map_rid", RID())
-      var agent_r := _agent_radius(body)
-      state["step_goal"] = _PathClear.resolve_step_objective(
-        map_rid, creature_pos, state["step_goal"], agent_r,
-      )
-      if not _is_facing_aligned_for_move(body, state["step_goal"], motor_v3):
-        return _pick_turn_action(body, state["step_goal"], motor_v3, state)
-  state["turn_commit_sign"] = 0
-  state["turn_commit_bearing_deg"] = null
-  return _MotorAction.MOVE_FORWARD
+
+
+## True when the tick's action completed a step objective (EAT or arrival STAY).
+static func completed_step_objective(
+  body: CharacterBody3D,
+  state: Dictionary,
+  motor_v3: Dictionary,
+  action: int,
+) -> bool:
+  if action == _MotorAction.EAT:
+    return true
+  if action == _MotorAction.STAY:
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    if step_goal.length_squared() > 1e-8 and _at_arrival(body, step_goal, motor_v3):
+      return true
+  return false
+
+
+## §7.3.0 facing-relative one-action pick toward current [code]step_goal[/code].
+static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: Dictionary) -> int:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
+    return _MotorAction.STAY
+  if _is_facing_aligned_for_move(body, step_goal, motor_v3):
+    return _MotorAction.MOVE_FORWARD
+  var turn_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
+  return _MotorAction.TURN_LEFT if turn_sign > 0 else _MotorAction.TURN_RIGHT
 
 
 static func _is_facing_aligned_with_tolerance(
@@ -947,52 +1054,6 @@ static func _signed_bearing_error_deg(body: CharacterBody3D, target: Vector3) ->
   var cross := facing.x * to_n.z - facing.z * to_n.x
   var dot := clampf(facing.dot(to_n), -1.0, 1.0)
   return rad_to_deg(atan2(cross, dot))
-
-
-static func _flat_bearing_deg(from_pos: Vector3, to_pos: Vector3) -> float:
-  var d := Vector3(to_pos.x - from_pos.x, 0.0, to_pos.z - from_pos.z)
-  if d.length_squared() < 1e-8:
-    return 0.0
-  return rad_to_deg(atan2(d.x, d.z))
-
-
-static func _angle_delta_deg(a: float, b: float) -> float:
-  return fmod(a - b + 540.0, 360.0) - 180.0
-
-
-static func _pick_turn_action(
-  body: CharacterBody3D,
-  target: Vector3,
-  motor_v3: Dictionary,
-  state: Dictionary,
-) -> int:
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
-  var creature_pos := body.global_position
-  var bearing_deg := _flat_bearing_deg(creature_pos, target)
-  var step_source: StringName = state.get("step_source", &"live")
-  var stored_bearing: Variant = state.get("turn_commit_bearing_deg", null)
-  # Flight/flee retargets each tick; latched precise/explore keep commit until MOVE cone (§7.3).
-  if (
-    stored_bearing != null
-    and not _is_latched_step_source(step_source)
-    and absf(_angle_delta_deg(bearing_deg, stored_bearing)) > turn_deg
-  ):
-    state["turn_commit_sign"] = 0
-  var move_min_dot := _move_alignment_min_dot(motor_v3)
-  var facing_dot := _facing_dot_to_target(body, target)
-  var commit := int(state.get("turn_commit_sign", 0))
-  if commit != 0:
-    # Hold committed turn until MOVE alignment — ignore atan2 sign flips near ±180°.
-    if facing_dot >= move_min_dot:
-      state["turn_commit_sign"] = 0
-      state["turn_commit_bearing_deg"] = null
-      return _MotorAction.MOVE_FORWARD
-    return _MotorAction.TURN_LEFT if commit > 0 else _MotorAction.TURN_RIGHT
-  var error_deg := _signed_bearing_error_deg(body, target)
-  var new_commit := 1 if error_deg >= 0.0 else -1
-  state["turn_commit_sign"] = new_commit
-  state["turn_commit_bearing_deg"] = bearing_deg
-  return _MotorAction.TURN_LEFT if new_commit > 0 else _MotorAction.TURN_RIGHT
 
 
 static func _agent_radius(body: CharacterBody3D) -> float:

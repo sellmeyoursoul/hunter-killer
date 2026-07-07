@@ -24,6 +24,7 @@ var _goal_catalog: Dictionary = {}
 
 var _physics_tick_count: int = 0
 var _consideration_interval: int = 8
+var _ticks_since_consideration: int = 0
 var _active_goals: Array = []
 var _incumbent: Dictionary = {}
 var _flight_fast_path_active: bool = false
@@ -63,6 +64,7 @@ func configure(
     _motor_v3,
   )
   _physics_tick_count = 0
+  _ticks_since_consideration = _consideration_interval
   _active_goals = []
   _incumbent = {}
   _flight_fast_path_active = false
@@ -86,10 +88,15 @@ func tick(delta: float) -> _ActionOutcome:
   _update_flight_fast_path_stub(ctx)
   ctx["flight_fast_path_active"] = _flight_fast_path_active
 
+  var ran_consideration := false
   if _should_run_consideration():
     _run_consideration(ctx)
+    ran_consideration = true
 
   var planner_ctx := _build_planner_context(ctx, delta)
+  planner_ctx["refresh_step_objective"] = ran_consideration
+  planner_ctx["run_path_clearance"] = ran_consideration
+
   var pos_before_tick := _body.global_position
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
   var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(_body, action, delta, _motor_v3)
@@ -108,6 +115,15 @@ func tick(delta: float) -> _ActionOutcome:
     delta,
   )
   _last_outcome = outcome
+  if outcome != null and int(outcome.action) == _MotorAction.MOVE_FORWARD and outcome.blocked:
+    var blocked_path_ctx := _build_planner_context(ctx, delta)
+    (_MotorPlanner as GDScript).call(
+      "apply_immediate_blocked_path_reevaluation",
+      blocked_path_ctx,
+      _planner_state,
+      _body,
+      _motor_v3,
+    )
   if int(outcome.action) == _MotorAction.EAT:
     _try_complete_eat()
   if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
@@ -118,6 +134,9 @@ func tick(delta: float) -> _ActionOutcome:
     _MotorPlanner.apply_blocked_objective_resolution(
       blocked_ctx, _planner_state, _body, _motor_v3
     )
+  if _objective_completed_this_tick(action):
+    _run_consideration(ctx)
+  _advance_consideration_timer()
   _apply_gravity_if_stationary(action, delta)
   _maybe_log_explore_tick()
   return outcome
@@ -152,6 +171,10 @@ func get_physics_tick_count() -> int:
 
 func get_consideration_interval() -> int:
   return _consideration_interval
+
+
+func get_ticks_since_consideration() -> int:
+  return _ticks_since_consideration
 
 
 func get_active_goals() -> Array:
@@ -220,12 +243,13 @@ func get_debug_snapshot() -> Dictionary:
     "blocked_objective_action": str(ps.get("blocked_objective_action", "")),
     "consecutive_blocked": int(ps.get("consecutive_blocked", 0)),
     "explore_no_progress_ticks": int(ps.get("explore_no_progress_ticks", 0)),
-    "turn_commit_sign": int(ps.get("turn_commit_sign", 0)),
     "boundary_scan_active": bool(ps.get("boundary_scan_active", false)),
+    "boundary_scan_sign": int(ps.get("boundary_scan_sign", 0)),
     "bearing_error_deg": float(bearing.get("bearing_error_deg", 0.0)),
     "facing_dot_tgt": float(bearing.get("facing_dot_tgt", 0.0)),
     "physics_tick": _physics_tick_count,
     "consideration_interval": _consideration_interval,
+    "ticks_since_consideration": _ticks_since_consideration,
     "flight_fast_path": _flight_fast_path_active,
     "ready_food": ready.size(),
     "threat_count": _threat_samples.size(),
@@ -463,9 +487,27 @@ func _update_flight_fast_path_stub(ctx: Dictionary) -> void:
 
 
 func _should_run_consideration() -> bool:
-  if _physics_tick_count == 1:
-    return true
-  return _physics_tick_count % _consideration_interval == 0
+  return _ticks_since_consideration >= _consideration_interval
+
+
+func _restart_consideration_timer() -> void:
+  _ticks_since_consideration = 0
+
+
+func _advance_consideration_timer() -> void:
+  _ticks_since_consideration += 1
+
+
+func _objective_completed_this_tick(action: int) -> bool:
+  if _incumbent.is_empty() or _body == null:
+    return false
+  return (_MotorPlanner as GDScript).call(
+    "completed_step_objective",
+    _body,
+    _planner_state,
+    _motor_v3,
+    action,
+  )
 
 
 func _run_consideration(ctx: Dictionary) -> void:
@@ -483,14 +525,17 @@ func _run_consideration(ctx: Dictionary) -> void:
   var winner := _MotorGoalHub.pick_winner(scored, _motor_v3)
   if winner.is_empty():
     _incumbent = {}
+    _restart_consideration_timer()
     return
   var weight_eps := 1e-4
   if float(winner.get("weight", 0.0)) <= weight_eps:
     _incumbent = {}
+    _restart_consideration_timer()
     return
   if _incumbent.get("goal_kind", &"") != winner.get("goal_kind", &""):
     _planner_state = _MotorPlanner.new_state()
   _incumbent = winner
+  _restart_consideration_timer()
 
 
 static func _feasibility_for_goal(row: Dictionary, ctx: Dictionary) -> float:

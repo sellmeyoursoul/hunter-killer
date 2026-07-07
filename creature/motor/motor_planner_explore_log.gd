@@ -41,20 +41,16 @@ static func _fw(text: String, width: int) -> String:
   return s.rpad(width, " ")
 
 
-## Format commit label from snapshot fields (align / boundary scan).
-static func commit_label_from_snap(snap: Dictionary) -> String:
-  var commit := int(snap.get("turn_commit_sign", 0))
-  if bool(snap.get("boundary_scan_active", false)):
-    if commit > 0:
-      return "sL"
-    if commit < 0:
-      return "sR"
-    return "s0"
-  if commit > 0:
-    return "L"
-  if commit < 0:
-    return "R"
-  return "0"
+## Boundary-scan turn label from [code]boundary_scan_sign[/code] ([code]sL[/code]/[code]sR[/code]).
+static func scan_label_from_snap(snap: Dictionary) -> String:
+  if not bool(snap.get("boundary_scan_active", false)):
+    return ""
+  var scan_sign := int(snap.get("boundary_scan_sign", 0))
+  if scan_sign > 0:
+    return "sL"
+  if scan_sign < 0:
+    return "sR"
+  return "s0"
 
 
 ## One fixed-width explore tick line (HUD row + log file).
@@ -66,6 +62,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
   var inc_goal := str(snap.get("incumbent_goal", ""))
   if bool(snap.get("incumbent_empty", true)):
     inc_goal = "(none)"
+  var scan_lbl := scan_label_from_snap(snap)
   var prefix := ""
   if not creature_label.is_empty():
     prefix = "%s " % _fw(creature_label, 8)
@@ -74,8 +71,8 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + "t=%04d act=%s blk=%s cal=%3d%% "
     + "inc=%s w=%6.3f src=%s gk=%s "
     + "tgt=(%8.1f,%8.1f) id=%5d "
-    + "cmt=%s err=%+7.1f dot=%7.3f enp=%d "
-    + "blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
+    + "err=%+7.1f dot=%7.3f enp=%d "
+    + "scan=%s blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),
@@ -88,10 +85,10 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     tgt.x,
     tgt.y,
     int(snap.get("step_instance_id", 0)),
-    _fw(commit_label_from_snap(snap), 2),
     float(snap.get("bearing_error_deg", 0.0)),
     float(snap.get("facing_dot_tgt", 0.0)),
     int(snap.get("explore_no_progress_ticks", 0)),
+    _fw(scan_lbl, 2),
     _fw(blk_act, 16),
     int(snap.get("consecutive_blocked", 0)),
     1 if bool(snap.get("flight_fast_path", false)) else 0,
@@ -109,6 +106,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
   var inc_goal := str(snap.get("incumbent_goal", ""))
   if bool(snap.get("incumbent_empty", true)):
     inc_goal = "(none)"
+  var scan_lbl := scan_label_from_snap(snap)
   var tag := ""
   if not creature_label.is_empty():
     tag = _fw(creature_label, 8) + " "
@@ -117,7 +115,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
     + "t=%04d act=%s blk=%s cal=%3d%% inc=%s w=%6.3f\n"
     + "src=%s gk=%s\n"
     + "tgt=(%8.1f,%8.1f) id=%5d\n"
-    + "cmt=%s err=%+7.1f dot=%7.3f enp=%d\n"
+    + "err=%+7.1f dot=%7.3f enp=%d scan=%s\n"
     + "blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
   ) % [
     int(snap.get("physics_tick", 0)),
@@ -131,10 +129,10 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
     tgt.x,
     tgt.y,
     int(snap.get("step_instance_id", 0)),
-    _fw(commit_label_from_snap(snap), 2),
     float(snap.get("bearing_error_deg", 0.0)),
     float(snap.get("facing_dot_tgt", 0.0)),
     int(snap.get("explore_no_progress_ticks", 0)),
+    _fw(scan_lbl, 2),
     _fw(blk_act, 16),
     int(snap.get("consecutive_blocked", 0)),
     1 if bool(snap.get("flight_fast_path", false)) else 0,

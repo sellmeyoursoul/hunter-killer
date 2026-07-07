@@ -981,15 +981,15 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Resolved — retire HUD / explore-log `cmt` (2026-07-06):** The debug snapshot exposes the **current** tick's **`action`** only — prior-tick **`Action`** is **not** available without new planner/stack state (`last_action`) or end-of-tick relabel plumbing. **Do not add** either path for v1. **Retire `cmt`** from F10 HUD and fixed-width explore tick log output; delete [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) **`commit_label_from_snap`** and any **`turn_commit_sign`** snapshot inputs. During explore **boundary scan**, **`sL`/`sR`** still come from **`boundary_scan_sign`** (unchanged).
 
-**Resolved — Flight align without commit (2026-07-06):** Flight fast-path may retarget **`step_goal`** every tick; turn-direction flutter from rear-hemisphere swings is **acceptable for v1** — use the same cone-only **`align_and_move`** as other modes (no separate Flight stabilization rule). **Playtest gate:** if flee geometry causes prey paralysis or visible spin-lock, revisit a Flight-only rule in a follow-up (track in duel smoke / carnivore chase when those scenes land).
+**Resolved — Flight align without commit (2026-07-06):** Flight fast-path may retarget **`step_goal`** every tick; turn-direction flutter from rear-hemisphere swings is **acceptable for v1** — use the same cone-only **`align_and_move`** as other modes (no separate Flight stabilization rule). **Playtest gate (6e.1 duel smoke, 2026-07-06):** mutual acute **`ff=1`** (fox treats prey as threat in [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) **`_is_threat_to_subject`**) + per-tick flee retarget + strict MOVE cone → prolonged **`TURN_*`** in place (not STAY). **Outside 6e.1 / 6e.2** — track **post-6d** (§12.2 **post-6d**).
 
-**Resolved — implementation target:** Refactor [`motor_planner.gd`](../../creature/motor/motor_planner.gd) into **`sync_step_objective`** → **`resolve_path_to_step_goal`** (§3.1) → **`align_and_move`** (§7.3.0); keep explore/rim/Flight as **`step_goal` providers** (§3 pipeline). **Design:** §3.1 / §7.3.0 / §15.3 rows **closed 2026-07-06**; refactor unblocked.
+**Resolved — implementation target:** Refactor [`motor_planner.gd`](../../creature/motor/motor_planner.gd) per §12.2 **6e.1** → **6e.2** (`sync_step_objective` → `resolve_path_to_step_goal` (§3.1) → `align_and_move` (§7.3.0); keep explore/rim/Flight as **`step_goal` providers** (§3 pipeline). **Design:** §3.1 / §7.3.0 / §15.3 rows **closed 2026-07-06**; implementation tracked in **6e**.
 
 #### 7.3.1 Turn increment and mode overlays
 
 **Resolved — authoritative facing:** Horizontal facing is **body state** (`last_move_direction` or renamed `facing`), not derived from post-move velocity. Turn actions mutate facing; move actions consume it. [`Visual`](../../creature/capabilities/creature_kinematic_body_3d.gd) yaw syncs from facing (awareness cone, §8.1).
 
-**Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). **`align_and_move`** (§7.3.0) picks left vs right by **fewest turns** to bring the target into the forward arc; at **exactly ±180°** bearing error, break ties with **RNG chaos** (§7.3.0). **Legacy:** shipped [`motor_planner.gd`](../../creature/motor/motor_planner.gd) still uses **`turn_commit_sign`** until refactor; **target:** cone-only §7.3.0 — commit **retired** (§7.3.0 resolved 2026-07-06).
+**Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). **`align_and_move`** (§7.3.0) picks left vs right by **fewest turns** to bring the target into the forward arc; at **exactly ±180°** bearing error, break ties with **RNG chaos** (§7.3.0). **Shipped (6e.1):** [`motor_planner.gd`](../../creature/motor/motor_planner.gd) uses cone-only §7.3.0 — **`turn_commit_sign` retired**.
 
 **Resolved — explore latch (no live/memory food):** First **`explore_dir`** copies horizontal **`last_move_direction`** (duel spawn facing), not a random bearing. **`explore_waypoint`** is a **world-fixed** point minted once at **`creature_pos + explore_dir × (awareness_radius × 0.5)`** and held until arrival tolerance, blocked explore move (clears latch), dead-end filter rotation, overshoot past latch, §9 switch/seek, **rim tangent realign**, or §3.1 / §3.2 forces a new objective (§3.1 substep stability). **Rim mint:** when footprint is within scaled **`playfield_hug_band`** ([`_is_near_playfield_boundary`](../../creature/motor/motor_planner.gd)), set **`explore_dir`** from **`_rim_escape_explore_dir`** (playfield **inbound normal**) **before** minting — waypoints must not sit on the rim tangent (e.g. east edge **`x ≈ max`**). **Rim tangent realign:** while a latch is held at the hug band, if **`dot(explore_dir, inbound_normal) < cos(turn_increment_deg)`** ([`_explore_latch_needs_rim_realign`](../../creature/motor/motor_planner.gd)), call **`_apply_explore_rim_escape_replan`** and remint — stale tangent latches picked before rim entry must not persist. Interior mint unchanged. Latched **`explore`** / **`precise`** run clearance on **consideration cadence** + blocked-outcome recheck (§3.1); they **hold** the minted point until clearance fails or reevaluate.
 
@@ -1003,7 +1003,7 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Resolved — latched stuck detection (explore / precise):** After each tick, [`CreatureMotorStack.tick()`](../../creature/motor/creature_motor_stack.gd) calls [`MotorPlanner.note_tick_completion()`](../../creature/motor/motor_planner.gd) with playfield clamp result. **Stuck** when: executor **`ActionOutcome.blocked`**; **`MOVE_FORWARD`** + playfield clamp adjusted position; or **`explore`** + latched + tick displacement **< `motor_stuck_move_epsilon`** (turn-in-place explore arcs). **`precise`** uses MOVE/clamp stuck **or** **`precise_no_progress_ticks`** (distance to GPS **`step_goal`** not improving over **`dead_end_record_min_blocked_ticks`**) — not turn-idle alone. **`explore`** turn-idle uses **`explore_no_progress_ticks`** (**`facing · to_target`** not improving vs prior turn-idle tick) before interior **`explore_replan`** when **not** in rim boundary-scan path; improving bearing resets **`explore_no_progress_ticks`** until MOVE cone. **`consecutive_blocked`** increments on stuck ticks; latched sources reset only on **`MOVE_FORWARD`** with meaningful progress toward **`step_goal`**. Blocked explore **MOVE** still forces escape readiness on move-stuck ticks; **`precise`** / other → §9 [`apply_blocked_objective_resolution`](../../creature/motor/motor_planner.gd). F10 HUD: **`sL`/`sR`** during boundary scan (`boundary_scan_sign`); **`cmt` retired** (§7.7). **`blk`** / **`cblk`** reflect latched stuck detection (playfield clamp, sub-epsilon displacement vs scaled `motor_stuck_move_epsilon`, wall block) — not wall collision alone.
 
-**Resolved — facing alignment before `MOVE_FORWARD`:** Two tolerances (`_is_facing_aligned_for_move` / `_is_facing_aligned_for_eat`). **MOVE alignment:** **`dot(facing, normalize(step_goal − pos)) ≥ cos(turn_increment_deg)`** (ship **22.5°** cone). **EAT** keeps **`turn_increment_deg × 0.5`** (**11.25°**). **Course correction:** target may exit the MOVE cone while approaching — next tick uses turn branch (§7.3.0); no separate interleave mode. Shipped [`motor_planner.gd`](../../creature/motor/motor_planner.gd) still uses legacy **`turn_commit_sign`** until refactor; **target** is cone-only §7.3.0 (commit retired). **`step_source == precise`** skips backtrack **60°** `step_goal` rewrite in §3.2 only (not §3.1 solid). Until aligned for MOVE, emit turn actions only.
+**Resolved — facing alignment before `MOVE_FORWARD`:** Two tolerances (`_is_facing_aligned_for_move` / `_is_facing_aligned_for_eat`). **MOVE alignment:** **`dot(facing, normalize(step_goal − pos)) ≥ cos(turn_increment_deg)`** (ship **22.5°** cone). **EAT** keeps **`turn_increment_deg × 0.5`** (**11.25°**). **Course correction:** target may exit the MOVE cone while approaching — next tick uses turn branch (§7.3.0); no separate interleave mode. **Shipped (6e.1):** cone-only §7.3.0 in [`motor_planner.gd`](../../creature/motor/motor_planner.gd). **`step_source == precise`** skips backtrack **60°** `step_goal` rewrite in §3.2 only (not §3.1 solid). Until aligned for MOVE, emit turn actions only.
 
 **Resolved — acute threat preempts turn sequence:** When Flight fast-path becomes eligible mid-turn (multi-tick reorientation in progress), **abort** the turn chain immediately — recalculate flee geometry; if continuing the turn is no longer correct, emit Flight actions instead (§6.3, §10).
 
@@ -1371,7 +1371,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 
 **Resolved — POST_LOS ledger vs V2 (kickoff audit):** Every row in the table below is **V3 intent-only**. **None** retains `cardinal_avoidance.gd` eight-way selection or V2 **`MotorContext`** merge at runtime. POST_LOS described goals and seek state atop those modules; V3 replaces them with an explicit **`ActiveGoal` table** (§2, §10), facing-relative **`Action`** execution (§7), and **memory adapter** consult (§8.4) — not a `MotorContext` projection path. Rows whose wording echoes POST_LOS/V2 are clarified in the **Notes** column (e.g. Eat urgency = **`creature_motor_v3` keys only**; eligibility = **hub `build_eligible_goals`** §1 — **delete** `tier2_dominance.gd`, per-tick `dom_leaf`, `goal_seek` filter).
 
-**Resolved — Step 3 teardown (V2 behavior out; not “delete every motor file”):** §12 Step 3 removes V2 **motor behavior** per §12.1 dispositions. After Step 3 the game launches with **no intelligent creature movement** (Step 5); compile survives via **stub**, **keep**, and **adapter** rows until §12.2 Step 6 rebuilds in order **6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**.
+**Resolved — Step 3 teardown (V2 behavior out; not “delete every motor file”):** §12 Step 3 removes V2 **motor behavior** per §12.1 dispositions. After Step 3 the game launches with **no intelligent creature movement** (Step 5); compile survives via **stub**, **keep**, and **adapter** rows until §12.2 Step 6 rebuilds in order **6a → 6b → 6c → 6e.1 → 6e.2 → 6d.1 → 6d.2 → 6d.3 → post-6d**.
 
 | Disposition | Step 3 action | Examples (§12.1 seed — complete inventory on branch) | V3 phase |
 |-------------|---------------|------------------------------------------------------|----------|
@@ -1402,7 +1402,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 | Cross-instance B-vs-A: replace vs secondary-objective | §8.3 | **V3 intent.** Circumstantial table |
 | Neighbor search refinement | §8.3 | **Deferred** — skills stub; no stored spatial relations |
 | Facing-relative forward MOVE; rear `MOVE_BACKWARD` deferred | §7.3.0 | **V3 intent.** Turn-first v1; rear arc deferred |
-| Simplified tick executor (§3.1 + §7.3.0) | §3, §7.3 | **V3 intent.** Refactor target; refactor-gate Q&A **closed 2026-07-06** |
+| Simplified tick executor (§3.1 + §7.3.0) | §3, §7.3 | **V3 intent.** §12.2 **6e.1** + **6e.2**; design gate **closed 2026-07-06** |
 | Turn-only vs move-only (one action per tick) | §7 | **V3 intent.** 180° and future shove/attack cost |
 | Execution-first; human adapter deferred | §7 | **V3 intent.** Shared `Action` contract |
 | Locomotion owner under `creature/motor/` | §7 | **V3 intent.** ENGINE + future adapters |
@@ -1419,7 +1419,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 | Config namespace `creature_motor_v3` | §7.5, §9, §12 | **V3 intent.** No legacy `creature_motor` merge or V2 `MotorContext` key reads |
 | Blocked-objective chaos | §9 | **V3 intent.** `blocked_objective_chaos` **0.15** ship default (§9) |
 | Step 2 inventory template (§12.1) | §12 | **V3 intent.** Disposition + consumers + tests columns |
-| Step 6 sub-phases 6a→6d.3 (§12.2) | §12 | **V3 intent.** Execution → hub → live planner → memory (6d.1→6d.2→6d.3) |
+| Step 6 sub-phases 6a→6d.3 (§12.2) | §12 | **V3 intent.** Execution → hub → live planner → **6e align/cadence** → memory (6d.1→6d.2→6d.3) |
 | Per-goal `base` + Find shelter scoring | §1, §6.4 | **V3 intent.** `goal_base_*`, `food_map_confidence` |
 | Find shelter hub goal | §6.4 | **V3 intent.** Wire `shelter`; MOVE + STAY probe |
 | `goal_feasibility_floor_*` epsilon | §1 | **V3 intent.** Per-goal keys; ship default **0.05** |
@@ -1449,7 +1449,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
    - [x] **Step 4 closed 2026-06-20** — `check_gdscript_no_tabs.py` clean; Step 3 scripts parse; fixed `world_to_cell` Vector2 type in `run_all.gd`.
 5. Run game — **§12 Step 3–5 QA contract** below; no intelligent creature movement expected; fix **non-motor** launch/crash errors only.
    - [x] **Step 5 closed 2026-06-20** — duel launches; no errors; idle creatures + calorie drain (manual smoke).
-6. Implement code changes per **§12.2** sub-phases (**6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3**); repeat 6–10 after each sub-phase closes.
+6. Implement code changes per **§12.2** sub-phases (**6a → 6b → 6c → 6e.1 → 6e.2 → 6d.1 → 6d.2 → 6d.3 → post-6d**); repeat 6–10 after each sub-phase closes. **6e** may run in parallel with **6d** completion (see §12.2 **6e**).
 7. Address linter errors.
 8. Review code against design for gaps, inconsistencies, sibling-doc conflicts.
 9. Address issues found.
@@ -1470,7 +1470,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Step 5 pass criteria:** Launch duel (or main 3D entry), no crash, no error spam — **motor behavior assertions not required**. Creatures may stand still or emit stub actions indefinitely.
 
-**CI / tests:** Remove or skip V2 motor tests at Step 3 with inventory row — **do not** restore V2 seek/cardinal tests to green the branch. New headless gates attach **only** as each **6a→6d** sub-phase closes its checklist.
+**CI / tests:** Remove or skip V2 motor tests at Step 3 with inventory row — **do not** restore V2 seek/cardinal tests to green the branch. New headless gates attach **only** as each **6a→6d** (and **6e**) sub-phase closes its checklist.
 
 **Manual duel smoke:** **Deferred until §12.2 6c** (14.2.7). Steps 3–5: optional “loads and runs” sanity only.
 
@@ -1567,7 +1567,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/capabilities/creature_kinematic_body_3d.gd` | keep | `ai_driver`, duel bodies | port: `_test_creature_kinematic_playfield_clamp_after_move`, human intent tests | §7.4 — deprecate ENGINE `set_creature_move_intent` **6a** |
 | `creature/awareness_debug_overlay_3d.gd` | keep | `main_3d`, debug HUD | port when zone builder lands **6c** | Uses `MotorPlane` for draw helpers |
 | `hud.gd` (motor readouts) | keep | `main_3d` | port: `_test_hud_resolves_3d_herbivore_motor_body` | Telemetry only — **6b** |
-| `tests/run_all.gd` | keep | CI | prune motor tests Step 3 per §12.1.1; add V3 gates per **6a→6d** | Master harness |
+| `tests/run_all.gd` | keep | CI | prune motor tests Step 3 per §12.1.1; add V3 gates per **6a→6d** + **6e** | Master harness |
 | `tests/debug_motor_pick.gd` | delete | manual cardinal debug | n/a | Step 3 |
 | `tests/run_motor_motivation_only.gd` | delete | dev wrapper for `_test_motor_motivation_wiring` | n/a | Step 3 — replace **6b** hub tests |
 | `tests/terrain_test_main_stub.gd` | keep | `tests/run_all.gd` | extend: `get_navigation_map_rid()` delegate | §3 fixture hook **6c** |
@@ -1609,10 +1609,15 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `_test_creature_pack_motor_overlays`, `_test_creature_motor_v2_profiles` | port | **6a** → `creature_motor_v3` |
 | `_test_ai_driver_creature_registry`, `_test_hud_resolves_3d_herbivore_motor_body` | port | **6b** |
 | `_test_motor_plane_yaw_from_facing` | port | keep until `motor_plane` retired |
+| `_test_motor_planner_*` turn-commit / `commit_label_from_snap` asserts | **done** | **6e.1** — migrated to behavioral alignment + `scan_label_from_snap` |
+| `_test_creature_motor_stack_consideration_advances` (updated) | **done** | **6e.2** — per-objective timer |
+| `_test_motor_planner_path_clearance_gated_by_cadence` | **added** | **6e.2** — clearance on consideration cadence |
+| `_test_motor_planner_avoid_hostiles_refresh_on_consideration_only` | **added** | **6e.2** — moving-target / flee refresh cadence |
+| `_test_motor_planner_blocked_move_immediate_path_reevaluation` | **added** | **6e.2** — blocked MOVE §3.2 immediate reeval |
 
 ### 12.2 Step 6 implementation sub-phases
 
-**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6d.1 Memory reads → 6d.2 slice 0 (adapter writes + migration) → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition.** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6d** splits into reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts.
+**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6e.1 Align refactor (smoke/fix) → 6e.2 Cadence + clearance → 6d.1 Memory reads → 6d.2 slice 0 (adapter writes + migration) → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition → post-6d Flight duel (predator threat + fast-path locomotion).** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6e** (post-6c executor + cadence — **not** memory adapter) may overlap **6d** manual smoke / remaining **6d** headless work; close **6e.1** before relying on duel rim smoke for refactor sign-off. **6d** splits into reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts. **post-6d** runs after **6d.3** — not a **6d** deliverable (§12.2 **post-6d**).
 
 <<Comment: **Alternative order (not adopted):** top-down **hub → planner → execution → memory adapter** matches §1→§3→§7 **document section** flow and the three-layer narrative in §11 (“goals → planner → execution”). **Downside:** hub/planner emit `Action`s long before `apply_action` exists — Step 5 “run game” stays broken; facing-relative turn-then-move and `ActionOutcome` → belief loops (§7.6) integrate in one late risky pass. **Memory adapter last** is the same in both orderings.>>
 
@@ -1788,10 +1793,110 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Headless **required** | Blocked approach / backtrack behavior (port or replace §12.1 tests) — `_test_blocked_approach_memory`, `_test_seek_wall_filter_and_backtrack` |
 | Headless **required** | Seek when no live objective (no memory consult) — `_test_creature_motor_stack_explore_no_live_food` |
 | Headless **required** | §3 **motor_path_fixture** — valid `map_rid` + nav path assert before navmesh-first slices; **`build_blocked`** for backtrack slice — `_test_motor_path_fixture_open_nav`, `_test_motor_path_fixture_blocked_nav` |
-| Headless **required** | Explore latch + rim boundary scan / egress / inward replan — `_test_motor_planner_explore_*` (latch, boundary scan inward escape, post-scan egress, rim waypoint mint, rim overshoot, turn-commit seeds, **NE corner inbound diagonal**, **stale tangent latch realign**, **egress survives blocked align turns**) |
+| Headless **required** | Explore latch + rim boundary scan / egress / inward replan — `_test_motor_planner_explore_*` (latch, boundary scan inward escape, post-scan egress, rim waypoint mint, rim overshoot, **NE corner inbound diagonal**, **stale tangent latch realign**, **egress survives blocked align turns**); turn-commit assertions **migrate to 6e.1** behavioral checks |
 | Manual **smoke** | Duel creature seeks **LoS-visible** shrub; pursuit movement plausible with live prey in zone only |
 | Inventory | `goal_seek`, `seek_planner`, cardinal modules **delete**d; **`motor_target_builder.gd`** **delete**d; **`awareness_zone.gd`** + **`awareness_zone_scan.gd`** + planner added per §3; **`tests/motor_path_fixture.gd`** added |
-| Out of scope | Remembered food, coarse bearing, §9 exceptions, **occluded-in-zone ghosts** |
+| Out of scope | Remembered food, coarse bearing, §9 exceptions, **occluded-in-zone ghosts**; **6e** align refactor + cadence slices (§12.2 **6e**) |
+
+---
+
+#### 6e — Post-6c executor + cadence refactor (2026-07-06 design)
+
+**Purpose:** Land the **2026-07-06** §3.1 / §7.3.0 / §10 design close **without** folding it into **6d** memory-adapter substeps. **6e** is planner + stack + telemetry — **not** `memory_adapter` reads/writes, ghosts, or disposition (**6d** scope unchanged).
+
+**Entry:** **6c** acceptance closed; §15.3 refactor gate **closed 2026-07-06**.
+
+**Scheduling:** **6e.1** is the **smoke/fix-cycle** slice — safe to ship while **6d.2 slice 0** manual duel smoke or remaining **6d** work is in flight. **6e.2** is a **follow-up** cross-cutting cadence slice — do **not** block **6e.1** rim smoke on **6e.2** landing, but **do** close **6e.2** before **§12 step 11** promotion. Run §12 steps **6–10** after each **6e** sub-slice closes.
+
+**Design → slice map (2026-07-06 closed decisions):**
+
+| Design decision (§3 / §7 / §10) | Slice | Notes |
+|---------------------------------|-------|-------|
+| Three-phase pipeline: `sync_step_objective` → `resolve_path_to_step_goal` → `align_and_move` | **6e.1** | Structural extract in [`motor_planner.gd`](../../creature/motor/motor_planner.gd); overlays unchanged |
+| Retire `turn_commit_sign` — cone-only `align_and_move`, fewest-turn pick | **6e.1** | Delete commit state, bearing latch, `_seed_inward_align_turn_commit` |
+| ±180° tie → `goal_consideration_chaos` | **6e.1** | In `align_and_move` only |
+| Delete `turn_commit_sign` from snapshot / stack telemetry | **6e.1** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), debug snapshot |
+| Retire HUD / explore-log `cmt` | **6e.1** | [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd), [`motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) |
+| `turn_commit_sign` test migration **same PR** as align refactor | **6e.1** | ~16 refs in [`tests/run_all.gd`](../../tests/run_all.gd) → behavioral |
+| Flight turn flutter acceptable v1 | **6e.1 verify** | **Done** — duel smoke 2026-07-06; explore/rim clean; mutual Flight spin → **post-6d** |
+| Moving actors ≠ solid | **6e.2 verify** | Likely already true; assert in clearance tests |
+| Clearance on consideration cadence + blocked-outcome immediate recheck (drop latched skip) | **6e.2** | [`motor_planner.gd`](../../creature/motor/motor_planner.gd), [`motor_path_clear.gd`](../../creature/motor/motor_path_clear.gd) |
+| Per-objective consideration timer (not global heartbeat) | **6e.2** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`motor_consideration_cadence.gd`](../../creature/motor/motor_consideration_cadence.gd) |
+| Substep-complete reeval = **full hub re-score** | **6e.2** | Stack calls `_run_consideration` on substep/objective completion |
+| Moving-target validity on **consideration ticks** only | **6e.2** | Planner + stack timer coupling |
+| Dead-end escape immediate (within winning goal) | **6e.2 verify** | Wire if `note_tick_completion` / §3.2 path incomplete |
+| Backtrack 60° in §3.2 only (not §3.1 solid) | **6e.2 verify** | Grep / test guard |
+| Single-winner model — no fixed §3.2 branch priority | **6e.2 verify** | Hub weights only at consideration; no mid-step goal steal |
+| Moonwalk / strafe / rear `MOVE_BACKWARD` emit | **Deferred** | Post–V3 v1 — [ENHANCEMENT_BACKLOG_PLAN](../ENHANCEMENT_BACKLOG_PLAN.md) |
+| Flight stabilization latch (if playtest paralysis) | **post-6d** | Confirmed duel mutual **`ff=1`** turn-in-place — see §12.2 **post-6d** |
+
+##### 6e.1 — Align refactor + telemetry (smoke/fix slice)
+
+**Status:** **Done** — closed 2026-07-06; cone-only `align_and_move`, commit retired, tests migrated, headless green.
+
+**In scope:**
+
+| # | Deliverable | Spec anchor |
+|---|-------------|-------------|
+| E1.1 | Named pipeline: `sync_step_objective` → `resolve_path_to_step_goal` (§3.1) → `align_and_move` (§7.3.0) inside `select_action` | §3, §7.3.0 |
+| E1.2 | **Delete** `turn_commit_sign`, `turn_commit_bearing_deg`, bearing-jump clear, `_seed_inward_align_turn_commit` | §7.3.0 |
+| E1.3 | `align_and_move`: forward arc → `MOVE_FORWARD`; else fewest-turn `TURN_L`/`TURN_R` **every tick**; ±180° → `goal_consideration_chaos` | §7.3.0 |
+| E1.4 | `boundary_scan_sign` only during scan — post-scan inward align uses cone only (no commit seed) | §7.3.1 |
+| E1.5 | Remove commit fields from planner state, debug snapshot, [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) telemetry | §7.7 |
+| E1.6 | Retire **`cmt`** from F10 HUD + explore tick log; delete `commit_label_from_snap` | §7.7 |
+| E1.7 | Migrate headless tests: no `turn_commit_sign` state asserts; add **no adjacent opposite turn pairs** during fixed-goal alignment | §7.3.0 refactor acceptance, §7.7 |
+
+**Out of scope:** Per-objective consideration timer, clearance cadence change, substep hub re-score (**6e.2**).
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | **6c** closed |
+| Headless **required** | All in-scope `tests/run_all.gd` green; zero `turn_commit_sign` snapshot asserts |
+| Headless **required** | Behavioral: fixed `step_goal` alignment — no adjacent `L`/`R`/`L` flip-flop pairs |
+| Headless **required** | Boundary scan → inward egress bearing monotonic (port or replace existing explore tests) |
+| Manual **smoke** | Duel: rear-hemisphere explore latch, precise 180°, **NE rim scan egress**, Flight retarget (§7.3.0 refactor acceptance). **Known limitation (not 6e.1 defect):** mutual acute Flight turn-in-place at close range → **post-6d** (§12.2) |
+| Inventory | §15 #16 row → **in_progress** during slice; **done** when checklist closes |
+| Out of scope | **6e.2** cadence; **6d** memory tiers |
+
+**After close:** §12 steps **6–10**; then **6e.2** (may overlap **6d** if not started).
+
+---
+
+##### 6e.2 — Consideration + clearance cadence
+
+**Status:** **Done** — closed 2026-07-06; per-objective timer, clearance cadence, blocked immediate reeval, tests green.
+
+**Entry:** **6e.1** acceptance closed.
+
+**In scope:**
+
+| # | Deliverable | Spec anchor |
+|---|-------------|-------------|
+| E2.1 | **Per-objective consideration timer** — interval (re)starts when a goal/loc is chosen; resets on objective or substep completion; replaces global `_physics_tick_count % interval` heartbeat | §3.1, §10 |
+| E2.2 | **Substep / objective completion** → immediate `_run_consideration` (**full hub re-score**, not incumbent-only substep derivation) | §3.1 |
+| E2.3 | Path clearance (LoS + corridor) on **consideration cadence** for **all** `step_source`; **drop** latched explore/precise per-tick clearance skip | §3.1 |
+| E2.4 | **`ActionOutcome.blocked`** on MOVE → **immediate** clearance recheck / §3.2 reevaluate (no cadence wait) | §3.1 |
+| E2.5 | Moving-target **`step_goal`** invalidation checked on **consideration ticks** only (not every physics tick) | §3.1 |
+| E2.6 | **Verify** dead-end escape fires immediately within winning goal; **verify** backtrack 60° only in §3.2 (not §3.1 solid branch) | §3.1, §3.2 |
+| E2.7 | **Verify** single-winner model — secondary objectives affect weights at consideration only | §3.1, §3.2 |
+
+**Out of scope:** Memory adapter consult/writes (**6d**); moonwalk/strafe; Flight stabilization latch unless playtest blocks ship.
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | **6e.1** closed |
+| Headless **required** | Timer restarts on substep completion — hub may pick different winner after substep advance |
+| Headless **required** | Between consideration ticks: no clearance raycast unless blocked-outcome exception |
+| Headless **required** | Blocked MOVE triggers immediate reevaluate without waiting for consideration timer |
+| Headless **required** | Moving prey / flee vector: `step_goal` refresh on consideration tick only (fixture) |
+| Manual **smoke** | Duel remembered-food + rim explore still plausible after cadence change |
+| Inventory | §13 **6e.2** row → **done**; §15 #16 → **done** when both **6e** slices close |
+
+**After close:** §12 steps **6–10**; continue or finish **6d** substeps if not already complete.
 
 ---
 
@@ -1943,7 +2048,46 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Sibling | Complete **§12.3.2** + **§12.3.4** before closing **6d.3** |
 | **6d complete** | All **6d.1–6d.3** checklists green |
 
+**After close:** §12 steps **6–10**; then **post-6d** (Flight duel) if duel predator–prey smoke is a ship gate.
+
+---
+
+##### post-6d — Flight duel + predator threat ingress
+
+**Status:** **Tracking** — confirmed duel manual smoke **2026-07-06** after **6e.1** close; **not** in **6e.1**, **6e.2**, or any **6d** sub-phase checklist.
+
+**Entry:** **6d.3** acceptance closed (memory adapter + ghosts + disposition baseline landed).
+
+**Why not 6d:** **6d.3** ships **`threat_disposition_mod`**, **`kind_threat`** on samples, and occluded threat ghosts — **not** carnivore prey-as-Flight-threat semantics or Flight fast-path locomotion policy. **`relative_threat_mod`** (opponent matchup zeroing Flight) remains **combat deferred** (§6.6, §13). Prey **chase** remains **deferred** (§14.2.9). The duel bug is **live scan + Flight executor** coupling, not memory consult.
+
+**Playtest symptom (2026-07-06):** Fox + rabbit both **`ff=1`**, **`gk=avoid_host`**, **`act=TURN_*`**, **`blk=0`**, large rear-hemisphere **`err`/`dot`** — visible freeze with no translation. Root causes: (1) predator **`_is_threat_to_subject`** treats **`prey`** group as hostile → fox enters Flight from rabbit; (2) mutual acute panic; (3) per-tick **`_flee_objective`** retarget + strict §7.3.0 MOVE cone during **`ff=1`**.
+
+**In scope:**
+
+| # | Deliverable | Primary touch |
+|---|-------------|---------------|
+| P1 | **Predator prey ≠ Flight threat** — carnivore live scan / hub eligibility: prey awareness feeds **hunt/chase** (§14.2.9 / §6.6), not **`avoid_hostiles`** / **`ff=1`** | [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd), hub (future chase goal) |
+| P2 | **Flight fast-path locomotion** — optional flee **bearing latch** during **`ff=1`**, and/or looser MOVE tolerance for Flight only, and/or close-range mutual-**`ff=1`** deadlock breaker | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`** |
+| P3 | **Flight telemetry hygiene** — clear stale **`step_instance_id`** / **`blocked_objective_action`** on flight entry | [`motor_planner.gd`](../../creature/motor/motor_planner.gd), debug snapshot |
+| P4 | **Headless** — mutual **`ff=1`** fixture: no indefinite turn-only loop without **`MOVE_F`** progress (or assert bounded turn count before escape) | [`tests/run_all.gd`](../../tests/run_all.gd) |
+
+**Out of scope:** **6e.2** consideration cadence (does not fix **`ff=1`** bypass); full **Fight** hub (§6.6); **`carnivore_pursuit.gd`** revival without greenfield chase design.
+
+**Acceptance checklist:**
+
+| Gate | Criterion |
+|------|-----------|
+| Entry | **6d.3** closed |
+| Manual **smoke** | Duel engagement: rabbit flees; **fox does not** enter mutual **`ff=1`** spin from prey proximity alone |
+| Manual **smoke** | Acute herbivore Flight still produces forward egress within bounded ticks after threat contact |
+| Headless **required** | Flight / threat-ingress fixtures for P1–P2 behaviors |
+| Inventory | §15 #17 → **done** when checklist closes |
+
+**After close:** §12 steps **6–10**; optional **§12 step 11** promotion if no other blockers.
+
 <<Comment: Headless test matrix — sub-phase checklists above are v1 gates; expand species rows after §1 scoring closes. Do not inherit V2 Phase 3 advance-gate checklist unless re-adopted explicitly.>>
+
+---
 
 **Resolved — config namespace (`creature_motor_v3`):** All V3 movement, planner, locomotion, and exception tuning keys live in a **new** pack-root inline object **`creature_motor_v3`** (same authoring pattern as V2 `creature_motor`, **separate merge block**). V3 runtime **does not** merge or alias legacy **`creature_motor`**, V2 **`MotorContext`** key names, or POST_LOS-prefixed motor keys — greenfield modules read **`creature_motor_v3` only** so old cardinal / tier-2 paths are not implied dependencies.
 
@@ -2140,7 +2284,9 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Step 3–5 QA contract (expected broken motor) | §12 | — | **Closed** — launch/no-crash only; motor bugs deferred to **6a→6d** |
 | Flight acute panic radius key | §1 | — | **Closed** — `flight_acute_panic_radius` default **220.0** |
 | Headless path fixture (navmesh + LoS scope) | §3 | — | **Closed** — `tests/motor_path_fixture.gd`; duel = manual only |
-| Simplified tick executor (§3.1 + §7.3.0) | §3, §7.3 | — | **Tracking** — refactor-gate Q&A **closed 2026-07-06**; `motor_planner` split unblocked |
+| Simplified tick executor — **6e.1** align refactor (§3.1 + §7.3.0) | §12.2 **6e.1** | — | **Done** — 2026-07-06; cone-only align; commit/`cmt` retired |
+| Consideration + clearance cadence — **6e.2** | §12.2 **6e.2**, §3.1, §10 | — | **Done** — 2026-07-06; per-objective timer + clearance gating |
+| Flight duel — mutual **`ff=1`** + predator prey-as-threat | §12.2 **post-6d**, §6.3, §7.3.0 | — | **Tracking** — duel smoke 2026-07-06; after **6d.3** |
 | `blocked_objective_chaos` default | §9 | — | **Closed** |
 | `goal_replan_base_ticks` default | §10 | — | **Closed** |
 | §11 POST_LOS row re-validation | §11 | — | **Closed** |
@@ -2195,7 +2341,8 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 13 | [`goal_seek.gd`](../../creature/motor/goal_seek.gd), [`seek_planner.gd`](../../creature/motor/seek_planner.gd) | **delete** | Step 3 / **6c** | Low | V2 seek; replaced by hub + planner |
 | 14 | Body [`set_creature_move_intent`](../../creature/capabilities/creature_kinematic_body_3d.gd) ENGINE path | **deprecate** for ENGINE — `apply_action` only | **6a** | Medium | Human adapter may keep intent path |
 | 15 | [`carnivore_pursuit.gd`](../../creature/motor/carnivore_pursuit.gd) | **delete** or backlog-isolate | **Deferred** | Low | Combat deferred (14.2.9) |
-| 16 | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) — monolithic `_turn_or_move_toward` | **refactor** — `sync_step_objective` → `resolve_path_to_step_goal` (§3.1) → `align_and_move` (§7.3.0); rim/explore/Flight as overlays | Refactor gate **closed 2026-07-06** | Med–High | §3 pipeline; cone-only align; retire `turn_commit_sign` |
+| 16 | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) — three-phase pipeline | **done** — **6e.1** align + **6e.2** cadence | — | Med | §12.2 **6e** closed 2026-07-06 |
+| 17 | Predator prey ≠ Flight threat; Flight fast-path locomotion (duel mutual **`ff=1`**) | **post-6d** — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`** | **post-6d** | Med | Duel smoke 2026-07-06; not **6d** / **6e** scope |
 
 ### 15.2 Keep (not cleanup targets)
 
@@ -2219,9 +2366,9 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Post–V3 trait modulator (module vs config keys) | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) | Post–V3 v1 — **deferred** |
 | Squeeze/hide tactic detectors (post–v1) | §12.3.4 <<Comment>> | Post–V3 v1 — **deferred** |
 | Moonwalk / strafe cost keys + ENGINE `MOVE_BACKWARD` | §7.3.0 deferred | Post–V3 v1 — **out of scope** |
-| Flight stabilization latch (if playtest shows paralysis) | §6.3, §7.3.0 resolved | Playtest follow-up — **not** v1 gate |
+| Flight stabilization latch (if playtest shows paralysis) | §6.3, §7.3.0 resolved | **post-6d** — confirmed duel mutual **`ff=1`** turn-in-place (2026-07-06) |
 
-**Closed 2026-07-06 (promoted from <<Answer>> — no longer open):** moving actors ≠ solid; **moving-target validity on goal-consideration ticks**; substep stability + clearance cadence; **single-winner model — no fixed §3.2 branch priority**; backtrack in §3.2 only; turn pick = fewest turns; **±180° tie reuses `goal_consideration_chaos`**; course correction via cone exit; rear `MOVE_BACKWARD` deferred; **clearance on consideration cadence + blocked-outcome immediate recheck (drop latched skip)**; **dead-end escape immediate/within-step**; **consideration = per-objective timer, not global heartbeat**; **substep-complete reeval = full hub re-score**; **no max-interval cap (substep churn)**; **retire `turn_commit_sign` — cone-only `align_and_move`**; **moonwalk/strafe out of V3 scope**; **retire HUD / explore-log `cmt`** (no `last_action` plumbing); **delete `turn_commit_sign` from state/snapshot**; **`turn_commit_sign` test migration same PR as align refactor**; **Flight turn flutter acceptable v1**.
+**Closed 2026-07-06 (promoted from <<Answer>> — no longer open):** moving actors ≠ solid; **moving-target validity on goal-consideration ticks**; substep stability + clearance cadence; **single-winner model — no fixed §3.2 branch priority**; backtrack in §3.2 only; turn pick = fewest turns; **±180° tie reuses `goal_consideration_chaos`**; course correction via cone exit; rear `MOVE_BACKWARD` deferred; **clearance on consideration cadence + blocked-outcome immediate recheck (drop latched skip)**; **dead-end escape immediate/within-step**; **consideration = per-objective timer, not global heartbeat**; **substep-complete reeval = full hub re-score**; **no max-interval cap (substep churn)**; **retire `turn_commit_sign` — cone-only `align_and_move`**; **moonwalk/strafe out of V3 scope**; **retire HUD / explore-log `cmt`** (no `last_action` plumbing); **delete `turn_commit_sign` from state/snapshot**; **`turn_commit_sign` test migration same PR as align refactor**; **Flight turn flutter acceptable v1**. **Implementation slices:** §12.2 **6e.1** (align + telemetry) and **6e.2** (cadence + clearance).
 
 **Resolved — `ai_driver` extraction (§15.3):** **Keep in `AI_int_lib/ai_driver.gd`:** LLM round loop, pack/creature registry, perception snippets for AI, HUD/debug telemetry hooks, **root registration + tick loop**. **Live on each [`CreatureRoot3D`](../../creature/creature_root_3d.gd):** [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) — hub, planner state, memory adapter delegate, orchestrates shared utils (`awareness_zone.gd`, executor). **`ai_driver`** calls **`root.motor_stack.tick()`** per ENGINE subject — **no** motor state dictionaries on the driver. Confirm wiring at **6b**.
 
@@ -2245,7 +2392,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
-| 14.1.7 | **Simplified tick executor** — §3.1 path clearance + §7.3.0 align-and-move as refactor target; overlays (explore rim, Flight) stay separate. | `accepted` | 2026-07-06 design pass — refactor gate closed |
+| 14.1.7 | **Simplified tick executor** — §3.1 path clearance + §7.3.0 align-and-move as refactor target; overlays (explore rim, Flight) stay separate. | `accepted` | 2026-07-06 design pass — implementation §12.2 **6e.1** / **6e.2** |
 | 14.1.8 | **Executor refactor gate** — §15.3 refactor-blocking rows | `done` | **Closed 2026-07-06** — all design gates closed; **`turn_commit_sign` tests migrate same PR** (§7.7) |
 | 14.1.1 | **Facing-relative + one action/tick** — up to **8** turn ticks for 180° before `MOVE_FORWARD` (§7.3); threats close every tick. | `accepted` | Product bet vs V2 single-tick cardinal pick |
 | 14.1.2 | **Dual control on goals** — hub `weight` scoring (§1) **and** `tier2_dominance.gd` eligibility + acute overrides. | `done` | §1 — hub **`build_eligible_goals`**; **delete** `tier2_dominance.gd` at **6b** |
@@ -2266,7 +2413,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 14.2.6 | **2D `*_px` keys** in **3D** motor | Wrong consult radii | `done` | §12.3.2 — rename at **6d.2** |
 | 14.2.7 | **Duel scene** sufficient manual smoke | Complex flows need harness | `accepted` | §12 Step 3–5 QA — duel motor smoke **from 6c**; load-only before |
 | 14.2.8 | **§12.3 Tracking** sibling passes on schedule | Sibling drift during **6d** | `accepted` | |
-| 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | |
+| 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | Duel mutual Flight spin → **post-6d** (§12.2); prey ≠ Flight threat |
 | 14.2.10 | **Acute fast-path** — `gate_dist ≤ flight_acute_panic_radius` | Implementers guess threshold | `done` — §1 keys table; default **220.0** |
 | 14.2.11 | **`arrival_tolerance` / interaction range** undefined | Step completion ambiguous | `done` | §7.2 **`action_max_distance`** — EAT **5** |
 | 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3.0 cone + fewest-turn pick; **`turn_commit_sign` retired on refactor** |
@@ -2302,7 +2449,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 ### 14.5 In good shape (no action unless review disagrees)
 
-- Phasing **6a → 6b → 6c → 6d.1 → 6d.2 → 6d.3** with vertical slices per sub-phase.
+- Phasing **6a → 6b → 6c → 6e.1 → 6e.2 → 6d.1 → 6d.2 → 6d.3 → post-6d** with vertical slices per sub-phase (**6e** may overlap **6d**).
 - Layer split: hub / planner / executor / memory adapter — **one stack per [`CreatureRoot3D`](../../creature/creature_root_3d.gd)** (§1).
 - §13 **Closed** for motor numerics; sibling sync **Tracking** only.
 - Dead-end three-way split; kind vs instance memory; coarse path-in-direction.
