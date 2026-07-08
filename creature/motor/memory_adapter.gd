@@ -9,6 +9,7 @@ const _DeadEnd := preload("res://creature/motor/dead_end_memory.gd")
 const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 
 const FEASIBILITY_PRECISE := 0.75
 const FEASIBILITY_COARSE := 0.45
@@ -16,13 +17,17 @@ const FEASIBILITY_LOCALE := 0.25
 
 var _beliefs: Dictionary = {}
 var _kind_profile: Dictionary = {}
+var _threat_disposition_mod: float = 1.0
 var _dead_end_marks: Array = []
+const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
+const _OccludedGhost := preload("res://creature/motor/occluded_in_zone_ghost.gd")
 var _locale_store: RefCounted
 var _pack_root: String = ""
 var _traits: Dictionary = {}
 var _modality_allowlist: Array = []
 var _goal_catalog: Dictionary = {}
 var _effective_goal_kinds: Array = []
+var _food_intake_policy: Resource
 
 
 func _init() -> void:
@@ -42,10 +47,16 @@ func set_goal_catalog(goal_catalog: Dictionary) -> void:
   _goal_catalog = goal_catalog.duplicate(true) if typeof(goal_catalog) == TYPE_DICTIONARY else {}
 
 
+## Wires diet policy used to filter remembered [code]find_food[/code] consult (§6.2 ingress).
+func set_food_intake_policy(policy: Resource) -> void:
+  _food_intake_policy = policy
+
+
 ## Clears instance beliefs, kind profile, dead-end marks, and locale rows.
 func reset() -> void:
   _beliefs.clear()
   _kind_profile.clear()
+  _threat_disposition_mod = _ThreatDisposition.DEFAULT_MOD
   _dead_end_marks.clear()
   if _locale_store != null and _locale_store.has_method(&"reset"):
     _locale_store.call(&"reset")
@@ -108,6 +119,28 @@ func get_locale_store() -> RefCounted:
   return _locale_store
 
 
+## Live + occluded-in-zone threat ghosts passing [code]danger_filter[/code] (§8.4).
+func consult_danger_samples(zone_ctx: Dictionary, live_threat_samples: Array) -> Array:
+  var live_ids: Dictionary = {}
+  var out: Array = []
+  for sample_v in live_threat_samples:
+    if typeof(sample_v) != TYPE_DICTIONARY:
+      continue
+    var sample: Dictionary = sample_v as Dictionary
+    var iid := int(sample.get("instance_id", 0))
+    if iid != 0:
+      live_ids[iid] = true
+    if _OccludedGhost.danger_filter(sample):
+      out.append(sample.duplicate(true))
+  for ghost_v in _OccludedGhost.project_ghosts(zone_ctx, _beliefs, live_ids):
+    if typeof(ghost_v) != TYPE_DICTIONARY:
+      continue
+    var ghost: Dictionary = ghost_v as Dictionary
+    if _OccludedGhost.danger_filter(ghost):
+      out.append(ghost)
+  return out
+
+
 ## Returns a shallow copy of instance belief rows keyed by [code]instance_id[/code].
 func get_beliefs() -> Dictionary:
   return _beliefs.duplicate(true)
@@ -115,6 +148,24 @@ func get_beliefs() -> Dictionary:
 
 func get_kind_profile() -> Dictionary:
   return _KindProfile.duplicate_profile(_kind_profile)
+
+
+## Per-creature Flight skittishness scalar (§1 — not locale memory).
+func get_threat_disposition_mod() -> float:
+  return _threat_disposition_mod
+
+
+## Applies benign and/or evade nudges from disposition episode logic (§1).
+func apply_disposition_deltas(benign_delta: float, evade_delta: float, motor_v3: Dictionary) -> void:
+  var total := benign_delta + evade_delta
+  if absf(total) < 1e-8:
+    return
+  _threat_disposition_mod = _ThreatDisposition.nudge(_threat_disposition_mod, total, motor_v3)
+
+
+## Test harness — seed disposition without simulating episodes.
+func set_threat_disposition_mod_for_test(value: float, motor_v3: Dictionary) -> void:
+  _threat_disposition_mod = _ThreatDisposition.clamp_mod(value, motor_v3)
 
 
 func get_dead_end_marks() -> Array:
@@ -198,6 +249,30 @@ func enrich_food_split_with_kind_yield(food_split: Dictionary, motor_v3: Diction
 ## Replaces instance beliefs — test harness only for 6d.1 read slices.
 func set_beliefs_for_test(beliefs: Dictionary) -> void:
   _beliefs = beliefs.duplicate(true) if typeof(beliefs) == TYPE_DICTIONARY else {}
+
+
+## Seeds one precise [code]avoid_hostiles[/code] belief row for ghost fixtures (6d.3).
+func seed_threat_belief_for_test(
+  instance_id: int,
+  world_pos: Vector3,
+  now_ms: int,
+  stimulus_kind_id: StringName = &"wolf",
+  velocity: Vector3 = Vector3.ZERO,
+) -> void:
+  _beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_AVOID_HOSTILES,
+    "tier": _GoalBelief.TIER_PRECISE,
+    "last_world_pos": world_pos,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": false,
+    "is_moving": velocity.length_squared() > 1e-8,
+    "last_velocity": velocity,
+    "passibility_fail_count": 0,
+    "last_passibility_fail_ms": 0,
+    "stimulus_kind_id": stimulus_kind_id,
+  }
 
 
 ## Seeds one precise [code]find_food[/code] belief row for headless fixtures.
@@ -292,6 +367,8 @@ func consult_precise_food(
       continue
     if bool(row.get("is_moving", false)):
       continue
+    if not _belief_instance_passes_diet(int(iid)):
+      continue
     var last_pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
     var dist := creature_pos.distance_to(last_pos)
     if dist > precise_r or dist > forget_r:
@@ -343,6 +420,8 @@ func consult_coarse_bearing(
     if row.get("tier", &"") != _GoalBelief.TIER_COARSE:
       continue
     if bool(row.get("is_moving", false)):
+      continue
+    if not _belief_instance_passes_diet(int(iid)):
       continue
     var last_pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
     if creature_pos.distance_to(last_pos) > forget_r:
@@ -497,3 +576,320 @@ func seed_locale_prior_for_test(
     "stored_strength": stored_strength,
     "last_used_time": Time.get_ticks_msec() / 1000.0,
   }
+
+
+## Fractional known-objective count for [param goal_kind] (§1 inventory table).
+func count_known_objectives(
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  food_split: Dictionary = {},
+  now_ms: int = 0,
+  _zone_ctx: Dictionary = {},
+  live_threat_samples: Array = [],
+) -> float:
+  if now_ms <= 0:
+    now_ms = Time.get_ticks_msec()
+  var live_ids := _live_instance_ids_for_goal(goal_kind, food_split, live_threat_samples)
+  var total := _count_live_known_objectives(goal_kind, food_split, live_threat_samples)
+  total += _count_belief_known_objectives(goal_kind, creature_pos, motor_v3, now_ms, live_ids)
+  total += _count_locale_known_objectives(goal_kind, creature_pos, motor_v3)
+  return total
+
+
+## Per-wedge memory coverage for explore bearing pick (§7.3.2).
+func explore_bearing_coverage(
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  food_split: Dictionary = {},
+  now_ms: int = 0,
+  zone_ctx: Dictionary = {},
+  live_threat_samples: Array = [],
+) -> PackedFloat32Array:
+  if now_ms <= 0:
+    now_ms = Time.get_ticks_msec()
+  var wedge_count := maxi(1, int(motor_v3.get("explore_bearing_count", 8)))
+  var coverage := PackedFloat32Array()
+  coverage.resize(wedge_count)
+  for i in wedge_count:
+    coverage[i] = 0.0
+  _accumulate_belief_bearing_coverage(
+    coverage, goal_kind, creature_pos, motor_v3, now_ms, wedge_count
+  )
+  var near_r := float(motor_v3.get("awareness_radius", 1500.0)) * 0.5
+  var live_near_w := float(motor_v3.get("explore_w_live_near", 0.5))
+  _accumulate_live_near_bearing_coverage(
+    coverage,
+    goal_kind,
+    creature_pos,
+    near_r,
+    live_near_w,
+    wedge_count,
+    food_split,
+    zone_ctx,
+    live_threat_samples,
+  )
+  return coverage
+
+
+func _live_instance_ids_for_goal(
+  goal_kind: StringName,
+  food_split: Dictionary,
+  live_threat_samples: Array,
+) -> Dictionary:
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    return _GoalBelief.live_food_instance_ids(food_split)
+  if goal_kind != _GkReg.GK_AVOID_HOSTILES:
+    return {}
+  var seen: Dictionary = {}
+  for sample_v in live_threat_samples:
+    if typeof(sample_v) != TYPE_DICTIONARY:
+      continue
+    var sample: Dictionary = sample_v as Dictionary
+    if not bool(sample.get("in_awareness", false)):
+      continue
+    var iid := int(sample.get("instance_id", 0))
+    if iid != 0:
+      seen[iid] = true
+  return seen
+
+
+func _count_live_known_objectives(
+  goal_kind: StringName,
+  food_split: Dictionary,
+  live_threat_samples: Array,
+) -> float:
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    var count := 0.0
+    for key in ["ready", "unready"]:
+      for entry_v in food_split.get(key, []) as Array:
+        if typeof(entry_v) != TYPE_DICTIONARY:
+          continue
+        var entry: Dictionary = entry_v as Dictionary
+        var iid := int(entry.get("instance_id", 0))
+        if not _belief_instance_passes_diet(iid):
+          continue
+        count += 1.0
+    return count
+  if goal_kind == _GkReg.GK_AVOID_HOSTILES:
+    var seen: Dictionary = {}
+    var count := 0.0
+    for sample_v in live_threat_samples:
+      if typeof(sample_v) != TYPE_DICTIONARY:
+        continue
+      var sample: Dictionary = sample_v as Dictionary
+      if not bool(sample.get("in_awareness", false)):
+        continue
+      var iid := int(sample.get("instance_id", 0))
+      if iid != 0 and seen.has(iid):
+        continue
+      if iid != 0:
+        seen[iid] = true
+      count += 1.0
+    return count
+  return 0.0
+
+
+func _count_belief_known_objectives(
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  now_ms: int,
+  live_ids: Dictionary,
+) -> float:
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius", 2400.0))
+  var coarse_ttl_ms := int(float(motor_v3.get("goal_memory_coarse_ttl_sec", 15.0)) * 1000.0)
+  var global_ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec", 45.0)) * 1000.0)
+  var total := 0.0
+  for iid_v in _beliefs.keys():
+    var iid := int(iid_v)
+    if live_ids.has(iid):
+      continue
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != goal_kind:
+      continue
+    if goal_kind == _GkReg.GK_FIND_FOOD and not _belief_instance_passes_diet(iid):
+      continue
+    var last_pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    if creature_pos.distance_to(last_pos) > forget_r:
+      continue
+    var last_obs := int(row.get("last_observed_ms", 0))
+    var age_ms := now_ms - last_obs
+    if age_ms > global_ttl_ms:
+      continue
+    var tier: StringName = row.get("tier", &"")
+    if tier == _GoalBelief.TIER_PRECISE:
+      total += 1.0
+    elif tier == _GoalBelief.TIER_COARSE:
+      if bool(row.get("is_moving", false)):
+        continue
+      var coarse_entered := int(row.get("coarse_entered_ms", last_obs))
+      if now_ms - coarse_entered > coarse_ttl_ms:
+        continue
+      total += 0.5
+  return total
+
+
+func _count_locale_known_objectives(
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+) -> float:
+  if _locale_store == null:
+    return 0.0
+  var coverage_cell := _GoalSource.coverage_cell_from_motor(motor_v3)
+  var escalate_r := float(motor_v3.get("believed_goal_seek_escalate_radius", 1000.0))
+  var total := 0.0
+  for key in _locale_store._rows.keys():
+    var row: Dictionary = _locale_store._rows[key]
+    if row.get("goal_kind") != goal_kind:
+      continue
+    var cx := int(row.get("cell_x", 0))
+    var cy := int(row.get("cell_y", 0))
+    var center := _MotorPlane.to_horizontal_vec3(
+      Vector2((float(cx) + 0.5) * coverage_cell, (float(cy) + 0.5) * coverage_cell)
+    )
+    if creature_pos.distance_to(center) > escalate_r:
+      continue
+    total += 0.25
+  return total
+
+
+func _accumulate_belief_bearing_coverage(
+  coverage: PackedFloat32Array,
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  now_ms: int,
+  wedge_count: int,
+) -> void:
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius", 2400.0))
+  var coarse_ttl_ms := int(float(motor_v3.get("goal_memory_coarse_ttl_sec", 15.0)) * 1000.0)
+  var global_ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec", 45.0)) * 1000.0)
+  for iid_v in _beliefs.keys():
+    var iid := int(iid_v)
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != goal_kind:
+      continue
+    if goal_kind == _GkReg.GK_FIND_FOOD and not _belief_instance_passes_diet(iid):
+      continue
+    var last_pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    var dist := creature_pos.distance_to(last_pos)
+    if dist > forget_r:
+      continue
+    var last_obs := int(row.get("last_observed_ms", 0))
+    if now_ms - last_obs > global_ttl_ms:
+      continue
+    var tier: StringName = row.get("tier", &"")
+    var tier_w := 0.0
+    if tier == _GoalBelief.TIER_PRECISE:
+      tier_w = 1.0
+    elif tier == _GoalBelief.TIER_COARSE:
+      var coarse_entered := int(row.get("coarse_entered_ms", last_obs))
+      if now_ms - coarse_entered > coarse_ttl_ms:
+        continue
+      tier_w = 0.5
+    else:
+      continue
+    var band_w := _coverage_band_weight(dist, motor_v3)
+    var wedge := _bearing_wedge_index(creature_pos, last_pos, wedge_count)
+    coverage[wedge] += tier_w * band_w
+
+
+func _accumulate_live_near_bearing_coverage(
+  coverage: PackedFloat32Array,
+  goal_kind: StringName,
+  creature_pos: Vector3,
+  near_r: float,
+  live_near_w: float,
+  wedge_count: int,
+  food_split: Dictionary,
+  zone_ctx: Dictionary,
+  live_threat_samples: Array,
+) -> void:
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    for key in ["ready", "unready"]:
+      for entry_v in food_split.get(key, []) as Array:
+        if typeof(entry_v) != TYPE_DICTIONARY:
+          continue
+        var entry: Dictionary = entry_v as Dictionary
+        var iid := int(entry.get("instance_id", 0))
+        if not _belief_instance_passes_diet(iid):
+          continue
+        var pos := _sample_world_pos(entry)
+        if creature_pos.distance_to(pos) > near_r:
+          continue
+        var wedge := _bearing_wedge_index(creature_pos, pos, wedge_count)
+        coverage[wedge] += live_near_w
+    return
+  if goal_kind == _GkReg.GK_AVOID_HOSTILES:
+    var seen: Dictionary = {}
+    for sample_v in live_threat_samples:
+      if typeof(sample_v) != TYPE_DICTIONARY:
+        continue
+      var sample: Dictionary = sample_v as Dictionary
+      if not bool(sample.get("in_awareness", false)):
+        continue
+      var iid := int(sample.get("instance_id", 0))
+      if iid != 0 and seen.has(iid):
+        continue
+      if iid != 0:
+        seen[iid] = true
+      var pos := _sample_world_pos(sample)
+      if creature_pos.distance_to(pos) > near_r:
+        continue
+      var wedge := _bearing_wedge_index(creature_pos, pos, wedge_count)
+      coverage[wedge] += live_near_w
+    return
+  if goal_kind == _GkReg.GK_SHELTER:
+    var live_ids: Dictionary = {}
+    for ghost_v in _OccludedGhost.project_ghosts(zone_ctx, _beliefs, live_ids):
+      if typeof(ghost_v) != TYPE_DICTIONARY:
+        continue
+      var ghost: Dictionary = ghost_v as Dictionary
+      if ghost.get("goal_kind", &"") != _GkReg.GK_SHELTER:
+        continue
+      var pos := _sample_world_pos(ghost)
+      if creature_pos.distance_to(pos) > near_r:
+        continue
+      var wedge := _bearing_wedge_index(creature_pos, pos, wedge_count)
+      coverage[wedge] += live_near_w
+
+
+func _coverage_band_weight(dist: float, motor_v3: Dictionary) -> float:
+  var hotspot_r := float(motor_v3.get("believed_goal_hotspot_near_radius", 250.0))
+  var escalate_r := float(motor_v3.get("believed_goal_seek_escalate_radius", 1000.0))
+  if dist <= hotspot_r:
+    return 1.0
+  if dist <= escalate_r:
+    return 0.5
+  return 0.2
+
+
+func _bearing_wedge_index(creature_pos: Vector3, target_pos: Vector3, wedge_count: int) -> int:
+  var delta := target_pos - creature_pos
+  delta.y = 0.0
+  if delta.length_squared() < 1e-8:
+    return 0
+  var angle := atan2(delta.x, -delta.z)
+  if angle < 0.0:
+    angle += TAU
+  return int(floor(angle / TAU * float(wedge_count))) % wedge_count
+
+
+func _sample_world_pos(sample: Dictionary) -> Vector3:
+  if sample.has("world_pos_3d"):
+    return _read_pos(sample.get("world_pos_3d"))
+  if sample.has("pos"):
+    return _read_pos(sample.get("pos"))
+  if sample.has("world_pos"):
+    return _read_pos(sample.get("world_pos"))
+  return Vector3.ZERO
+
+
+func _belief_instance_passes_diet(instance_id: int) -> bool:
+  if _food_intake_policy == null or instance_id == 0:
+    return true
+  var node := instance_from_id(instance_id)
+  return _DietRegistry.node_is_valid_food_for_policy(node, _food_intake_policy)

@@ -3,6 +3,7 @@ class_name MotorGoalHub
 ## V3 goal hub — eligibility, scoring, winner selection ([CREATURE_MOVEMENT_V3.md §1](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
+const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 
 const GOAL_FIND_FOOD := _GkReg.GK_FIND_FOOD
 const GOAL_AVOID_HOSTILES := _GkReg.GK_AVOID_HOSTILES
@@ -11,6 +12,13 @@ const GOAL_REST := &"rest"
 
 const _REST_CALORIE_FLOOR := 0.95
 const _NEUTRAL_KIND_THREAT := 0.5
+
+
+static func _effective_awareness_reach(_sample: Dictionary, motor_v3: Dictionary) -> float:
+  var sample_reach: Variant = _sample.get("eff_reach", null)
+  if sample_reach != null:
+    return maxf(0.0, float(sample_reach))
+  return float(motor_v3.get("awareness_radius", 1500.0))
 
 
 ## Builds eligible hub rows per §1 matrix; Mate omitted until §6.5.
@@ -52,7 +60,7 @@ static func score_goals(eligible: Array, ctx: Dictionary) -> Array:
     var row: Dictionary = (row_v as Dictionary).duplicate(true)
     var goal_kind: StringName = row.get("goal_kind", &"")
     var effective_base := _effective_base(goal_kind, motor_v3, ctx)
-    var urgency := _urgency_for_goal(goal_kind, cr, threat_samples, motor_v3)
+    var urgency := _urgency_for_goal(goal_kind, cr, threat_samples, motor_v3, ctx)
     var floor_key := _feasibility_floor_key(goal_kind)
     var feasibility_floor := float(motor_v3.get(floor_key, 0.05))
     var feasibility := float(row.get("feasibility", 0.0))
@@ -87,9 +95,77 @@ static func urgency_eat(calorie_ratio: float, motor_v3: Dictionary) -> float:
   return smoothstep(0.0, 1.0, pow(t, 1.0 / smoothness))
 
 
+## [code]inventory_ratio[/code] for a hub [param goal_kind] from fractional [param known_count] (§1).
+static func inventory_ratio_for_goal(
+  goal_kind: StringName,
+  known_count: float,
+  motor_v3: Dictionary,
+) -> float:
+  var min_key := "goal_inventory_min_find_food"
+  var min_default := 3.0
+  if goal_kind == _GkReg.GK_FIND_MATE:
+    min_key = "goal_inventory_min_find_mate"
+    min_default = 1.0
+  elif goal_kind != GOAL_FIND_FOOD:
+    return 0.0
+  var min_inv := float(motor_v3.get(min_key, min_default))
+  return clampf(known_count / maxf(min_inv, 1e-6), 0.0, 1.0)
+
+
+## Sated patrol + mapping urgency blended with [code]urgency_eat[/code] (§1).
+static func effective_urgency_find_food(
+  calorie_ratio: float,
+  inventory_ratio: float,
+  motor_v3: Dictionary,
+) -> float:
+  var u_eat := urgency_eat(calorie_ratio, motor_v3)
+  var food_security := clampf(inventory_ratio, 0.0, 1.0)
+  var patrol := (
+    (1.0 - u_eat)
+    * food_security
+    * float(motor_v3.get("goal_sated_patrol_urgency", 0.15))
+  )
+  var mapping := (
+    (1.0 - u_eat)
+    * (1.0 - food_security)
+    * float(motor_v3.get("goal_mapping_urgency", 0.35))
+  )
+  return maxf(u_eat, maxf(patrol, mapping))
+
+
+## Distance-only Flight urgency for one threat sample (§1 geometry curve).
+static func urgency_dist_for_sample(sample: Dictionary, motor_v3: Dictionary) -> float:
+  var gate_dist := float(sample.get("gate_dist", INF))
+  var eff_reach := _effective_awareness_reach(sample, motor_v3)
+  var area_radius := float(motor_v3.get("awareness_radius", eff_reach))
+  var dist_floor := float(motor_v3.get("flight_urgency_dist_floor", 1.0))
+  var far_floor := float(motor_v3.get("flight_urgency_far_floor", 0.5))
+  var denom := maxf(dist_floor, eff_reach - area_radius)
+  var t := clampf((eff_reach - gate_dist) / denom, 0.0, 1.0)
+  return lerpf(far_floor, 1.0, t)
+
+
+## [code]kind_threat[/code] from kind profile consult; neutral prior when unseen (§1).
+static func kind_threat_for_sample(
+  sample: Dictionary,
+  motor_v3: Dictionary,
+  memory_adapter: Variant = null,
+) -> float:
+  var stimulus_kind_id: StringName = sample.get("stimulus_kind_id", &"")
+  if stimulus_kind_id == &"":
+    return _NEUTRAL_KIND_THREAT
+  if memory_adapter != null and memory_adapter.has_method(&"consult_kind_facet"):
+    return float(
+      memory_adapter.consult_kind_facet(_LearnReg.FACET_THREAT_DANGER, stimulus_kind_id, motor_v3)
+    )
+  return _NEUTRAL_KIND_THREAT
+
+
 ## Flight urgency geometry — max over in-zone threat samples ([CREATURE_MOVEMENT_V3.md §1](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
-static func urgency_flight(threat_samples: Array, motor_v3: Dictionary) -> float:
+static func urgency_flight(threat_samples: Array, motor_v3: Dictionary, hub_ctx: Dictionary = {}) -> float:
   var best := 0.0
+  var threat_disposition_mod := float(hub_ctx.get("threat_disposition_mod", 1.0))
+  var adapter: Variant = hub_ctx.get("memory_adapter", null)
   for sample_v in threat_samples:
     if typeof(sample_v) != TYPE_DICTIONARY:
       continue
@@ -98,16 +174,8 @@ static func urgency_flight(threat_samples: Array, motor_v3: Dictionary) -> float
       continue
     if not bool(sample.get("hostile", true)):
       continue
-    var gate_dist := float(sample.get("gate_dist", INF))
-    var eff_reach := _effective_awareness_reach(sample, motor_v3)
-    var area_radius := float(motor_v3.get("awareness_radius", eff_reach))
-    var dist_floor := float(motor_v3.get("flight_urgency_dist_floor", 1.0))
-    var far_floor := float(motor_v3.get("flight_urgency_far_floor", 0.5))
-    var denom := maxf(dist_floor, eff_reach - area_radius)
-    var t := clampf((eff_reach - gate_dist) / denom, 0.0, 1.0)
-    var urgency_dist := lerpf(far_floor, 1.0, t)
-    var kind_threat := _NEUTRAL_KIND_THREAT
-    var threat_disposition_mod := 1.0
+    var urgency_dist := urgency_dist_for_sample(sample, motor_v3)
+    var kind_threat := kind_threat_for_sample(sample, motor_v3, adapter)
     var relative_threat_mod := 1.0
     var sample_urgency := clampf(
       urgency_dist * kind_threat * threat_disposition_mod * relative_threat_mod,
@@ -145,7 +213,7 @@ static func pick_winner(scored: Array, motor_v3: Dictionary) -> Dictionary:
   return (scored[best_idx] as Dictionary).duplicate(true)
 
 
-static func _goal_row(goal_kind: StringName, motor_v3: Dictionary) -> Dictionary:
+static func _goal_row(goal_kind: StringName, _motor_v3: Dictionary) -> Dictionary:
   return {
     "goal_kind": goal_kind,
     "feasibility": 0.0,
@@ -196,22 +264,19 @@ static func _urgency_for_goal(
   calorie_ratio: float,
   threat_samples: Array,
   motor_v3: Dictionary,
+  hub_ctx: Dictionary = {},
 ) -> float:
   match goal_kind:
     GOAL_FIND_FOOD:
-      return urgency_eat(calorie_ratio, motor_v3)
+      var inv_ratio := float(
+        hub_ctx.get("inventory_ratio", hub_ctx.get("food_map_confidence", 0.0))
+      )
+      return effective_urgency_find_food(calorie_ratio, inv_ratio, motor_v3)
     GOAL_AVOID_HOSTILES:
-      return urgency_flight(threat_samples, motor_v3)
+      return urgency_flight(threat_samples, motor_v3, hub_ctx)
     GOAL_SHELTER:
       return 1.0
     GOAL_REST:
       return 1.0
     _:
       return 0.0
-
-
-static func _effective_awareness_reach(_sample: Dictionary, motor_v3: Dictionary) -> float:
-  var sample_reach: Variant = _sample.get("eff_reach", null)
-  if sample_reach != null:
-    return maxf(0.0, float(sample_reach))
-  return float(motor_v3.get("awareness_radius", 1500.0))

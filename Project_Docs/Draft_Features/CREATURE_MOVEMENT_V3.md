@@ -12,7 +12,7 @@ Purpose: Working spec for ENGINE creature movement and goal refactor (V3). **Aut
 6. **Cone of awareness** — Forward-facing **3D** observation cone from the eye ray origin (§8.1), limited by line of sight — no seeing through solids.
 7. **Area of awareness** — **Spherical** observation radius around the creature (§8.1), limited by line of sight — no seeing through solids.
 8. **Zone of awareness** — **Union** of cone of awareness + area of awareness (§8.1); both geometric membership **and** clear LoS required for **live** ingest. **Threat ghosts** (§8.1) extend remembered hostile presence when LoS-blocked but still in zone.
-9. **Unexplored** — A coarse- or precise-tier region with no observed objects within **50%** of the area-of-awareness radius (world units).
+9. **Unexplored** — A coarse- or precise-tier region with no observed objects within **50%** of the area-of-awareness radius (world units). **Explore bearing pick (§7.3.2):** low **instance-belief coverage** in a direction (distance-banded) plus optional **live** object density in the near wedge — not `LocalePriorMap` strength alone.
 10. **Default step chains (per goal)** — Eat: approach → consume; **Find shelter:** approach candidate → **STAY** evaluate (Safety + fit) → belief write (§6.4); Flight: reach shelter or flee position → hold until safe; Rest: reach candidate safe location → **STAY** until Safety state (§1) → **REST**; Mate/Fight: stub until those systems land.
 
 ---
@@ -78,7 +78,7 @@ NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i
 effective_base_shelter = goal_base_shelter × food_map_confidence
 ```
 
-**Resolved — `food_map_confidence`:** `∈ [0, 1]` — how well the creature knows **nearby food**. Take the **best** of: live ready food in zone of awareness; precise/coarse **`find_food`** instance belief within `goal_memory_forget_radius`; strongest **`find_food`** locale-prior `stored_strength` within `believed_goal_hotspot_near_radius_px` ([CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)). Low confidence ⇒ shelter mapping deprioritized (focus food first); high confidence ⇒ full `goal_base_shelter` applies. Tunable blend weights — **deferred** (v1: `max` of signals).
+**Resolved — `food_map_confidence` (2026-07-08):** `∈ [0, 1]` — how well the creature knows **nearby food** for shelter gating and hub-side inventory pressure. **Ship v1:** **`food_map_confidence = inventory_ratio`** (§1 below) — same scalar as known-objective inventory for **`find_food`**; **do not** blend live scan, locale `stored_strength`, or separate confidence signals in v1. Low confidence ⇒ shelter mapping deprioritized (focus food first); high confidence ⇒ full `goal_base_shelter` applies.
 
 **Resolved — Find shelter eligibility (consideration):** Candidate enters the goal table only when **`calorie_ratio ≥ seek_priority_food_ceiling`** (default **0.80** — same key as Eat urgency bands; tune in playtest). **Not** eligible under starvation override band (Eat dominates). **Fully suppressed** during acute threat / Flight fast-path (§6.3, §10) — no parallel Find shelter row competes with flee.
 
@@ -104,6 +104,47 @@ effective_base_shelter = goal_base_shelter × food_map_confidence
 | `starvation_override_food_ceiling` | **0.10** | Below: Eat hard-dominates acute threat |
 
 **Eat urgency curve:** `urgency_eat = 1.0` when `calorie_ratio < seek_priority_food_ceiling` or under starvation override; `0.0` when `calorie_ratio ≥ preserve_bias_food_floor`; else smoothstep blend between ceilings using `preserve_seek_blend_smoothness` (same shape as V2 `preserve_find_food_seek_scale`, inverted for urgency — [CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)). Implemented in the V3 hub module; **not** delegated to `tier2_dominance.gd`.
+
+**Resolved — known objective inventory (2026-07-08):** How many **actionable remembered targets** the creature has for a hub `GoalKind`. Drives **`inventory_ratio`**, sated **`find_food`** hub urgency, **`food_map_confidence`**, and explore vs memory **step-source** competition (§7.3.2). Consult lives on the **memory adapter** — [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) `count_known_objectives(goal_kind, …)`.
+
+**Fractional count weights (instance beliefs only — no `LocalePriorMap` double-count):**
+
+| Source | Weight |
+|--------|--------|
+| Live ready / unready in zone (diet-valid) | **1.0** each |
+| Precise `_goal_belief` row (`goal_kind` match, TTL + forget radius, diet-valid) | **1.0** |
+| Coarse bearing-only `_goal_belief` row | **0.5** |
+| Locale-prior anchor (active consult row for goal) | **0.25** |
+
+Spent / depleted bushes (`consumable_now = false`) still count at full instance weight — scarcity is **low count**, not depletion flag.
+
+```text
+known_count(goal_kind) = sum of fractional weights above
+inventory_ratio        = clamp(known_count / goal_inventory_min_<wire_id>, 0, 1)
+```
+
+| Key | Ship default | Role |
+|-----|--------------|------|
+| `goal_inventory_min_find_food` | **3** | “Enough known food” threshold — rabbit with ≥3 known bushes is stocked; 1 known bush is under-stocked |
+| `goal_inventory_min_find_mate` | **1** | Placeholder for §6.5 — same machinery when Mate ships |
+
+**Resolved — effective Eat hub urgency when sated (2026-07-08):** Pure `urgency_eat` goes to **0** in the preserve band and would drop **`find_food`** from contention. Add inventory-driven patrol / mapping urgency:
+
+```text
+food_security   = inventory_ratio   // alias — same scalar as food_map_confidence for find_food
+
+patrol_urgency  = (1 - urgency_eat) × food_security × goal_sated_patrol_urgency
+mapping_urgency = (1 - urgency_eat) × (1 - food_security) × goal_mapping_urgency
+
+effective_urgency_find_food = max(urgency_eat, patrol_urgency, mapping_urgency)
+```
+
+Hub **`weight`** for **`find_food`** uses **`effective_urgency_find_food`** in place of **`urgency_eat`** only. Examples: full belly + **5** known bushes ⇒ high `food_security` ⇒ small `patrol_urgency` ⇒ **`find_food`** stays on the table (patrol known patches). Full belly + **1** spent bush ⇒ low `food_security` ⇒ high `mapping_urgency` ⇒ **`find_food`** stays on the table but planner favors **`step_source = explore`** (§7.3.2).
+
+| Key | Ship default | Role |
+|-----|--------------|------|
+| `goal_sated_patrol_urgency` | **0.15** | Stocked + sated — light **`find_food`** presence |
+| `goal_mapping_urgency` | **0.35** | Under-stocked + sated — proactive mapping |
 
 **Resolved — Flight urgency (`gate_dist` + disposition):**
 
@@ -153,8 +194,8 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 | `flight_urgency_dist_floor` | **1.0** | `eps` for normalization denominator (world units) |
 | `flight_disposition_mod_min` | **0.4** | Floor on `threat_disposition_mod` |
 | `flight_disposition_mod_max` | **1.2** | Ceiling on `threat_disposition_mod` |
-| `flight_disposition_benign_delta` | TBD playtest | Per benign-exposure nudge (sign negative) |
-| `flight_disposition_evade_delta` | TBD playtest | Per hunt/evade nudge (sign positive) |
+| `flight_disposition_benign_delta` | **-0.05** | Per benign-exposure nudge (sign negative) |
+| `flight_disposition_evade_delta` | **0.08** | Per hunt/evade nudge (sign positive) |
 | `flight_acute_panic_radius` | **220.0** | Acute Flight fast-path when threat `gate_dist ≤` this (world units; V2 parity: `herbivore_flee_panic_radius` from duel rabbit pack) |
 
 **Implementation phasing:** **6b** — `urgency_dist` + `threat_disposition_mod = 1.0` + `relative_threat_mod = 1.0`. **6d** — persist / update per-creature disposition on benign vs evade events (motor meta or memory adapter field — not `LocalePriorMap`). **Combat** — `relative_threat_mod` + Fight hub reuse of `urgency_dist` geometry (§6.6).
@@ -408,7 +449,7 @@ Legacy ASCII for **blocked-primary** and **seek** branches — invoked from §3.
 
 **Resolved — “Pattern that matches believed objective”:** **Combined precedence** — any source that yields an objective-producing match counts: instance `_goal_belief`, `LocalePriorMap` / `replay_rank_score`, coarse belief bearing (§8.3).
 
-**Resolved — “Unexplored locations”:** See Definitions §9 (coarse/precise tier, 50% area-of-awareness object-density rule). Does not reuse `explore_coverage_cell_px` as the primary contract.
+**Resolved — “Unexplored locations”:** See Definitions §9 (coarse/precise tier, 50% area-of-awareness object-density rule) and §7.3.2 instance-belief wedge coverage. Does not reuse `explore_coverage_cell_px` as the primary explore-bearing contract (that cell size remains locale-prior grid only).
 
 **Resolved — detour / multistep (POST_LOS intent, greenfield implementation):** **Navmesh-first** (`NavigationServer3D` first waypoint); **static-obstacle detour fallback** when navmesh path is empty or map RID invalid. Detour scoring inputs: distance, threat, `replay_weight`, terrain. Optional **`creature_motor_v3.detour_score_competition`** (default **false**): when true, score navmesh vs detour and pick highest. **Headless:** run static AABB corridor sweep when `space_state` is absent; LoS ray skipped where raycast unavailable; navmesh still requires valid map RID — see **headless path fixture** below.
 
@@ -704,6 +745,8 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 
 `food_split` = `{ "ready": […], "unready": […] }`. Entries with `instance_id == 0` skip instance sync (phase-1 rule). **Do not** use per-instance **`anticipated_calories`** as the V3 learning field — yield lives on **kind** facets ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)).
 
+**Resolved — diet membership (not geometry forks):** Live food ingress filters by [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) via [`DietRegistry`](../../creature/capabilities/diet_registry.gd) — **`plant_groups`** and **`prey_groups`** only (V2 §B.2). Carnivore: plants never enter `food_split`; prey in awareness do. Herbivore: plants only. Omnivore: union. Memory consult skips instance beliefs whose node fails the same policy. EAT plant grant gated by `body_accepts_plant_intake`. **Not** movement-layer logic.
+
 **Resolved — `stimulus_kind_id` authoring (required):** Every food source scene **must** define **`stimulus_kind_id`** before spawn. **Spawn / placement:** do **not** instantiate food into the world without a valid id — fix the bush/shrub (or pack) definition instead of ingesting with a missing key. **`OLog.error`** when spawn is attempted without **`stimulus_kind_id`**. Required for all new food assets; kind ranking and EWMA depend on it (§6.2, §8.4 **6d**).
 
 **Resolved — module ownership:** **Motor stack** ([§1](CREATURE_MOVEMENT_V3)) — orchestrates tick; owns hub scoring runtime, planner state, per-creature **memory adapter** instance. **Hub** — goal scoring only; **no** ingest or memory calls. **Planner** (within stack) — runs awareness pass (or calls shared util), ranks live food targets using **kind** `nutrition_yield` consult + geometry; binds active step `instance_id` for EAT. **Memory adapter** (§8.4, **6d**) — one façade **per stack**; all writes: instance sync, `record_observation`, locale salient write fan-out. **Body / executor** — emits EAT completion outcome to **this stack’s** adapter (calories gained); does not mutate belief stores directly.
@@ -721,6 +764,8 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 **Deferred — trait modulation on kind confidence:** Traits will bias how fast confidence grows and how strongly kind beliefs affect scoring — v1 omniscient `stimulus_kind_id`, neutral unseen, trait channels stub **1.0** (§1).
 
 **Phasing:** **6c** — ingest includes `stimulus_kind_id`; live target ranking uses kind consult with neutral priors; **no** kind EWMA writes. **6d** — full adapter: instance sync, `record_observation` on EAT, kind read in §8.3 / §9.
+
+**Known bug — prey pursuit drop (2026-07-08 playtest):** Carnivore binds **live** prey when the rabbit is in the awareness cone (`step_source = live`). Prey moves **out of awareness** before capture. On the next goal-consideration refresh there is no live prey; memory fallback calls [`consult_precise_food`](../../creature/motor/memory_adapter.gd) / [`consult_coarse_bearing`](../../creature/motor/memory_adapter.gd), which **skip `is_moving = true` beliefs** (static revisit path — §8.2). Planner falls through to **`mint_explore_step`** instead of continuing pursuit. **Root cause:** no engagement latch for active prey chase; moving-target beliefs excluded from food memory consult. **Fix slice (post-6d-explore, out of E1–E7):** prey-tracking — consult moving prey beliefs + optional intercept hint (`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`, §8.1); live re-bind preempts explore latch when prey re-enters cone. **Not** addressed by inventory / explore-seek work (E4).
 
 ### 6.3 Flight
 
@@ -858,6 +903,8 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 
 **Deferred** until mating systems land. <<Comment: Stub — define steps, criteria, urgency, and `find_mate` memory hooks when mating systems land.>>
 
+**Resolved — explore fallback pattern (2026-07-08):** When Mate (or any future hub goal with actionable targets) **wins consideration** but decomposition finds **no viable partner / target**, planner calls **`mint_explore_step(find_mate, …)`** (§7.3.2) — same module as **`shelter`** / **`rest`**. Apply **`goal_inventory_min_find_mate`** + fractional inventory when §6.5 numerics land. **Implementation deferred** with Mate.
+
 ### 6.6 Fight
 
 **Deferred** until combat ships. <<Comment: Stub — define engagement criteria and interaction with Flight fast-path until combat ships.>>
@@ -991,7 +1038,7 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Resolved — turn increment:** **22.5°** per `TURN_LEFT` / `TURN_RIGHT` tick. A 180° reversal requires **8** consecutive turn ticks (deliberate reorientation cost). **`align_and_move`** (§7.3.0) picks left vs right by **fewest turns** to bring the target into the forward arc; at **exactly ±180°** bearing error, break ties with **RNG chaos** (§7.3.0). **Shipped (6e.1):** [`motor_planner.gd`](../../creature/motor/motor_planner.gd) uses cone-only §7.3.0 — **`turn_commit_sign` retired**.
 
-**Resolved — explore latch (no live/memory food):** First **`explore_dir`** copies horizontal **`last_move_direction`** (duel spawn facing), not a random bearing. **`explore_waypoint`** is a **world-fixed** point minted once at **`creature_pos + explore_dir × (awareness_radius × 0.5)`** and held until arrival tolerance, blocked explore move (clears latch), dead-end filter rotation, overshoot past latch, §9 switch/seek, **rim tangent realign**, or §3.1 / §3.2 forces a new objective (§3.1 substep stability). **Rim mint:** when footprint is within scaled **`playfield_hug_band`** ([`_is_near_playfield_boundary`](../../creature/motor/motor_planner.gd)), set **`explore_dir`** from **`_rim_escape_explore_dir`** (playfield **inbound normal**) **before** minting — waypoints must not sit on the rim tangent (e.g. east edge **`x ≈ max`**). **Rim tangent realign:** while a latch is held at the hug band, if **`dot(explore_dir, inbound_normal) < cos(turn_increment_deg)`** ([`_explore_latch_needs_rim_realign`](../../creature/motor/motor_planner.gd)), call **`_apply_explore_rim_escape_replan`** and remint — stale tangent latches picked before rim entry must not persist. Interior mint unchanged. Latched **`explore`** / **`precise`** run clearance on **consideration cadence** + blocked-outcome recheck (§3.1); they **hold** the minted point until clearance fails or reevaluate.
+**Resolved — explore latch (hold + remint — 2026-07-08):** **Bearing pick** at mint time is **§7.3.2** `mint_explore_step` / `_pick_explore_dir` (scored seek — supersedes “first `explore_dir` copies spawn facing only”). **`explore_waypoint`** is a **world-fixed** point minted once at **`creature_pos + explore_dir × (awareness_radius × 0.5)`** and held until arrival tolerance, blocked explore move (clears latch), dead-end filter rotation, overshoot past latch, §9 switch/seek, **rim tangent realign**, or §3.1 / §3.2 forces a new objective (§3.1 substep stability). Between remints the creature **walks straight** to the latch (§7.3.0) — no re-score on consideration ticks. **Remint** re-runs §7.3.2 picker only on §7.3.2 remint triggers. **Rim mint:** when footprint is within scaled **`playfield_hug_band`** ([`_is_near_playfield_boundary`](../../creature/motor/motor_planner.gd)), set **`explore_dir`** from **`_rim_escape_explore_dir`** (playfield **inbound normal**) **before** minting — waypoints must not sit on the rim tangent (e.g. east edge **`x ≈ max`**). **Rim tangent realign:** while a latch is held at the hug band, if **`dot(explore_dir, inbound_normal) < cos(turn_increment_deg)`** ([`_explore_latch_needs_rim_realign`](../../creature/motor/motor_planner.gd)), call **`_apply_explore_rim_escape_replan`** and remint — stale tangent latches picked before rim entry must not persist. Interior mint unchanged. Latched **`explore`** / **`precise`** run clearance on **consideration cadence** + blocked-outcome recheck (§3.1); they **hold** the minted point until clearance fails or reevaluate.
 
 **Resolved — dual-edge corner inbound:** [`motor_plane.gd`](../../creature/motor/motor_plane.gd) **`playfield_boundary_hug`** sums inbound normals for **every** edge whose margin is within **`EDGE_TIE_EPS`** of **`min_margin`** (not first-match only). NE corner → diagonal interior bearing (e.g. **−X + +Z** on a **0…max** playfield), avoiding single-axis flip as the creature shifts between equally tight edges. Per-edge inward (motor plane; Godot **`Vector2.DOWN`** = **+Z**): left **+X**, right **−X**, min-z **`Vector2.DOWN`**, max-z **`Vector2.UP`**.
 
@@ -1006,6 +1053,125 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 **Resolved — facing alignment before `MOVE_FORWARD`:** Two tolerances (`_is_facing_aligned_for_move` / `_is_facing_aligned_for_eat`). **MOVE alignment:** **`dot(facing, normalize(step_goal − pos)) ≥ cos(turn_increment_deg)`** (ship **22.5°** cone). **EAT** keeps **`turn_increment_deg × 0.5`** (**11.25°**). **Course correction:** target may exit the MOVE cone while approaching — next tick uses turn branch (§7.3.0); no separate interleave mode. **Shipped (6e.1):** cone-only §7.3.0 in [`motor_planner.gd`](../../creature/motor/motor_planner.gd). **`step_source == precise`** skips backtrack **60°** `step_goal` rewrite in §3.2 only (not §3.1 solid). Until aligned for MOVE, emit turn actions only.
 
 **Resolved — acute threat preempts turn sequence:** When Flight fast-path becomes eligible mid-turn (multi-tick reorientation in progress), **abort** the turn chain immediately — recalculate flee geometry; if continuing the turn is no longer correct, emit Flight actions instead (§6.3, §10).
+
+#### 7.3.2 Unified explore seek (design closed 2026-07-08; impl §12.2 **post-6d-explore**)
+
+**Purpose:** One **planner-owned** seek module for any hub goal that needs exploration — breaks deterministic spawn-facing patrol (fox rim loops) while keeping latch stability (§7.3.1). **Not** hub scoring, **not** stack logic, **not** per-species forks. **All creature types** and **all goals** that require exploration call the same scorer with active **`goal_kind`**.
+
+**Implementation status:** Spec **closed**; **shipped** — [`motor_explore_seek.gd`](../../creature/motor/motor_explore_seek.gd) + §7.3.2 config in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_v3_explore_inventory_params()`; E7 headless matrix in [`tests/run_all.gd`](../../tests/run_all.gd) (§12.2 **post-6d-explore** E1–E7).
+
+**Layer split:**
+
+| Layer | Role |
+|-------|------|
+| **Hub** | Goal weights, `effective_urgency_find_food`, `inventory_ratio` — *whether* a goal competes |
+| **Memory adapter** | Read-only: `count_known_objectives`, `explore_bearing_coverage(goal_kind)` (§8.4) |
+| **Planner** | **`mint_explore_step`**, step-source gate (`find_food` only), latch / rim / stuck replan |
+
+**Artifacts (post-6d-explore):**
+
+| Artifact | Path | Role |
+|----------|------|------|
+| **Planner entry** | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) `sync_step_objective` | Routes “no actionable target” → unified seek |
+| **Seek module** | [`motor_explore_seek.gd`](../../creature/motor/motor_explore_seek.gd) (new) | `_pick_explore_dir`, `mint_explore_step` — **planner-only**; preloaded by `motor_planner.gd` |
+| **Legacy shim** | `_explore_step_goal` | Delegates to `mint_explore_step` until call sites migrated |
+
+**Public planner API:**
+
+```text
+mint_explore_step(goal_kind, creature_pos, state, motor_v3, ctx) -> Vector3
+  → _pick_explore_dir(goal_kind, …)     // scored rays; remint only
+  → sets explore_dir, explore_waypoint, step_source = explore
+  → returns step_goal world point
+```
+
+**Call sites** — whenever decomposition has **no actionable target** for incumbent `goal_kind`:
+
+| `goal_kind` | When |
+|-------------|------|
+| **`find_food`** | Step-source gate (below) chooses explore; or no live/memory after gate |
+| **`shelter`** | No shelter candidate / belief target (§6.4) |
+| **`rest`** | No safe-site candidate (§6.1) |
+| **`find_mate`** | (§6.5) No partner target — same module when Mate ships |
+| **§9 seek** | `_seed_explore_after_seek` → `mint_explore_step` |
+| **`avoid_hostiles`** | **Never** — flee geometry or `STAY` only |
+
+Species / diet differences come from **beliefs**, **scan**, and **config** — not separate explore implementations.
+
+**Step-source gate (`find_food` only)** — in `_derive_find_food_step_objective`, after live-food short-circuit:
+
+```text
+if urgency_eat >= seek_priority_food_ceiling:
+  live → memory tiers (precise / coarse / locale) → mint_explore_step   // hunger overrides inventory
+
+elif known_count >= goal_inventory_min_find_food:
+  memory tiers → mint_explore_step   // stocked — tend known patches
+
+else:
+  mint_explore_step → memory tiers   // under-stocked — map before revisiting sparse memory
+```
+
+**Revisit** known / depleted patches uses **memory seek** (`step_source` precise / coarse / locale). Seek module **repels** bearings with high instance coverage — **not** `LocalePriorMap` pull (locale remains revisit path via §9 / memory tiers).
+
+**Scored bearing pick** — **`explore_bearing_count`** rays (ship **8** = 45° apart). **Independent** of **`turn_increment_deg`** (22.5° align) — creature turns in finer steps toward a coarser-picked waypoint. Raise count (12 / 16) in playtest if 8 feels chunky.
+
+```text
+score(dir) =
+    w_spawn   × dot(dir, spawn_facing)              // last_move_direction prior, not winner
+  + w_open    × nav_clearance(dir)                  // LoS / static probe to awareness_radius × 0.5
+  + w_unexp   × unexplored_score(dir)               // coverage model below
+  + w_forward × forward_unexplored_swatch(dir)      // wide low-coverage arc ahead of spawn_facing
+  + tie_break(goal_consideration_chaos)             // §10 — single motor chaos key
+```
+
+Winner → **`explore_dir`** → **`explore_waypoint = creature_pos + explore_dir × (awareness_radius × 0.5)`**.
+
+**Coverage model — instance beliefs + live near wedge (Option B + light C):**
+
+- **Instance only** for memory wedge occupancy — **no** `LocalePriorMap` `stored_strength` (avoids double-count with instance rows on same EAT).
+- **`explore_bearing_coverage(goal_kind)`** returns **`PackedFloat32Array`** length **`explore_bearing_count`** — wedge count matches ray count.
+- Per wedge: **`instance_coverage`** from `_goal_belief` rows matching **`goal_kind`** (+ live zone samples for ingest-appropriate goals), distance-banded:
+
+| Band | Radius | `band_weight` |
+|------|--------|---------------|
+| Near | `0 … believed_goal_hotspot_near_radius` | **1.0** |
+| Mid | hotspot … `believed_goal_seek_escalate_radius` | **0.5** |
+| Far | escalate … `goal_memory_forget_radius` | **0.2** |
+
+Per belief: fractional tier weight (§1 inventory table) × `band_weight(dist)`.
+
+- **Light C — live near overlay:** Near band only — live object density per Definitions §9 (50% `awareness_radius`, occluded-in-zone ghosts when §8.1 active).
+
+```text
+coverage(dir)     = instance_coverage(dir) + w_live_near × live_density(dir)
+unexplored(dir)   = 1 - normalize(coverage(dir))
+unexplored_score  = unexplored(dir)   // repel explored; attract cold wedges
+```
+
+**Empty map:** When all wedges zero coverage, baseline unexplored = **`explore_empty_map_unexplored_baseline`** (ship **0.5**) before comparing candidates.
+
+**Latch / remint (2026-07-08):** After mint, **walk straight** to latched waypoint via §7.3.0 — **do not** re-score on consideration ticks. **Remint** (re-run `_pick_explore_dir`) on: first mint; interior **60°** `explore_replan`; rim inward escape; arrival / overshoot; §9 seek; inventory mode flip; blocked explore MOVE; dead-end rotation. Rim / boundary-scan contracts (§7.3.1) unchanged.
+
+**Chaos — single key (2026-07-08):** **`goal_consideration_chaos`** (ship **0.15**) breaks ties for hub weights (§10), ±180° align (§7.3.0), §9 persist/switch/seek, **and** explore bearing picks. **`blocked_objective_chaos`** **retired** — remove from packs at **post-6d-explore** (`blocked_objective_resolver.gd` reads `goal_consideration_chaos`). Split keys later if playtest requires.
+
+**Config keys (`creature_motor_v3`):**
+
+| Key | Ship default | Role |
+|-----|--------------|------|
+| `explore_bearing_count` | **8** | Scored rays + coverage wedge count |
+| `explore_empty_map_unexplored_baseline` | **0.5** | Unexplored when all wedges empty |
+| `explore_w_spawn` | **0.35** | Spawn-facing prior |
+| `explore_w_open` | **0.30** | Nav / LoS clearance |
+| `explore_w_unexp` | **0.25** | Memory + live unexplored |
+| `explore_w_forward` | **0.10** | Forward-unexplored swatch |
+| `explore_w_live_near` | **0.50** | Live §9 density in near band only |
+| `goal_inventory_min_find_food` | **3** | §1 |
+| `goal_inventory_min_find_mate` | **1** | §6.5 placeholder |
+| `goal_sated_patrol_urgency` | **0.15** | §1 |
+| `goal_mapping_urgency` | **0.35** | §1 |
+| `goal_consideration_chaos` | **0.15** | Hub + §9 + explore bearing ties (§10) |
+
+**Headless (post-6d-explore — E7 closed):** Wall-bias pick (`_test_motor_explore_seek_wall_bias_opens_away`); under-stocked sated `find_food` → explore + stocked → memory (`_test_motor_planner_find_food_*`); hungry memory-before-explore (`_test_motor_planner_find_food_hungry_memory_before_explore`); `shelter` no-candidate explore (`_test_motor_planner_shelter_no_candidate_explore`); empty-map spawn prior (`_test_motor_explore_seek_empty_map_spawn_prior`); zero-belief baseline (`_test_motor_explore_seek_zero_belief_baseline`); `goal_consideration_chaos` tie-break (`_test_motor_explore_seek_chaos_breaks_bearing_tie`, `_test_blocked_objective_resolver_goal_consideration_chaos_only`).
 
 ### 7.4 Body integration
 
@@ -1286,6 +1452,8 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 | **`consult_food_targets()`** | **`goal_kind == &"find_food"`** | Live + ghost when persistent row | Eat ranking (§6.2), remembered food seek (§8.2), §8.3 replace |
 | **`consult_shelter_beliefs()`** | **`goal_kind == &"shelter"`** | Precise / coarse outside zone; **live + ghost inside** zone (remembered bolt-hole behind cover still counts at **`last_world_pos`**) | **`safe_site_score`** (§6.1), Find shelter probe (§6.4), REST site rank / qualify |
 | **`consult_goal_beliefs(goal_kind)`** | **`goal_kind` param match** (+ optional `tier`) | Live + ghost per §8.1 | Generic remembered seek (§8.2–8.3); future **`find_mate`** |
+| **`count_known_objectives(goal_kind, …)`** | Diet-valid instance + live samples per §1 fractional table | Live + in-radius beliefs | Hub **`inventory_ratio`**, **`food_map_confidence`**, §7.3.2 step-source gate |
+| **`explore_bearing_coverage(goal_kind, …)`** | Instance `_goal_belief` per wedge + near live §9 overlay (§7.3.2) | Live + ghost in near band | **`mint_explore_step`** / `_pick_explore_dir`; length = **`explore_bearing_count`**; all goals needing exploration |
 | **`consult_kind_facet(...)`** | **`_kind_profile`** by **`stimulus_kind_id`** | N/A (not instance rows) | §6.2 yield rank; §1 **`kind_threat`** on threat samples |
 
 **First sight → `goal_kind` stamp (write-side; before any ghost):**
@@ -1330,9 +1498,11 @@ If the objective is inaccessible (shrub out of reach, creature in squeeze), eval
 
 **Resolved — `change_stability` (single path):** Factored **once** — inside **`replay_rank_score`** trait rank bias ([CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)). **Not** a separate §9 multiplier or second “past experience” input.
 
-**Resolved — chaos on close calls:** When persist / switch / seek scores tie after the above, break symmetry with RNG. Key **`blocked_objective_chaos`** under pack **`creature_motor_v3`** — **not** legacy `motor_intent_cost_chaos` or other V2 `creature_motor` keys.
+**Resolved — chaos on close calls (2026-07-08 — unified):** When persist / switch / seek scores tie after the above, break symmetry with RNG using **`goal_consideration_chaos`** (§10) — **same key** as hub goal ties and explore bearing picks (§7.3.2). Ship default **0.15**; **`0.0`** disables chaos. **Retired:** **`blocked_objective_chaos`** — remove at **post-6d-explore**; [`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd) reads **`goal_consideration_chaos`**. Not legacy `motor_intent_cost_chaos`.
 
-**Resolved — `blocked_objective_chaos` ship default:** **`0.15`** (light jitter on persist / switch / seek score ties). **`0.0`** disables chaos. Species packs may override; retune in playtest if ties feel too random or too sticky.
+**Resolved — cross-goal explore fallback (2026-07-08):** When the hub winner’s planner decomposition finds **no actionable objective** for that `goal_kind`, **`sync_step_objective`** calls **`mint_explore_step(goal_kind, …)`** (§7.3.2) — `step_source = explore`. Applies to **`shelter`**, **`rest`**, future **`find_mate`**, and **`find_food`** when the step-source gate selects explore. **Exception:** **`avoid_hostiles`** — flee only. Mate (§6.5) uses the same contract when enabled.
+
+**Resolved — §9 seek vs explore seek:** §9 **seek** after blocked approach calls **`_seed_explore_after_seek`** → **`mint_explore_step`** — same §7.3.2 module, not a separate random bearing.
 
 ---
 
@@ -1346,7 +1516,9 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 - Maintain an **active goal table** (goals + weights). **Empty table** (no rows) ⇒ **`STAY`** each tick (§7.2). Goals on table at **`feasibility_floor`** only are **not** empty.
 - Goal consideration weighs all candidates. When a goal decomposes into steps, earliest unaccomplished step is **primary**. If another goal’s weight exceeds incumbent, discard incumbent step chain.
 
-**Resolved — goal consideration tie-break:** When hub goal **weights tie** (or are within a small epsilon after rounding), break symmetry with RNG. Key **`goal_consideration_chaos`** under pack **`creature_motor_v3`** — ship default **`0.15`** (same magnitude as **`blocked_objective_chaos`** §9). **`0.0`** disables chaos.
+**Resolved — goal consideration tie-break:** When hub goal **weights tie** (or are within a small epsilon after rounding), break symmetry with RNG. Key **`goal_consideration_chaos`** under pack **`creature_motor_v3`** — ship default **`0.15`**. **`0.0`** disables chaos.
+
+**Resolved — single motor chaos key (2026-07-08):** **`goal_consideration_chaos`** is the **only** V3 symmetry-breaking RNG scalar for: hub goal-weight ties (§10); ±180° align (§7.3.0); §9 persist / switch / seek; explore bearing picks (§7.3.2). **`blocked_objective_chaos`** **retired** at **post-6d-explore** — split later only if playtest requires independent tuning.
 
 **Fast-path bypass (every tick):** Flight. **Find shelter** is **fully suppressed** — not scored on the goal table during acute threat (§1, §6.4). Flight **consumes** nearby **`shelter`** beliefs for retreat bias (§6.3). **Combat (future):** attack action triggers fight/flight immediately — planner and frozen goal table do not compete with acute response. **Acute Flight preempts** in-progress multi-tick turn sequences (§7.3).
 
@@ -1361,7 +1533,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 
 **Resolved — `goal_replan_base_ticks` ship default:** Adopt POST_LOS **`post_los_replan_base_ticks` = 8** under **`creature_motor_v3.goal_replan_base_ticks`**. At `stat_observation = 10`, `n = 8`. Retune in playtest if consideration feels too sluggish or twitchy.
 
-**Resolved — `goal_consideration_chaos` ship default:** **`0.15`** — light jitter on hub goal-weight ties (§10 above). **`0.0`** disables.
+**Resolved — `goal_consideration_chaos` ship default:** **`0.15`** — hub ties, §9 blocked-objective ties, explore bearing ties, ±180° align (§7.3.0). **`0.0`** disables.
 
 **Resolved — between replan ticks:** Execution follows the **incumbent goal** from the last consideration round (weights frozen; step chain advances on objective completion). Fast-path Flight/combat may override every tick (§10). No per-tick full re-score between consideration cycles. **Timer is per-objective (above):** reaching an objective or a blocked outcome ends the current interval early and restarts it — the *n*-tick figure is the **maximum** dwell on a single unblocked, uncompleted objective, not a fixed clock.
 
@@ -1417,7 +1589,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 | Eat — kind vs instance memory + ingest | §6.2, §8.4 | **V3 intent.** `stimulus_kind_id`; `record_observation`; instance = where only |
 | Flight — kind threat × disposition | §1, §6.3 | **V3 intent.** `kind_threat`; neutral unseen; not familiarity |
 | Config namespace `creature_motor_v3` | §7.5, §9, §12 | **V3 intent.** No legacy `creature_motor` merge or V2 `MotorContext` key reads |
-| Blocked-objective chaos | §9 | **V3 intent.** `blocked_objective_chaos` **0.15** ship default (§9) |
+| Blocked-objective chaos | §9 | **V3 intent.** **`goal_consideration_chaos`** (unified **2026-07-08**); `blocked_objective_chaos` retired |
 | Step 2 inventory template (§12.1) | §12 | **V3 intent.** Disposition + consumers + tests columns |
 | Step 6 sub-phases 6a→6d.3 (§12.2) | §12 | **V3 intent.** Execution → hub → live planner → **6e align/cadence** → memory (6d.1→6d.2→6d.3) |
 | Per-goal `base` + Find shelter scoring | §1, §6.4 | **V3 intent.** `goal_base_*`, `food_map_confidence` |
@@ -1555,6 +1727,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | `creature/motor/memory_adapter.gd` (new) | keep | hub, planner | replace: adapter consult + write tests **6d.1–6d.2** | §12.2 **6d** — §8.4 façade (reads + writes + §9) |
 | `creature/motor/dead_end_memory.gd` (new) | keep | memory adapter | replace: dead-end filter tests **6d.2** | §12.2 **6d.2** — geographic cul-de-sac |
 | `creature/motor/blocked_objective_resolver.gd` (new) | keep | motor planner | replace: §9 persist/switch/seek tests **6d.2** | §12.2 **6d.2** — §9 |
+| `creature/motor/motor_explore_seek.gd` (new) | keep | `motor_planner.gd` | **ported:** `_test_motor_explore_seek_*`, E7 planner gate tests in `run_all.gd` | §12.2 **post-6d-explore** — §7.3.2 unified seek |
 | `creature/motor/salient_write_context.gd` (new, optional) | keep | memory adapter, outcome hooks | replace: salient-write gate tests **6d.2** | §12.2 **6d.2** |
 | `creature/motor/kind_profile_memory.gd` (new) | adapter | memory adapter | replace: EWMA + neutral prior tests **6d** | §12.2 **6d** — `_kind_profile` |
 | `creature/memory/stimulus_learn_registry.gd` (new) | keep | memory adapter, packs | replace: learn-topic registry tests **6d** | §12.2 **6d** |
@@ -1617,7 +1790,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ### 12.2 Step 6 implementation sub-phases
 
-**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6e.1 Align refactor (smoke/fix) → 6e.2 Cadence + clearance → 6d.1 Memory reads → 6d.2 slice 0 (adapter writes + migration) → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition → post-6d Flight duel (predator threat + fast-path locomotion).** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6e** (post-6c executor + cadence — **not** memory adapter) may overlap **6d** manual smoke / remaining **6d** headless work; close **6e.1** before relying on duel rim smoke for refactor sign-off. **6d** splits into reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts. **post-6d** runs after **6d.3** — not a **6d** deliverable (§12.2 **post-6d**).
+**Resolved — build order:** **6a Execution → 6b Hub shell → 6c Planner (live tier) → 6e.1 Align refactor (smoke/fix) → 6e.2 Cadence + clearance → 6d.1 Memory reads → 6d.2 slice 0 (adapter writes + migration) → 6d.2 Writes + exceptions → 6d.3 Ghosts + disposition → post-6d-explore (unified explore seek §7.3.2) → post-6d Flight duel (predator threat + fast-path locomotion).** Unblocks post–Step 3 playability (§7.4 tick loop), defers highest-coupling memory work until live pathing is baseline. **6e** (post-6c executor + cadence — **not** memory adapter) may overlap **6d** manual smoke / remaining **6d** headless work; close **6e.1** before relying on duel rim smoke for refactor sign-off. **6d** splits into reviewable sub-phases — each closes its checklist and runs §12 steps **6–10** before the next **6d** sub-phase starts. **post-6d-explore** and **post-6d** run after **6d.3** — not **6d** deliverables (§12.2).
 
 <<Comment: **Alternative order (not adopted):** top-down **hub → planner → execution → memory adapter** matches §1→§3→§7 **document section** flow and the three-layer narrative in §11 (“goals → planner → execution”). **Downside:** hub/planner emit `Action`s long before `apply_action` exists — Step 5 “run game” stays broken; facing-relative turn-then-move and `ActionOutcome` → belief loops (§7.6) integrate in one late risky pass. **Memory adapter last** is the same in both orderings.>>
 
@@ -1995,13 +2168,13 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Headless closed 2026-07-02** — [`kind_profile_memory.gd`](../../creature/motor/kind_profile_memory.gd), [`dead_end_memory.gd`](../../creature/motor/dead_end_memory.gd), [`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd), [`stimulus_learn_registry.gd`](../../creature/memory/stimulus_learn_registry.gd). Adapter writes: `record_observation`, dead-end marks, `passibility_fail_count`; live food ranked by kind `nutrition_yield`; §9 persist/switch/seek on blocked locomotion; `stimulus_kind_id` spawn gate on [`main_3d.gd`](../../main_3d.gd) + [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd).
 
-**In scope:** §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers + `blocked_objective_chaos`). **Dead-end** geographic marks (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3). **`_kind_profile`** + **`record_observation`** + learn-topic registry — `nutrition_yield` on EAT ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)). **`stimulus_kind_id`** spawn gate enforced at food placement (§6.2). **Rename `*_px` config keys** to world-unit names during MEMORY / pack pass (e.g. `believed_goal_hotspot_near_radius_px` → `believed_goal_hotspot_near_radius`) — §12.3.2.
+**In scope:** §9 blocked-objective persist/switch/seek (locale + instance + **kind** layers + **`goal_consideration_chaos`**). **Dead-end** geographic marks (`_dead_end_marks_by_body`) + **instance passibility** on `_goal_belief` (§3). **`_kind_profile`** + **`record_observation`** + learn-topic registry — `nutrition_yield` on EAT ([CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md)). **`stimulus_kind_id`** spawn gate enforced at food placement (§6.2). **Rename `*_px` config keys** to world-unit names during MEMORY / pack pass (e.g. `believed_goal_hotspot_near_radius_px` → `believed_goal_hotspot_near_radius`) — §12.3.2.
 
 **Out of scope:** Occluded-in-zone ghosts; `threat_disposition_mod`; shelter instance beliefs; Flight kind `threat_danger` episodes.
 
 **Vertical slices:**
 
-4. **§9** — inaccessible objective uses locale + instance + **kind** memory layers + `blocked_objective_chaos`.
+4. **§9** — inaccessible objective uses locale + instance + **kind** memory layers + **`goal_consideration_chaos`**.
 5. **Dead-end consult** — geographic filter on edge waypoints (§3); instance `passibility_fail_count` on switch (§9).
 6. **Kind profile** — EAT updates `nutrition_yield`; live ranking + §8.3 replace consult (§6.2).
 
@@ -2032,8 +2205,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Vertical slices:**
 
-7. **Flight disposition + kind threat** — benign-exposure vs evade nudges to `threat_disposition_mod`; `kind_threat` on samples (§1).
-8. **Occluded-in-zone ghosts** — **`danger_filter`** + shelter / food consults (§8.1, §8.4); threat ghosts affect Safety / Flight / REST; live-wins dedupe; mover reach cap; static non-threat zone-only expiry.
+7. **Flight disposition + kind threat** — benign-exposure vs evade nudges to `threat_disposition_mod`; `kind_threat` on samples (§1). **Slice 7 headless closed 2026-07-07** — [`threat_disposition.gd`](../../creature/motor/threat_disposition.gd), adapter `get_threat_disposition_mod` / `apply_disposition_deltas`, hub `kind_threat_for_sample` + `urgency_dist_for_sample`, scan `stimulus_kind_id` on threat samples, stack episode tracking; tests `_test_motor_goal_hub_kind_threat_modulates_flight`, `_test_motor_goal_hub_disposition_modulates_flight`, `_test_threat_disposition_*`, `_test_creature_motor_stack_disposition_episodes`.
+8. **Occluded-in-zone ghosts** — **`danger_filter`** + shelter / food consults (§8.1, §8.4); threat ghosts affect Safety / Flight / REST; live-wins dedupe; mover reach cap; static non-threat zone-only expiry. **Slice 8 headless closed 2026-07-07** — [`occluded_in_zone_ghost.gd`](../../creature/motor/occluded_in_zone_ghost.gd), `memory_adapter.consult_danger_samples`, stack danger merge + `safety_time` consideration cycles + Flight fast-path latch exit; tests `_test_memory_adapter_ghost_*`, `_test_creature_motor_stack_safety_blocked_by_ghost`.
 
 **Acceptance checklist:**
 
@@ -2085,6 +2258,41 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **After close:** §12 steps **6–10**; optional **§12 step 11** promotion if no other blockers.
 
+---
+
+##### post-6d-explore — Unified explore seek (§7.3.2)
+
+**Status:** **Tracking** — spec **closed 2026-07-08**; interim code still uses spawn-facing × fixed reach ([`motor_planner.gd`](../../creature/motor/motor_planner.gd) `_explore_step_goal`).
+
+**Entry:** **6d.2** memory adapter baseline (instance beliefs + consult paths) — may land in parallel with **post-6d** Flight work.
+
+**In scope:**
+
+| # | Deliverable | Primary touch |
+|---|-------------|---------------|
+| E1 | **`count_known_objectives`** + **`explore_bearing_coverage(goal_kind)`** on memory adapter (§8.4) | [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) |
+| E2 | Hub **`effective_urgency_find_food`** + stack **`food_map_confidence = inventory_ratio`** | [`motor_goal_hub.gd`](../../creature/motor/motor_goal_hub.gd), [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) |
+| E3 | **[`motor_explore_seek.gd`](../../creature/motor/motor_explore_seek.gd)** — `mint_explore_step`, `_pick_explore_dir` (8 rays default, `explore_bearing_count` tunable) | New module; preloaded by planner |
+| E4 | **`sync_step_objective`** routes all goals → `mint_explore_step` when no actionable target; **`find_food`** step-source gate | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) |
+| E5 | **`goal_consideration_chaos`** everywhere; **retire** `blocked_objective_chaos` | [`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd), [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd), [`tests/run_all.gd`](../../tests/run_all.gd) |
+| E6 | **`creature_motor_v3`** defaults — §7.3.2 config table (`explore_bearing_count`, `explore_*`, inventory keys) | [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) |
+| E7 | Headless — wall-bias pick, inventory gate, shelter fallback, empty-map baseline, chaos tie | [`tests/run_all.gd`](../../tests/run_all.gd) |
+
+**Out of scope:** Mate partner consult (§6.5); trait tactic modulator; `LocalePriorMap` in wedge coverage; per-species explore forks; **prey pursuit persistence** (§6.2 known bug — moving-target memory consult + engagement latch).
+
+**Acceptance checklist:**
+
+| Gate | Criterion | Headless test |
+|------|-----------|---------------|
+| Headless **required** | Asymmetric wall — open bearing beats spawn-facing into obstruction | `_test_motor_explore_seek_wall_bias_opens_away` |
+| Headless **required** | Under-stocked sated **`find_food`** → **`step_source = explore`**; stocked → memory seek | `_test_motor_planner_find_food_understocked_sated_explore_first`, `_test_motor_planner_find_food_stocked_sated_memory_first` |
+| Headless **required** | Hungry **`find_food`** → memory before explore (inventory gate) | `_test_motor_planner_find_food_hungry_memory_before_explore` |
+| Headless **required** | **`shelter`** hub winner, no candidate → **`mint_explore_step(shelter)`** (same module) | `_test_motor_planner_shelter_no_candidate_explore` |
+| Headless **required** | `blocked_objective_resolver` + explore seek use **`goal_consideration_chaos`** only | `_test_blocked_objective_resolver_goal_consideration_chaos_only`, `_test_motor_explore_seek_chaos_breaks_bearing_tie` |
+| Headless **required** | Empty-map spawn prior + zero-belief baseline | `_test_motor_explore_seek_empty_map_spawn_prior`, `_test_motor_explore_seek_zero_belief_baseline` |
+| Manual **smoke** | Fox no prey — non-repeating patrol vs single-axis rim rut | — |
+| Inventory | §12.1 row for **`motor_explore_seek.gd`**; §13 explore seek row → **Done** | — |
+
 <<Comment: Headless test matrix — sub-phase checklists above are v1 gates; expand species rows after §1 scoring closes. Do not inherit V2 Phase 3 advance-gate checklist unless re-adopted explicitly.>>
 
 ---
@@ -2093,7 +2301,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 **Resolved — one-shot copy at 6a.** Copy duel `creature_motor` → `creature_motor_v3` in the same commit that wires V3 merge; **do not** dual-author both blocks during transition. V3 runtime reads **`creature_motor_v3` only**. Legacy `creature_motor` may remain in packs for archived V2 tests until **§12 step 11**, then **remove** legacy blocks entirely. At **6a**, add an **`OLog`** guard (e.g. warn once if any V3 code path reads legacy `creature_motor` keys) to catch stray reads while debugging mid-transition behavior.
 
-- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency band keys + **Flight urgency / disposition / `kind_threat` clamp keys** + **`flight_acute_panic_radius`**, §8.1 **`awareness_radius` / `awareness_cone_extra` / `awareness_cone_half_angle_deg` / `los_eye_height` / `los_blocked_occlusion_fraction` / `awareness_requires_los`**, §6.1 **`safe_site_*`** rest-site scoring keys, §9 **`blocked_objective_chaos`** (ship default **0.15**), §10 **`goal_replan_base_ticks`** (ship default **8**) + **`goal_consideration_chaos`** (ship default **0.15**), §7 **`turn_increment_deg`** (ship **22.5**) + per-action **`action_max_distance`** (EAT ship **5**), §6.2 **`unknown_kind_multiplier`**, detour toggles (e.g. **`detour_score_competition`**, replacing `post_los_detour_score_competition` intent).
+- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency / inventory keys (`goal_inventory_min_*`, `goal_sated_patrol_urgency`, `goal_mapping_urgency`) + **explore seek keys** (`explore_bearing_count`, `explore_*` — §7.3.2) + **Flight urgency / disposition / `kind_threat` clamp keys** + **`flight_acute_panic_radius`**, §8.1 awareness keys, §6.1 **`safe_site_*`**, **`goal_consideration_chaos`** (ship **0.15** — hub, §9, explore, ±180° align; **replaces** `blocked_objective_chaos` at **post-6d-explore**), §10 **`goal_replan_base_ticks`** (**8**), §7 **`turn_increment_deg`** (**22.5**), EAT **`action_max_distance`** (**5**), §6.2 **`unknown_kind_multiplier`**, detour toggles.
 - **Memory storage keys** (`goal_*`, `believed_goal_*`, **`kind_profile_*`** — [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)) remain the **MEMORY sibling** contract for belief / locale-prior / **kind-profile** **storage and TTL**; V3 consumes them through the **memory adapter** (§8.4) in **§12.2 6d**, not by reusing V2 motor merge codepaths or V2 pack motor weights.
 
 ### 12.3 Sibling doc rework (single-pass checklists)
@@ -2287,7 +2495,8 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Simplified tick executor — **6e.1** align refactor (§3.1 + §7.3.0) | §12.2 **6e.1** | — | **Done** — 2026-07-06; cone-only align; commit/`cmt` retired |
 | Consideration + clearance cadence — **6e.2** | §12.2 **6e.2**, §3.1, §10 | — | **Done** — 2026-07-06; per-objective timer + clearance gating |
 | Flight duel — mutual **`ff=1`** + predator prey-as-threat | §12.2 **post-6d**, §6.3, §7.3.0 | — | **Tracking** — duel smoke 2026-07-06; after **6d.3** |
-| `blocked_objective_chaos` default | §9 | — | **Closed** |
+| `blocked_objective_chaos` | §9 | — | **Retired** — unified **`goal_consideration_chaos`** at **post-6d-explore** |
+| Unified explore seek (`motor_explore_seek.gd`) | §7.3.2, §1, §8.4, §9, §12.2 **post-6d-explore** | — | **Done** — E1–E7 **2026-07-08** |
 | `goal_replan_base_ticks` default | §10 | — | **Closed** |
 | §11 POST_LOS row re-validation | §11 | — | **Closed** |
 | `_goal_belief` LRU — deprecate `merge_use_count` | §8.4, §12.3.1 | — | **Closed** — cap eviction = lowest `last_observed_ms`; no consult-frequency retention v1 |
@@ -2393,6 +2602,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | # | Item | Status | Notes |
 |---|------|--------|-------|
 | 14.1.7 | **Simplified tick executor** — §3.1 path clearance + §7.3.0 align-and-move as refactor target; overlays (explore rim, Flight) stay separate. | `accepted` | 2026-07-06 design pass — implementation §12.2 **6e.1** / **6e.2** |
+| 14.1.9 | **Unified explore seek** — `motor_explore_seek.gd`, 8-ray default (`explore_bearing_count`), planner-only, all goals, `goal_consideration_chaos` unified (§7.3.2). | `done` | Spec **2026-07-08**; impl **post-6d-explore** E1–E7 |
 | 14.1.8 | **Executor refactor gate** — §15.3 refactor-blocking rows | `done` | **Closed 2026-07-06** — all design gates closed; **`turn_commit_sign` tests migrate same PR** (§7.7) |
 | 14.1.1 | **Facing-relative + one action/tick** — up to **8** turn ticks for 180° before `MOVE_FORWARD` (§7.3); threats close every tick. | `accepted` | Product bet vs V2 single-tick cardinal pick |
 | 14.1.2 | **Dual control on goals** — hub `weight` scoring (§1) **and** `tier2_dominance.gd` eligibility + acute overrides. | `done` | §1 — hub **`build_eligible_goals`**; **delete** `tier2_dominance.gd` at **6b** |
@@ -2417,6 +2627,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 14.2.10 | **Acute fast-path** — `gate_dist ≤ flight_acute_panic_radius` | Implementers guess threshold | `done` — §1 keys table; default **220.0** |
 | 14.2.11 | **`arrival_tolerance` / interaction range** undefined | Step completion ambiguous | `done` | §7.2 **`action_max_distance`** — EAT **5** |
 | 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3.0 cone + fewest-turn pick; **`turn_commit_sign` retired on refactor** |
+| 14.2.13 | **Prey pursuit drop** when prey leaves awareness — `is_moving` beliefs skipped by food consult (§6.2) | Carnivore abandons chase for explore | `open` | **post-6d-explore** prey-tracking slice; not E4 |
 
 ### 14.3 Edge cases (under-specified)
 

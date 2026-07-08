@@ -11,6 +11,12 @@ const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
+const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
+const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
+
+const _FOOD_INV_HUNGRY := 0
+const _FOOD_INV_STOCKED := 1
+const _FOOD_INV_UNDERSTOCKED := 2
 
 ## V2 reference: ~400 px/s at 60 Hz — [code]motor_stuck_move_epsilon[/code] 1.25 ≈ 18.75% of that per-tick budget.
 const _LEGACY_REF_TICK_DISPLACEMENT := 400.0 / 60.0
@@ -40,6 +46,7 @@ static func new_state() -> Dictionary:
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
     "playfield_clamp_latch_ticks": 0,
+    "food_inventory_step_mode": -1,
   }
 
 
@@ -162,8 +169,8 @@ static func _apply_explore_waypoint_passed(
 
 
 ## Resets explore fields after §9 seek fallback so the next sync can mint a waypoint.
-static func _seed_explore_after_seek(state: Dictionary, ctx: Dictionary) -> void:
-  state["explore_dir"] = _initial_explore_dir(ctx)
+static func _seed_explore_after_seek(state: Dictionary, _ctx: Dictionary) -> void:
+  state["explore_dir"] = Vector3.ZERO
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["step_instance_id"] = 0
@@ -655,7 +662,16 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
 
   match goal_kind:
     _GkReg.GK_FIND_FOOD:
-      if refresh_targets or not has_step_goal:
+      if _live_ready_food_present(scan, creature_pos):
+        _derive_find_food_step_objective(
+          ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+        )
+      elif refresh_targets or not has_step_goal:
+        _derive_find_food_step_objective(
+          ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+        )
+      elif _food_inventory_mode_changed(ctx, state, motor_v3):
+        _clear_explore_latch_for_remint(state)
         _derive_find_food_step_objective(
           ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
         )
@@ -666,11 +682,17 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3)
         state["step_instance_id"] = 0
         state["step_source"] = &"live"
+    _GkReg.GK_SHELTER, _MotorGoalHub.GOAL_REST:
+      if refresh_targets or not has_step_goal:
+        if not _sync_shelter_or_rest_objective(ctx, state, creature_pos, motor_v3, goal_kind):
+          _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, goal_kind)
+      elif state.get("step_source", &"") == &"explore":
+        _maintain_explore_latch(ctx, state, motor_v3)
     _:
       if refresh_targets or not has_step_goal:
-        state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
-        state["step_instance_id"] = 0
-        state["step_source"] = &"explore"
+        _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, goal_kind)
+      elif state.get("step_source", &"") == &"explore":
+        _maintain_explore_latch(ctx, state, motor_v3)
 
 
 static func _derive_find_food_step_objective(
@@ -684,17 +706,115 @@ static func _derive_find_food_step_objective(
 ) -> void:
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
-    var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
-    state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
-    state["step_instance_id"] = int(food.get("instance_id", 0))
-    state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
-    state["step_source"] = &"live"
+    _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
+    _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
-  if _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r):
-    return
-  state["step_goal"] = _explore_step_goal(creature_pos, state, motor_v3, ctx)
+  var inv_mode := _resolve_food_inventory_step_mode(ctx, motor_v3)
+  if _food_inventory_mode_changed(ctx, state, motor_v3):
+    _clear_explore_latch_for_remint(state)
+  _store_food_inventory_step_mode(ctx, state, motor_v3)
+  var explore_first := inv_mode == _FOOD_INV_UNDERSTOCKED
+  if explore_first:
+    _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
+    if (state.get("step_goal", Vector3.ZERO) as Vector3).length_squared() < 1e-8:
+      _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
+  elif not _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r):
+    _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
+
+
+static func _apply_live_food_objective(
+  state: Dictionary,
+  food: Dictionary,
+  map_rid: RID,
+  creature_pos: Vector3,
+  agent_r: float,
+) -> void:
+  var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
+  state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  state["step_instance_id"] = int(food.get("instance_id", 0))
+  state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
+  state["step_source"] = &"live"
+
+
+static func _mint_explore_objective_for_goal(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  goal_kind: StringName,
+) -> void:
+  state["step_goal"] = _ExploreSeek.mint_explore_step(goal_kind, creature_pos, state, motor_v3, ctx)
   state["step_instance_id"] = 0
-  state["step_source"] = &"explore"
+
+
+## Placeholder until shelter / rest belief consult ships — returns false so explore seek runs.
+static func _sync_shelter_or_rest_objective(
+  _ctx: Dictionary,
+  _state: Dictionary,
+  _creature_pos: Vector3,
+  _motor_v3: Dictionary,
+  _goal_kind: StringName,
+) -> bool:
+  return false
+
+
+static func _live_ready_food_present(scan: Dictionary, creature_pos: Vector3) -> bool:
+  return not _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos).is_empty()
+
+
+static func _calorie_ratio_from_ctx(ctx: Dictionary, body: CharacterBody3D) -> float:
+  if ctx.has("calorie_ratio"):
+    return clampf(float(ctx.get("calorie_ratio", 1.0)), 0.0, 1.0)
+  if body == null:
+    return 1.0
+  var cap := maxf(1.0, float(body.get("caloric_needs")))
+  return clampf(float(body.get("current_calories")) / cap, 0.0, 1.0)
+
+
+static func _known_food_count(ctx: Dictionary, motor_v3: Dictionary, creature_pos: Vector3) -> float:
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null or not adapter.has_method(&"count_known_objectives"):
+    return 0.0
+  var scan: Dictionary = ctx.get("scan", {})
+  var food_split: Dictionary = scan.get("food_split", {})
+  var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+  return float(
+    adapter.count_known_objectives(
+      _GkReg.GK_FIND_FOOD, creature_pos, motor_v3, food_split, now_ms
+    )
+  )
+
+
+static func _resolve_food_inventory_step_mode(ctx: Dictionary, motor_v3: Dictionary) -> int:
+  var body: CharacterBody3D = ctx.get("body")
+  var calorie_ratio := _calorie_ratio_from_ctx(ctx, body)
+  var urgency_eat := _MotorGoalHub.urgency_eat(calorie_ratio, motor_v3)
+  var seek_ceil := float(motor_v3.get("seek_priority_food_ceiling", 0.80))
+  if urgency_eat >= seek_ceil - 1e-6:
+    return _FOOD_INV_HUNGRY
+  var creature_pos := body.global_position if body != null else Vector3.ZERO
+  var known := _known_food_count(ctx, motor_v3, creature_pos)
+  var min_inv := float(motor_v3.get("goal_inventory_min_find_food", 3.0))
+  if known >= min_inv - 1e-6:
+    return _FOOD_INV_STOCKED
+  return _FOOD_INV_UNDERSTOCKED
+
+
+static func _store_food_inventory_step_mode(ctx: Dictionary, state: Dictionary, motor_v3: Dictionary) -> void:
+  state["food_inventory_step_mode"] = _resolve_food_inventory_step_mode(ctx, motor_v3)
+
+
+static func _food_inventory_mode_changed(ctx: Dictionary, state: Dictionary, motor_v3: Dictionary) -> bool:
+  var prev := int(state.get("food_inventory_step_mode", -1))
+  if prev < 0:
+    return false
+  return prev != _resolve_food_inventory_step_mode(ctx, motor_v3)
+
+
+static func _clear_explore_latch_for_remint(state: Dictionary) -> void:
+  state["explore_dir"] = Vector3.ZERO
+  state["explore_waypoint"] = Vector3.ZERO
+  _reset_explore_align_progress_state(state)
 
 
 ## Overshoot / rim / dead-end maintenance on a held explore latch (runs between consideration ticks).
@@ -722,8 +842,9 @@ static func _maintain_explore_latch(
     _apply_explore_rim_escape_replan(state, body, motor_v3)
     return
   var adapter_hold: RefCounted = ctx.get("memory_adapter")
+  var latch_goal_kind: StringName = state.get("goal_kind", _GkReg.GK_FIND_FOOD)
   if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
-    if adapter_hold.is_waypoint_dead_end(creature_pos, latched, _GkReg.GK_FIND_FOOD, motor_v3):
+    if adapter_hold.is_waypoint_dead_end(creature_pos, latched, latch_goal_kind, motor_v3):
       if _is_near_playfield_boundary(body, motor_v3):
         state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
       else:
@@ -828,56 +949,8 @@ static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Di
 
 
 static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v3: Dictionary, ctx: Dictionary) -> Vector3:
-  var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
-  if explore.length_squared() < 1e-8:
-    explore = _initial_explore_dir(ctx)
-    state["explore_dir"] = explore.normalized()
-  var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
-  var body: CharacterBody3D = ctx.get("body")
-  if latched.length_squared() > 1e-8:
-    if creature_pos.distance_to(latched) <= arrival_tol:
-      state["explore_waypoint"] = Vector3.ZERO
-      latched = Vector3.ZERO
-    elif body != null and _passed_explore_waypoint(body, latched, state):
-      _apply_explore_waypoint_passed(state, body, motor_v3)
-      latched = Vector3.ZERO
-    elif body != null and _explore_latch_needs_rim_realign(body, motor_v3, state):
-      _apply_explore_rim_escape_replan(state, body, motor_v3)
-      latched = Vector3.ZERO
-    else:
-      var adapter_hold: RefCounted = ctx.get("memory_adapter")
-      if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
-        if adapter_hold.is_waypoint_dead_end(creature_pos, latched, _GkReg.GK_FIND_FOOD, motor_v3):
-          if body != null and _is_near_playfield_boundary(body, motor_v3):
-            state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
-          else:
-            explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
-            state["explore_dir"] = explore.normalized()
-          state["explore_waypoint"] = Vector3.ZERO
-          latched = Vector3.ZERO
-      if latched.length_squared() > 1e-8:
-        return latched
-  explore = (state["explore_dir"] as Vector3).normalized()
-  if body != null and _is_near_playfield_boundary(body, motor_v3):
-    var inward := _rim_escape_explore_dir(body, motor_v3)
-    if inward.length_squared() > 1e-12:
-      explore = inward.normalized()
-      state["explore_dir"] = explore
-  var waypoint := creature_pos + explore * reach
-  var adapter: RefCounted = ctx.get("memory_adapter")
-  if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
-    if adapter.is_waypoint_dead_end(creature_pos, waypoint, _GkReg.GK_FIND_FOOD, motor_v3):
-      if body != null and _is_near_playfield_boundary(body, motor_v3):
-        explore = _rim_escape_explore_dir(body, motor_v3).normalized()
-        state["explore_dir"] = explore
-      else:
-        explore = explore.rotated(Vector3.UP, deg_to_rad(60.0))
-        state["explore_dir"] = explore.normalized()
-      waypoint = creature_pos + state["explore_dir"] * reach
-  state["explore_waypoint"] = waypoint
-  return waypoint
+  var goal_kind: StringName = state.get("goal_kind", _GkReg.GK_FIND_FOOD)
+  return _ExploreSeek.mint_explore_step(goal_kind, creature_pos, state, motor_v3, ctx)
 
 
 ## Horizontal facing at first explore pick — duel spawn facing, not random (§3 explore latch).

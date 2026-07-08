@@ -14,6 +14,7 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
 
 
 var _body: CharacterBody3D
@@ -30,17 +31,22 @@ var _incumbent: Dictionary = {}
 var _flight_fast_path_active: bool = false
 var _safety_met: bool = false
 var _threat_samples: Array = []
+var _live_threat_samples: Array = []
 var _food_split: Dictionary = {"ready": [], "unready": []}
 var _food_map_confidence: float = 0.0
 var _stat_observation: int = 10
 var _planner_state: Dictionary = {}
 var _threat_samples_test_override: bool = false
+var _safety_cycles: int = 0
+var _flight_fast_path_latched: bool = false
 var _scan_test_override: Dictionary = {}
 var _use_scan_test_override: bool = false
 var _env_grid_test_override: Variant = null
 var _use_env_grid_test_override: bool = false
 var _memory_adapter: _MemoryAdapter
 var _last_outcome: _ActionOutcome
+var _benign_episode_pending: bool = false
+var _was_flight_fast_path: bool = false
 
 
 ## Wires body, vitals, merged [code]creature_motor_v3[/code], and goal catalog at spawn.
@@ -68,6 +74,11 @@ func configure(
   _active_goals = []
   _incumbent = {}
   _flight_fast_path_active = false
+  _flight_fast_path_latched = false
+  _safety_cycles = 0
+  _safety_met = false
+  _benign_episode_pending = false
+  _was_flight_fast_path = false
   _planner_state = _MotorPlanner.new_state()
   _threat_samples_test_override = false
   _use_scan_test_override = false
@@ -76,6 +87,8 @@ func configure(
     _memory_adapter = _MemoryAdapter.new()
   _memory_adapter.configure(_pack_root, _traits_from_body())
   _memory_adapter.set_goal_catalog(_goal_catalog)
+  if _body != null and _body.has_method(&"get_food_intake_policy"):
+    _memory_adapter.set_food_intake_policy(_body.call(&"get_food_intake_policy"))
   _ExploreLog.reset_session()
 
 
@@ -84,14 +97,23 @@ func tick(delta: float) -> _ActionOutcome:
   _physics_tick_count += 1
   _run_live_scan()
   _maintain_memory_beliefs()
+  var area_only := _rest_area_only_perception()
+  _refresh_danger_samples(area_only)
   var ctx := _build_context()
-  _update_flight_fast_path_stub(ctx)
-  ctx["flight_fast_path_active"] = _flight_fast_path_active
 
   var ran_consideration := false
   if _should_run_consideration():
-    _run_consideration(ctx)
+    _update_safety_on_consideration()
     ran_consideration = true
+
+  _update_flight_fast_path(ctx)
+  ctx["flight_fast_path_active"] = _flight_fast_path_active
+  _update_threat_disposition(ctx)
+  ctx["threat_disposition_mod"] = _threat_disposition_mod()
+  ctx["safety_met"] = _safety_met
+
+  if ran_consideration:
+    _run_consideration(ctx)
 
   var planner_ctx := _build_planner_context(ctx, delta)
   planner_ctx["refresh_step_objective"] = ran_consideration
@@ -185,8 +207,17 @@ func get_incumbent() -> Dictionary:
   return _incumbent.duplicate(true)
 
 
+## Known-food inventory scalar driving hub shelter gate and Eat urgency (§1).
+func get_food_map_confidence() -> float:
+  return _food_map_confidence
+
+
 func is_flight_fast_path_active() -> bool:
   return _flight_fast_path_active
+
+
+func is_safety_met() -> bool:
+  return _safety_met
 
 
 func get_food_split() -> Dictionary:
@@ -254,6 +285,13 @@ func get_debug_snapshot() -> Dictionary:
     "ready_food": ready.size(),
     "threat_count": _threat_samples.size(),
     "incumbent_empty": _incumbent.is_empty(),
+    "food_map_confidence": _food_map_confidence,
+    "inventory_ratio": _food_map_confidence,
+    "effective_urgency_find_food": _MotorGoalHub.effective_urgency_find_food(
+      _calorie_ratio(),
+      _food_map_confidence,
+      _motor_v3,
+    ),
   }
 
 
@@ -330,8 +368,19 @@ func seed_locale_prior_for_test(cell_x: int, cell_z: int, weight: float) -> void
 
 ## Test / harness injection for threat geometry (6b).
 func set_threat_samples_for_test(samples: Array) -> void:
-  _threat_samples = samples.duplicate(true)
+  _live_threat_samples = samples.duplicate(true)
+  _threat_samples = _live_threat_samples.duplicate(true)
   _threat_samples_test_override = true
+
+
+func seed_threat_belief_for_test(
+  instance_id: int,
+  world_pos: Vector3,
+  now_ms: int,
+  stimulus_kind_id: StringName = &"wolf",
+) -> void:
+  if _memory_adapter != null:
+    _memory_adapter.seed_threat_belief_for_test(instance_id, world_pos, now_ms, stimulus_kind_id)
 
 
 func set_safety_met_for_test(met: bool) -> void:
@@ -360,8 +409,6 @@ func _run_live_scan() -> void:
   var area_only := _rest_area_only_perception()
   var scan := _AwarenessScan.scan_live(_body, _motor_v3, tree, area_only)
   _apply_scan_dict(scan)
-  if not _threat_samples_test_override:
-    _threat_samples = scan.get("threat_samples", []).duplicate(true)
 
 
 func _apply_scan_dict(scan: Dictionary) -> void:
@@ -370,12 +417,59 @@ func _apply_scan_dict(scan: Dictionary) -> void:
     _food_split = (split as Dictionary).duplicate(true)
   if _memory_adapter != null:
     _food_split = _memory_adapter.enrich_food_split_with_kind_yield(_food_split, _motor_v3)
-  if scan.has("food_map_confidence"):
-    _food_map_confidence = float(scan.get("food_map_confidence", _food_map_confidence))
-  if scan.has("threat_samples") and not _threat_samples_test_override:
-    _threat_samples = scan.get("threat_samples", []).duplicate(true)
+  if not _threat_samples_test_override:
+    _live_threat_samples = scan.get("threat_samples", []).duplicate(true)
   if _memory_adapter != null:
-    _memory_adapter.sync_after_scan(_food_split, _threat_samples, Time.get_ticks_msec())
+    _memory_adapter.sync_after_scan(_food_split, _live_threat_samples, Time.get_ticks_msec())
+  _refresh_food_inventory()
+
+
+func _refresh_food_inventory() -> void:
+  if _memory_adapter == null or _body == null:
+    _food_map_confidence = 0.0
+    return
+  var now_ms := Time.get_ticks_msec()
+  var known := _memory_adapter.count_known_objectives(
+    _GkReg.GK_FIND_FOOD,
+    _body.global_position,
+    _motor_v3,
+    _food_split,
+    now_ms,
+    _build_zone_ctx(false),
+    _live_threat_samples,
+  )
+  _food_map_confidence = _MotorGoalHub.inventory_ratio_for_goal(
+    _GkReg.GK_FIND_FOOD,
+    known,
+    _motor_v3,
+  )
+
+
+func _refresh_danger_samples(area_only: bool) -> void:
+  if _memory_adapter == null or _body == null:
+    _threat_samples = _live_threat_samples.duplicate(true)
+    return
+  var zone_ctx := _build_zone_ctx(area_only)
+  _threat_samples = _memory_adapter.consult_danger_samples(zone_ctx, _live_threat_samples)
+
+
+func _build_zone_ctx(area_only: bool) -> Dictionary:
+  var creature_pos := _body.global_position if _body != null else Vector3.ZERO
+  var facing: Vector3 = _body.get("last_move_direction") if _body != null else Vector3.FORWARD
+  var eye_h := 1.0
+  var space: PhysicsDirectSpaceState3D = null
+  if _body != null and _body.is_inside_tree():
+    space = _body.get_world_3d().direct_space_state
+    if _body.has_method(&"get_los_eye_height"):
+      eye_h = float(_body.call(&"get_los_eye_height"))
+  return {
+    "creature_pos": creature_pos,
+    "facing": facing,
+    "eye_height": eye_h,
+    "space_state": space,
+    "motor_v3": _motor_v3,
+    "area_only": area_only,
+  }
 
 
 func _maintain_memory_beliefs() -> void:
@@ -385,7 +479,20 @@ func _maintain_memory_beliefs() -> void:
 
 
 func _rest_area_only_perception() -> bool:
+  if _incumbent.get("goal_kind", &"") == _MotorGoalHub.GOAL_REST:
+    return true
+  if _last_outcome != null and int(_last_outcome.action) == _MotorAction.REST:
+    return true
   return false
+
+
+func _update_safety_on_consideration() -> void:
+  var required := maxi(1, int(_motor_v3.get("safety_time", 5)))
+  if _threat_samples.is_empty():
+    _safety_cycles += 1
+  else:
+    _safety_cycles = 0
+  _safety_met = _safety_cycles >= required
 
 
 func _build_context() -> Dictionary:
@@ -397,11 +504,13 @@ func _build_context() -> Dictionary:
     "flight_fast_path_active": _flight_fast_path_active,
     "safety_met": _safety_met,
     "food_map_confidence": _food_map_confidence,
+    "inventory_ratio": _food_map_confidence,
     "pack_root": _pack_root,
     "goal_catalog": _goal_catalog,
     "food_split": _food_split,
     "memory_adapter": _memory_adapter,
     "environment_grid": _resolve_environment_grid(),
+    "threat_disposition_mod": _threat_disposition_mod(),
   }
 
 
@@ -472,9 +581,9 @@ func _resolve_stat_observation() -> int:
   return 10
 
 
-func _update_flight_fast_path_stub(ctx: Dictionary) -> void:
+func _update_flight_fast_path(ctx: Dictionary) -> void:
   var panic_r := float(_motor_v3.get("flight_acute_panic_radius", 220.0))
-  _flight_fast_path_active = false
+  var acute := false
   for sample_v in ctx.get("threat_samples", []):
     if typeof(sample_v) != TYPE_DICTIONARY:
       continue
@@ -482,8 +591,42 @@ func _update_flight_fast_path_stub(ctx: Dictionary) -> void:
     if not bool(sample.get("in_awareness", false)):
       continue
     if float(sample.get("gate_dist", INF)) <= panic_r:
-      _flight_fast_path_active = true
-      return
+      acute = true
+      break
+  if acute:
+    _flight_fast_path_latched = true
+  if _flight_fast_path_latched:
+    _flight_fast_path_active = not _safety_met
+    if not _flight_fast_path_active:
+      _flight_fast_path_latched = false
+  else:
+    _flight_fast_path_active = acute
+
+
+func _threat_disposition_mod() -> float:
+  if _memory_adapter == null:
+    return _ThreatDisposition.DEFAULT_MOD
+  return _memory_adapter.get_threat_disposition_mod()
+
+
+func _update_threat_disposition(ctx: Dictionary) -> void:
+  if _memory_adapter == null:
+    _was_flight_fast_path = _flight_fast_path_active
+    return
+  var deltas := _ThreatDisposition.episode_deltas(
+    ctx.get("threat_samples", []),
+    _flight_fast_path_active,
+    _was_flight_fast_path,
+    _benign_episode_pending,
+    _motor_v3,
+  )
+  _memory_adapter.apply_disposition_deltas(
+    float(deltas.get("benign_delta", 0.0)),
+    float(deltas.get("evade_delta", 0.0)),
+    _motor_v3,
+  )
+  _benign_episode_pending = bool(deltas.get("benign_episode_pending", false))
+  _was_flight_fast_path = _flight_fast_path_active
 
 
 func _should_run_consideration() -> bool:

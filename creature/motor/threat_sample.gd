@@ -17,6 +17,7 @@ static func make(
   line_of_sight_clear: bool = true,
   occluded: bool = false,
   occlusion_fraction: float = 0.0,
+  stimulus_kind_id: StringName = &"",
 ) -> Dictionary:
   return {
     "world_pos": world_pos,
@@ -30,6 +31,7 @@ static func make(
     "line_of_sight_clear": line_of_sight_clear,
     "occluded": occluded,
     "occlusion_fraction": occlusion_fraction,
+    "stimulus_kind_id": stimulus_kind_id,
   }
 
 

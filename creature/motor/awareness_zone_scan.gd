@@ -6,7 +6,6 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _ThreatSample := preload("res://creature/motor/threat_sample.gd")
-
 const _NEUTRAL_KIND_YIELD := 0.5
 
 
@@ -30,9 +29,11 @@ static func scan_live(
   var space := body.get_world_3d().direct_space_state if body.is_inside_tree() else null
   var subject_hostile := bool(body.get("is_hostile"))
 
-  _scan_food_plants(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, out)
+  var policy: Resource = DietRegistry.food_intake_policy_for_body(body)
+  _scan_food_plants(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
+  _scan_prey_food(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
   _scan_hostile_threats(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, subject_hostile, out)
-  out["food_map_confidence"] = _food_map_confidence_from_split(out["food_split"])
+  ## [code]food_map_confidence[/code] is owned by stack [code]inventory_ratio[/code] consult (§1) — not live-scan split.
   return out
 
 
@@ -53,44 +54,111 @@ static func _scan_food_plants(
   motor_v3: Dictionary,
   tree: SceneTree,
   area_only: bool,
+  policy: Resource,
   out: Dictionary,
 ) -> void:
   var ready: Array = out["food_split"]["ready"]
   var unready: Array = out["food_split"]["unready"]
-  for node in tree.get_nodes_in_group(&"food_plants"):
-    if not (node is Node3D):
-      continue
-    var plant := node as Node3D
-    var plant_pos := plant.global_position
-    var mem := _AwarenessZone.membership_with_los(
-      space, creature_pos, facing, eye_h, plant_pos, motor_v3, area_only,
-    )
-    if not bool(mem.get("in_awareness", false)):
-      continue
-    var kind_id := _stimulus_kind_for_plant(plant)
-    if kind_id == &"":
-      continue
-    var consumable := true
-    if plant.has_method(&"is_pickup_ready_for_motor"):
-      consumable = bool(plant.call(&"is_pickup_ready_for_motor"))
-    var entry := {
-      "pos": plant_pos,
-      "instance_id": plant.get_instance_id(),
-      "stimulus_kind_id": kind_id,
-      "consumable_now": consumable,
-      "line_of_sight_clear": true,
-      "occluded": false,
-      "occlusion_fraction": float(mem.get("occlusion_fraction", 0.0)),
-      "gate_dist": float(mem.get("gate_dist", 0.0)),
-      "kind_yield": _NEUTRAL_KIND_YIELD,
-      "source": &"live",
-    }
-    if consumable:
-      ready.append(entry)
-    else:
-      unready.append(entry)
+  var plant_groups: Array = DietRegistry.policy_groups(policy, "plant_groups")
+  if plant_groups.is_empty():
+    return
+  var seen: Dictionary = {}
+  for group_name in plant_groups:
+    var group := StringName(str(group_name))
+    for node in tree.get_nodes_in_group(group):
+      if not (node is Node3D):
+        continue
+      var plant := node as Node3D
+      var pid := plant.get_instance_id()
+      if seen.has(pid):
+        continue
+      seen[pid] = true
+      var plant_pos := plant.global_position
+      var mem := _AwarenessZone.membership_with_los(
+        space, creature_pos, facing, eye_h, plant_pos, motor_v3, area_only,
+      )
+      if not bool(mem.get("in_awareness", false)):
+        continue
+      var kind_id := _stimulus_kind_for_plant(plant)
+      if kind_id == &"":
+        continue
+      var consumable := true
+      if plant.has_method(&"is_pickup_ready_for_motor"):
+        consumable = bool(plant.call(&"is_pickup_ready_for_motor"))
+      var entry := {
+        "pos": plant_pos,
+        "instance_id": plant.get_instance_id(),
+        "stimulus_kind_id": kind_id,
+        "consumable_now": consumable,
+        "line_of_sight_clear": true,
+        "occluded": false,
+        "occlusion_fraction": float(mem.get("occlusion_fraction", 0.0)),
+        "gate_dist": float(mem.get("gate_dist", 0.0)),
+        "kind_yield": _NEUTRAL_KIND_YIELD,
+        "source": &"live",
+      }
+      if consumable:
+        ready.append(entry)
+      else:
+        unready.append(entry)
   out["food_split"]["ready"] = ready
   out["food_split"]["unready"] = unready
+
+
+static func _scan_prey_food(
+  body: CharacterBody3D,
+  creature_pos: Vector3,
+  facing: Vector3,
+  eye_h: float,
+  space: PhysicsDirectSpaceState3D,
+  motor_v3: Dictionary,
+  tree: SceneTree,
+  area_only: bool,
+  policy: Resource,
+  out: Dictionary,
+) -> void:
+  var prey_groups: Array = DietRegistry.policy_groups(policy, "prey_groups")
+  if prey_groups.is_empty():
+    return
+  var ready: Array = out["food_split"]["ready"]
+  var seen: Dictionary = {}
+  for group_name in prey_groups:
+    var group := StringName(str(group_name))
+    for node in tree.get_nodes_in_group(group):
+      if node == body or not (node is Node3D):
+        continue
+      var prey := node as Node3D
+      var pid := prey.get_instance_id()
+      if seen.has(pid):
+        continue
+      seen[pid] = true
+      var prey_pos := prey.global_position
+      var mem := _AwarenessZone.membership_with_los(
+        space, creature_pos, facing, eye_h, prey_pos, motor_v3, area_only,
+      )
+      if not bool(mem.get("in_awareness", false)):
+        continue
+      var vel := Vector3.ZERO
+      if prey is CharacterBody3D:
+        vel = _MotorPlane.body_motor_velocity(prey as CharacterBody3D)
+      var kind_id := &""
+      if prey is CharacterBody3D:
+        kind_id = _stimulus_kind_for_creature(prey as CharacterBody3D)
+      ready.append({
+        "pos": prey_pos,
+        "instance_id": pid,
+        "stimulus_kind_id": kind_id,
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+        "occlusion_fraction": float(mem.get("occlusion_fraction", 0.0)),
+        "gate_dist": float(mem.get("gate_dist", 0.0)),
+        "kind_yield": _NEUTRAL_KIND_YIELD,
+        "source": &"live",
+        "is_moving": true,
+        "velocity": vel,
+      })
+  out["food_split"]["ready"] = ready
 
 
 static func _stimulus_kind_for_plant(plant: Node) -> StringName:
@@ -99,6 +167,17 @@ static func _stimulus_kind_for_plant(plant: Node) -> StringName:
     return kind_v as StringName
   if typeof(kind_v) == TYPE_STRING and not str(kind_v).strip_edges().is_empty():
     return StringName(str(kind_v).strip_edges())
+  return &""
+
+
+static func _stimulus_kind_for_creature(body: CharacterBody3D) -> StringName:
+  var def_v: Variant = body.get("definition")
+  if def_v is Resource:
+    var species_v: Variant = (def_v as Resource).get("species_id")
+    if typeof(species_v) == TYPE_STRING_NAME and not StringName(species_v).is_empty():
+      return species_v as StringName
+    if typeof(species_v) == TYPE_STRING and not str(species_v).strip_edges().is_empty():
+      return StringName(str(species_v).strip_edges())
   return &""
 
 
@@ -148,6 +227,7 @@ static func _scan_hostile_threats(
           true,
           false,
           float(mem.get("occlusion_fraction", 0.0)),
+          _stimulus_kind_for_creature(other),
         )
       )
       var last := samples[samples.size() - 1] as Dictionary

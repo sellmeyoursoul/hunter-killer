@@ -275,9 +275,27 @@ static func merge_creature_motor_pack_overlay(motor_p: Dictionary, pack_root: St
   return _merge_dict_shallow(motor_p, over)
 
 
+## §7.3.2 explore seek + §1 inventory ship defaults ([CREATURE_MOVEMENT_V3.md §7.3.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
+static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
+  return {
+    "explore_bearing_count": 8,
+    "explore_empty_map_unexplored_baseline": 0.5,
+    "explore_w_spawn": 0.35,
+    "explore_w_open": 0.30,
+    "explore_w_unexp": 0.25,
+    "explore_w_forward": 0.10,
+    "explore_w_live_near": 0.50,
+    "goal_inventory_min_find_food": 3,
+    "goal_inventory_min_find_mate": 1,
+    "goal_sated_patrol_urgency": 0.15,
+    "goal_mapping_urgency": 0.35,
+    "goal_consideration_chaos": 0.15,
+  }
+
+
 ## V3 motor defaults ([CREATURE_MOVEMENT_V3.md §7.5 / §12.2 6a](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 static func default_creature_motor_v3_params() -> Dictionary:
-  return {
+  var core := {
     "turn_increment_deg": 22.5,
     "calorie_baseline_drain_per_sec": 1.0,
     "move_calorie_per_sec": 1.0,
@@ -296,8 +314,6 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "blocked_approach_memory_ticks": 45,
     "blocked_approach_backtrack_dot": 0.55,
     "goal_replan_base_ticks": 8,
-    "blocked_objective_chaos": 0.15,
-    "goal_consideration_chaos": 0.15,
     "flight_acute_panic_radius": 220.0,
     "goal_base_find_food": 1.0,
     "goal_base_avoid_hostiles": 1.0,
@@ -311,7 +327,6 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "goal_feasibility_floor_find_mate": 0.05,
     "flight_urgency_far_floor": 0.5,
     "flight_urgency_dist_floor": 1.0,
-    "food_map_confidence": 0.0,
     "goal_memory_ttl_sec": 45.0,
     "goal_memory_coarse_ttl_sec": 15.0,
     "goal_memory_precise_radius": 1000.0,
@@ -329,6 +344,12 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## Unscaled world margin for rim detection when scaled [code]playfield_hug_band[/code] is too tight.
     "playfield_rim_margin": 2.0,
     "passibility_fail_switch_threshold": 2,
+    "safety_time": 5,
+    "goal_memory_ghost_horizon_sec": 0.4,
+    "flight_disposition_mod_min": 0.4,
+    "flight_disposition_mod_max": 1.2,
+    "flight_disposition_benign_delta": -0.05,
+    "flight_disposition_evade_delta": 0.08,
     "kind_profile_neutral_prior": 0.5,
     "kind_profile_ewma_alpha": 0.15,
     "kind_nutrition_yield_reference_calories": 5.0,
@@ -337,6 +358,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "believed_goal_hotspot_near_radius": 250.0,
     "believed_goal_seek_escalate_radius": 1000.0,
   }
+  return _merge_dict_shallow(core, default_creature_motor_v3_explore_inventory_params())
 
 
 ## Per-spawn pack overlay: [param motor_v3] ∪ [code]pack_resources.json[/code] [code]creature_motor_v3[/code] (one-shot legacy copy when absent).

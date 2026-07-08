@@ -194,7 +194,9 @@ static func sync_from_scene(
       if iid == 0:
         continue
       var pos: Vector3 = _read_pos_v3(ent.get("pos", Vector3.ZERO))
-      _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, false, Vector3.ZERO, consumable)
+      var is_moving := bool(ent.get("is_moving", false))
+      var vel: Vector3 = _read_vel_v3(ent.get("velocity", Vector3.ZERO))
+      _upsert_row(beliefs, iid, _GkReg.GK_FIND_FOOD, pos, now_ms, is_moving, vel, consumable)
       if ent.has("stimulus_kind_id"):
         beliefs[iid]["stimulus_kind_id"] = ent.get("stimulus_kind_id", &"")
       if ent.has("anticipated_calories"):
@@ -239,6 +241,8 @@ static func sync_from_threat_samples(
     var pos: Vector3 = _read_pos_v3(row.get("world_pos", Vector3.ZERO))
     var vel: Vector3 = _read_vel_v3(row.get("velocity", Vector3.ZERO))
     _upsert_row(beliefs, iid, _GkReg.GK_AVOID_HOSTILES, pos, now_ms, true, vel, false)
+    if row.has("stimulus_kind_id"):
+      beliefs[iid]["stimulus_kind_id"] = row.get("stimulus_kind_id", &"")
   return beliefs
 
 

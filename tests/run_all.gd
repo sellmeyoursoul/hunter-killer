@@ -50,8 +50,11 @@ const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
 const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
+const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
+const _OccludedGhost := preload("res://creature/motor/occluded_in_zone_ghost.gd")
 const _BushFoodScr := preload("res://assets/plants/bush_food_3d.gd")
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
@@ -124,6 +127,7 @@ func _run_all_async() -> void:
 func _run_all() -> void:
   _test_merge_defaults_and_override()
   _test_creature_motor_v3_merge_defaults()
+  _test_creature_motor_v3_explore_inventory_defaults()
   _test_creature_pack_motor_overlays()
   _test_creature_motor_v3_pack_overlays()
   _test_creature_motor_v3_playfield_distance_scale()
@@ -157,6 +161,10 @@ func _run_all() -> void:
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
   _test_motor_goal_hub_urgency_eat_preserve_band()
+  _test_motor_goal_hub_effective_urgency_sated_mapping()
+  _test_motor_goal_hub_effective_urgency_sated_patrol()
+  _test_motor_goal_hub_effective_urgency_hungry_unchanged()
+  _test_motor_goal_hub_shelter_gated_by_food_inventory()
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
@@ -167,6 +175,27 @@ func _run_all() -> void:
   _test_creature_motor_stack_dual_isolation()
   _test_creature_motor_stack_integration_single_debit()
   await _test_awareness_zone_scan_live_food()
+  await _test_awareness_zone_scan_carnivore_ignores_plants()
+  await _test_awareness_zone_scan_carnivore_finds_prey()
+  await _test_awareness_zone_scan_herbivore_ignores_prey()
+  _test_bush_food_diet_gate_carnivore()
+  await _test_creature_motor_stack_carnivore_no_plant_seek()
+  _test_memory_adapter_diet_filters_plant_belief()
+  _test_memory_adapter_count_known_objectives_fractional()
+  _test_memory_adapter_count_known_objectives_live_dedupe()
+  _test_memory_adapter_explore_bearing_coverage_wedge()
+  _test_motor_explore_seek_empty_map_spawn_prior()
+  await _test_motor_explore_seek_wall_bias_opens_away()
+  _test_motor_explore_seek_repels_explored_north_wedge()
+  _test_motor_explore_seek_mint_sets_explore_source()
+  _test_motor_planner_find_food_understocked_sated_explore_first()
+  _test_motor_planner_find_food_stocked_sated_memory_first()
+  _test_motor_planner_shelter_no_candidate_explore()
+  _test_blocked_objective_resolver_goal_consideration_chaos_only()
+  # §12.2 post-6d-explore E7 — headless matrix (explore seek + planner gates)
+  _test_motor_explore_seek_zero_belief_baseline()
+  _test_motor_explore_seek_chaos_breaks_bearing_tie()
+  _test_motor_planner_find_food_hungry_memory_before_explore()
   await _test_motor_path_fixture_open_nav()
   await _test_motor_path_fixture_blocked_nav()
   await _test_creature_motor_stack_seek_live_food()
@@ -183,9 +212,19 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_maintain_coarse_ttl()
   _test_creature_motor_stack_memory_eat_locale_write()
   _test_creature_motor_stack_memory_write_dual_isolation()
-  _test_creature_motor_stack_sated_stay()
+  _test_creature_motor_stack_sated_understocked_mapping_urgency()
+  _test_creature_motor_stack_food_map_confidence_inventory_ratio()
   _test_creature_motor_stack_debug_snapshot()
   _test_creature_motor_stack_memory_kind_ewma()
+  _test_motor_goal_hub_kind_threat_modulates_flight()
+  _test_motor_goal_hub_disposition_modulates_flight()
+  _test_threat_disposition_benign_nudge()
+  _test_threat_disposition_evade_nudge()
+  _test_creature_motor_stack_disposition_episodes()
+  await _test_memory_adapter_ghost_danger_without_live_los()
+  _test_memory_adapter_ghost_live_wins_dedupe()
+  _test_memory_adapter_ghost_mover_reach_cap()
+  await _test_creature_motor_stack_safety_blocked_by_ghost()
   _test_creature_motor_stack_memory_dead_end_filter()
   _test_creature_motor_stack_memory_passibility_switch()
   _test_creature_motor_stack_memory_blocked_objective()
@@ -660,8 +699,8 @@ func _test_creature_motor_v3_merge_defaults() -> void:
   )
   _assert(int(v3.get("goal_replan_base_ticks", -1)) == 8, "v3 goal_replan_base_ticks default")
   _assert(
-    is_equal_approx(float(v3.get("blocked_objective_chaos", 0.0)), 0.15),
-    "v3 blocked_objective_chaos default",
+    not v3.has("blocked_objective_chaos"),
+    "v3 merge omits retired blocked_objective_chaos",
   )
   _assert(
     is_equal_approx(float(v3.get("goal_consideration_chaos", 0.0)), 0.15),
@@ -677,6 +716,43 @@ func _test_creature_motor_v3_merge_defaults() -> void:
     is_equal_approx(float(merged["creature_motor_v3"].get("move_calorie_per_sec", 0.0)), 1.0),
     "merge creature_motor_v3 keeps default move_calorie_per_sec",
   )
+
+
+func _test_creature_motor_v3_explore_inventory_defaults() -> void:
+  var ship := _Merge.default_creature_motor_v3_explore_inventory_params()
+  var expected := {
+    "explore_bearing_count": 8.0,
+    "explore_empty_map_unexplored_baseline": 0.5,
+    "explore_w_spawn": 0.35,
+    "explore_w_open": 0.30,
+    "explore_w_unexp": 0.25,
+    "explore_w_forward": 0.10,
+    "explore_w_live_near": 0.50,
+    "goal_inventory_min_find_food": 3.0,
+    "goal_inventory_min_find_mate": 1.0,
+    "goal_sated_patrol_urgency": 0.15,
+    "goal_mapping_urgency": 0.35,
+    "goal_consideration_chaos": 0.15,
+  }
+  for key in expected:
+    _assert(ship.has(key), "explore/inventory ship defaults include %s" % str(key))
+    var got: Variant = ship[key]
+    if typeof(got) == TYPE_INT:
+      _assert(int(got) == int(expected[key]), "ship default %s matches §7.3.2" % str(key))
+    else:
+      _assert(
+        is_equal_approx(float(got), float(expected[key])),
+        "ship default %s matches §7.3.2" % str(key),
+      )
+  var v3 := _Merge.default_creature_motor_v3_params()
+  for key in expected:
+    _assert(v3.has(key), "default_creature_motor_v3_params merges explore/inventory key %s" % str(key))
+  var root_v3: Dictionary = _Merge.default_root()["creature_motor_v3"]
+  _assert(
+    int(root_v3.get("explore_bearing_count", 0)) == 8,
+    "default_root creature_motor_v3 exposes explore_bearing_count",
+  )
+
 
 func _test_creature_motor_v3_pack_overlays() -> void:
   var base := _Merge.default_creature_motor_v3_params()
@@ -696,6 +772,14 @@ func _test_creature_motor_v3_pack_overlays() -> void:
     is_equal_approx(float(rabbit_m.get("preserve_bias_food_floor", 0.0)), 0.90),
     "rabbit v3 pack preserve_bias_food_floor",
   )
+  _assert(
+    int(rabbit_m.get("explore_bearing_count", 0)) == 8,
+    "rabbit v3 pack merge keeps explore_bearing_count ship default",
+  )
+  _assert(
+    int(rabbit_m.get("goal_inventory_min_find_food", 0)) == 3,
+    "rabbit v3 pack merge keeps goal_inventory_min_find_food ship default",
+  )
   var fox_m := _Merge.merge_creature_motor_v3_pack_overlay(
     base.duplicate(true),
     "res://assets/creatures/fox",
@@ -707,6 +791,10 @@ func _test_creature_motor_v3_pack_overlays() -> void:
   _assert(
     is_equal_approx(float(fox_m.get("awareness_cone_half_angle_deg", 0.0)), 50.0),
     "fox v3 pack awareness_cone_half_angle_deg",
+  )
+  _assert(
+    is_equal_approx(float(fox_m.get("goal_mapping_urgency", 0.0)), 0.35),
+    "fox v3 pack merge keeps goal_mapping_urgency ship default",
   )
   _assert(
     is_equal_approx(float(rabbit_m.get("awareness_radius", 0.0)), 150.0),
@@ -752,6 +840,36 @@ func _motor_v3_test_params() -> Dictionary:
   return p
 
 
+## Flight urgency via hub scoring (ctx keys flow into urgency_flight hub_ctx).
+func _motor_goal_hub_flight_urgency(
+  threat_samples: Array,
+  motor_v3: Dictionary,
+  hub_fields: Dictionary = {},
+) -> float:
+  var ctx := {
+    "motor_v3": motor_v3,
+    "calorie_ratio": 0.75,
+    "threat_samples": threat_samples,
+    "flight_fast_path_active": false,
+    "safety_met": false,
+  }
+  for key in hub_fields:
+    ctx[key] = hub_fields[key]
+  var eligible := _MotorGoalHub.build_eligible_goals(ctx)
+  var avoid_row: Dictionary = {}
+  for row_v in eligible:
+    var row: Dictionary = row_v
+    if row.get("goal_kind", &"") == _MotorGoalHub.GOAL_AVOID_HOSTILES:
+      avoid_row = row
+      break
+  if avoid_row.is_empty():
+    return 0.0
+  var scored := _MotorGoalHub.score_goals([avoid_row], ctx)
+  if scored.is_empty():
+    return 0.0
+  return float((scored[0] as Dictionary).get("urgency", 0.0))
+
+
 func _test_awareness_zone_scan_live_food() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -765,6 +883,542 @@ func _test_awareness_zone_scan_live_food() -> void:
   var entry: Dictionary = ready[0]
   _assert(int(entry.get("instance_id", 0)) == bush.get_instance_id(), "food entry carries instance_id")
   _assert(entry.get("stimulus_kind_id", &"") != &"", "food entry carries stimulus_kind_id")
+  main.queue_free()
+
+
+func _test_awareness_zone_scan_carnivore_ignores_plants() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  _spawn_food_bush(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var scan := _AwarenessScan.scan_live(body, _motor_v3_test_params(), main.get_tree())
+  _assert((scan["food_split"]["ready"] as Array).is_empty(), "carnivore awareness scan ignores plants")
+  main.queue_free()
+
+
+func _test_awareness_zone_scan_carnivore_finds_prey() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  predator.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var prey := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var scan := _AwarenessScan.scan_live(predator, _motor_v3_test_params(), main.get_tree())
+  var ready: Array = scan["food_split"]["ready"]
+  _assert(ready.size() >= 1, "carnivore awareness scan finds prey")
+  var entry: Dictionary = ready[0]
+  _assert(int(entry.get("instance_id", 0)) == prey.get_instance_id(), "prey entry carries prey instance_id")
+  _assert(bool(entry.get("is_moving", false)), "prey entry marked moving")
+  main.queue_free()
+
+
+func _test_awareness_zone_scan_herbivore_ignores_prey() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var herb := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  herb.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  _spawn_carnivore_body(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var scan := _AwarenessScan.scan_live(herb, _motor_v3_test_params(), main.get_tree())
+  for entry_v in scan["food_split"]["ready"] as Array:
+    if typeof(entry_v) == TYPE_DICTIONARY:
+      _assert(not bool((entry_v as Dictionary).get("is_moving", false)), "herbivore food_split has no prey entries")
+  main.queue_free()
+
+
+func _test_bush_food_diet_gate_carnivore() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, 0.0))
+  var carn := _spawn_carnivore_body(main, Vector3(1.0, 1.0, 0.0))
+  carn.current_calories = 5.0
+  var granted: int = int(bush.call("try_grant_engine_creature", carn))
+  _assert(granted == 0, "bush refuses carnivore engine grant")
+  _assert(
+    is_equal_approx(float(bush.current_calories), float(bush.max_calories)),
+    "bush calories unchanged after carnivore grant",
+  )
+  main.queue_free()
+
+
+func _test_creature_motor_stack_carnivore_no_plant_seek() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -14.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.tick(1.0 / 60.0)
+  _assert((stack.get_food_split().get("ready", []) as Array).is_empty(), "carnivore stack food_split ready empty near shrub")
+  var snap: Dictionary = stack.get_debug_snapshot()
+  _assert(
+    int(snap.get("step_instance_id", 0)) != bush.get_instance_id(),
+    "carnivore does not bind step_goal to shrub instance",
+  )
+  main.queue_free()
+
+
+func _test_memory_adapter_count_known_objectives_fractional() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  var now_ms := Time.get_ticks_msec()
+  var origin := Vector3.ZERO
+  adapter.seed_precise_food_belief(8001, Vector3(0.0, 0.0, -50.0), now_ms)
+  adapter.seed_precise_food_belief(8002, Vector3(50.0, 0.0, 0.0), now_ms)
+  adapter.seed_coarse_food_belief(8003, Vector3(-50.0, 0.0, 0.0), now_ms)
+  adapter.seed_locale_prior_for_test(0, 0, 1.0)
+  var count := adapter.count_known_objectives(
+    _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
+  )
+  _assert(is_equal_approx(count, 2.75), "fractional inventory: 2 precise + 0.5 coarse + 0.25 locale")
+  var wedges := adapter.explore_bearing_coverage(
+    _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
+  )
+  _assert(wedges.size() == 8, "explore_bearing_coverage length matches explore_bearing_count")
+  var north_wedge := 0
+  _assert(
+    wedges[north_wedge] > wedges[2],
+    "belief north of origin scores higher in north wedge than east wedge",
+  )
+
+
+func _test_memory_adapter_count_known_objectives_live_dedupe() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -8.0))
+  var herb := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var adapter := _MemoryAdapter.new()
+  adapter.set_food_intake_policy(herb.call("get_food_intake_policy"))
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_precise_food_belief(bush.get_instance_id(), bush.global_position, now_ms)
+  var food_split := {
+    "ready": [{
+      "instance_id": bush.get_instance_id(),
+      "pos": bush.global_position,
+      "stimulus_kind_id": &"berry_bush",
+    }],
+    "unready": [],
+  }
+  var count := adapter.count_known_objectives(
+    _GkReg.GK_FIND_FOOD,
+    herb.global_position,
+    _motor_v3_test_params(),
+    food_split,
+    now_ms,
+  )
+  _assert(is_equal_approx(count, 1.0), "live food dedupes matching belief row")
+  main.queue_free()
+
+
+func _test_memory_adapter_explore_bearing_coverage_wedge() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params().duplicate(true)
+  motor_p["explore_bearing_count"] = 8
+  motor_p["believed_goal_hotspot_near_radius"] = 500.0
+  var now_ms := Time.get_ticks_msec()
+  var origin := Vector3.ZERO
+  adapter.seed_precise_food_belief(8101, Vector3(0.0, 0.0, -40.0), now_ms)
+  var wedges := adapter.explore_bearing_coverage(
+    _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
+  )
+  var max_val := 0.0
+  var max_idx := 0
+  for i in wedges.size():
+    if wedges[i] > max_val:
+      max_val = wedges[i]
+      max_idx = i
+  _assert(max_idx == 0, "near north belief peaks in wedge 0 (N)")
+
+
+func _explore_seek_unit_ctx(body: CharacterBody3D, motor_p: Dictionary, adapter: _MemoryAdapter = null) -> Dictionary:
+  var mem := adapter if adapter != null else _MemoryAdapter.new()
+  return {
+    "body": body,
+    "motor_v3": motor_p,
+    "memory_adapter": mem,
+    "space_state": body.get_world_3d().direct_space_state if body.is_inside_tree() else null,
+    "eye_height": 1.0,
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "food_split": {"ready": [], "unready": []},
+    "threat_samples": [],
+  }
+
+
+func _test_motor_explore_seek_empty_map_spawn_prior() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_p := _motor_v3_test_params()
+  motor_p["goal_consideration_chaos"] = 0.0
+  var picked := _ExploreSeek._pick_explore_dir(
+    _GkReg.GK_FIND_FOOD,
+    body.global_position,
+    Vector3(1.0, 0.0, 0.0),
+    motor_p,
+    _explore_seek_unit_ctx(body, motor_p),
+  )
+  _assert(picked.dot(Vector3(1.0, 0.0, 0.0)) > 0.7, "empty map favors spawn-facing bearing")
+  main.queue_free()
+
+
+func _test_motor_explore_seek_wall_bias_opens_away() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  _ghost_test_wall(main, -4.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await physics_frame
+  var motor_p := _motor_v3_test_params()
+  motor_p["awareness_requires_los"] = true
+  motor_p["awareness_radius"] = 500.0
+  motor_p["goal_consideration_chaos"] = 0.0
+  motor_p["explore_w_spawn"] = 0.15
+  motor_p["explore_w_open"] = 0.55
+  var picked := _ExploreSeek._pick_explore_dir(
+    _GkReg.GK_FIND_FOOD,
+    body.global_position,
+    Vector3(0.0, 0.0, -1.0),
+    motor_p,
+    _explore_seek_unit_ctx(body, motor_p),
+  )
+  _assert(
+    picked.dot(Vector3(0.0, 0.0, 1.0)) > picked.dot(Vector3(0.0, 0.0, -1.0)),
+    "wall north of spawn-facing picks open bearing away from obstruction",
+  )
+  main.queue_free()
+
+
+func _test_motor_explore_seek_repels_explored_north_wedge() -> void:
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_precise_food_belief(92001, Vector3(0.0, 0.0, -40.0), now_ms)
+  var motor_p := _motor_v3_test_params()
+  motor_p["goal_consideration_chaos"] = 0.0
+  motor_p["explore_w_spawn"] = 0.05
+  motor_p["explore_w_unexp"] = 0.60
+  var picked := _ExploreSeek._pick_explore_dir(
+    _GkReg.GK_FIND_FOOD,
+    Vector3.ZERO,
+    Vector3(1.0, 0.0, 0.0),
+    motor_p,
+    {
+      "motor_v3": motor_p,
+      "memory_adapter": adapter,
+      "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+      "food_split": {"ready": [], "unready": []},
+      "threat_samples": [],
+    },
+  )
+  _assert(
+    picked.dot(Vector3(0.0, 0.0, -1.0)) < 0.5,
+    "north belief coverage repels explore pick toward north",
+  )
+
+
+func _test_motor_explore_seek_mint_sets_explore_source() -> void:
+  var motor_p := _motor_v3_test_params()
+  motor_p["goal_consideration_chaos"] = 0.0
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var wp := _ExploreSeek.mint_explore_step(
+    _GkReg.GK_FIND_FOOD,
+    Vector3.ZERO,
+    state,
+    motor_p,
+    {"motor_v3": motor_p, "memory_adapter": _MemoryAdapter.new()},
+  )
+  _assert(String(state.get("step_source", &"")) == "explore", "mint sets step_source explore")
+  _assert(wp.length_squared() > 1e-8, "mint returns non-zero waypoint")
+  _assert(state.get("explore_waypoint", Vector3.ZERO).length_squared() > 1e-8, "mint latches explore_waypoint")
+
+
+func _planner_find_food_gate_ctx(
+  body: CharacterBody3D,
+  adapter: _MemoryAdapter,
+  calorie_ratio: float,
+) -> Dictionary:
+  return {
+    "body": body,
+    "motor_v3": _motor_v3_test_params(),
+    "calorie_ratio": calorie_ratio,
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "space_state": body.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": adapter,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+    "refresh_step_objective": true,
+  }
+
+
+func _test_motor_planner_find_food_understocked_sated_explore_first() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_precise_food_belief(8201, Vector3(0.0, 0.0, -80.0), Time.get_ticks_msec())
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 1.0)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"explore",
+    "sated under-stocked find_food prefers explore over sparse memory",
+  )
+  _assert(
+    (state.get("explore_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-8,
+    "under-stocked explore mints a waypoint",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_stocked_sated_memory_first() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_precise_food_belief(8211, Vector3(0.0, 0.0, -80.0), now_ms)
+  adapter.seed_precise_food_belief(8212, Vector3(80.0, 0.0, 0.0), now_ms)
+  adapter.seed_precise_food_belief(8213, Vector3(0.0, 0.0, 80.0), now_ms)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 1.0)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"precise",
+    "sated stocked find_food prefers precise memory seek",
+  )
+  _assert(
+    int(state.get("step_instance_id", 0)) == 8211,
+    "stocked memory binds nearest precise bush",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_shelter_no_candidate_explore() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  var motor_v3 := _motor_v3_test_params()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "memory_adapter": _MemoryAdapter.new(),
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+    "refresh_step_objective": true,
+  }
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_SHELTER)
+  _assert(state.get("goal_kind", &"") == _GkReg.GK_SHELTER, "shelter sync sets goal_kind")
+  _assert(
+    state.get("step_source", &"") == &"explore",
+    "shelter with no candidate mints explore step source",
+  )
+  _assert(
+    (state.get("explore_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-8,
+    "shelter explore fallback latches a waypoint",
+  )
+  main.queue_free()
+
+
+func _blocked_objective_tied_scores_ctx() -> Dictionary:
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_locale_prior_for_test(10, 10, 2.0)
+  return {
+    "memory_adapter": adapter,
+    "creature_pos": Vector3.ZERO,
+    "food_split": {"ready": [], "unready": []},
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": _motor_stack_test_env_grid(),
+  }
+
+
+func _test_blocked_objective_resolver_goal_consideration_chaos_only() -> void:
+  var ctx := _blocked_objective_tied_scores_ctx()
+  var motor_det := _motor_v3_test_params()
+  motor_det["goal_consideration_chaos"] = 0.0
+  motor_det["blocked_objective_chaos"] = 1.0
+  var res_det := _BlockedObjective.resolve(ctx, 0, &"", motor_det)
+  _assert(
+    is_equal_approx(float(res_det.get("persist_score", 0.0)), float(res_det.get("seek_score", 0.0))),
+    "fixture ties persist and seek scores",
+  )
+  for _i in 12:
+    var repeat := _BlockedObjective.resolve(ctx, 0, &"", motor_det)
+    _assert(
+      repeat.get("action") == _BlockedObjective.ACTION_PERSIST,
+      "zero goal_consideration_chaos keeps persist on tied scores (legacy blocked_objective_chaos ignored)",
+    )
+  var motor_chaos := _motor_v3_test_params()
+  motor_chaos["goal_consideration_chaos"] = 1.0
+  var saw_seek := false
+  for _i in 40:
+    if _BlockedObjective.resolve(ctx, 0, &"", motor_chaos).get("action") == _BlockedObjective.ACTION_SEEK:
+      saw_seek = true
+      break
+  _assert(saw_seek, "high goal_consideration_chaos breaks persist/seek ties")
+
+
+func _explore_seek_flat_ctx(motor_p: Dictionary, adapter: _MemoryAdapter = null) -> Dictionary:
+  var mem := adapter if adapter != null else _MemoryAdapter.new()
+  return {
+    "motor_v3": motor_p,
+    "memory_adapter": mem,
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "food_split": {"ready": [], "unready": []},
+    "threat_samples": [],
+  }
+
+
+func _explore_seek_north_wedge_dir(bearing_count: int = 8) -> Vector3:
+  var angle := TAU * 0.5 / float(maxi(1, bearing_count))
+  return Vector3(sin(angle), 0.0, -cos(angle)).normalized()
+
+
+func _test_motor_explore_seek_zero_belief_baseline() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params()
+  motor_p["goal_consideration_chaos"] = 0.0
+  motor_p["explore_w_spawn"] = 0.0
+  motor_p["explore_w_open"] = 0.0
+  motor_p["explore_w_forward"] = 0.0
+  motor_p["explore_w_unexp"] = 1.0
+  motor_p["explore_empty_map_unexplored_baseline"] = 0.42
+  var wedges := adapter.explore_bearing_coverage(
+    _GkReg.GK_FIND_FOOD, Vector3.ZERO, motor_p, {}, Time.get_ticks_msec()
+  )
+  for i in wedges.size():
+    _assert(wedges[i] < 1e-6, "zero-belief fixture has empty wedge coverage")
+  var picked := _ExploreSeek._pick_explore_dir(
+    _GkReg.GK_FIND_FOOD,
+    Vector3.ZERO,
+    Vector3(1.0, 0.0, 0.0),
+    motor_p,
+    _explore_seek_flat_ctx(motor_p, adapter),
+  )
+  _assert(
+    picked.dot(_explore_seek_north_wedge_dir(8)) > 0.99,
+    "zero-belief empty map uses explore_empty_map_unexplored_baseline on tied wedges",
+  )
+
+
+func _test_motor_explore_seek_chaos_breaks_bearing_tie() -> void:
+  var motor_det := _motor_v3_test_params()
+  motor_det["explore_w_spawn"] = 0.0
+  motor_det["explore_w_open"] = 0.0
+  motor_det["explore_w_unexp"] = 0.0
+  motor_det["explore_w_forward"] = 0.0
+  motor_det["goal_consideration_chaos"] = 0.0
+  var ctx := _explore_seek_flat_ctx(motor_det)
+  var det := _ExploreSeek._pick_explore_dir(
+    _GkReg.GK_FIND_FOOD,
+    Vector3.ZERO,
+    Vector3(1.0, 0.0, 0.0),
+    motor_det,
+    ctx,
+  )
+  _assert(
+    det.dot(_explore_seek_north_wedge_dir(8)) > 0.99,
+    "zero-weight scores with chaos disabled pick first wedge deterministically",
+  )
+  var motor_chaos := motor_det.duplicate(true)
+  motor_chaos["goal_consideration_chaos"] = 1.0
+  var unique_dirs := {}
+  for _i in 48:
+    var pick := _ExploreSeek._pick_explore_dir(
+      _GkReg.GK_FIND_FOOD,
+      Vector3.ZERO,
+      Vector3(1.0, 0.0, 0.0),
+      motor_chaos,
+      ctx,
+    )
+    var key := "%d_%d" % [int(round(pick.x * 100.0)), int(round(pick.z * 100.0))]
+    unique_dirs[key] = true
+  _assert(unique_dirs.size() > 1, "goal_consideration_chaos breaks explore bearing ties")
+
+
+func _test_motor_planner_find_food_hungry_memory_before_explore() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_precise_food_belief(8221, Vector3(0.0, 0.0, -80.0), Time.get_ticks_msec())
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"precise",
+    "hungry under-stocked find_food still prefers memory seek before explore",
+  )
+  main.queue_free()
+
+
+func _test_memory_adapter_diet_filters_plant_belief() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var bush := _spawn_food_bush(main, Vector3(0.0, 1.0, -5.0))
+  var carn := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var adapter := _MemoryAdapter.new()
+  adapter.set_food_intake_policy(carn.call("get_food_intake_policy"))
+  adapter.seed_precise_food_belief(bush.get_instance_id(), bush.global_position, Time.get_ticks_msec())
+  var consult := adapter.consult_precise_food(
+    carn.global_position,
+    _motor_v3_test_params(),
+    {"ready": [], "unready": []},
+    Time.get_ticks_msec(),
+  )
+  _assert(not bool(consult.get("active", false)), "carnivore memory consult ignores stale plant belief")
   main.queue_free()
 
 
@@ -1194,7 +1848,7 @@ func _test_creature_motor_stack_memory_write_dual_isolation() -> void:
   main.queue_free()
 
 
-func _test_creature_motor_stack_sated_stay() -> void:
+func _test_creature_motor_stack_sated_understocked_mapping_urgency() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
@@ -1202,9 +1856,48 @@ func _test_creature_motor_stack_sated_stay() -> void:
   var stack := _motor_stack_test_configure(body)
   stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
   stack.tick(1.0 / 60.0)
-  var outcome: ActionOutcome = stack.tick(1.0 / 60.0)
-  _assert(stack.get_incumbent().is_empty(), "sated creature clears incumbent when hub weights are zero")
-  _assert(int(outcome.action) == _MotorAction.STAY, "sated idle emits STAY")
+  _assert(
+    stack.get_incumbent().get("goal_kind", &"") == _GkReg.GK_FIND_FOOD,
+    "sated under-stocked creature keeps find_food incumbent via mapping urgency",
+  )
+  _assert(
+    is_equal_approx(stack.get_food_map_confidence(), 0.0),
+    "empty map yields zero inventory_ratio",
+  )
+  _assert(
+    is_equal_approx(
+      _MotorGoalHub.effective_urgency_find_food(1.0, stack.get_food_map_confidence(), _motor_v3_test_params()),
+      0.35,
+    ),
+    "sated empty map effective find_food urgency is mapping_urgency",
+  )
+  main.queue_free()
+
+
+func _test_creature_motor_stack_food_map_confidence_inventory_ratio() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_precise_food_belief_for_test(89001, Vector3(0.0, 1.0, -20.0), now_ms)
+  stack.seed_precise_food_belief_for_test(89002, Vector3(20.0, 1.0, 0.0), now_ms)
+  stack.seed_precise_food_belief_for_test(89003, Vector3(-20.0, 1.0, 0.0), now_ms)
+  stack.tick(1.0 / 60.0)
+  _assert(
+    is_equal_approx(stack.get_food_map_confidence(), 1.0),
+    "three known bushes saturate inventory_ratio at goal_inventory_min_find_food=3",
+  )
+  var adapter := stack.get_memory_adapter()
+  adapter.get_beliefs().erase(89003)
+  adapter.set_beliefs_for_test(adapter.get_beliefs())
+  stack.tick(1.0 / 60.0)
+  _assert(
+    is_equal_approx(stack.get_food_map_confidence(), 2.0 / 3.0),
+    "two known bushes yield partial inventory_ratio",
+  )
   main.queue_free()
 
 
@@ -1221,6 +1914,9 @@ func _test_creature_motor_stack_debug_snapshot() -> void:
   _assert(snap.has("physics_tick"), "debug snapshot includes physics_tick")
   _assert(snap.has("boundary_scan_sign"), "debug snapshot includes boundary_scan_sign")
   _assert(snap.has("bearing_error_deg"), "debug snapshot includes bearing_error_deg")
+  _assert(snap.has("food_map_confidence"), "debug snapshot includes food_map_confidence")
+  _assert(snap.has("inventory_ratio"), "debug snapshot includes inventory_ratio")
+  _assert(snap.has("effective_urgency_find_food"), "debug snapshot includes effective_urgency_find_food")
   _assert(snap.has("facing_dot_tgt"), "debug snapshot includes facing_dot_tgt")
   _assert(snap.has("explore_no_progress_ticks"), "debug snapshot includes explore_no_progress_ticks")
   _assert(int(snap.get("physics_tick", 0)) >= 1, "debug snapshot reflects ticks after tick")
@@ -1259,6 +1955,218 @@ func _test_creature_motor_stack_memory_kind_ewma() -> void:
   }
   var best := _AwarenessScan.best_ready_food_target(split, Vector3.ZERO)
   _assert(int(best.get("instance_id", 0)) == 101, "kind yield ranks higher-yield bush first")
+
+
+func _test_motor_goal_hub_kind_threat_modulates_flight() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var adapter := _MemoryAdapter.new()
+  adapter.record_observation(_LearnReg.TOPIC_THREAT_DANGER, &"wolf", 0.95, motor_v3)
+  var far_threat := _ThreatSampleScr.make(Vector2(100.0, 0.0), 1500.0, true)
+  far_threat["stimulus_kind_id"] = &"wolf"
+  far_threat["eff_reach"] = 1500.0
+  var with_kind := _motor_goal_hub_flight_urgency(
+    [far_threat],
+    motor_v3,
+    {"memory_adapter": adapter, "threat_disposition_mod": 1.0},
+  )
+  var neutral := _motor_goal_hub_flight_urgency([far_threat], motor_v3)
+  _assert(with_kind > neutral + 1e-4, "high threat_danger kind profile raises Flight urgency")
+
+
+func _test_motor_goal_hub_disposition_modulates_flight() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var threat := _ThreatSampleScr.make(Vector2(100.0, 0.0), 1500.0, true)
+  threat["eff_reach"] = 1500.0
+  var base := _motor_goal_hub_flight_urgency([threat], motor_v3, {"threat_disposition_mod": 1.0})
+  var skittish := _motor_goal_hub_flight_urgency([threat], motor_v3, {"threat_disposition_mod": 1.2})
+  _assert(skittish > base + 1e-4, "higher threat_disposition_mod raises Flight urgency")
+
+
+func _test_threat_disposition_benign_nudge() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["flight_disposition_benign_delta"] = -0.1
+  var adapter := _MemoryAdapter.new()
+  var pending := false
+  var far := _ThreatSampleScr.make(Vector2(100.0, 0.0), 1500.0, true)
+  far["eff_reach"] = 1500.0
+  var deltas := _ThreatDisposition.episode_deltas([far], false, false, pending, motor_v3)
+  pending = bool(deltas.get("benign_episode_pending", false))
+  _assert(pending, "sub-acute threat starts benign episode")
+  deltas = _ThreatDisposition.episode_deltas([], false, false, pending, motor_v3)
+  adapter.apply_disposition_deltas(
+    float(deltas.get("benign_delta", 0.0)),
+    float(deltas.get("evade_delta", 0.0)),
+    motor_v3,
+  )
+  _assert(
+    adapter.get_threat_disposition_mod() < 1.0 - 1e-4,
+    "benign departure lowers disposition mod",
+  )
+
+
+func _test_threat_disposition_evade_nudge() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["flight_disposition_evade_delta"] = 0.1
+  var adapter := _MemoryAdapter.new()
+  var acute := _ThreatSampleScr.make(Vector2(10.0, 0.0), 50.0, true)
+  var deltas := _ThreatDisposition.episode_deltas([acute], true, false, false, motor_v3)
+  adapter.apply_disposition_deltas(
+    float(deltas.get("benign_delta", 0.0)),
+    float(deltas.get("evade_delta", 0.0)),
+    motor_v3,
+  )
+  _assert(
+    adapter.get_threat_disposition_mod() > 1.0 + 1e-4,
+    "fast-path entry raises disposition mod",
+  )
+
+
+func _test_creature_motor_stack_disposition_episodes() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 10.0
+  var motor_p := _motor_v3_test_params()
+  motor_p["flight_disposition_benign_delta"] = -0.08
+  var stack := _CreatureMotorStack.new()
+  stack.configure(body, null, motor_p, "", {})
+  var far := _ThreatSampleScr.make(Vector2(100.0, 0.0), 1500.0, true)
+  far["eff_reach"] = 1500.0
+  stack.set_threat_samples_for_test([far])
+  stack.tick(0.5)
+  stack.set_threat_samples_for_test([])
+  stack.tick(0.5)
+  _assert(
+    stack.get_memory_adapter().get_threat_disposition_mod() < 1.0 - 1e-4,
+    "stack applies benign disposition nudge after subacute threat clears",
+  )
+  main.queue_free()
+
+
+func _ghost_test_wall(main: Node3D, z_pos: float = -6.0) -> StaticBody3D:
+  var wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(4.0, 4.0, 0.5)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  wall.add_child(col)
+  wall.collision_layer = 1
+  wall.collision_mask = 1
+  main.add_child(wall)
+  wall.global_position = Vector3(0.0, 1.0, z_pos)
+  return wall
+
+
+func _ghost_test_zone_ctx(body: CharacterBody3D, motor_p: Dictionary) -> Dictionary:
+  return {
+    "creature_pos": body.global_position,
+    "facing": body.get("last_move_direction"),
+    "eye_height": 1.0,
+    "space_state": body.get_world_3d().direct_space_state,
+    "motor_v3": motor_p,
+    "area_only": false,
+  }
+
+
+func _test_memory_adapter_ghost_danger_without_live_los() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  _ghost_test_wall(main, -6.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var motor_p := _motor_v3_test_params()
+  motor_p["awareness_requires_los"] = true
+  motor_p["awareness_radius"] = 500.0
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_threat_belief_for_test(
+    9001, Vector3(0.0, 1.0, -12.0), Time.get_ticks_msec(), &"wolf"
+  )
+  var danger: Array = adapter.consult_danger_samples(_ghost_test_zone_ctx(body, motor_p), [])
+  _assert(danger.size() >= 1, "occluded threat ghost emits danger sample")
+  _assert(
+    String(danger[0].get("source", &"")) == str(_OccludedGhost.SOURCE_GHOST),
+    "danger sample source is ghost",
+  )
+  main.queue_free()
+
+
+func _test_memory_adapter_ghost_live_wins_dedupe() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  _ghost_test_wall(main, -6.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var motor_p := _motor_v3_test_params()
+  motor_p["awareness_requires_los"] = true
+  motor_p["awareness_radius"] = 500.0
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_threat_belief_for_test(
+    9001, Vector3(0.0, 1.0, -12.0), Time.get_ticks_msec(), &"wolf"
+  )
+  var live := _ThreatSampleScr.make(Vector2(0.0, -12.0), 12.0, true, Vector2.ZERO, 9001)
+  live["world_pos_3d"] = Vector3(0.0, 1.0, -12.0)
+  var danger: Array = adapter.consult_danger_samples(_ghost_test_zone_ctx(body, motor_p), [live])
+  _assert(danger.size() == 1, "live threat dedupes ghost for same instance")
+  _assert(
+    String(danger[0].get("source", &"")) != str(_OccludedGhost.SOURCE_GHOST),
+    "deduped output is live sample not ghost",
+  )
+  main.queue_free()
+
+
+func _test_memory_adapter_ghost_mover_reach_cap() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  _ghost_test_wall(main, -20.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  await process_frame
+  var motor_p := _motor_v3_test_params()
+  motor_p["awareness_requires_los"] = true
+  motor_p["awareness_radius"] = 100.0
+  motor_p["awareness_cone_extra"] = 50.0
+  motor_p["goal_memory_ghost_horizon_sec"] = 0.4
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_threat_belief_for_test(
+    9002,
+    Vector3(0.0, 1.0, -35.0),
+    Time.get_ticks_msec(),
+    &"wolf",
+    Vector3(0.0, 0.0, -500.0),
+  )
+  var danger: Array = adapter.consult_danger_samples(_ghost_test_zone_ctx(body, motor_p), [])
+  _assert(danger.is_empty(), "mover ghost beyond reach cap is not projected")
+  main.queue_free()
+
+
+func _test_creature_motor_stack_safety_blocked_by_ghost() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  _ghost_test_wall(main, -6.0)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var motor_p := _motor_v3_test_params()
+  motor_p["awareness_requires_los"] = true
+  motor_p["awareness_radius"] = 500.0
+  motor_p["safety_time"] = 2
+  motor_p["goal_replan_base_ticks"] = 1
+  var stack := _CreatureMotorStack.new()
+  stack.configure(body, null, motor_p, "", {})
+  stack.seed_threat_belief_for_test(
+    9001, Vector3(0.0, 1.0, -12.0), Time.get_ticks_msec(), &"wolf"
+  )
+  stack.set_threat_samples_for_test([])
+  await process_frame
+  for _i in 3:
+    stack.tick(0.5)
+  _assert(not stack.is_safety_met(), "ghost danger blocks Safety state")
+  main.queue_free()
 
 
 func _test_creature_motor_stack_memory_dead_end_filter() -> void:
@@ -2865,6 +3773,51 @@ func _test_motor_goal_hub_urgency_eat_preserve_band() -> void:
     is_equal_approx(_MotorGoalHub.urgency_eat(0.75, motor_v3), 1.0),
     "below seek ceiling full Eat urgency",
   )
+
+func _test_motor_goal_hub_effective_urgency_sated_mapping() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var urgency := _MotorGoalHub.effective_urgency_find_food(0.92, 0.0, motor_v3)
+  _assert(is_equal_approx(urgency, 0.35), "sated empty map uses mapping_urgency")
+
+
+func _test_motor_goal_hub_effective_urgency_sated_patrol() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var urgency := _MotorGoalHub.effective_urgency_find_food(0.92, 1.0, motor_v3)
+  _assert(is_equal_approx(urgency, 0.15), "sated stocked map uses patrol_urgency")
+
+
+func _test_motor_goal_hub_effective_urgency_hungry_unchanged() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var cr := 0.75
+  _assert(
+    is_equal_approx(
+      _MotorGoalHub.effective_urgency_find_food(cr, 0.0, motor_v3),
+      _MotorGoalHub.urgency_eat(cr, motor_v3),
+    ),
+    "hungry creature effective urgency matches urgency_eat",
+  )
+
+
+func _test_motor_goal_hub_shelter_gated_by_food_inventory() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var row := {"goal_kind": _MotorGoalHub.GOAL_SHELTER, "feasibility": 0.0}
+  var base_ctx := {
+    "motor_v3": motor_v3,
+    "calorie_ratio": 0.85,
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "safety_met": false,
+  }
+  var low_ctx := base_ctx.duplicate(true)
+  low_ctx["food_map_confidence"] = 0.0
+  low_ctx["inventory_ratio"] = 0.0
+  var high_ctx := base_ctx.duplicate(true)
+  high_ctx["food_map_confidence"] = 1.0
+  high_ctx["inventory_ratio"] = 1.0
+  var w_low := float(_MotorGoalHub.score_goals([row], low_ctx)[0].get("weight", 0.0))
+  var w_high := float(_MotorGoalHub.score_goals([row], high_ctx)[0].get("weight", 0.0))
+  _assert(w_high > w_low, "high food inventory unlocks shelter effective_base")
+
 
 func _test_motor_goal_hub_subacute_flight_weight() -> void:
   var motor_v3 := _motor_v3_test_params().duplicate(true)

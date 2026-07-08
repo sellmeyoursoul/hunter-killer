@@ -53,7 +53,7 @@ static func resolve(
   var switch_score := _switch_score(ctx, incumbent_instance_id, incumbent_kind_id, motor_v3, neutral)
   var seek_score := 1.0 - persist_score
 
-  var chaos := clampf(float(motor_v3.get("blocked_objective_chaos", 0.15)), 0.0, 1.0)
+  var chaos := clampf(float(motor_v3.get("goal_consideration_chaos", 0.15)), 0.0, 1.0)
   var best_action := ACTION_PERSIST
   var best_val := persist_score
   for action in [ACTION_SWITCH, ACTION_SEEK]:

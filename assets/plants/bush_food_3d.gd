@@ -87,6 +87,8 @@ func is_pickup_ready_for_motor() -> bool:
 
 ## ENGINE creature EAT completion — grants calories when in range ([CREATURE_MOVEMENT_V3.md §6.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 func try_grant_engine_creature(body: Node3D) -> int:
+  if not DietRegistry.body_accepts_plant_intake(body):
+    return 0
   if not is_pickup_ready_for_motor():
     return 0
   if body == null or not body.has_method(&"add_calories_from_food"):
