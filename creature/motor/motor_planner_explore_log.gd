@@ -1,29 +1,53 @@
 extends RefCounted
 class_name MotorPlannerExploreLog
-## Fixed-width explore motor tick lines for F10 HUD + smoke log ([code]user://logs/motor_explore_tick.log[/code]).
+## Fixed-width motor tick lines for F10 HUD + rolling smoke log ([code]user://logs/motor_explore_tick.log[/code]).
 
 const _LOG_REL_PATH := "logs/motor_explore_tick.log"
-const _MAX_LINES := 400
+const _MAX_LINES := 800
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 
-static var _line_count: int = 0
+static var _lines: PackedStringArray = PackedStringArray()
 static var _session_open: bool = false
 
 
-## Clears counters and truncates the explore tick log (call on motor stack configure / duel reset).
+static func _log_header() -> String:
+  return "# motor tick log — fixed-width columns (rolling last %d lines, all step sources)" % _MAX_LINES
+
+
+## Clears the rolling buffer and truncates the tick log (call on motor stack configure / duel reset).
 static func reset_session() -> void:
-  _line_count = 0
+  _lines = PackedStringArray()
   _session_open = false
   if not _logging_enabled():
     return
+  _ensure_logs_dir()
+  _flush_log_file()
+  _session_open = true
+
+
+static func _ensure_logs_dir() -> void:
   var dir := DirAccess.open("user://")
   if dir != null:
     dir.make_dir_recursive("logs")
+
+
+static func _flush_log_file() -> void:
   var f := FileAccess.open("user://%s" % _LOG_REL_PATH, FileAccess.WRITE)
-  if f != null:
-    f.store_line("# motor explore tick log — fixed-width columns")
-    f.close()
-    _session_open = true
+  if f == null:
+    return
+  f.store_line(_log_header())
+  for line in _lines:
+    f.store_line(line)
+  f.close()
+
+
+static func _append_line_to_log_file(line: String) -> void:
+  var f := FileAccess.open("user://%s" % _LOG_REL_PATH, FileAccess.READ_WRITE)
+  if f == null:
+    return
+  f.seek_end()
+  f.store_line(line)
+  f.close()
 
 
 ## True when [code]hunter_killer_debug/motor_explore_tick_log[/code] is set (debug builds only).
@@ -110,6 +134,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
   var tag := ""
   if not creature_label.is_empty():
     tag = _fw(creature_label, 8) + " "
+  var hunt_suffix := _hunt_debug_suffix(snap)
   return (
     tag
     + "t=%04d act=%s blk=%s cal=%3d%% inc=%s w=%6.3f\n"
@@ -117,6 +142,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
     + "tgt=(%8.1f,%8.1f) id=%5d\n"
     + "err=%+7.1f dot=%7.3f enp=%d scan=%s\n"
     + "blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
+    + hunt_suffix
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),
@@ -141,21 +167,41 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
   ]
 
 
-## Append one explore tick line when logging is enabled and [param snap] [code]step_source[/code] is explore.
+static func _hunt_debug_suffix(snap: Dictionary) -> String:
+  if not bool(snap.get("is_carnivore", false)):
+    return ""
+  var goal_kind := str(snap.get("goal_kind", ""))
+  var eng_rem := int(snap.get("prey_engagement_ticks_remaining", 0))
+  if goal_kind != "find_food" and eng_rem <= 0:
+    return ""
+  var inv_mode := int(snap.get("food_inventory_step_mode", -1))
+  var inv_lbl := "?"
+  match inv_mode:
+    0:
+      inv_lbl = "hun"
+    1:
+      inv_lbl = "stk"
+    2:
+      inv_lbl = "und"
+  var eng_id := int(snap.get("prey_engagement_instance_id", 0))
+  var eng_total := int(snap.get("prey_engagement_latch_total", 0))
+  return "\neng_id=%d eng=%d/%d inv=%s" % [eng_id, eng_rem, eng_total, inv_lbl]
+
+
+## Append one motor tick line when logging is enabled (all [code]step_source[/code] values; rolling [code]_MAX_LINES[/code] buffer).
 static func maybe_log_tick(creature_label: String, snap: Dictionary) -> void:
   if not _logging_enabled():
-    return
-  if str(snap.get("step_source", "")) != "explore":
-    return
-  if _line_count >= _MAX_LINES:
     return
   if not _session_open:
     reset_session()
   var line := format_explore_tick_line(snap, creature_label)
-  var f := FileAccess.open("user://%s" % _LOG_REL_PATH, FileAccess.READ_WRITE)
-  if f != null:
-    f.seek_end()
-    f.store_line(line)
-    f.close()
-  _line_count += 1
+  _lines.append(line)
+  var rolled := false
+  while _lines.size() > _MAX_LINES:
+    _lines.remove_at(0)
+    rolled = true
+  if rolled:
+    _flush_log_file()
+  else:
+    _append_line_to_log_file(line)
   _OLogSafe.debug(line, false, "MotorExplore")

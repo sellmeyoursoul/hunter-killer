@@ -1,7 +1,7 @@
 extends Control
 ## On-screen V3 motor planner debug for duel smoke — action, incumbent, step source, scan counts.
 ## Enable via Project Settings [code]hunter_killer_debug/draw_motor_planner_hud[/code], or press **F10** in debug builds.
-## Explore ticks also append to [code]user://logs/motor_explore_tick.log[/code] when [code]motor_explore_tick_log[/code] is set.
+## Motor ticks (all step sources) append to [code]user://logs/motor_explore_tick.log[/code] when [code]motor_explore_tick_log[/code] is set.
 
 const _PLAYING_STATE: int = 2
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")

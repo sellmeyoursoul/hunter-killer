@@ -15,6 +15,7 @@ const _ControlMode := preload("res://creature/capabilities/creature_control_mode
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
 const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
+const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 
 
 var _body: CharacterBody3D
@@ -108,6 +109,11 @@ func tick(delta: float) -> _ActionOutcome:
 
   _update_flight_fast_path(ctx)
   ctx["flight_fast_path_active"] = _flight_fast_path_active
+  var flight_just_entered := _flight_fast_path_active and not _was_flight_fast_path
+  var flight_just_exited := not _flight_fast_path_active and _was_flight_fast_path
+  ctx["flight_just_entered"] = flight_just_entered
+  if flight_just_exited:
+    (_MotorPlanner as GDScript).call("clear_flee_waypoint_latch", _planner_state)
   _update_threat_disposition(ctx)
   ctx["threat_disposition_mod"] = _threat_disposition_mod()
   ctx["safety_met"] = _safety_met
@@ -160,13 +166,11 @@ func tick(delta: float) -> _ActionOutcome:
     _run_consideration(ctx)
   _advance_consideration_timer()
   _apply_gravity_if_stationary(action, delta)
-  _maybe_log_explore_tick()
+  _maybe_log_motor_tick()
   return outcome
 
 
-func _maybe_log_explore_tick() -> void:
-  if str(_planner_state.get("step_source", &"")) != &"explore":
-    return
+func _maybe_log_motor_tick() -> void:
   var snap := get_debug_snapshot()
   _ExploreLog.maybe_log_tick(_creature_log_label(), snap)
 
@@ -292,6 +296,11 @@ func get_debug_snapshot() -> Dictionary:
       _food_map_confidence,
       _motor_v3,
     ),
+    "prey_engagement_instance_id": int(ps.get("prey_engagement_instance_id", 0)),
+    "prey_engagement_ticks_remaining": int(ps.get("prey_engagement_ticks_remaining", 0)),
+    "prey_engagement_latch_total": int(ps.get("prey_engagement_latch_total", 0)),
+    "food_inventory_step_mode": int(ps.get("food_inventory_step_mode", -1)),
+    "is_carnivore": _is_carnivore_body(),
   }
 
 
@@ -530,6 +539,7 @@ func _build_planner_context(hub_ctx: Dictionary, _delta: float) -> Dictionary:
     "motor_v3": _motor_v3,
     "incumbent": _incumbent,
     "flight_fast_path_active": hub_ctx.get("flight_fast_path_active", false),
+    "flight_just_entered": bool(hub_ctx.get("flight_just_entered", false)),
     "threat_samples": _threat_samples,
     "scan": {
       "food_split": _food_split,
@@ -543,6 +553,8 @@ func _build_planner_context(hub_ctx: Dictionary, _delta: float) -> Dictionary:
     "memory_adapter": _memory_adapter,
     "now_ms": Time.get_ticks_msec(),
     "environment_grid": _resolve_environment_grid(),
+    "traits": _traits_from_body(),
+    "calorie_ratio": _calorie_ratio(),
   }
 
 
@@ -715,11 +727,44 @@ func _try_complete_eat() -> void:
   var instance_id := int(_planner_state.get("step_instance_id", 0))
   if instance_id == 0:
     return
-  var plant := instance_from_id(instance_id)
-  if plant == null:
+  var target := instance_from_id(instance_id)
+  if target == null:
     return
-  if plant.has_method(&"try_grant_engine_creature"):
-    plant.call(&"try_grant_engine_creature", _body)
+  if target is CharacterBody3D and target != _body:
+    if target.has_method(&"try_grant_as_prey_to"):
+      var anchor: Vector3 = (target as CharacterBody3D).global_position
+      var stimulus: StringName = _planner_state.get("step_stimulus_kind_id", &"")
+      var meal := _resolve_predator_prey_meal_calories()
+      if bool(target.call(&"try_grant_as_prey_to", _body)):
+        notify_food_consumption_outcome(anchor, false, stimulus, meal)
+        _clear_prey_engagement_planner_state()
+      return
+  if target.has_method(&"try_grant_engine_creature"):
+    target.call(&"try_grant_engine_creature", _body)
+
+
+func _clear_prey_engagement_planner_state() -> void:
+  _planner_state["prey_engagement_instance_id"] = 0
+  _planner_state["prey_engagement_ticks_remaining"] = 0
+  _planner_state["prey_engagement_latch_total"] = 0
+
+
+func _resolve_predator_prey_meal_calories() -> int:
+  var meal := 5
+  var gc := Engine.get_main_loop()
+  if gc != null and gc.has_method(&"get_root"):
+    var game_config := (gc as SceneTree).root.get_node_or_null("GameConfig")
+    if game_config != null and game_config.has_method(&"get_creature_motor_params"):
+      meal = int(game_config.call(&"get_creature_motor_params").get("predator_prey_meal_calories", meal))
+  return meal
+
+
+func _is_carnivore_body() -> bool:
+  if _body == null:
+    return false
+  if _body.has_method(&"get_feeding_mode"):
+    return int(_body.call(&"get_feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE
+  return bool(_body.get("is_hostile"))
 
 
 func _apply_gravity_if_stationary(action: int, delta: float) -> void:

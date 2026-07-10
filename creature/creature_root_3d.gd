@@ -144,6 +144,9 @@ func _attach_visual_scene(ps: PackedScene, mount: Node) -> void:
   inst.name = "Visual"
   _disable_collision_recursive(inst)
   mount.add_child(inst)
+  var body := mount as CharacterBody3D
+  if body != null and body.has_method(&"apply_capsule_footprint_from_visual"):
+    body.call(&"apply_capsule_footprint_from_visual", inst)
 
 
 func _disable_collision_recursive(node: Node) -> void:

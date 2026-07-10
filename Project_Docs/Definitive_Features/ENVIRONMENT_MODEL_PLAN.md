@@ -13,6 +13,7 @@
 | **`crush_weight`** destructible props | **NOT IMPLEMENTED** — future phase | §4 Property catalog; §5 step 3 |
 | **`apply_movement_impact` / modifier merge** (shared helper) | Partially scoped — env side in object-avoidance plan; **plant + terrain merge** still **OUTSTANDING** | §5 step 1; §8 Risks |
 | Physics **layer/mask mapping** (hunger shrubs + actors) | **Done (3D)** — layer/mask **split** (Option A); see **§6** | §6; [HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) §5.1 |
+| **Static obstacle mesh ↔ collision** (boulders bake at spawn; shrubs convex at `_ready`; creature capsules from visual) | **Done (3D)** | **§6.3**; [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd) |
 | **`crush_weight == 0`** semantics in code comments | **OUTSTANDING** (blocked until crush phase) | §7 Acceptance |
 | **3D** height / volumetric crush | **OUTSTANDING / deferred** — **3D layers shipped** ([CONVERT_TO_3D.md](../Completed_Features/CONVERT_TO_3D.md) M1); height/crush revisit in dedicated phase | §10 Open questions |
 | Nice-to-have: **`Area2D` water** with non-linear drag | **OUTSTANDING** | §3 Nice to have |
@@ -142,6 +143,19 @@
 | **Food B / Food A calorie `Area3D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **player-only** overlap for burst calories. Mobs (**layer `4`**) do **not** match mask **`2`**. |
 
 **Implementer note:** Calorie **`Area3D`** nodes are **not** a substitute for mob blocking; keep the **StaticBody3D** shell on **`plant_mob_block`** for **`open_shrub_3d`**.
+
+### 6.3 Static obstacle collision authoring (mesh ↔ physics)
+
+**Policy:** Visual meshes and gameplay collision should match. Implementation split by prop type:
+
+| Prop class | Scene pattern | Collision bake |
+|------------|---------------|----------------|
+| **Mesh-only imports** (perimeter boulders, mesh props without physics) | No **`StaticBody3D`** in the imported scene | **Spawn-time trimesh** via [`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd) [`ensure_obstacle_physics()`](../../environment/playfield_bounds_3d.gd) — [`PlayfieldPerimeterBoulders`](../../environment/playfield_perimeter_boulders.gd) calls this on spawn. **Do not** add placeholder static bodies on mesh-only imports or baking is skipped. |
+| **Food shrubs** (`solid_shrub_3d`, `open_shrub_3d`) | Empty **`StaticBody3D`** / **`MobBlocker`** shell (layers per §6.2); no hand-authored placeholder spheres | **Convex hull from active visual** in [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) `_ready` / visual refresh via [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd). Calorie **`Area3D`** pickup sphere sized from the same visual AABB. |
+| **Creatures** | **`CharacterBody3D`** capsule on **Body** (not mesh colliders) | Capsule radius/height + vertical center from mounted **Visual** mesh via [`creature_mesh_footprint.gd`](../../creature/capabilities/creature_mesh_footprint.gd) after [`creature_root_3d.gd`](../../creature/creature_root_3d.gd) mounts the species blend. |
+| **Playfield floor** | Collision defines walkable bounds | Do **not** auto-match decorative grass mesh padding — bounds come from floor colliders ([`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd)). |
+
+**Helper module:** [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd) — convex blocker sync + pickup sphere fit. **Boulders** use **trimesh** (accurate static rock); **shrubs** use **convex hull** (cheaper, fewer snags).
 
 ---
 

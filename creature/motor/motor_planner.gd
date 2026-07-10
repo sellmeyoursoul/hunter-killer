@@ -47,6 +47,11 @@ static func new_state() -> Dictionary:
     "explore_last_facing_dot": -2.0,
     "playfield_clamp_latch_ticks": 0,
     "food_inventory_step_mode": -1,
+    "prey_engagement_instance_id": 0,
+    "prey_engagement_ticks_remaining": 0,
+    "prey_engagement_latch_total": 0,
+    "flee_waypoint": Vector3.ZERO,
+    "flee_waypoint_ticks_remaining": 0,
   }
 
 
@@ -64,6 +69,8 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   var goal_kind: StringName = incumbent.get("goal_kind", &"")
   if goal_kind.is_empty():
     return _MotorAction.STAY
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    _tick_prey_engagement_latch(ctx, state)
   _sync_step_objective(ctx, state, goal_kind)
   if bool(state.get("boundary_scan_active", false)) and state.get("step_source") == &"explore":
     return _boundary_scan_action(body, motor_v3, state)
@@ -79,7 +86,11 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
 
 ## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
 static func _is_latched_step_source(step_source: StringName) -> bool:
-  return step_source == &"precise" or step_source == &"explore"
+  return (
+    step_source == &"precise"
+    or step_source == &"explore"
+    or step_source == &"memory_moving"
+  )
 
 
 ## Minimum per-tick displacement that counts as progress (scales with body speed × delta).
@@ -650,6 +661,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
     _reset_explore_align_progress_state(state)
+    _clear_prey_engagement(state)
   var refresh_targets := bool(ctx.get("refresh_step_objective", false))
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   var has_step_goal := step_goal.length_squared() > 1e-8
@@ -707,13 +719,21 @@ static func _derive_find_food_step_objective(
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
     _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
+    _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
   var inv_mode := _resolve_food_inventory_step_mode(ctx, motor_v3)
   if _food_inventory_mode_changed(ctx, state, motor_v3):
     _clear_explore_latch_for_remint(state)
   _store_food_inventory_step_mode(ctx, state, motor_v3)
-  var explore_first := inv_mode == _FOOD_INV_UNDERSTOCKED
+  if _prey_engagement_latch_valid(state):
+    if _sync_moving_prey_memory_objective(
+      ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+    ):
+      return
+  var explore_first := (
+    inv_mode == _FOOD_INV_UNDERSTOCKED and not _prey_engagement_latch_valid(state)
+  )
   if explore_first:
     _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
     if (state.get("step_goal", Vector3.ZERO) as Vector3).length_squared() < 1e-8:
@@ -817,6 +837,120 @@ static func _clear_explore_latch_for_remint(state: Dictionary) -> void:
   _reset_explore_align_progress_state(state)
 
 
+static func _prey_engagement_latch_valid(state: Dictionary) -> bool:
+  return (
+    int(state.get("prey_engagement_instance_id", 0)) != 0
+    and int(state.get("prey_engagement_ticks_remaining", 0)) > 0
+  )
+
+
+static func _clear_prey_engagement(state: Dictionary) -> void:
+  state["prey_engagement_instance_id"] = 0
+  state["prey_engagement_ticks_remaining"] = 0
+  state["prey_engagement_latch_total"] = 0
+
+
+static func _effective_prey_engagement_latch_ticks(ctx: Dictionary, motor_v3: Dictionary) -> int:
+  var traits: Dictionary = ctx.get("traits", {})
+  var change_stability := float(traits.get("change_stability", 0.0))
+  var t := clampf((change_stability + 100.0) / 200.0, 0.0, 1.0)
+  var scale_min := float(motor_v3.get("predator_prey_engagement_latch_scale_min", 0.5))
+  var scale_max := float(motor_v3.get("predator_prey_engagement_latch_scale_max", 1.5))
+  var base_ticks := float(motor_v3.get("predator_prey_engagement_latch_base_ticks", 40.0))
+  var ticks_min := int(
+    motor_v3.get(
+      "predator_prey_engagement_latch_ticks_min",
+      motor_v3.get("goal_replan_base_ticks", 8),
+    )
+  )
+  var ticks_max := int(motor_v3.get("predator_prey_engagement_latch_ticks_max", 120))
+  var scaled := roundi(base_ticks * lerpf(scale_min, scale_max, t))
+  return clampi(scaled, ticks_min, ticks_max)
+
+
+static func _arm_prey_engagement_from_live_food(
+  ctx: Dictionary,
+  state: Dictionary,
+  food: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
+  if not bool(food.get("is_moving", false)):
+    return
+  var iid := int(food.get("instance_id", 0))
+  if iid == 0:
+    return
+  var effective := _effective_prey_engagement_latch_ticks(ctx, motor_v3)
+  state["prey_engagement_instance_id"] = iid
+  state["prey_engagement_ticks_remaining"] = effective
+  state["prey_engagement_latch_total"] = effective
+
+
+static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> bool:
+  if instance_id == 0:
+    return false
+  var ready: Array = scan.get("food_split", {}).get("ready", [])
+  for entry_v in ready:
+    if typeof(entry_v) != TYPE_DICTIONARY:
+      continue
+    if int((entry_v as Dictionary).get("instance_id", 0)) == instance_id:
+      return true
+  return false
+
+
+static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> void:
+  if not _prey_engagement_latch_valid(state):
+    return
+  var scan: Dictionary = ctx.get("scan", {})
+  var iid := int(state.get("prey_engagement_instance_id", 0))
+  if _live_food_instance_visible(scan, iid):
+    return
+  var rem := int(state.get("prey_engagement_ticks_remaining", 0)) - 1
+  state["prey_engagement_ticks_remaining"] = rem
+  if rem <= 0:
+    _clear_prey_engagement(state)
+
+
+static func _sync_moving_prey_memory_objective(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> bool:
+  if not _prey_engagement_latch_valid(state):
+    return false
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null or not adapter.has_method(&"consult_moving_prey_food"):
+    return false
+  var food_split: Dictionary = scan.get("food_split", {})
+  var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+  var consult_ctx := {
+    "flight_fast_path_active": bool(ctx.get("flight_fast_path_active", false)),
+    "threat_samples": ctx.get("threat_samples", scan.get("threat_samples", [])),
+  }
+  var moving: Dictionary = adapter.consult_moving_prey_food(
+    int(state.get("prey_engagement_instance_id", 0)),
+    creature_pos,
+    motor_v3,
+    food_split,
+    now_ms,
+    consult_ctx,
+  )
+  if not bool(moving.get("active", false)):
+    return false
+  var new_iid := int(moving.get("instance_id", 0))
+  if int(state.get("step_instance_id", 0)) != new_iid:
+    _reset_precise_progress_state(state)
+  var ultimate: Vector3 = moving.get("pos", Vector3.ZERO)
+  state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  state["step_instance_id"] = new_iid
+  state["step_stimulus_kind_id"] = moving.get("stimulus_kind_id", &"")
+  state["step_source"] = &"memory_moving"
+  return true
+
+
 ## Overshoot / rim / dead-end maintenance on a held explore latch (runs between consideration ticks).
 static func _maintain_explore_latch(
   ctx: Dictionary,
@@ -905,13 +1039,65 @@ static func _sync_food_memory_objective(
   return false
 
 
+## Clears acute Flight flee latch (stack calls on [code]ff=0[/code] episode exit).
+static func clear_flee_waypoint_latch(state: Dictionary) -> void:
+  state["flee_waypoint"] = Vector3.ZERO
+  state["flee_waypoint_ticks_remaining"] = 0
+
+
+## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
+static func _reset_flight_entry_telemetry(state: Dictionary) -> void:
+  state["step_instance_id"] = 0
+  state["step_stimulus_kind_id"] = &""
+  state["blocked_objective_action"] = &""
+  state["consecutive_blocked"] = 0
+  state["boundary_scan_active"] = false
+  state["boundary_scan_sign"] = 0
+
+
+static func _mint_flee_waypoint(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> Vector3:
+  var wp := _flee_objective(ctx, body.global_position, motor_v3)
+  state["flee_waypoint"] = wp
+  var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+  state["flee_waypoint_ticks_remaining"] = latch_ticks
+  return wp
+
+
+## Hold latched [code]flee_waypoint[/code] between remints during acute Flight (§12.2 post-6d O1).
+static func _maintain_flee_latch(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return
+  if bool(ctx.get("flight_just_entered", false)):
+    _reset_flight_entry_telemetry(state)
+    state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    return
+  var remaining := int(state.get("flee_waypoint_ticks_remaining", 0))
+  var latched: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+  if remaining <= 0 or latched.length_squared() < 1e-8:
+    state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    return
+  state["step_goal"] = latched
+  state["flee_waypoint_ticks_remaining"] = remaining - 1
+
+
 static func _select_flight_action(ctx: Dictionary, state: Dictionary) -> int:
   state["goal_kind"] = _GkReg.GK_AVOID_HOSTILES
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
-  state["step_goal"] = _flee_objective(ctx, body.global_position, motor_v3)
+  _maintain_flee_latch(ctx, state, motor_v3)
   state["step_source"] = &"live"
-  if state["step_goal"].length_squared() < 1e-8:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
   return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
@@ -1027,6 +1213,8 @@ static func apply_immediate_blocked_path_reevaluation(
     move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
     state["step_goal"] = creature_pos + move_dir * to_goal.length()
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
+  if bool(ctx.get("flight_fast_path_active", false)):
+    state["flee_waypoint"] = state.get("step_goal", Vector3.ZERO)
 
 
 static func _run_path_clearance_los_nav(

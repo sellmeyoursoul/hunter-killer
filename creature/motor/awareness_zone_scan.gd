@@ -32,7 +32,9 @@ static func scan_live(
   var policy: Resource = DietRegistry.food_intake_policy_for_body(body)
   _scan_food_plants(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
   _scan_prey_food(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
-  _scan_hostile_threats(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, subject_hostile, out)
+  _scan_hostile_threats(
+    body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, subject_hostile, policy, out
+  )
   ## [code]food_map_confidence[/code] is owned by stack [code]inventory_ratio[/code] consult (§1) — not live-scan split.
   return out
 
@@ -191,6 +193,7 @@ static func _scan_hostile_threats(
   tree: SceneTree,
   area_only: bool,
   subject_hostile: bool,
+  policy: Resource,
   out: Dictionary,
 ) -> void:
   var samples: Array = []
@@ -205,7 +208,7 @@ static func _scan_hostile_threats(
       if seen.has(oid):
         continue
       seen[oid] = true
-      if not _is_threat_to_subject(other, subject_hostile):
+      if not _is_threat_to_subject(other, subject_hostile, body, policy):
         continue
       var other_pos := other.global_position
       var mem := _AwarenessZone.membership_with_los(
@@ -236,7 +239,14 @@ static func _scan_hostile_threats(
   out["threat_samples"] = samples
 
 
-static func _is_threat_to_subject(other: CharacterBody3D, subject_hostile: bool) -> bool:
+static func _is_threat_to_subject(
+  other: CharacterBody3D,
+  subject_hostile: bool,
+  _subject: CharacterBody3D,
+  policy: Resource,
+) -> bool:
+  if policy != null and DietRegistry.node_is_valid_food_for_policy(other, policy):
+    return false
   if subject_hostile:
     return other.is_in_group(&"prey")
   return bool(other.get("is_hostile")) or other.is_in_group(&"mobs")

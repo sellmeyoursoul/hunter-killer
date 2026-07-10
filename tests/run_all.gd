@@ -59,6 +59,9 @@ const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
 const _Carnivore3DScenePath := "res://creature/templates/creature_carnivore_kinematic_3d.tscn"
 const _SolidShrub3DScenePath := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
+const _OpenShrub3DScenePath := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
+const _StaticObstacleCollision := preload("res://environment/static_obstacle_collision.gd")
+const _CreatureMeshFootprint := preload("res://creature/capabilities/creature_mesh_footprint.gd")
 
 var _failures: int = 0
 
@@ -171,12 +174,17 @@ func _run_all() -> void:
   _test_creature_motor_stack_consideration_advances()
   _test_motor_planner_path_clearance_gated_by_cadence()
   _test_motor_planner_avoid_hostiles_refresh_on_consideration_only()
+  # §12.2 post-6d P4 — Flight flee waypoint latch + entry telemetry
+  _test_motor_planner_flight_close_range_forward_egress()
+  _test_motor_planner_flight_flee_waypoint_orbit_stable()
+  _test_motor_planner_flight_entry_telemetry_reset()
   _test_motor_planner_blocked_move_immediate_path_reevaluation()
   _test_creature_motor_stack_dual_isolation()
   _test_creature_motor_stack_integration_single_debit()
   await _test_awareness_zone_scan_live_food()
   await _test_awareness_zone_scan_carnivore_ignores_plants()
   await _test_awareness_zone_scan_carnivore_finds_prey()
+  await _test_awareness_zone_scan_carnivore_prey_not_flight_threat()
   await _test_awareness_zone_scan_herbivore_ignores_prey()
   _test_bush_food_diet_gate_carnivore()
   await _test_creature_motor_stack_carnivore_no_plant_seek()
@@ -196,6 +204,13 @@ func _run_all() -> void:
   _test_motor_explore_seek_zero_belief_baseline()
   _test_motor_explore_seek_chaos_breaks_bearing_tie()
   _test_motor_planner_find_food_hungry_memory_before_explore()
+  _test_motor_planner_find_food_moving_prey_memory_persists()
+  _test_motor_planner_find_food_moving_prey_requires_engagement_latch()
+  _test_motor_planner_find_food_engaged_prey_overrides_explore_first()
+  _test_motor_planner_find_food_moving_prey_latch_expires()
+  _test_motor_planner_find_food_moving_prey_blocked_by_threat()
+  _test_motor_planner_prey_engagement_latch_trait_scaled()
+  _test_creature_motor_stack_prey_eat_capture_and_memory()
   await _test_motor_path_fixture_open_nav()
   await _test_motor_path_fixture_blocked_nav()
   await _test_creature_motor_stack_seek_live_food()
@@ -252,6 +267,8 @@ func _run_all() -> void:
   _test_creature_perception_3d_scale()
   _test_creature_3d_template_scenes_load()
   _test_shrub_3d_visual_scenes_load()
+  await _test_shrub_mesh_collision_bake()
+  await _test_creature_capsule_fits_visual_mesh()
   await _test_creature_3d_predation_contact()
   _test_playfield_clamp()
   _test_playfield_bounds_3d_collision_only()
@@ -483,15 +500,32 @@ func _test_creature_3d_predation_contact() -> void:
   carn_root.global_position = contact
   await physics_frame
   await physics_frame
-  _assert(not prey_body.visible, "prey hidden after mob enters MobHitbox")
-  _assert(int(hit_state[0]) >= 1, "prey hit signal emitted on predation contact")
+  _assert(prey_body.visible, "MobHitbox contact does not defeat prey (D11 inert)")
+  _assert(int(hit_state[0]) == 0, "MobHitbox contact does not emit hit")
+  _assert(
+    is_equal_approx(float(pred_body.get("current_calories")), pred_cal_before),
+    "MobHitbox overlap does not grant meal — V3 EAT only",
+  )
+  var hb_cs := prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
+  _assert(hb_cs != null and not hb_cs.disabled, "prey MobHitbox stays enabled after contact overlap")
+  pred_body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  pred_body.global_position = contact + Vector3(3.5, 0.0, 0.0)
+  prey_body.global_position = contact
+  var stack := _motor_stack_test_configure(pred_body)
+  stack._planner_state["step_instance_id"] = prey_body.get_instance_id()
+  stack._planner_state["step_goal"] = prey_body.global_position
+  stack._planner_state["step_stimulus_kind_id"] = &"rabbit"
+  stack._planner_state["step_source"] = &"live"
+  stack.call("_try_complete_eat")
+  _assert(not prey_body.visible, "prey hidden after V3 EAT grant")
+  _assert(int(hit_state[0]) >= 1, "prey hit signal emitted on V3 EAT capture")
   _assert(
     float(pred_body.get("current_calories")) > pred_cal_before,
-    "predator gains calories from prey contact",
+    "predator gains calories from V3 EAT prey grant",
   )
   await physics_frame
-  var hb_cs := prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  _assert(hb_cs != null and hb_cs.disabled, "prey MobHitbox disabled after defeat")
+  hb_cs = prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
+  _assert(hb_cs != null and hb_cs.disabled, "prey MobHitbox disabled after V3 EAT defeat")
   herb_root.queue_free()
   carn_root.queue_free()
   floor_body.queue_free()
@@ -733,6 +767,7 @@ func _test_creature_motor_v3_explore_inventory_defaults() -> void:
     "goal_sated_patrol_urgency": 0.15,
     "goal_mapping_urgency": 0.35,
     "goal_consideration_chaos": 0.15,
+    "flee_waypoint_latch_ticks": 16.0,
   }
   for key in expected:
     _assert(ship.has(key), "explore/inventory ship defaults include %s" % str(key))
@@ -1401,6 +1436,291 @@ func _test_motor_planner_find_food_hungry_memory_before_explore() -> void:
     state.get("step_source", &"") == &"precise",
     "hungry under-stocked find_food still prefers memory seek before explore",
   )
+  main.queue_free()
+
+
+func _planner_carnivore_find_food_gate_ctx(
+  body: CharacterBody3D,
+  adapter: _MemoryAdapter,
+  calorie_ratio: float,
+  traits: Dictionary = {},
+) -> Dictionary:
+  var ctx := _planner_find_food_gate_ctx(body, adapter, calorie_ratio)
+  if adapter != null:
+    adapter.set_food_intake_policy(body.call("get_food_intake_policy"))
+  var trait_defaults := {
+    "explorer_builder": 0.0,
+    "change_stability": 0.0,
+    "compassion_self_interest": 0.0,
+    "community_individual": 0.0,
+  }
+  for k in traits.keys():
+    trait_defaults[k] = traits[k]
+  ctx["traits"] = trait_defaults
+  return ctx
+
+
+func _test_awareness_zone_scan_carnivore_prey_not_flight_threat() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var predator := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  predator.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var prey := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -12.0))
+  await process_frame
+  var scan := _AwarenessScan.scan_live(predator, _motor_v3_test_params(), main.get_tree())
+  var ready: Array = scan["food_split"]["ready"]
+  _assert(ready.size() >= 1, "carnivore still binds prey in food_split")
+  for threat_v in scan["threat_samples"] as Array:
+    if typeof(threat_v) != TYPE_DICTIONARY:
+      continue
+    var threat: Dictionary = threat_v
+    _assert(
+      int(threat.get("instance_id", 0)) != prey.get_instance_id(),
+      "diet-valid prey is not a carnivore Flight threat sample",
+    )
+  var herb := _spawn_herbivore_body(main, Vector3(40.0, 1.0, 0.0))
+  herb.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  predator.global_position = Vector3(40.0, 1.0, 12.0)
+  await process_frame
+  var herb_scan := _AwarenessScan.scan_live(herb, _motor_v3_test_params(), main.get_tree())
+  var saw_fox_threat := false
+  for threat_v2 in herb_scan["threat_samples"] as Array:
+    if typeof(threat_v2) != TYPE_DICTIONARY:
+      continue
+    if int((threat_v2 as Dictionary).get("instance_id", 0)) == predator.get_instance_id():
+      saw_fox_threat = true
+  _assert(saw_fox_threat, "herbivore still sees carnivore fox as threat after D1")
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_moving_prey_memory_persists() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var prey_iid := 93001
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_moving_prey_belief(
+    prey_iid, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -8.0), Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["prey_engagement_instance_id"] = prey_iid
+  state["prey_engagement_ticks_remaining"] = 20
+  state["prey_engagement_latch_total"] = 20
+  var ctx := _planner_carnivore_find_food_gate_ctx(body, adapter, 1.0)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"memory_moving",
+    "engaged carnivore continues find_food from moving memory after cone dropout",
+  )
+  _assert(int(state.get("step_instance_id", 0)) == prey_iid, "memory_moving binds engaged prey id")
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_moving_prey_requires_engagement_latch() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_moving_prey_belief(
+    93002, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -8.0), Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_carnivore_find_food_gate_ctx(body, adapter, 0.05)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") != &"memory_moving",
+    "moving prey consult requires engagement latch (no cold-start)",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_engaged_prey_overrides_explore_first() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var prey_iid := 93003
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_moving_prey_belief(
+    prey_iid, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -8.0), Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["prey_engagement_instance_id"] = prey_iid
+  state["prey_engagement_ticks_remaining"] = 30
+  state["prey_engagement_latch_total"] = 30
+  var ctx := _planner_carnivore_find_food_gate_ctx(body, adapter, 1.0)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"memory_moving",
+    "active engagement overrides under-stocked explore-first remint",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_moving_prey_latch_expires() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var prey_iid := 93004
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_moving_prey_belief(
+    prey_iid, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -8.0), Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["prey_engagement_instance_id"] = prey_iid
+  state["prey_engagement_ticks_remaining"] = 1
+  state["prey_engagement_latch_total"] = 40
+  var ctx := _planner_carnivore_find_food_gate_ctx(body, adapter, 1.0)
+  (_MotorPlanner as GDScript).call("_tick_prey_engagement_latch", ctx, state)
+  _assert(not int(state.get("prey_engagement_ticks_remaining", 0)) > 0, "latch expires after tick decay")
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") != &"memory_moving",
+    "expired latch falls back to normal find_food routing",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_find_food_moving_prey_blocked_by_threat() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = float(body.caloric_needs)
+  var prey_iid := 93005
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_moving_prey_belief(
+    prey_iid, Vector3(0.0, 0.0, -40.0), Vector3(0.0, 0.0, -8.0), Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["prey_engagement_instance_id"] = prey_iid
+  state["prey_engagement_ticks_remaining"] = 30
+  state["prey_engagement_latch_total"] = 30
+  var ctx := _planner_carnivore_find_food_gate_ctx(body, adapter, 1.0)
+  ctx["flight_fast_path_active"] = true
+  ctx["threat_samples"] = [
+    {"in_awareness": true, "gate_dist": 50.0, "instance_id": 99999},
+  ]
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") != &"memory_moving",
+    "G-A acute threat blocks moving prey consult",
+  )
+  var consult := adapter.consult_moving_prey_food(
+    prey_iid,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"]["food_split"],
+    int(ctx["now_ms"]),
+    {"flight_fast_path_active": true, "threat_samples": ctx["threat_samples"]},
+  )
+  _assert(not bool(consult.get("active", false)), "consult API inactive under G-A")
+  var consult_open := adapter.consult_moving_prey_food(
+    prey_iid,
+    body.global_position,
+    ctx["motor_v3"],
+    ctx["scan"]["food_split"],
+    int(ctx["now_ms"]),
+    {"flight_fast_path_active": false, "threat_samples": []},
+  )
+  _assert(bool(consult_open.get("active", false)), "prey belief row persists after G-A block clears")
+  main.queue_free()
+
+
+func _test_motor_planner_prey_engagement_latch_trait_scaled() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var ctx_change := {
+    "traits": {"change_stability": -100.0},
+    "motor_v3": motor_v3,
+  }
+  var ctx_stable := {
+    "traits": {"change_stability": 100.0},
+    "motor_v3": motor_v3,
+  }
+  var short_ticks: int = (_MotorPlanner as GDScript).call(
+    "_effective_prey_engagement_latch_ticks", ctx_change, motor_v3
+  )
+  var long_ticks: int = (_MotorPlanner as GDScript).call(
+    "_effective_prey_engagement_latch_ticks", ctx_stable, motor_v3
+  )
+  _assert(short_ticks < long_ticks, "Change trait yields shorter engagement latch than Stability")
+  _assert(short_ticks >= int(motor_v3.get("predator_prey_engagement_latch_ticks_min", 8)), "latch respects floor")
+
+
+func _test_creature_motor_stack_prey_eat_capture_and_memory() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var pred := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var prey := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 0.0))
+  pred.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var stack := _motor_stack_test_configure(pred)
+  var before := float(pred.current_calories)
+  stack._planner_state["step_instance_id"] = prey.get_instance_id()
+  stack._planner_state["step_goal"] = prey.global_position
+  stack._planner_state["step_stimulus_kind_id"] = &"rabbit"
+  stack.call("_try_complete_eat")
+  _assert(not prey.visible, "prey EAT grant defeats prey body")
+  _assert(float(pred.current_calories) > before, "predator gains calories from prey EAT")
+  var snap := stack.get_debug_snapshot()
+  _assert(snap.has("prey_engagement_instance_id"), "debug snapshot exposes prey engagement fields")
   main.queue_free()
 
 
@@ -3976,6 +4296,225 @@ func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
   main.queue_free()
 
 
+func _flight_test_threat_at(pos: Vector3, gate_dist: float) -> Dictionary:
+  var threat := _ThreatSampleScr.make(Vector2(pos.x, pos.z), gate_dist, true)
+  threat["world_pos_3d"] = pos
+  threat["in_awareness"] = true
+  return threat
+
+
+func _flight_test_planner_ctx(
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  main: Node3D,
+  threat: Dictionary,
+  flight_fast_path_active: bool,
+  flight_just_entered: bool = false,
+) -> Dictionary:
+  return {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {},
+    "threat_samples": [threat],
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": [threat]},
+    "flight_fast_path_active": flight_fast_path_active,
+    "flight_just_entered": flight_just_entered,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+
+
+func _test_motor_planner_flight_close_range_forward_egress() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(8.0, 1.0, 0.0), 8.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  var state := _MotorPlanner.new_state()
+  var start_pos: Vector3 = body.global_position
+  var threat_bearing := (threat["world_pos_3d"] as Vector3) - start_pos
+  threat_bearing.y = 0.0
+  threat_bearing = threat_bearing.normalized()
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  var stuck_eps: float = (_MotorPlanner as GDScript).call(
+    "_latched_stuck_move_epsilon", motor_v3, body, 1.0 / 60.0
+  )
+  var saw_aligned_move := false
+  for tick_i in 12:
+    ctx["physics_tick"] = tick_i + 1
+    ctx["flight_just_entered"] = tick_i == 0
+    var act := _MotorPlanner.select_action(ctx, state)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      var pos_before := body.global_position
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      _motor_planner_note_outcome(
+        state,
+        body,
+        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
+        motor_v3,
+        tick_i + 1,
+        pos_before,
+        false,
+      )
+    elif act == _MotorAction.MOVE_FORWARD:
+      var facing: Vector3 = body.last_move_direction.normalized()
+      var to_goal: Vector3 = (state.get("step_goal", Vector3.ZERO) - body.global_position)
+      to_goal.y = 0.0
+      var dot := facing.dot(to_goal.normalized())
+      var pos_before := body.global_position
+      var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      _motor_planner_note_outcome(
+        state,
+        body,
+        outcome,
+        motor_v3,
+        tick_i + 1,
+        pos_before,
+        false,
+      )
+      if dot >= move_min_dot - 0.01:
+        saw_aligned_move = true
+  _assert(saw_aligned_move, "flight close range: aligned MOVE_F within 12 ticks")
+  var away := body.global_position - start_pos
+  away.y = 0.0
+  _assert(
+    away.dot(-threat_bearing) >= stuck_eps - 0.01,
+    "flight close range: net displacement away from threat",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.set_use_v3_action_calories(true)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(8.0, 1.0, 0.0), 8.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  var state := _MotorPlanner.new_state()
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  var actions: Array[int] = []
+  var saw_aligned_move := false
+  for tick_i in 24:
+    var angle := float(tick_i) * 0.35
+    var threat_pos := Vector3(8.0 * cos(angle), 1.0, 8.0 * sin(angle))
+    threat["world_pos_3d"] = threat_pos
+    threat["world_pos"] = Vector2(threat_pos.x, threat_pos.z)
+    ctx["threat_samples"] = [threat]
+    ctx["scan"]["threat_samples"] = [threat]
+    ctx["physics_tick"] = tick_i + 1
+    ctx["flight_just_entered"] = tick_i == 0
+    var remaining_before := int(state.get("flee_waypoint_ticks_remaining", 0))
+    var wp_before: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+    var act := _MotorPlanner.select_action(ctx, state)
+    actions.append(act)
+    var blocked_move := false
+    if tick_i == 0:
+      _assert(
+        wp_before.length_squared() < 1e-8 and (state.get("flee_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
+        "orbit flight: entry tick arms flee_waypoint",
+      )
+    elif remaining_before > 0 and wp_before.length_squared() > 1e-8:
+      _assert(
+        (state.get("flee_waypoint", Vector3.ZERO) as Vector3).distance_to(wp_before) < 0.01,
+        "orbit flight: flee_waypoint stable while latch active",
+      )
+      _assert(
+        (state.get("step_goal", Vector3.ZERO) as Vector3).distance_to(wp_before) < 0.01,
+        "orbit flight: step_goal matches latched flee_waypoint",
+      )
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      var pos_before := body.global_position
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      _motor_planner_note_outcome(
+        state,
+        body,
+        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
+        motor_v3,
+        tick_i + 1,
+        pos_before,
+        false,
+      )
+    elif act == _MotorAction.MOVE_FORWARD:
+      var pos_before := body.global_position
+      var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
+      blocked_move = outcome.blocked
+      _motor_planner_note_outcome(
+        state,
+        body,
+        outcome,
+        motor_v3,
+        tick_i + 1,
+        pos_before,
+        false,
+      )
+      if not blocked_move:
+        var facing: Vector3 = body.last_move_direction.normalized()
+        var to_goal: Vector3 = (state.get("step_goal", Vector3.ZERO) - body.global_position)
+        to_goal.y = 0.0
+        if to_goal.length_squared() > 1e-8 and facing.dot(to_goal.normalized()) >= move_min_dot - 0.01:
+          saw_aligned_move = true
+  for start_i in range(max(0, actions.size() - 15)):
+    var window: Array[int] = actions.slice(start_i, start_i + 16)
+    for j in range(window.size() - 1):
+      var a: int = window[j]
+      var b: int = window[j + 1]
+      var is_flip := (
+        (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
+        or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
+      )
+      _assert(not is_flip, "orbit flight: no adjacent opposite turn pair in 16-tick window")
+  _assert(saw_aligned_move, "orbit flight: at least one aligned MOVE_F")
+  main.queue_free()
+
+
+func _test_motor_planner_flight_entry_telemetry_reset() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(8.0, 1.0, 0.0), 8.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  var state := _MotorPlanner.new_state()
+  state["step_instance_id"] = 42
+  state["step_stimulus_kind_id"] = &"stale_kind"
+  state["blocked_objective_action"] = &"detour"
+  state["consecutive_blocked"] = 5
+  state["boundary_scan_active"] = true
+  state["boundary_scan_sign"] = 1
+  _MotorPlanner.select_action(ctx, state)
+  _assert(int(state.get("step_instance_id", -1)) == 0, "flight entry clears step_instance_id")
+  _assert(state.get("step_stimulus_kind_id", &"x") == &"", "flight entry clears step_stimulus_kind_id")
+  _assert(state.get("blocked_objective_action", &"x") == &"", "flight entry clears blocked_objective_action")
+  _assert(int(state.get("consecutive_blocked", -1)) == 0, "flight entry clears consecutive_blocked")
+  _assert(not bool(state.get("boundary_scan_active", true)), "flight entry clears boundary_scan_active")
+  _assert(int(state.get("boundary_scan_sign", -1)) == 0, "flight entry clears boundary_scan_sign")
+  _assert(state.get("step_source", &"") == &"live", "flight entry sets step_source live")
+  _assert(
+    (state.get("flee_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
+    "flight entry arms flee_waypoint",
+  )
+  _assert(
+    int(state.get("flee_waypoint_ticks_remaining", 0)) > 0,
+    "flight entry arms flee_waypoint_ticks_remaining",
+  )
+  main.queue_free()
+
+
 func _test_motor_planner_blocked_move_immediate_path_reevaluation() -> void:
   var motor_v3 := _motor_v3_test_params()
   var main := Node3D.new()
@@ -5218,6 +5757,81 @@ func _test_shrub_3d_visual_scenes_load() -> void:
     _assert(not ready_v.visible, "%s ready hidden when depleted" % path)
     _assert(depleted_v.visible, "%s depleted visible when empty" % path)
     holder.queue_free()
+
+func _count_collision_shapes(body: StaticBody3D) -> int:
+  var n := 0
+  for ch in body.get_children():
+    if ch is CollisionShape3D:
+      n += 1
+  return n
+
+func _await_shrub_collision_bake() -> void:
+  await create_timer(0.05).timeout
+
+func _test_shrub_mesh_collision_bake() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var solid := _spawn_food_bush(main, Vector3(0.0, 1.0, 0.0))
+  await _await_shrub_collision_bake()
+  var solid_blocker := solid.get_node_or_null("StaticBody3D") as StaticBody3D
+  _assert(solid_blocker != null, "solid shrub has StaticBody3D blocker shell")
+  _assert(
+    _count_collision_shapes(solid_blocker) >= 1,
+    "solid shrub bakes convex mesh collision on blocker",
+  )
+  var ready_v := solid.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var mesh_aabb: Dictionary = _StaticObstacleCollision.world_mesh_aabb(ready_v)
+  _assert(
+    float(mesh_aabb.get("xz_radius", 0.0)) > 1.0,
+    "solid shrub visual footprint exceeds legacy 0.8 m placeholder sphere",
+  )
+  var open_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  _assert(open_scene != null, "open_shrub_3d loads for mesh collision bake")
+  var open := open_scene.instantiate() as Node3D
+  main.add_child(open)
+  open.global_position = Vector3(4.0, 1.0, 0.0)
+  await _await_shrub_collision_bake()
+  var mob_blocker := open.get_node_or_null("MobBlocker") as StaticBody3D
+  _assert(mob_blocker != null, "open shrub has MobBlocker shell")
+  _assert(
+    _count_collision_shapes(mob_blocker) >= 1,
+    "open shrub bakes convex mesh collision on MobBlocker",
+  )
+  var pickup_cs := open.get_node_or_null("CalorieArea/CollisionShape3D") as CollisionShape3D
+  _assert(pickup_cs != null, "open shrub CalorieArea gains pickup sphere after mesh bake")
+  _assert(
+    pickup_cs.shape is SphereShape3D and (pickup_cs.shape as SphereShape3D).radius > 1.0,
+    "open shrub pickup radius follows visual mesh footprint",
+  )
+  main.queue_free()
+
+func _test_creature_capsule_fits_visual_mesh() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  for label_pair in [
+    ["fox", _instantiate_carnivore_root()],
+    ["rabbit", _instantiate_herbivore_root()],
+  ]:
+    var tag: String = label_pair[0]
+    var creature_root := label_pair[1] as Node3D
+    main.add_child(creature_root)
+    if creature_root.has_method(&"_propagate_definition_to_children"):
+      creature_root.call("_propagate_definition_to_children")
+    await create_timer(0.05).timeout
+    var body := creature_root.get_node_or_null("Body") as CharacterBody3D
+    var visual := body.get_node_or_null("Visual") as Node3D if body != null else null
+    _assert(visual != null, "%s duel body mounts Visual mesh" % tag)
+    var local_aabb := _CreatureMeshFootprint.mesh_aabb_in_body_local(body, visual)
+    _assert(bool(local_aabb.get("valid", false)), "%s visual yields body-local mesh AABB" % tag)
+    var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+    _assert(cs != null and cs.shape is CapsuleShape3D, "%s body keeps capsule collider" % tag)
+    var cap := cs.shape as CapsuleShape3D
+    _assert(
+      cap.radius >= float(local_aabb.get("radius", 0.0)) * 0.85,
+      "%s capsule radius tracks visual mesh width" % tag,
+    )
+    creature_root.queue_free()
+  main.queue_free()
 
 func _test_tokens() -> void:
   _assert(_Tokens.normalize_completion_token("  left\nnoise") == "LEFT", "token first line")

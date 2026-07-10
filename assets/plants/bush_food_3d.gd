@@ -2,6 +2,7 @@ extends Node3D
 ## 3D calorie pool + player-only pickup for food shrubs ([ENVIRONMENT_MODEL_PLAN.md §6](../../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)).
 
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
+const _StaticObstacleCollision := preload("res://environment/static_obstacle_collision.gd")
 
 signal calories_changed
 
@@ -37,6 +38,45 @@ func _ready() -> void:
     _calorie_area.body_exited.connect(_on_calorie_body_exited)
   current_calories = float(max_calories)
   _refresh_visual()
+  call_deferred("_sync_mesh_collision_from_visual")
+
+
+func _sync_mesh_collision_from_visual() -> void:
+  var visual := _active_visual_root()
+  if visual == null:
+    return
+  var blocker := _find_blocker_body()
+  if blocker != null:
+    var shapes := _StaticObstacleCollision.sync_convex_blocker_from_visual(blocker, visual)
+    if shapes <= 0:
+      _OLogSafe.error(
+        "bush_food_3d failed to bake blocker collision on %s — check Visual mesh" % name,
+        false,
+        "FoodPlant",
+      )
+  if _calorie_area != null:
+    _StaticObstacleCollision.fit_pickup_sphere_from_visual(_calorie_area, visual, 0.15)
+    var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+    if bool(aabb.get("valid", false)):
+      var center: Vector3 = aabb.get("center", global_position)
+      _calorie_area.position = global_transform.affine_inverse() * center
+
+
+func _find_blocker_body() -> StaticBody3D:
+  var sb := get_node_or_null("StaticBody3D") as StaticBody3D
+  if sb != null:
+    return sb
+  return get_node_or_null("MobBlocker") as StaticBody3D
+
+
+func _active_visual_root() -> Node3D:
+  if _ready_visual != null and _ready_visual.visible:
+    return _ready_visual
+  if _depleted_visual != null and _depleted_visual.visible:
+    return _depleted_visual
+  if _ready_visual != null:
+    return _ready_visual
+  return _depleted_visual
 
 
 func reset_session() -> void:
@@ -59,6 +99,7 @@ func _refresh_visual() -> void:
     _ready_visual.visible = full
   if _depleted_visual != null:
     _depleted_visual.visible = not full
+  call_deferred("_sync_mesh_collision_from_visual")
 
 
 ## Remove Blender preview Light3D / Camera3D nodes bundled in imported .blend scenes.

@@ -307,6 +307,16 @@ static func sample_best_moving(
   }
 
 
+## Light intercept objective for latch-gated moving prey consult (§12.2 D5).
+static func moving_seek_objective_pos(row: Dictionary, motor_p: Dictionary) -> Vector3:
+  var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
+  var vel: Vector3 = _read_vel_v3(row.get("last_velocity", Vector3.ZERO))
+  if vel.length_squared() < 1e-8:
+    return last_pos
+  var horizon := float(motor_p.get("goal_memory_ghost_horizon_sec", 0.4))
+  return last_pos + vel * horizon
+
+
 ## True when a precise remembered [code]avoid_hostiles[/code] mover is still in envelope.
 static func has_remembered_avoid_threat(
   beliefs: Dictionary,

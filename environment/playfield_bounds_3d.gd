@@ -4,6 +4,7 @@ class_name PlayfieldBounds3D
 
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _MeshWorldAabb3D := preload("res://environment/mesh_world_aabb_3d.gd")
 
 const WORLD_STATIC_COLLISION_MASK := 1
 const GROUND_RAY_HEIGHT := 256.0
@@ -24,7 +25,7 @@ static func xz_bounds_from_playfield_root(root: Node3D) -> Dictionary:
   var mx: Vector3 = acc[1]
   if mn.x >= mx.x or mn.z >= mx.z:
     acc = [Vector3(INF, INF, INF), Vector3(-INF, -INF, -INF)]
-    _accumulate_mesh_bounds(root, acc)
+    _MeshWorldAabb3D.accumulate_mesh_bounds(root, acc)
     mn = acc[0]
     mx = acc[1]
     if mn.x >= mx.x or mn.z >= mx.z:
@@ -65,17 +66,20 @@ static func _accumulate_collision_bounds(node: Node, acc: Array) -> void:
 
 ## Fallback when a playfield import has meshes but no collision yet.
 static func _accumulate_mesh_bounds(node: Node, acc: Array) -> void:
-  if node is MeshInstance3D:
-    _accumulate_mesh_instance(node as MeshInstance3D, acc)
-  for ch in node.get_children():
-    _accumulate_mesh_bounds(ch, acc)
+  _MeshWorldAabb3D.accumulate_mesh_bounds(node, acc)
+
+
+## World-space AABB of all [MeshInstance3D] under [param root].
+## Returns [code]valid[/code], [code]min[/code], [code]max[/code], [code]center[/code], [code]xz_radius[/code].
+static func world_mesh_aabb(root: Node) -> Dictionary:
+  return _MeshWorldAabb3D.world_mesh_aabb(root)
 
 
 static func _accumulate_collision_shape(cs: CollisionShape3D, acc: Array) -> void:
   var sh: Shape3D = cs.shape
   if sh == null:
     return
-  var xf: Transform3D = _node_global_transform(cs)
+  var xf: Transform3D = _MeshWorldAabb3D.node_global_transform(cs)
   if sh is BoxShape3D:
     _accumulate_box(xf, (sh as BoxShape3D).size, acc)
   elif sh is SphereShape3D:
@@ -86,41 +90,6 @@ static func _accumulate_collision_shape(cs: CollisionShape3D, acc: Array) -> voi
   elif sh is CylinderShape3D:
     var cyl := sh as CylinderShape3D
     _accumulate_cylinder(xf, cyl.radius, cyl.height, acc)
-
-
-static func _accumulate_mesh_instance(mi: MeshInstance3D, acc: Array) -> void:
-  var mesh: Mesh = mi.mesh
-  if mesh == null:
-    return
-  var local_aabb := mesh.get_aabb()
-  var corners := _box_corners_local(local_aabb.size)
-  var origin := local_aabb.position
-  var mi_xf := _node_global_transform(mi)
-  var mn: Vector3 = acc[0]
-  var mx: Vector3 = acc[1]
-  for c in corners:
-    var w: Vector3 = mi_xf * (origin + c)
-    mn.x = minf(mn.x, w.x)
-    mn.y = minf(mn.y, w.y)
-    mn.z = minf(mn.z, w.z)
-    mx.x = maxf(mx.x, w.x)
-    mx.y = maxf(mx.y, w.y)
-    mx.z = maxf(mx.z, w.z)
-  acc[0] = mn
-  acc[1] = mx
-
-
-static func _box_corners_local(size: Vector3) -> Array:
-  return [
-    Vector3.ZERO,
-    Vector3(size.x, 0.0, 0.0),
-    Vector3(size.x, 0.0, size.z),
-    Vector3(0.0, 0.0, size.z),
-    Vector3(0.0, size.y, 0.0),
-    Vector3(size.x, size.y, 0.0),
-    Vector3(size.x, size.y, size.z),
-    Vector3(0.0, size.y, size.z),
-  ]
 
 
 static func _accumulate_box(xf: Transform3D, size: Vector3, acc: Array) -> void:
@@ -177,22 +146,6 @@ static func _accumulate_capsule(xf: Transform3D, radius: float, height: float, a
 
 static func _accumulate_cylinder(xf: Transform3D, radius: float, height: float, acc: Array) -> void:
   _accumulate_capsule(xf, radius, height, acc)
-
-
-## Global transform for bounds walks — uses scene graph when not yet in-tree (headless fixtures).
-static func _node_global_transform(node: Node3D) -> Transform3D:
-  if node.is_inside_tree():
-    return node.global_transform
-  var chain: Array[Node3D] = []
-  var cur: Node = node
-  while cur is Node3D:
-    chain.append(cur as Node3D)
-    cur = cur.get_parent()
-  chain.reverse()
-  var xf := Transform3D.IDENTITY
-  for n in chain:
-    xf = xf * n.transform
-  return xf
 
 
 ## Maps a normalized playfield fraction ([code]0..1[/code] on XZ) to a grounded world position.
@@ -359,7 +312,7 @@ static func _accum_mesh_bottom_in_root_space(prop_root: Node3D, node: Node, acc:
     if mesh != null:
       var local_aabb := mesh.get_aabb()
       var root_inv := prop_root.global_transform.affine_inverse()
-      for c in _box_corners_local(local_aabb.size):
+      for c in _MeshWorldAabb3D.box_corners_local(local_aabb.size):
         var mesh_point: Vector3 = local_aabb.position + c
         var in_root: Vector3 = root_inv * (mi.global_transform * mesh_point)
         acc[0] = minf(float(acc[0]), in_root.y)
@@ -433,6 +386,9 @@ static func ensure_world_static_layers(node: Node) -> void:
 
 
 ## Bakes trimesh colliders for mesh-only obstacle imports and tags bodies for motor + physics.
+## Policy: skips baking when any [StaticBody3D] already exists (authored shells bake in scene code).
+## Mesh-only imports (e.g. boulders) must ship without [StaticBody3D] so spawn-time trimesh bake runs.
+## See [StaticObstacleCollision] and [ENVIRONMENT_MODEL_PLAN.md §6.3](../../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
 ## Returns the number of [StaticBody3D] colliders now under [param root] (existing or newly added).
 static func ensure_obstacle_physics(root: Node3D) -> int:
   if root == null:

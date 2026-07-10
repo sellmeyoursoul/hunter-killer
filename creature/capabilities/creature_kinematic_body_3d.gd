@@ -11,6 +11,7 @@ const _DefScript := _CreatureDefinition
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
+const _CreatureMeshFootprint := preload("res://creature/capabilities/creature_mesh_footprint.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
@@ -141,7 +142,7 @@ func apply_effective_creature_size(size: float) -> void:
   creature_size = size
   scale = Vector3.ONE * factor
   _apply_capsule_scale(factor, "CollisionShape3D")
-  _apply_capsule_scale(factor, "MobHitbox/CollisionShape3D")
+  _apply_capsule_scale(factor, "MobHitbox/CollisionShape3D", 1.15)
 
 
 func get_collision_capsule_radius() -> float:
@@ -159,18 +160,59 @@ func get_los_eye_height() -> float:
   return get_collision_capsule_height() * 0.9
 
 
-func _apply_capsule_scale(factor: float, node_path: String) -> void:
+func _apply_capsule_scale(factor: float, node_path: String, radius_mul: float = 1.0) -> void:
   var col := get_node_or_null(node_path) as CollisionShape3D
   if col == null:
     return
   if not (col.shape is CapsuleShape3D):
     return
-  var cap := col.shape as CapsuleShape3D
-  if not cap.resource_local_to_scene:
-    col.shape = cap.duplicate()
-    cap = col.shape as CapsuleShape3D
-  cap.radius = _base_capsule_radius * factor
-  cap.height = _base_capsule_height * factor
+  var fit_radius := _base_capsule_radius * factor * radius_mul
+  var fit_height := maxf(_base_capsule_height * factor, fit_radius * 2.0 + 0.05)
+  var cap := CapsuleShape3D.new()
+  cap.height = fit_height
+  cap.radius = fit_radius
+  col.shape = cap
+
+
+## Resizes body + MobHitbox capsules to match [param visual_root] mesh AABB ([code]CreatureMeshFootprint[/code]).
+## Params:
+## - visual_root: Mounted [code]Visual[/code] subtree (no collision).
+## - inset_ratio: Horizontal shrink on XZ radius (default 0.92).
+## Returns true when capsule dimensions were applied.
+func apply_capsule_footprint_from_visual(visual_root: Node3D, inset_ratio: float = 0.92) -> bool:
+  if visual_root == null:
+    return false
+  var aabb := _CreatureMeshFootprint.mesh_aabb_in_body_local(self, visual_root)
+  if not bool(aabb.get("valid", false)):
+    return false
+  var ratio := clampf(inset_ratio, 0.5, 1.0)
+  _base_capsule_radius = maxf(0.05, float(aabb.get("radius", 0.0)) * ratio)
+  _base_capsule_height = maxf(0.05, float(aabb.get("height", 0.0)))
+  _base_capsule_height = maxf(_base_capsule_height, _base_capsule_radius * 2.0 + 0.05)
+  var center: Vector3 = aabb.get("center", Vector3.ZERO)
+  var body_col := get_node_or_null("CollisionShape3D") as CollisionShape3D
+  if body_col != null:
+    body_col.position = center
+  var hit_col := get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
+  if hit_col != null:
+    hit_col.position = center
+  var factor := creature_size / maxf(_base_creature_size, 1e-6)
+  scale = Vector3.ONE * factor
+  if body_col != null:
+    var body_cap := CapsuleShape3D.new()
+    var fit_radius := _base_capsule_radius * factor
+    var fit_height := maxf(_base_capsule_height * factor, fit_radius * 2.0 + 0.05)
+    body_cap.height = fit_height
+    body_cap.radius = fit_radius
+    body_col.shape = body_cap
+  if hit_col != null:
+    var hit_cap := CapsuleShape3D.new()
+    var hit_radius := _base_capsule_radius * factor * 1.15
+    var hit_height := maxf(_base_capsule_height * factor, hit_radius * 2.0 + 0.05)
+    hit_cap.height = hit_height
+    hit_cap.radius = hit_radius
+    hit_col.shape = hit_cap
+  return true
 
 
 func _apply_physics_layers() -> void:
@@ -395,24 +437,27 @@ func _apply_defeat_local() -> void:
     hb_cs.set_deferred("disabled", true)
 
 
-func _on_mob_hitbox_body_entered(body: Node3D) -> void:
-  if is_hostile:
-    return
-  var hostile := false
-  if body.get("is_hostile") != null:
-    hostile = bool(body.get("is_hostile"))
-  elif body.get("isHostile") != null:
-    hostile = bool(body.get("isHostile"))
-  if not hostile:
-    return
+func try_grant_as_prey_to(predator: CharacterBody3D) -> bool:
+  if _defeat_hidden or predator == null:
+    return false
+  if not predator.has_method(&"add_calories_from_prey"):
+    return false
+  var policy: Resource = _DietRegistry.food_intake_policy_for_body(predator)
+  if policy == null or not _DietRegistry.node_is_valid_food_for_policy(self, policy):
+    return false
   var meal := 5
   var gc := get_node_or_null("/root/GameConfig")
   if gc != null and gc.has_method(&"get_creature_motor_params"):
     meal = int(gc.get_creature_motor_params().get("predator_prey_meal_calories", meal))
-  if body.has_method(&"add_calories_from_prey"):
-    body.call(&"add_calories_from_prey", meal)
+  predator.call(&"add_calories_from_prey", meal)
   _apply_defeat_local()
   hit.emit()
+  return true
+
+
+func _on_mob_hitbox_body_entered(_body: Node3D) -> void:
+  ## D11 — contact predation retired; prey defeat via V3 [code]EAT[/code] only.
+  return
 
 
 func _motor_distance_scale() -> float:

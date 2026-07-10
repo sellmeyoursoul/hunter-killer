@@ -1,5 +1,7 @@
 Purpose: Working spec for ENGINE creature movement and goal refactor (V3). **Authority:** supersedes V2 + POST_LOS; greenfield `creature/motor/` design. Sibling docs ([CREATURE_GOAL_DRIVERS.md](CREATURE_GOAL_DRIVERS.md), [CREATURE_MEMORY.md](CREATURE_MEMORY.md)) refactored separately — V3 defines the **planner interface** they must satisfy. **Sibling rework:** resolved checklists **§12.3** (apply at Step 3 / before **6d** close; **§13 Tracking**).
 
+**Cleanup / gap work:** Bug fixes and implementation-gap **design** (post-ship playtest, CI smoke extensions) live in [CREATURE_MOVEMENT_V3_CLEANUP.md](CREATURE_MOVEMENT_V3_CLEANUP.md) — not §12 phasing. Promote closed items back into this spec or §12 when scheduled.
+
 **Step 1 (2026-06-20):** Promoted to [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); [CREATURE_MOVEMENT_V2.md](../Completed_Features/CREATURE_MOVEMENT_V2.md) + [POST_LOS_MOVEMENT.md](../Completed_Features/POST_LOS_MOVEMENT.md) archived with supersession banners; registered in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 
 # Definitions
@@ -60,7 +62,10 @@ NOTE: The evaluation should factor in goal urgency and ease of accomplishment (i
 | Precise instance belief (§8.2) | **0.75** | `precise` |
 | Coarse bearing only (§8.3) | **0.45** | `coarse` |
 | Locale prior / hotspot (§9 tactic layer) | **0.25** | `locale` |
+| Latch-gated moving prey (`memory_moving`, §12.2 post-6d-explore-prey) | **0.75** (`FEASIBILITY_MEMORY_MOVING` — same as precise when latch + consult active) | `memory_moving` |
 | None (generic explore) | **0.0** | `explore` |
+
+**Open — `memory_moving` hub feasibility (2026-07-09):** §12.2 adds planner `step_source = memory_moving` (latch-gated dropout bridge) but this §1 table has no settled hub feasibility tier. During cone dropout, [`best_find_food_feasibility`](../../creature/motor/memory_adapter.gd) may return **0.0** (floor only) while the planner still pursues via engagement latch — hub weight can under-score `find_food` vs other goals on the same consideration tick. **Ship v1:** document gap; impl may use **`FEASIBILITY_PRECISE` (0.75)** when engagement latch is valid and `consult_moving_prey_food` would be active, **or** accept floor-only during latch (incumbent wins on urgency). **Resolve at implementation** — add row to table when chosen; playtest gate if hub switches goals mid-chase.
 
 **Resolved — per-goal `base` (`creature_motor_v3`):** Temperament multiplier (typical range **0…2**; ship profile uses **~0.5–1.0**). **Not** V2 `weight_seek_*` cardinal keys. Species packs may override.
 
@@ -245,7 +250,7 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 
 **Disposition:** [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) → **`delete`** at **§12.2 6b**; hub eligibility lives in new V3 hub module under `creature/motor/`.
 
-**Resolved — trait channels v1 (stub):** **Do not** wire non-zero trait coefficients in **`creature_motor_v3`** for V3 v1. Hub consideration: **`trait_goal_mul = 1.0`** always. Planner tactic style: **`trait_tactic_mul = 1.0`** always (reserved hook — no separate module in v1). **Do not** call [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) from the V3 hub — it maps **`dom_leaf` → Tier-2 urgency channels**, the same dual-control pattern retired with **`tier2_dominance.gd`** (§1).
+**Resolved — trait channels v1 (stub):** **Do not** wire non-zero trait coefficients in **`creature_motor_v3`** for V3 v1. Hub consideration: **`trait_goal_mul = 1.0`** always. Planner tactic style: **`trait_tactic_mul = 1.0`** always (reserved hook — no separate module in v1). **Exception — post-6d-explore-prey (D10):** **`change_stability`** modulates prey **engagement latch duration** only (pursuit dropout bridge — not hub scoring). **Do not** call [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) from the V3 hub — it maps **`dom_leaf` → Tier-2 urgency channels**, the same dual-control pattern retired with **`tier2_dominance.gd`** (§1).
 
 **Long-term intent (deferred — no full spec in this doc):** Traits should bias **how** an active goal is **implemented** (target choice, seek vs local commit, persist / switch / seek — [CREATURE_GOAL_DRIVERS.md §3.1–3.2](CREATURE_GOAL_DRIVERS.md)), **not** which hub goal wins consideration. Example: Eat + Explorer + sated calories → seek novel food sources; Eat + Builder → persist on known local patch; Change → favor seek/switch; Stability → favor persist/wait. Numerics and module ownership ship post–V3 v1 ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) — **Post–V3 trait tactic modulator**). **V3 v1 intentional:** **`trait_goal_mul = 1.0`** at hub; personality via **`replay_weight`** / locale priors at memory consult (**6d**) only.
 
@@ -458,8 +463,9 @@ Legacy ASCII for **blocked-primary** and **seek** branches — invoked from §3.
 | Artifact | Path | Role |
 |----------|------|------|
 | **Fixture builder** | [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) (new) | Headless-only: spawn flat walkable floor + `NavigationRegion3D`, **sync bake**, return valid `map_rid` |
-| **Layout variants** | same module | **`open`** — clear floor nav path; **`blocked`** — floor + static AABB wall for backtrack / detour slices |
+| **Layout variants** | same module | **`open`** — clear floor nav path; **`blocked`** — floor + static AABB wall for backtrack / detour slices; **`pursuit_pinch`** — [CLEANUP](CREATURE_MOVEMENT_V3_CLEANUP.md) carnivore–prey obstacle smoke (proposed) |
 | **Main stub hook** | extend [`tests/terrain_test_main_stub.gd`](../../tests/terrain_test_main_stub.gd) | Add **`get_navigation_map_rid()`** delegating to active fixture (same contract as `main_3d`) |
+| **Cleanup hub** | [CREATURE_MOVEMENT_V3_CLEANUP.md](CREATURE_MOVEMENT_V3_CLEANUP.md) | Bug/gap design; headless smoke extensions beyond `open` / `blocked` |
 
 **Fixture contract (6c CI gates):**
 
@@ -469,7 +475,7 @@ Legacy ASCII for **blocked-primary** and **seek** branches — invoked from §3.
 4. **Teardown** — free fixture nodes after each test (or per `run_all` group) so CI stays deterministic.
 5. **Fallback slice** — one separate headless test uses **invalid** `RID()` to assert detour / `STEP_MODE_NONE` fallback — **not** a substitute for navmesh-first slices.
 
-**Out of scope for fixture:** grasslands art pack, interior boulders, LLM/HUD, creature pack merge — keep tests fast. Full duel scene remains **manual smoke** only (§12.2 **6c**).
+**Out of scope for fixture:** grasslands art pack, interior boulders, LLM/HUD, creature pack merge — keep tests fast. Full duel scene remains **manual smoke** only (§12.2 **6c**). **Complex pursuit / obstacle geometry** (carnivore + live prey + pinch wall) — design and L1 smoke spec in [CREATURE_MOVEMENT_V3_CLEANUP.md](CREATURE_MOVEMENT_V3_CLEANUP.md) § smoke test engineering.
 
 **Resolved — backtrack v1:** **Approach-heading TTL memory** only ([`blocked_approach_memory.gd`](../../creature/motor/blocked_approach_memory.gd) pattern) — no position stack in v1. Invoked from §3.2 **reevaluate** only (not §3.1).
 
@@ -759,13 +765,15 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 2. **`goal_source_memory.try_salient_write`** — `find_food` locale prior (unchanged §14.4).
 3. **Instance sync** — refresh `consumable_now` / position on matching `instance_id` when still tracked.
 
+**Planned — prey EAT (post-6d-explore-prey D11):** Same write contract as plants when predator completes `EAT` on a diet-valid prey **`CharacterBody3D`**. **`stimulus_kind_id`** = prey **`CreatureDefinition.species_id`** (live scan convention — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd)); enables kind memory for multiple prey types without per-creature scene keys. Replaces active **`MobHitbox`** contact predation ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) — left inert until later template cleanup). Range: shared **`eat_action_max_distance`** (**5**).
+
 **Deferred — variable bite / pool / sharing:** Today plants are static one-bite-full-depletion; schema allows **`believed_calories_per_action`** separate from pool size when [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) lands. V3 wires **`calories_gained`** observation only.
 
 **Deferred — trait modulation on kind confidence:** Traits will bias how fast confidence grows and how strongly kind beliefs affect scoring — v1 omniscient `stimulus_kind_id`, neutral unseen, trait channels stub **1.0** (§1).
 
 **Phasing:** **6c** — ingest includes `stimulus_kind_id`; live target ranking uses kind consult with neutral priors; **no** kind EWMA writes. **6d** — full adapter: instance sync, `record_observation` on EAT, kind read in §8.3 / §9.
 
-**Known bug — prey pursuit drop (2026-07-08 playtest):** Carnivore binds **live** prey when the rabbit is in the awareness cone (`step_source = live`). Prey moves **out of awareness** before capture. On the next goal-consideration refresh there is no live prey; memory fallback calls [`consult_precise_food`](../../creature/motor/memory_adapter.gd) / [`consult_coarse_bearing`](../../creature/motor/memory_adapter.gd), which **skip `is_moving = true` beliefs** (static revisit path — §8.2). Planner falls through to **`mint_explore_step`** instead of continuing pursuit. **Root cause:** no engagement latch for active prey chase; moving-target beliefs excluded from food memory consult. **Fix slice (post-6d-explore, out of E1–E7):** prey-tracking — consult moving prey beliefs + optional intercept hint (`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`, §8.1); live re-bind preempts explore latch when prey re-enters cone. **Not** addressed by inventory / explore-seek work (E4).
+**Known bug — prey pursuit drop (2026-07-08 playtest):** Carnivore binds **live** prey when the rabbit is in the awareness cone (`step_source = live`). Prey moves **out of awareness** before capture. On the next goal-consideration refresh there is no live prey; memory fallback calls [`consult_precise_food`](../../creature/motor/memory_adapter.gd) / [`consult_coarse_bearing`](../../creature/motor/memory_adapter.gd), which **skip `is_moving = true` beliefs** (static revisit path — §8.2). Planner falls through to **`mint_explore_step`** instead of continuing pursuit. **Root cause:** no engagement latch for active prey chase; moving-target beliefs excluded from food memory consult. **Planned fix (§12.2 post-6d-explore-prey — design closed 2026-07-09, not implemented):** latch-gated `consult_moving_prey_food` (D4, D8) + planner prey-engagement latch (D2) + light intercept (`goal_memory_ghost_horizon_sec`, D5); live re-bind preempts explore latch when prey re-enters cone. **Mid-chase dropout only** — not post-latch hungry revisit (D8). **Not** addressed by inventory / explore-seek work (E4).
 
 ### 6.3 Flight
 
@@ -852,7 +860,7 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 
 **Resolved — Flight + believed shelter:** On fast-path flee, rank retreat objectives using **`avoid_hostiles`** urgency plus **nearby `shelter` beliefs** (instance precise/coarse rows + locale priors within consult radius). Prefer known bolt-holes that pass squeeze-fit vs estimated threat ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)) over generic flee headings when available. **Find shelter** hub goal is **not** active during fast-path — only this **consume** path runs.
 
-**Resolved — Flight align turn flutter (2026-07-06):** Per-tick flee retarget + cone-only **`align_and_move`** may flip turn direction when geometry crosses the rear hemisphere — **acceptable for v1**; no Flight-only stabilization latch. Revisit only if playtest shows prey paralysis or flee spin-lock (§7.3.0).
+**Resolved — Flight align turn flutter (2026-07-06):** Per-tick flee retarget + cone-only **`align_and_move`** may flip turn direction when geometry crosses the rear hemisphere — **acceptable for v1**; no Flight-only stabilization latch. **Superseded for close-range egress (2026-07-09):** §12.2 **post-6d** O1 — **flee waypoint latch** (`flee_waypoint` GPS + **`flee_waypoint_latch_ticks`**); same **`align_and_move`** executor.
 
 ### 6.4 Find shelter
 
@@ -1028,7 +1036,7 @@ Deduct `action.calorie_cost` (§7.5) when the action is applied. Deprecate engin
 
 **Resolved — retire HUD / explore-log `cmt` (2026-07-06):** The debug snapshot exposes the **current** tick's **`action`** only — prior-tick **`Action`** is **not** available without new planner/stack state (`last_action`) or end-of-tick relabel plumbing. **Do not add** either path for v1. **Retire `cmt`** from F10 HUD and fixed-width explore tick log output; delete [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) **`commit_label_from_snap`** and any **`turn_commit_sign`** snapshot inputs. During explore **boundary scan**, **`sL`/`sR`** still come from **`boundary_scan_sign`** (unchanged).
 
-**Resolved — Flight align without commit (2026-07-06):** Flight fast-path may retarget **`step_goal`** every tick; turn-direction flutter from rear-hemisphere swings is **acceptable for v1** — use the same cone-only **`align_and_move`** as other modes (no separate Flight stabilization rule). **Playtest gate (6e.1 duel smoke, 2026-07-06):** mutual acute **`ff=1`** (fox treats prey as threat in [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) **`_is_threat_to_subject`**) + per-tick flee retarget + strict MOVE cone → prolonged **`TURN_*`** in place (not STAY). **Outside 6e.1 / 6e.2** — track **post-6d** (§12.2 **post-6d**).
+**Resolved — Flight align without commit (2026-07-06):** Flight fast-path may retarget **`step_goal`** every tick; turn-direction flutter from rear-hemisphere swings is **acceptable for v1** — use the same cone-only **`align_and_move`** as other modes (no separate Flight stabilization rule). **Playtest gate (6e.1 duel smoke, 2026-07-06):** mutual acute **`ff=1`** (fox treats prey as threat in [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) **`_is_threat_to_subject`**) + per-tick flee retarget + strict MOVE cone → prolonged **`TURN_*`** in place (not STAY). **Close-range fix (2026-07-09):** §12.2 **post-6d** O1 — **flee waypoint latch** mints/holds world GPS **`flee_waypoint`** for **`flee_waypoint_latch_ticks`**; stack episode entry + planner **`_maintain_flee_latch`**; **`align_and_move`** unchanged. Path **zig-zag** on latch remint with a moving threat is acceptable; **turn-in-place storm** is not. §3.2 blocked-MOVE immediate reeval may rewrite flee waypoint (wall escape).
 
 **Resolved — implementation target:** Refactor [`motor_planner.gd`](../../creature/motor/motor_planner.gd) per §12.2 **6e.1** → **6e.2** (`sync_step_objective` → `resolve_path_to_step_goal` (§3.1) → `align_and_move` (§7.3.0); keep explore/rim/Flight as **`step_goal` providers** (§3 pipeline). **Design:** §3.1 / §7.3.0 / §15.3 rows **closed 2026-07-06**; implementation tracked in **6e**.
 
@@ -1240,13 +1248,13 @@ Executor returns `ActionOutcome` with observed displacement and blocked flag. Be
 
 **Debug (3D zone):** [`creature/awareness_debug_overlay_3d.gd`](../../creature/awareness_debug_overlay_3d.gd) on duel template **Body** nodes — F9 / project setting `hunter_killer_debug/draw_awareness`. Draws scaled **`creature_motor_v3`** zone geometry (same playfield distance scale as [`CreatureMotorStack`](../../creature/motor/creature_motor_stack.gd) via [`motor_plane.gd`](../../creature/motor/motor_plane.gd) `scale_creature_motor_v3_for_playfield`).
 
-**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Monospace multi-line blocks via [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) (`format_explore_tick_hud`): last action, incumbent, `step_source`, **`sL`/`sR`** during boundary scan via **`boundary_scan_sign`**, bearing error (`err`), facing·target dot (`dot`), **`enp`** (`explore_no_progress_ticks`), scan counts per creature. **`blk`** / **`cblk`** reflect latched stuck detection (playfield clamp, sub-epsilon displacement vs scaled `motor_stuck_move_epsilon`, wall block) — not wall collision alone. **`cmt` retired** — prior-tick turn label requires unavailable snapshot data (§7.3.0).
+**Debug (HUD):** [`creature/motor/motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd) on duel **HUD** — F10 / project setting `hunter_killer_debug/draw_motor_planner_hud`. Monospace multi-line blocks via [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) (`format_explore_tick_hud`): last action, incumbent, `step_source`, **`sL`/`sR`** during boundary scan via **`boundary_scan_sign`**, bearing error (`err`), facing·target dot (`dot`), **`enp`** (`explore_no_progress_ticks`), scan counts per creature. **`blk`** / **`cblk`** reflect latched stuck detection (playfield clamp, sub-epsilon displacement vs scaled `motor_stuck_move_epsilon`, wall block) — not wall collision alone. **`cmt` retired** — prior-tick turn label requires unavailable snapshot data (§7.3.0). **post-6d-explore-prey (D12):** carnivore line adds **`eng_id`**, **`eng_rem/total`**, **`inv`** (hun/stk/und) when pursuing prey — §12.2.
 
 **Resolved — delete `turn_commit_sign` from state / snapshot (2026-07-06):** Refactor **removes** `turn_commit_sign` and `turn_commit_bearing_deg` from planner state, debug snapshot, and [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) telemetry — **no** read-only derived field. Migrate headless tests that assert on commit state to behavioral checks (§7.3.0 refactor acceptance) **in the same refactor PR** as cone-only **`align_and_move`** — tests must reflect shipped code; no follow-up PR for test hygiene alone.
 
 **Resolved — `turn_commit_sign` test migration (2026-07-06):** Land cone-only **`align_and_move`**, delete commit state/snapshot fields, and update ~16 headless **`turn_commit_sign`** assertions **together** in one refactor PR. Behavioral replacement checks (§7.3.0 refactor acceptance) ship with the align refactor, not a deferred follow-up.
 
-**Explore tick log:** When `hunter_killer_debug/motor_explore_tick_log` is set (debug builds), each **`step_source == explore`** physics tick appends one fixed-width line to **`user://logs/motor_explore_tick.log`** (cap 400 lines per duel configure). See §7.3 rim / boundary-scan contracts for interpreting **`blk_act`**, **`tgt`**; **`cmt` column retired** with HUD (§7.3.0).
+**Motor tick log:** When `hunter_killer_debug/motor_explore_tick_log` is set (debug builds), each creature physics tick appends one fixed-width line to **`user://logs/motor_explore_tick.log`** (**all** `step_source` values — `explore`, `live`, `precise`, `coarse`, `locale`, `memory_moving`, …). Rolling buffer keeps the **last 800 lines** (drops oldest on overflow; full file rewrite only when the buffer rolls). Reset on motor stack configure / duel reset. See §7.3 rim / boundary-scan contracts for interpreting **`blk_act`**, **`tgt`**; **`cmt` column retired** with HUD (§7.3.0).
 
 **Headless logging:** Scripts preloaded or fixture-attached by [`tests/run_all.gd`](../../tests/run_all.gd) (e.g. [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd)) must use [`olog_safe.gd`](../../AI_int_lib/olog_safe.gd), not bare autoload **`OLog`**, so **`-s`** parse succeeds.
 
@@ -1339,6 +1347,7 @@ Instance-anchored beliefs for past observed objects of interest within `goal_mem
 
 - Moving toward objectives on **precise** remembered targets **does not** use LoS ray + capsule/corridor sweep (straight seek / shortest path).
 - Prefer shortest path unless known obstacles in awareness — then closest unobstructed point becomes primary objective.
+- **Moving prey (`is_moving = true`):** excluded from static [`consult_precise_food`](../../creature/motor/memory_adapter.gd) / [`consult_coarse_bearing`](../../creature/motor/memory_adapter.gd) (stationary revisit only). **post-6d-explore-prey:** latch-gated [`consult_moving_prey_food`](../../creature/motor/memory_adapter.gd) (§12.2 D4, D8) — mid-chase dropout bridge only; not ambient hunt-from-memory.
 
 <<Comment: Precise tier = **instance beliefs** (`instance_id` rows), not `LocalePriorMap` aggregates — wording synced; storage authority remains [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md).>>
 
@@ -1450,6 +1459,7 @@ Same-instance re-awareness (B = A) remains **[CREATURE_MEMORY.md §5.4](CREATURE
 |-----------------|---------------------|--------|-------------------|
 | **`consult_danger_samples()`** | **`danger_filter`** | Live + threat ghost | Safety state (§1), Flight urgency / fast-path (§1, §6.3), **`REST` area interrupt** (§6.1), hub threat eligibility |
 | **`consult_food_targets()`** | **`goal_kind == &"find_food"`** | Live + ghost when persistent row | Eat ranking (§6.2), remembered food seek (§8.2), §8.3 replace |
+| **`consult_moving_prey_food(engagement_instance_id, …)`** *(post-6d-explore-prey)* | **`find_food`**, `is_moving = true`, **`instance_id == engagement_instance_id`**, engagement latch valid (§12.2 D8); **inactive** when D9 **G-A** live acute threat guard fires — **does not** erase beliefs | Precise moving row only | Mid-chase dropout persistence (`step_source = memory_moving`); **not** `sample_best_moving` |
 | **`consult_shelter_beliefs()`** | **`goal_kind == &"shelter"`** | Precise / coarse outside zone; **live + ghost inside** zone (remembered bolt-hole behind cover still counts at **`last_world_pos`**) | **`safe_site_score`** (§6.1), Find shelter probe (§6.4), REST site rank / qualify |
 | **`consult_goal_beliefs(goal_kind)`** | **`goal_kind` param match** (+ optional `tier`) | Live + ghost per §8.1 | Generic remembered seek (§8.2–8.3); future **`find_mate`** |
 | **`count_known_objectives(goal_kind, …)`** | Diet-valid instance + live samples per §1 fractional table | Live + in-radius beliefs | Hub **`inventory_ratio`**, **`food_map_confidence`**, §7.3.2 step-source gate |
@@ -1496,7 +1506,7 @@ If the objective is inaccessible (shrub out of reach, creature in squeeze), eval
 
 **Combine:** **Persist** only when **all three** layers support staying on the incumbent (locale + instance passibility/consumability + kind yield vs alternates). Any layer failing pushes toward **switch** (ranked alternates: higher kind-yield live/instance targets, locale hotspots via **`replay_rank_score`**, §8.3 cross-instance table) then **Seek** if no viable alternate.
 
-**Resolved — `change_stability` (single path):** Factored **once** — inside **`replay_rank_score`** trait rank bias ([CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)). **Not** a separate §9 multiplier or second “past experience” input.
+**Resolved — `change_stability` (§9 replay path):** Factored inside **`replay_rank_score`** trait rank bias ([CREATURE_GOAL_DRIVERS.md §5.1](CREATURE_GOAL_DRIVERS.md)) for locale persist/switch/seek — **not** a separate §9 blocked-objective multiplier. **Separate carve-out (D10):** same trait also scales prey **engagement latch** duration in **post-6d-explore-prey** — tactic persistence for mid-chase dropout, not hub consideration.
 
 **Resolved — chaos on close calls (2026-07-08 — unified):** When persist / switch / seek scores tie after the above, break symmetry with RNG using **`goal_consideration_chaos`** (§10) — **same key** as hub goal ties and explore bearing picks (§7.3.2). Ship default **0.15**; **`0.0`** disables chaos. **Retired:** **`blocked_objective_chaos`** — remove at **post-6d-explore**; [`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd) reads **`goal_consideration_chaos`**. Not legacy `motor_intent_cost_chaos`.
 
@@ -1585,7 +1595,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 | `STAY` vs `REST`; Rest phase machine; cone off during `REST` only | §6.1, §7.2, §8.1 | **V3 intent.** Safety state gates `REST` |
 | Safe location scoring — shelter-heavy weights | §6.1 | **V3 intent.** `safe_site_weight_*`; squeeze anti-double-count |
 | Physics failure → beliefs (not executor) | §7.6 | **V3 intent.** Memory sibling |
-| Past experience: locale + instance + kind layers; `change_stability` once | §9 | **V3 intent.** **6d** via memory adapter + `replay_rank_score`; not `MotorContext` merge |
+| Past experience: locale + instance + kind layers; `change_stability` in replay_rank_score; pursuit latch (D10) separate | §9, §12.2 | **V3 intent.** **6d** via memory adapter + `replay_rank_score`; latch at **post-6d-explore-prey** |
 | Eat — kind vs instance memory + ingest | §6.2, §8.4 | **V3 intent.** `stimulus_kind_id`; `record_observation`; instance = where only |
 | Flight — kind threat × disposition | §1, §6.3 | **V3 intent.** `kind_threat`; neutral unseen; not familiarity |
 | Config namespace `creature_motor_v3` | §7.5, §9, §12 | **V3 intent.** No legacy `creature_motor` merge or V2 `MotorContext` key reads |
@@ -2001,7 +2011,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 | Backtrack 60° in §3.2 only (not §3.1 solid) | **6e.2 verify** | Grep / test guard |
 | Single-winner model — no fixed §3.2 branch priority | **6e.2 verify** | Hub weights only at consideration; no mid-step goal steal |
 | Moonwalk / strafe / rear `MOVE_BACKWARD` emit | **Deferred** | Post–V3 v1 — [ENHANCEMENT_BACKLOG_PLAN](../ENHANCEMENT_BACKLOG_PLAN.md) |
-| Flight stabilization latch (if playtest paralysis) | **post-6d** | Confirmed duel mutual **`ff=1`** turn-in-place — see §12.2 **post-6d** |
+| Flight stabilization latch (if playtest paralysis) | **post-6d** | **O1 closed 2026-07-09** — flee waypoint latch; see §12.2 **post-6d** |
 
 ##### 6e.1 — Align refactor + telemetry (smoke/fix slice)
 
@@ -2227,34 +2237,95 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ##### post-6d — Flight duel + predator threat ingress
 
-**Status:** **Tracking** — confirmed duel manual smoke **2026-07-06** after **6e.1** close; **not** in **6e.1**, **6e.2**, or any **6d** sub-phase checklist.
+**Status:** **Done** — P2 flee waypoint latch + P3 entry telemetry + P4 headless fixtures **2026-07-10**; duel manual smoke still pending sign-off.
 
-**Entry:** **6d.3** acceptance closed (memory adapter + ghosts + disposition baseline landed).
+**Entry / build order (locked 2026-07-09):** **post-6d-explore** E1–E7 → **post-6d-explore-prey** (P1 ingress D1 + prey pursuit + EAT) → **post-6d** (this slice). **P1 ships in post-6d-explore-prey (D1), not here** — this slice starts **after** explore-prey closes and owns **Flight fast-path locomotion only**. Requires **6d.3** acceptance closed (memory adapter + ghosts + disposition baseline landed).
 
-**Why not 6d:** **6d.3** ships **`threat_disposition_mod`**, **`kind_threat`** on samples, and occluded threat ghosts — **not** carnivore prey-as-Flight-threat semantics or Flight fast-path locomotion policy. **`relative_threat_mod`** (opponent matchup zeroing Flight) remains **combat deferred** (§6.6, §13). Prey **chase** remains **deferred** (§14.2.9). The duel bug is **live scan + Flight executor** coupling, not memory consult.
+**Why not 6d:** **6d.3** ships **`threat_disposition_mod`**, **`kind_threat`** on samples, and occluded threat ghosts — **not** Flight fast-path locomotion policy. **`relative_threat_mod`** (opponent matchup zeroing Flight) remains **combat deferred** (§6.6, §13). The duel spin bug is **Flight executor** geometry, not memory consult.
 
-**Playtest symptom (2026-07-06):** Fox + rabbit both **`ff=1`**, **`gk=avoid_host`**, **`act=TURN_*`**, **`blk=0`**, large rear-hemisphere **`err`/`dot`** — visible freeze with no translation. Root causes: (1) predator **`_is_threat_to_subject`** treats **`prey`** group as hostile → fox enters Flight from rabbit; (2) mutual acute panic; (3) per-tick **`_flee_objective`** retarget + strict §7.3.0 MOVE cone during **`ff=1`**.
+**Playtest symptom (2026-07-06):** Fox + rabbit both **`ff=1`**, **`gk=avoid_host`**, **`act=TURN_*`**, **`blk=0`**, large rear-hemisphere **`err`/`dot`** — visible freeze with no translation. Root causes: (1) predator **`_is_threat_to_subject`** treats **`prey`** group as hostile → fox enters Flight from rabbit — **resolved in post-6d-explore-prey D1**; (2) mutual acute panic; (3) per-tick **`_flee_objective`** retarget + strict §7.3.0 MOVE cone during **`ff=1`**. **After D1 ships:** carnivore no longer flees prey, so the surviving symptom is **close-range herbivore Flight geometry** (turn-in-place / flutter), not mutual predator–prey spin — **smoke scenario updated below**.
 
 **In scope:**
 
 | # | Deliverable | Primary touch |
 |---|-------------|---------------|
-| P1 | **Predator prey ≠ Flight threat** — carnivore live scan / hub eligibility: prey awareness feeds **hunt/chase** (§14.2.9 / §6.6), not **`avoid_hostiles`** / **`ff=1`** | [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd), hub (future chase goal) |
-| P2 | **Flight fast-path locomotion** — optional flee **bearing latch** during **`ff=1`**, and/or looser MOVE tolerance for Flight only, and/or close-range mutual-**`ff=1`** deadlock breaker | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`** |
-| P3 | **Flight telemetry hygiene** — clear stale **`step_instance_id`** / **`blocked_objective_action`** on flight entry | [`motor_planner.gd`](../../creature/motor/motor_planner.gd), debug snapshot |
-| P4 | **Headless** — mutual **`ff=1`** fixture: no indefinite turn-only loop without **`MOVE_F`** progress (or assert bounded turn count before escape) | [`tests/run_all.gd`](../../tests/run_all.gd) |
+| P2 | **Flight fast-path locomotion** — **flee waypoint latch** during **`ff=1`** (O1 — see below); same §7.3.0 **`align_and_move`** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) (episode entry), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`**, **`_maintain_flee_latch`** |
+| P3 | **Flight telemetry hygiene** — on Flight-entry, reset stale planner objective fields (**closed** — see below) | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) (entry edge), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) |
+| P4 | **Headless** — Flight geometry fixtures + P3 reset (O2 — see below) | [`tests/run_all.gd`](../../tests/run_all.gd) |
 
-**Out of scope:** **6e.2** consideration cadence (does not fix **`ff=1`** bypass); full **Fight** hub (§6.6); **`carnivore_pursuit.gd`** revival without greenfield chase design.
+**Resolved — P3 Flight-entry telemetry reset (2026-07-09 — documentation gap closed):** On transition into Flight fast-path (first tick of an **`ff=1`** episode), reset the following planner-state fields so stale non-Flight objective data does not leak into flee telemetry / clearance. **Stack** detects the episode edge (alongside existing **`_was_flight_fast_path`** / **`_flight_fast_path_latched`**) and passes **`flight_just_entered`** (or equivalent) in planner ctx; **planner** performs the field reset and **arms** a new **`flee_waypoint`**. In-progress turn/move from the prior goal is **aborted** — §7.3.0 acute preempt (§7.3.1).
+
+| Field | Reset value | Reason |
+|-------|-------------|--------|
+| **`step_instance_id`** | **0** | Flee has no bound interaction target; prevents stale EAT / precise id on HUD |
+| **`step_stimulus_kind_id`** | **`&""`** | Same — no kind bound during flee |
+| **`blocked_objective_action`** | **`&""`** | Clears prior detour / rim label from the pre-Flight goal |
+| **`consecutive_blocked`** | **0** | Prior stuck count from pre-Flight goal is not meaningful on Flight entry |
+| **`boundary_scan_active`** / **`boundary_scan_sign`** | **false** / **0** | Explore rim scan does not run under Flight |
+
+`step_source` is set to **`live`** by **`_select_flight_action`** (existing behavior); `prey_engagement_*` latch is already cleared on goal change (post-6d-explore-prey D2). Debug snapshot surfaces the reset values on the next tick — no new HUD field required. **Headless:** assert the fields above are cleared on the first Flight tick (fold into P4 fixture **C**).
+
+**Resolved — two flee refresh paths (2026-07-09):** Sub-acute **`avoid_hostiles`** via hub uses **`_sync_step_objective`** — flee **`step_goal`** refreshes on **consideration cadence** only ([`_test_motor_planner_avoid_hostiles_refresh_on_consideration_only`](../../tests/run_all.gd)). Acute **`ff=1`** fast-path bypasses hub and **`_sync_step_objective`**; **`_select_flight_action`** + **`_maintain_flee_latch`** hold a latched **`flee_waypoint`** between remints. Do not conflate the two paths.
+
+**Out of scope:** **P1 predator-prey ingress** (owned by **post-6d-explore-prey D1**); **6e.2** consideration cadence (does not fix **`ff=1`** bypass); full **Fight** hub (§6.6); **`carnivore_pursuit.gd`** revival without greenfield chase design; predictive intercept / intelligent pursuit geometry; **Flight-only looser MOVE cone** and **close-range deadlock breaker** (O1 options b/c — not shipped unless playtest fails after latch); carnivore contact-range **live pursuit** turn flutter (`find_food`, **`ff=0`**); straight-line escape path (latch remint **zig-zag** with a moving threat is acceptable); **§6.3 Flight + believed shelter** bolt-hole ranking (future flee enhancement); **terrain-aware flee** / solids-weighted mint (future — when predator pursuit rework lands); **multiple simultaneous attackers** (v1 nearest-threat only; v2 TBD); **generic world-waypoint latch helper** shared by explore + flee (**deferred** follow-up — not required to ship post-6d); stack-level P4 integration tests (planner-only sufficient for v1).
+
+**Resolved — O1 flee waypoint latch (2026-07-09; refined 2026-07-09):** Stabilize Flight **`step_goal`** with a **world-fixed GPS point** (same pattern as **`explore_waypoint`**) — **do not** fork turn/move logic. Between remints the creature **walks straight** toward the latched point via §7.3.0 **`align_and_move`**.
+
+**Layer split:**
+
+| Layer | Owns |
+|-------|------|
+| **[`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd)** | Acute **`ff=1`** episode (`_flight_fast_path_active`, `_flight_fast_path_latched`, `_was_flight_fast_path` — **unchanged names**); **`flight_just_entered`** (or equivalent) in planner ctx on episode edge; trigger P3 reset + **arm** new **`flee_waypoint`** on entry |
+| **[`motor_planner.gd`](../../creature/motor/motor_planner.gd)** | Planner state **`flee_waypoint`**, **`flee_waypoint_ticks_remaining`**; **`_mint_flee_waypoint`** from **`_flee_objective`**; **`_maintain_flee_latch`**; **`_select_flight_action`** sets **`step_goal`** from latch |
+
+**Naming (2026-07-09):** Do **not** use **`flight_flee_latch_*`** — collides with stack **`_flight_fast_path_latched`** (episode semantics). Planner fields: **`flee_waypoint`**, **`flee_waypoint_ticks_remaining`**. Config: **`flee_waypoint_latch_ticks`**.
+
+| Field | Semantics |
+|-------|-----------|
+| **`flee_waypoint`** | World-fixed flee GPS minted at arm/remint |
+| **`flee_waypoint_ticks_remaining`** | Physics-tick countdown while latch is valid |
+
+- **Arm / remint:** first tick of **`ff=1`** episode (stack entry edge), or when **`flee_waypoint_ticks_remaining`** reaches **0** → mint **`flee_waypoint`** from **`_flee_objective`**, reset countdown to **`flee_waypoint_latch_ticks`**, set **`step_goal`**.
+- **Tick:** while countdown **> 0**, decrement once per physics tick (in **`_maintain_flee_latch`** or **`_select_flight_action`** path); **`step_goal`** = **`flee_waypoint`** (ignore per-tick **`_flee_objective`** retarget).
+- **Clear:** Flight fast-path exit (`ff=0`), goal change, or explicit planner reset.
+- **Blocked MOVE (§3.2):** same immediate **`apply_immediate_blocked_path_reevaluation`** as other modes — may **rewrite** **`flee_waypoint`** / **`step_goal`** (one tick cost acceptable); latch holds against **per-tick retarget only**, not wall escape. A second aligned **`MOVE_F`** should then progress away from the pin.
+- **Hub / incumbent during `ff=1`:** by design — hub returns empty eligible goals; in-progress step aborted on entry; **full goal re-evaluation** when danger ends (`ff=0` / safety met).
+- **Executor:** unchanged §7.3.0 cone — **`align_and_move`** only; no Flight-only turn picker, no looser MOVE tolerance in v1.
+- **v1 mint:** **`_flee_objective`** — away from **nearest** in-zone threat; co-located threat (`away ≈ 0`) falls back to spawn-facing (`HORIZONTAL_FORWARD`) — acceptable v1. **Future:** solids-weighted / terrain-aware mint; corner escape may briefly favor paths past the threat over staying wall-pinned (predator pursuit rework); multiple attackers (v2).
+
+**Ship config (`creature_motor_v3`)** — add in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) same PR as P2:
+
+| Key | Ship default | Notes |
+|-----|--------------|-------|
+| **`flee_waypoint_latch_ticks`** | **16** | ≥ **8** (full 180° at **22.5°**/tick). Long enough that a cornered creature may run past a predator (combat-deferred — taking hits beats wall pin); tunable in playtest |
+
+**Deferred unless playtest fails:** looser MOVE cone during **`ff=1`**; turn-only deadlock breaker after K ticks; **generic `_maintain_world_waypoint_latch`** refactor (explore + flee share countdown/copy helper).
+
+**Resolved — O2 P4 headless contract (2026-07-09; refined 2026-07-09):** **Planner-only** fixtures sufficient for v1 (mirror **`_test_motor_planner_explore_rear_hemisphere_no_flip_flop`**) — **`_LocomotionExecutor.apply_action`** between ticks; open floor via **`_motor_v3_test_floor`**. **Not** mutual fox+rabbit duel (manual smoke only). Threat samples via **`_ThreatSampleScr.make(...)`** — single herbivore vs **one** threat; **`gate_dist ≤ flight_acute_panic_radius`**.
+
+| # | Test | Setup | Pass criteria |
+|---|------|-------|---------------|
+| **A — sanity (static contact)** | `_test_motor_planner_flight_close_range_forward_egress` | Herbivore **`(0, 1, 0)`**, threat **`(8, 1, 0)`**, facing **`(1, 0, 0)`**, **`flight_fast_path_active = true`** | Within **12** ticks: at least one **`MOVE_F`** with **`dot(facing, to_step_goal) ≥ cos(turn_increment_deg)`**; net displacement **away** from initial threat bearing ≥ scaled **`motor_stuck_move_epsilon`**. **Note:** may pass **before** P2 ships (stable rear target without latch); still run as regression sanity |
+| **B — regression (orbiting threat)** | `_test_motor_planner_flight_flee_waypoint_orbit_stable` | Same start; each tick set threat **`world_pos_3d`** to **`(8·cos(t), 1, 8·sin(t))`** for **24** ticks; **no** blocked **`MOVE_F`** in assertion window | While **`flee_waypoint_ticks_remaining > 0`** and no §3.2 blocked-MOVE rewrite: **`flee_waypoint`** / **`step_goal`** unchanged vs per-tick **`_flee_objective`** retarget; no adjacent **`TURN_L`/`TURN_R`** pair in any **16**-tick window; at least one aligned **`MOVE_F`** in that window |
+| **C — P3 telemetry reset** | `_test_motor_planner_flight_entry_telemetry_reset` | Pre-seed stale **`step_instance_id`**, **`blocked_objective_action`**, **`consecutive_blocked`**, boundary-scan fields; set **`flight_just_entered`** (or first **`ff=1`** tick) | First Flight tick clears per P3 table above; new **`flee_waypoint`** armed |
+
+**Explicit non-goals (P4):** assert straight-line path; forbid all course change when threat moves (remint **zig-zag** is OK); stack integration / acute detection wiring.
+
+Register under **`# §12.2 post-6d P4`** in [`tests/run_all.gd`](../../tests/run_all.gd).
 
 **Acceptance checklist:**
 
-| Gate | Criterion |
-|------|-----------|
-| Entry | **6d.3** closed |
-| Manual **smoke** | Duel engagement: rabbit flees; **fox does not** enter mutual **`ff=1`** spin from prey proximity alone |
-| Manual **smoke** | Acute herbivore Flight still produces forward egress within bounded ticks after threat contact |
-| Headless **required** | Flight / threat-ingress fixtures for P1–P2 behaviors |
-| Inventory | §15 #17 → **done** when checklist closes |
+| Gate | Criterion | Headless test |
+|------|-----------|---------------|
+| Entry | **post-6d-explore-prey** closed (D1 ingress live) **and** **6d.3** closed | — |
+| Design | **O1 / O2** closed **2026-07-09** (refined same day) | — |
+| Config | **`flee_waypoint_latch_ticks`** in **`game_config_merge.gd`** default **16** | — |
+| Manual **smoke** | Duel: rabbit Flight produces **forward egress within bounded ticks** at close range (no indefinite turn-in-place); fox hunts (does not flee prey — D1) | — |
+| Manual **smoke** | Acute herbivore Flight still produces forward egress within bounded ticks after threat contact | — |
+| Headless **required** | Fixture **A** — static contact sanity | `_test_motor_planner_flight_close_range_forward_egress` |
+| Headless **required** | Fixture **B** — orbit latch stability + aligned **`MOVE_F`** | `_test_motor_planner_flight_flee_waypoint_orbit_stable` |
+| Headless **required** | Fixture **C** — P3 Flight-entry field reset | `_test_motor_planner_flight_entry_telemetry_reset` |
+| Inventory | §15 #17 → **done** when duel manual smoke closes | — |
 
 **After close:** §12 steps **6–10**; optional **§12 step 11** promotion if no other blockers.
 
@@ -2262,7 +2333,7 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ##### post-6d-explore — Unified explore seek (§7.3.2)
 
-**Status:** **Tracking** — spec **closed 2026-07-08**; interim code still uses spawn-facing × fixed reach ([`motor_planner.gd`](../../creature/motor/motor_planner.gd) `_explore_step_goal`).
+**Status:** **Done** — E1–E7 **2026-07-08**; [`motor_explore_seek.gd`](../../creature/motor/motor_explore_seek.gd) + planner wiring shipped; E7 headless matrix green in [`tests/run_all.gd`](../../tests/run_all.gd).
 
 **Entry:** **6d.2** memory adapter baseline (instance beliefs + consult paths) — may land in parallel with **post-6d** Flight work.
 
@@ -2297,11 +2368,220 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 
 ---
 
+##### post-6d-explore-prey — P1 ingress + prey pursuit persistence
+
+**Status:** **Done** — D1–D13 shipped **2026-07-09**; headless acceptance matrix green in [`tests/run_all.gd`](../../tests/run_all.gd). Duel manual smoke pending maintainer sign-off.
+
+**Entry:** **post-6d-explore** E1-E7 closed. May land before **post-6d** P2-P4.
+
+**Why a separate slice:** Two duel failures were observed in the same fox-rabbit smoke, but they are different couplings. **P1** is threat-ingress semantics (prey should not drive carnivore Flight). **Prey pursuit persistence** is `find_food` planner continuity after live prey leaves awareness. The former must be correct before the latter can be meaningfully validated in duel smoke.
+
+**Resolved — D1 threat ingress (diet-first):** [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) **`_is_threat_to_subject`**: if the other body is **valid food** for the subject [`FoodIntakePolicy`](../../creature/definition/food_intake_policy.gd) (`DietRegistry.node_is_valid_food_for_policy`), it is **not** a Flight threat sample. Otherwise use hostile / `mobs` ingress (herbivore sees fox as threat). **v1:** no learned attack-history curve; rabbit→fox flee uses existing hostile ingress + optional pack **`threat_danger`** seed (combat deferred). Carnivore / omnivore prey never enters **`avoid_hostiles`** from diet-valid prey alone. **Out of scope (G3, 2026-07-09):** **edible-but-dangerous prey** / omnivore “risky food” weighting — no diet exception that treats some valid food as Flight threat in this slice; deferred to **combat** / future dangerous-prey design.
+
+**Resolved — D2 engagement latch (single-stage, planner state):**
+
+| Field | Semantics |
+|-------|-----------|
+| **`prey_engagement_instance_id`** | Prey `instance_id` bound while chase is active |
+| **`prey_engagement_ticks_remaining`** | Physics-tick bridge after live prey drops out of awareness |
+| **`prey_engagement_latch_total`** | Effective latch ticks set at last arm/refresh (D10) — HUD **rem/total** denominator |
+
+- **Arm / refresh:** each tick live **moving** prey is bound (`food_split.ready`, `is_moving = true`) → set id + reset **`prey_engagement_ticks_remaining`** to **effective latch ticks** (D10 — computed once per arm/refresh from `change_stability` + pack keys; not a fixed constant).
+- **Tick:** when live prey for that id is **not** visible, decrement once per physics tick; at **0**, clear latch.
+- **Clear:** goal change, explicit reset, or latch expiry.
+- **Does not** revive V2 `goal_visibility_latch.gd` two-stage visible/engagement split.
+
+**Resolved — D3 inventory-gate override:** While engagement latch is valid (`prey_engagement_ticks_remaining > 0`), under-stocked sated **`find_food`** does **not** take the explore-first remint path.
+
+**Resolved — D4 memory consult API (planned):** new **`memory_adapter.consult_moving_prey_food`** — dedicated read; static [`consult_precise_food`](../../creature/motor/memory_adapter.gd) / [`consult_coarse_bearing`](../../creature/motor/memory_adapter.gd) unchanged. **Latch-gated only** (D8): requires `prey_engagement_ticks_remaining > 0` and returns the precise moving belief for **`prey_engagement_instance_id` only** — no [`goal_belief_memory.sample_best_moving`](../../creature/motor/goal_belief_memory.gd) fallback for `find_food`. Planner `step_source = memory_moving`. **`sample_best_moving` remains for `avoid_hostiles` / threat memory only** — not prey food consult.
+
+**Planner `find_food` step-source order** (after live short-circuit; §7.3.2 inventory gates unchanged):
+
+```text
+live → [moving consult if engagement latch valid] → static precise → coarse → locale → explore
+```
+
+**Resolved — D5 intercept (planned):** When `last_velocity` is nonzero, objective = **`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`** (ship default **0.4 s** — G6 closed); else `last_world_pos`. Reuse Phase E math already documented in [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd) `inject_moving_memory_chase` / §8.1 — add thin `moving_seek_objective_pos` helper at ship. Refresh on **goal-consideration cadence** only (§3 / §10). **v1 only:** constant-velocity extrapolation — no predictive pursuit, acceleration model, pursuit disk sampling, or occluded-prey projection (D7). Zigzag / stale-velocity aim error accepted for mid-chase dropout bridge; playtest may tune **`goal_memory_ghost_horizon_sec`** only.
+
+**Resolved — D6 V3 config keys (planned):** [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_v3_explore_inventory_params()` will ship **`goal_memory_mover_ttl_sec`** (**10**), engagement latch base + scale keys (D10), and reuses existing **`goal_memory_ghost_horizon_sec`** (**0.4**). **Retire** fixed legacy **`predator_prey_engagement_latch_ticks`** (**36**) under **`creature_motor`** — V3 reads **`creature_motor_v3` only**.
+
+**Implementation checklist — D6 / Q5 config keys (required):**
+
+| Key | Ship default | Merge target |
+|-----|--------------|--------------|
+| `goal_memory_mover_ttl_sec` | **10** | [`default_creature_motor_v3_explore_inventory_params()`](../../AI_int_lib/game_config_merge.gd) |
+| `predator_prey_engagement_latch_base_ticks` | **40** | same |
+| `predator_prey_engagement_latch_scale_min` | **0.5** | same |
+| `predator_prey_engagement_latch_scale_max` | **1.5** | same |
+| `predator_prey_engagement_latch_ticks_min` | **`goal_replan_base_ticks` (8)** | same |
+| `predator_prey_engagement_latch_ticks_max` | **120** | same |
+
+**Retire reads:** legacy `creature_motor.predator_prey_engagement_latch_ticks` (**36** in fox pack) — V3 planner reads **`creature_motor_v3` only**. `predator_prey_meal_calories` may remain legacy until moved (D11 — acceptable v1).
+
+**Deferred — D7:** occluded-in-zone prey ghosts for food consult (projector exists; food adapter path not wired).
+
+**Resolved — D8 moving consult scope (G1, 2026-07-09):** **Persistence bridge only** — moving prey consult continues an **active** chase across brief cone dropout; **not** ambient hunt-from-memory. **In scope:** mid-chase dropout while engagement latch is valid. **Out of scope for this slice:** post-latch hungry revisit to last rabbit position (moving beliefs stay `is_moving = true` and static food consult skips them — deferred to a later ambient-hunt / revisit feature). Belief may remain in storage until mover TTL (**10 s**); consult ignores it after latch expiry (duration trait-scaled — D10; **~0.67 s** at neutral **`change_stability = 0`**). Moving prey beliefs may still count toward `count_known_objectives` / inventory — accepted; does not enable cold-start moving consult.
+
+**Resolved — D9 threat blocks prey consult (G4, 2026-07-09):** [`consult_moving_prey_food`](../../creature/motor/memory_adapter.gd) returns **inactive** under **G-A live acute threat only** — **does not** erase prey beliefs from storage.
+
+| Guard | Ship predicate (V3) | Effect |
+|-------|---------------------|--------|
+| **G-A Live acute** *(ship)* | `ctx.flight_fast_path_active` **or** non-empty acute **`threat_samples`** with `in_awareness` within `flight_acute_panic_radius` / envelope | `consult_moving_prey_food` **inactive** |
+| **G-B Remembered `avoid_hostiles`** | [`GoalBeliefMemory.has_remembered_avoid_threat`](../../creature/motor/goal_belief_memory.gd) | **Not used** this slice — deferred; MEMORY Phase E full priority may ship later |
+
+**Memory vs block:** D9 **blocks** moving-prey **consult** only — **do not** erase or invalidate prey `_goal_belief` rows. When threat clears, beliefs remain for normal `find_food` routing (D13).
+
+**While G-A active and `find_food` incumbent:** inactive `consult_moving_prey_food` → fall through normal `find_food` routing (static precise → coarse → locale → explore) — **do not** mint `memory_moving`. When **`avoid_hostiles` / Flight** wins hub consideration, engagement latch clears on goal change (D2) — latch state only; prey memory rows persist.
+
+**Resolved — D13 Flight incumbent + post-Flight `find_food` resume (2026-07-09):**
+
+- **`avoid_hostiles` / Flight** remains the active hub winner until threat ends **naturally** per existing §6.3 / §10 (acute fast-path exit, `safety_met` after `safety_time` empty-threat cycles). Do **not** force goal change away from Flight mid-flee.
+- **Goal change to Flight clears engagement latch** (D2) — prey pursuit **bridge** does not survive Flight; **prey beliefs in storage are not cleared**.
+- **When `find_food` wins again after Flight ends:** run the **normal** `find_food` planner step-source order (`live` → `[moving if latch]` → static precise → coarse → locale → explore). **No** post-Flight special-case moving consult.
+- **Remembered prey after Flight:** instance beliefs written during chase **persist** (mover TTL **`goal_memory_mover_ttl_sec`** — **10 s**). **Live** prey in awareness → `live` bind + latch re-arm (D2). **Static** (non-moving) prey belief → normal `precise` / `coarse` consult. **Moving** prey belief only, latch cleared → belief remains for inventory / future slices; **this slice** does **not** cold-start `consult_moving_prey_food` (D8, T9). **No** consultable memory and no live prey → normal inventory-gated explore / memory-or-explore routing.
+
+**Resolved — carnivore-only scope (2026-07-09):** **Omnivore** diet / pursuit / P1 ingress / duel smoke for this slice is **out of scope**. Ship and test **carnivore** (fox) vs **herbivore prey** (rabbit) only. Omnivore plant-vs-prey bind, engagement arm, and diet-first threat edge cases deferred to a later slice.
+
+**Open — implementation integration notes (do not skip at ship):**
+
+| # | Note | Owner |
+|---|------|-------|
+| I1 | §1 `memory_moving` feasibility tier — see §1 table open gap | `memory_adapter.gd` + hub feasibility |
+| I2 | **`traits` in planner ctx** — D10 latch formula needs `change_stability` from `_traits_from_body()` in `_build_planner_context` | `creature_motor_stack.gd` |
+| I3 | **`memory_moving` in `_is_latched_step_source`** — decide parity with `precise` for stuck/progress (T8) | `motor_planner.gd` |
+| I4 | **Legacy test migration** — see T13 | `tests/run_all.gd` |
+
+**Resolved — D10 engagement latch duration (G2, 2026-07-09):** Effective latch is **trait-modulated** at arm/refresh — first small **tactic-style** `change_stability` hook for **`find_food`** pursuit (§1 carve-out; does not change hub **`trait_goal_mul`**). Base divides evenly by **`goal_replan_base_ticks`** (**8**): **5** consideration cycles at neutral trait.
+
+| Key | Ship default | Role |
+|-----|--------------|------|
+| **`predator_prey_engagement_latch_base_ticks`** | **40** | Neutral trait (`change_stability = 0`) latch duration |
+| **`predator_prey_engagement_latch_scale_min`** | **0.5** | Change pole (−100) multiplier |
+| **`predator_prey_engagement_latch_scale_max`** | **1.5** | Stability pole (+100) multiplier |
+| **`predator_prey_engagement_latch_ticks_min`** | **`goal_replan_base_ticks`** (**8**) | Floor — at least one consideration cycle |
+| **`predator_prey_engagement_latch_ticks_max`** | **120** | Ceiling — playtest cap |
+
+```text
+t     = (change_stability + 100) / 200.0          // 0 = Change … 1 = Stability (same as Slot B — goal_source_memory.gd)
+scale = lerpf(latch_scale_min, latch_scale_max, t)
+effective_latch_ticks = clamp(
+  round(latch_base_ticks * scale),
+  latch_ticks_min,
+  latch_ticks_max
+)
+```
+
+**Ship examples @ 60 Hz** (base **40**, scale **0.5…1.5**): **`change_stability = −100`** → **20 ticks** (~0.33 s); **`0`** → **40 ticks** (~0.67 s); **`+100`** → **60 ticks** (~1.0 s). **Change** creatures lose prey track faster; **Stability** creatures persist longer — still mid-chase dropout only (D8). Traits from [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) `_traits_from_body()` passed in planner ctx; compute at arm only (spawn-fixed). Playtest may widen scale range via pack overrides.
+
+**Resolved — G3 edible-but-dangerous prey (2026-07-09):** Weighing potentially dangerous prey is **out of scope** for this slice. Diet-first D1 stands; no omnivore exception in P1 ingress.
+
+**Resolved — G5 post-6d Flight locomotion (2026-07-09):** **post-6d** P2–P4 (close-range `ff=1` turn-in-place, Flight fast-path locomotion) is a **separate milestone** after this slice (P1 ingress D1 + prey pursuit ship **here**; post-6d owns **P2–P4 only**). **O1 / O2 closed 2026-07-09** (refined) — flee waypoint latch, stack/planner layer split, P4 headless contract (§12.2 **post-6d**). Duel may still show close-range Flight turn-in-place until P2 ships — not a defect in this slice.
+
+**Resolved — G6 intercept quality (2026-07-09):** Ship light intercept at **`goal_memory_ghost_horizon_sec = 0.4`** (D5/D6). No further design decision required for v1.
+
+**Resolved — G7 prey capture path (2026-07-09):** Wire meal + defeat through V3 **`EAT`** + §6.2 memory writes (D11); disable active `MobHitbox` predation (node inert until later cleanup).
+
+**Resolved — D11 prey capture via V3 EAT (G7, 2026-07-09):** Retire **active** duel predation on prey **`MobHitbox`** contact; wire meal + defeat through V3 **`EAT`** completion (same range gate as plants — §7.2 **`eat_action_max_distance`** **5**; acceptable v1, tune later). **Until combat:** no separate `ATTACK` action — prey kill remains under **`find_food`** / `EAT`.
+
+| Step | Behavior |
+|------|----------|
+| **Planner** | Existing `_can_eat_now` — within **`eat_action_max_distance`**, facing aligned, `step_instance_id` = prey body id |
+| **Stack** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) `_try_complete_eat` — if `instance_from_id` is prey **`CharacterBody3D`** (diet-valid for predator), call prey grant API; bushes unchanged (`try_grant_engine_creature`) |
+| **Prey body** | New grant method on [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (e.g. `try_grant_as_prey_to`) — one-shot: predator `add_calories_from_prey` + **`notify_food_consumption_outcome`** (§6.2 memory writes) + prey `_apply_defeat_local` + `hit` (duel round end via [`main_3d.gd`](../../main_3d.gd)) |
+| **Memory** | Same adapter path as plant EAT: **`record_observation`** (`nutrition_yield`) + locale salient write; **`stimulus_kind_id`** = prey **`species_id`** ([`awareness_zone_scan._stimulus_kind_for_creature`](../../creature/motor/awareness_zone_scan.gd)) — supports multiple prey species without per-scene bush-style ids |
+| **Meal size** | **`predator_prey_meal_calories`** (legacy **`creature_motor`** default **5** until moved to **`creature_motor_v3`**) via [`creature_predation_math.gd`](../../creature/capabilities/creature_predation_math.gd) clamp |
+| **MobHitbox** | **Leave in herbivore template but inert** — disconnect or no-op [`_on_mob_hitbox_body_entered`](../../creature/capabilities/creature_kinematic_body_3d.gd) predation path in this slice; remove node in a **later cleanup phase** (post-combat or template hygiene) |
+
+**Guards:** skip grant if prey already defeated (`_defeat_hidden`); idempotent — repeat `EAT` ticks on same target no-op after first success.
+
+**Resolved — G8 hunt debug (2026-07-09):** Minimal duel HUD fields for pursuit triage — see **D12**.
+
+**Resolved — D12 hunt debug HUD (G8, 2026-07-09):** Extend [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) **`get_debug_snapshot()`** and [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) **`format_explore_tick_hud`** (used by [`motor_planner_debug_hud.gd`](../../creature/motor/motor_planner_debug_hud.gd)) — **no** separate hunt-only panel in v1.
+
+| Snapshot key | Source | HUD (carnivore line append) |
+|--------------|--------|----------------------------|
+| **`prey_engagement_instance_id`** | planner state (D2) | `eng_id=%d` — **0** when latch cleared |
+| **`prey_engagement_ticks_remaining`** | planner state (D2) | `eng_rem=%d` |
+| **`prey_engagement_latch_total`** | planner state — effective ticks at last arm/refresh (D10) | `eng=%d/%d` (rem/total) |
+| **`food_inventory_step_mode`** | planner state — `0` hungry, `1` stocked, `2` under-stocked (explore-first, D3) | `inv=hun` / `stk` / `und` |
+
+**Display rule:** append hunt fields on the **carnivore** HUD line only when `goal_kind == find_food` **or** `prey_engagement_ticks_remaining > 0` (avoid clutter on herbivore / idle fox). Existing fields (`step_source`, `step_instance_id`, `ready_food`, `ff`) unchanged.
+
+**Out of scope (D12):** hunt-only tick log file, 3D engagement overlay, D9 threat-block flag, per-prey distance column — add in playtest if needed.
+
+**Design closed — behavior gaps G1–G8 resolved 2026-07-09.** Remaining work: implementation deliverables Q1–Q8, open integration notes (I1–I4) above, and test gaps T1–T13 below.
+
+**Open — test gaps (required before checklist close):**
+
+| # | Missing coverage |
+|---|------------------|
+| T1 | Full **`CreatureMotorStack.tick()`** loop — live prey arms latch → cone dropout → `memory_moving` persists |
+| T2 | **`_arm_prey_engagement` from live bind** — not manual state seeding |
+| T3 | **`_tick_prey_engagement_latch` via `select_action`** — latch decay integration |
+| T4 | **Herbivore regression** — fox still in rabbit `threat_samples` after D1 |
+| T5 | **Manual duel smoke** — acceptance gate in checklist below |
+| T6 | **Flight wins during engaged chase** — engagement latch clears on goal change (D2); after Flight natural end, `find_food` resumes per D13 (no cold-start moving consult); prey beliefs persist |
+| T7 | **Engagement latch expiry** — distinct from mover belief TTL in storage |
+| T8 | **Navmesh / path clearance** on intercept `step_goal` |
+| T9 | **No cold-start moving consult** — `sample_best_moving` not used for `find_food` without engagement latch |
+| T10 | **`change_stability` scales latch** — Change (−100) shorter effective ticks than Stability (+100) at arm (D10) |
+| T11 | **Prey `EAT` capture (D11)** — meal + defeat + memory writes; inert `MobHitbox` does not grant |
+| T12 | **Hunt debug snapshot (D12)** — `get_debug_snapshot` includes engagement + `food_inventory_step_mode` when latch active |
+| T13 | **Predation test migration (D11)** — [`_test_creature_3d_predation_contact`](../../tests/run_all.gd) currently asserts MobHitbox overlap grants meal; update to assert **inert** MobHitbox + V3 `EAT` path, or split legacy contact (deprecated) + T11 |
+
+**In scope:**
+
+| # | Deliverable | Primary touch |
+|---|-------------|---------------|
+| Q1 | **P1 ingress gate** — diet-valid prey awareness feeds `find_food` / chase inputs, not `avoid_hostiles` / `ff=1`, for **carnivores** (G3: no dangerous-prey exception; **omnivore out of scope**) | [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd) |
+| Q2 | **Moving-prey memory consult (latch-gated)** — planner continues `find_food` from the engaged prey's moving belief when live prey drops out of awareness; static food consult unchanged; no cold-start `sample_best_moving` | [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd), [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) |
+| Q3 | **Engagement latch (trait-scaled)** — active prey chase persists across brief awareness dropout; duration from D10; suppresses explore remint while valid | [`motor_planner.gd`](../../creature/motor/motor_planner.gd), planner state on [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) |
+| Q4 | **Intercept hint (light only)** — optional `last_world_pos + last_velocity × goal_memory_ghost_horizon_sec` objective hint for moving prey memory seek; no full predictive intercept / pursuit disk sampling | [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) |
+| Q5 | **V3 config ownership** — mover TTL / engagement keys used by this slice live under `creature_motor_v3`; no new reads from legacy `creature_motor` | [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) |
+| Q6 | **Headless** — carnivore does not classify prey as threat; live-prey dropout continues chase from memory; engagement latch outranks under-stocked explore-first remint while valid | [`tests/run_all.gd`](../../tests/run_all.gd) |
+| Q7 | **Prey capture via `EAT` (D11)** — stack completes prey meal at `eat_action_max_distance`; memory adapter writes; legacy `MobHitbox` predation inert | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) |
+| Q8 | **Hunt debug HUD (D12)** — snapshot + F10 line expose engagement latch + food inventory step mode | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) |
+
+**Design guardrails (resolved for this slice):**
+
+- **No new hub goal:** prey chase remains under **`find_food`** / Eat in V3 v1; do **not** introduce a separate hunt / Fight winner in this slice (§6.6 deferred).
+- **Cadence unchanged:** moving-prey objective refresh stays on **goal-consideration cadence** / blocked reevaluation rules already resolved in §3 / §10; do **not** add per-tick pursuit retargeting.
+- **Flight precedence unchanged:** real hostile threat samples may still win Flight via hub scoring / fast-path; this slice only removes **diet-valid prey** as a carnivore Flight ingress source. **D9 (G-A):** moving prey consult inactive while **live acute** threat active — **blocks consult only**, does not erase prey memory.
+- **Flight resume (D13):** `avoid_hostiles` until natural end; post-Flight `find_food` uses normal planner order; moving-prey consult remains latch-gated only (D8).
+- **Carnivore-only (2026-07-09):** omnivore pursuit, plant-vs-prey bind, and omnivore duel smoke **out of scope** this slice.
+- **Persistence bridge only (D8):** no ambient hunt-from-memory; post-latch revisit to last prey position deferred.
+- **Prey capture via `EAT` (D11):** meal + defeat on successful `EAT` at **`eat_action_max_distance`** (**5**); full §6.2 memory writes on prey meals; `MobHitbox` contact predation disabled (node left for later removal).
+- **Hunt debug (D12):** engagement latch + inventory step mode on carnivore F10 HUD during pursuit.
+- **No V2 latch revival by shape:** legacy `goal_visibility_latch.gd` stays retired; latch numerics re-homed under **`creature_motor_v3`** planner state (D2, D10).
+- **`change_stability` on pursuit only (D10):** modulates engagement latch duration at arm — not hub `trait_goal_mul` / general tactic modulator.
+
+**Out of scope:** **post-6d** Flight locomotion P2-P4 (G5 — separate milestone); full Fight hub / opponent matchup (`relative_threat_mod`); **edible-but-dangerous prey** / omnivore risky-food weighting (G3 — combat deferred); **omnivore** pursuit / P1 ingress / duel smoke (**carnivore-only slice**); `carnivore_pursuit.gd` revival; full predictive intercept / pursuit geometry beyond D5 light ghost (G6); per-species pursuit forks; occluded-prey pursuit ghosts (D7 deferred); **ambient hunt / post-latch hungry revisit** to last prey position (D8); cold-start moving prey consult via `sample_best_moving`; **D9 G-B** remembered-`avoid_hostiles` consult block (deferred); **MobHitbox node removal** from templates (D11 — inert only this slice); separate prey **`eat_action_max_distance`** key (v1 shares **5** with plants); **hunt tick log / 3D engagement overlay** (D12).
+
+**Acceptance checklist** *(test names planned — not in `run_all.gd` until implementation)*:
+
+| Gate | Criterion | Headless test |
+|------|-----------|---------------|
+| Headless **required** | Carnivore prey in awareness enters `food_split` but does **not** populate carnivore threat ingress / `ff=1` from prey proximity alone | `_test_awareness_zone_scan_carnivore_prey_not_flight_threat` |
+| Headless **required** | Live prey leaves awareness before contact; on next consideration refresh planner continues `find_food` from moving memory instead of `step_source = explore` | `_test_motor_planner_find_food_moving_prey_memory_persists` |
+| Headless **required** | No `consult_moving_prey_food` without active engagement latch (no cold-start `sample_best_moving` on `find_food`) | `_test_motor_planner_find_food_moving_prey_requires_engagement_latch` |
+| Headless **required** | Under-stocked sated carnivore with active prey engagement does **not** remint explore while engagement latch remains valid | `_test_motor_planner_find_food_engaged_prey_overrides_explore_first` |
+| Headless **required** | Expired engagement latch falls back to normal `find_food` memory-or-explore routing (mover belief may still exist in storage) | `_test_motor_planner_find_food_moving_prey_latch_expires` |
+| Headless **required** | Live acute threat (D9 **G-A**) blocks `consult_moving_prey_food` while engagement latch valid; prey belief rows **not** erased | `_test_motor_planner_find_food_moving_prey_blocked_by_threat` |
+| Headless **required** | **`change_stability`** scales engagement latch at arm — Change shorter, Stability longer (D10) | `_test_motor_planner_prey_engagement_latch_trait_scaled` |
+| Headless **required** | Carnivore `EAT` on prey within range grants meal, defeats prey, writes memory adapter outcome; `MobHitbox` overlap does **not** grant (D11) | `_test_creature_motor_stack_prey_eat_capture_and_memory` |
+| Headless **required** | Legacy `_test_creature_3d_predation_contact` migrated — MobHitbox does **not** grant; prey defeat via V3 `EAT` only (D11, T13) | `_test_creature_3d_predation_contact` (updated) or T11 |
+| Manual **smoke** | Duel: rabbit Flight; fox chases through brief cone dropout; fox captures rabbit via **`EAT`** (not contact-only). **Known limitation (G5):** mutual acute Flight spin may persist until **post-6d** P2 | — |
+| Inventory | §13 row / §14.2.13 flips when checklist closes | — |
+
+<<Comment: Keep this slice small. If occluded-prey ghosts or Flight locomotion deadlock fixes start expanding the PR, split them back out. D11 prey EAT rewire ships in this slice; delete inert MobHitbox in a later template-hygiene / combat phase.>>
+
+---
+
 **Resolved — config namespace (`creature_motor_v3`):** All V3 movement, planner, locomotion, and exception tuning keys live in a **new** pack-root inline object **`creature_motor_v3`** (same authoring pattern as V2 `creature_motor`, **separate merge block**). V3 runtime **does not** merge or alias legacy **`creature_motor`**, V2 **`MotorContext`** key names, or POST_LOS-prefixed motor keys — greenfield modules read **`creature_motor_v3` only** so old cardinal / tier-2 paths are not implied dependencies.
 
 **Resolved — one-shot copy at 6a.** Copy duel `creature_motor` → `creature_motor_v3` in the same commit that wires V3 merge; **do not** dual-author both blocks during transition. V3 runtime reads **`creature_motor_v3` only**. Legacy `creature_motor` may remain in packs for archived V2 tests until **§12 step 11**, then **remove** legacy blocks entirely. At **6a**, add an **`OLog`** guard (e.g. warn once if any V3 code path reads legacy `creature_motor` keys) to catch stray reads while debugging mid-transition behavior.
 
-- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency / inventory keys (`goal_inventory_min_*`, `goal_sated_patrol_urgency`, `goal_mapping_urgency`) + **explore seek keys** (`explore_bearing_count`, `explore_*` — §7.3.2) + **Flight urgency / disposition / `kind_threat` clamp keys** + **`flight_acute_panic_radius`**, §8.1 awareness keys, §6.1 **`safe_site_*`**, **`goal_consideration_chaos`** (ship **0.15** — hub, §9, explore, ±180° align; **replaces** `blocked_objective_chaos` at **post-6d-explore**), §10 **`goal_replan_base_ticks`** (**8**), §7 **`turn_increment_deg`** (**22.5**), EAT **`action_max_distance`** (**5**), §6.2 **`unknown_kind_multiplier`**, detour toggles.
+- **V3-owned examples:** §7.5 calorie keys, §1 **`goal_feasibility_floor_*`** + Eat urgency / inventory keys (`goal_inventory_min_*`, `goal_sated_patrol_urgency`, `goal_mapping_urgency`) + **explore seek keys** (`explore_bearing_count`, `explore_*` — §7.3.2) + **prey engagement latch keys** (D10 — `predator_prey_engagement_latch_*`) + **Flight urgency / disposition / `kind_threat` clamp keys** + **`flight_acute_panic_radius`**, §8.1 awareness keys, §6.1 **`safe_site_*`**, **`goal_consideration_chaos`** (ship **0.15** — hub, §9, explore, ±180° align; **replaces** `blocked_objective_chaos` at **post-6d-explore**), §10 **`goal_replan_base_ticks`** (**8**), §7 **`turn_increment_deg`** (**22.5**), EAT **`action_max_distance`** (**5**), §6.2 **`unknown_kind_multiplier`**, detour toggles.
 - **Memory storage keys** (`goal_*`, `believed_goal_*`, **`kind_profile_*`** — [CREATURE_MEMORY.md §10](CREATURE_MEMORY.md)) remain the **MEMORY sibling** contract for belief / locale-prior / **kind-profile** **storage and TTL**; V3 consumes them through the **memory adapter** (§8.4) in **§12.2 6d**, not by reusing V2 motor merge codepaths or V2 pack motor weights.
 
 ### 12.3 Sibling doc rework (single-pass checklists)
@@ -2430,7 +2710,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 **§5.1 Replay consume path (align with V3 §1 / §9):**
 
-- **`replay_weight` motor integration:** replace “multiplicative on **`weight_believed_goal_pull`** / cardinal **`weight_seek_*`**” with **planner-only consult** — locale prior ranking (§9 persist/switch/seek), detour/seek cycle (V3 §3), **not** hub consideration `weight`. **`change_stability`** remains **only** inside **`replay_rank_score`** (V3 §9 resolved).
+- **`replay_weight` motor integration:** replace “multiplicative on **`weight_believed_goal_pull`** / cardinal **`weight_seek_*`**” with **planner-only consult** — locale prior ranking (§9 persist/switch/seek), detour/seek cycle (V3 §3), **not** hub consideration `weight`. **`change_stability`** in §9 remains inside **`replay_rank_score`**; **D10** adds pursuit latch scaling (post-6d-explore-prey only).
 - **Hotspot / escalate:** rebind **CREATURE_MOVEMENT_V2 §A.3.1** bullets to **V3 §3 seek cycle** + MEMORY §14.1 adapter consult (post-§12.3.2).
 
 **§5.1.1 Salient episode emitter:**
@@ -2494,7 +2774,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Headless path fixture (navmesh + LoS scope) | §3 | — | **Closed** — `tests/motor_path_fixture.gd`; duel = manual only |
 | Simplified tick executor — **6e.1** align refactor (§3.1 + §7.3.0) | §12.2 **6e.1** | — | **Done** — 2026-07-06; cone-only align; commit/`cmt` retired |
 | Consideration + clearance cadence — **6e.2** | §12.2 **6e.2**, §3.1, §10 | — | **Done** — 2026-07-06; per-objective timer + clearance gating |
-| Flight duel — mutual **`ff=1`** + predator prey-as-threat | §12.2 **post-6d**, §6.3, §7.3.0 | — | **Tracking** — duel smoke 2026-07-06; after **6d.3** |
+| Flight fast-path locomotion (close-range **`ff=1`** turn-in-place) | §12.2 **post-6d**, §6.3, §7.3.0 | P4 A/B/C | **Done** — P2–P4 **2026-07-10**; duel manual smoke pending. Predator prey ≠ Flight threat → **post-6d-explore-prey D1** |
 | `blocked_objective_chaos` | §9 | — | **Retired** — unified **`goal_consideration_chaos`** at **post-6d-explore** |
 | Unified explore seek (`motor_explore_seek.gd`) | §7.3.2, §1, §8.4, §9, §12.2 **post-6d-explore** | — | **Done** — E1–E7 **2026-07-08** |
 | `goal_replan_base_ticks` default | §10 | — | **Closed** |
@@ -2551,7 +2831,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 14 | Body [`set_creature_move_intent`](../../creature/capabilities/creature_kinematic_body_3d.gd) ENGINE path | **deprecate** for ENGINE — `apply_action` only | **6a** | Medium | Human adapter may keep intent path |
 | 15 | [`carnivore_pursuit.gd`](../../creature/motor/carnivore_pursuit.gd) | **delete** or backlog-isolate | **Deferred** | Low | Combat deferred (14.2.9) |
 | 16 | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) — three-phase pipeline | **done** — **6e.1** align + **6e.2** cadence | — | Med | §12.2 **6e** closed 2026-07-06 |
-| 17 | Predator prey ≠ Flight threat; Flight fast-path locomotion (duel mutual **`ff=1`**) | **post-6d** — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`** | **post-6d** | Med | Duel smoke 2026-07-06; not **6d** / **6e** scope |
+| 17 | Flight fast-path locomotion (close-range **`ff=1`** turn-in-place) | **post-6d** — stack episode entry + [`motor_planner.gd`](../../creature/motor/motor_planner.gd) **`_select_flight_action`** / **`_maintain_flee_latch`** | **post-6d** | Med | **Done** P2–P4 **2026-07-10**; duel manual smoke pending. Config **`flee_waypoint_latch_ticks`** **16** |
 
 ### 15.2 Keep (not cleanup targets)
 
@@ -2575,7 +2855,8 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | Post–V3 trait modulator (module vs config keys) | [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) | Post–V3 v1 — **deferred** |
 | Squeeze/hide tactic detectors (post–v1) | §12.3.4 <<Comment>> | Post–V3 v1 — **deferred** |
 | Moonwalk / strafe cost keys + ENGINE `MOVE_BACKWARD` | §7.3.0 deferred | Post–V3 v1 — **out of scope** |
-| Flight stabilization latch (if playtest shows paralysis) | §6.3, §7.3.0 resolved | **post-6d** — confirmed duel mutual **`ff=1`** turn-in-place (2026-07-06) |
+
+**Closed 2026-07-09:** **Flight flee waypoint latch (O1)** + **P4 headless contract (O2)** — §12.2 **post-6d** (layer split, rename, §3.2 blocked-MOVE policy, generic latch refactor deferred).
 
 **Closed 2026-07-06 (promoted from <<Answer>> — no longer open):** moving actors ≠ solid; **moving-target validity on goal-consideration ticks**; substep stability + clearance cadence; **single-winner model — no fixed §3.2 branch priority**; backtrack in §3.2 only; turn pick = fewest turns; **±180° tie reuses `goal_consideration_chaos`**; course correction via cone exit; rear `MOVE_BACKWARD` deferred; **clearance on consideration cadence + blocked-outcome immediate recheck (drop latched skip)**; **dead-end escape immediate/within-step**; **consideration = per-objective timer, not global heartbeat**; **substep-complete reeval = full hub re-score**; **no max-interval cap (substep churn)**; **retire `turn_commit_sign` — cone-only `align_and_move`**; **moonwalk/strafe out of V3 scope**; **retire HUD / explore-log `cmt`** (no `last_action` plumbing); **delete `turn_commit_sign` from state/snapshot**; **`turn_commit_sign` test migration same PR as align refactor**; **Flight turn flutter acceptable v1**. **Implementation slices:** §12.2 **6e.1** (align + telemetry) and **6e.2** (cadence + clearance).
 
@@ -2623,11 +2904,11 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 | 14.2.6 | **2D `*_px` keys** in **3D** motor | Wrong consult radii | `done` | §12.3.2 — rename at **6d.2** |
 | 14.2.7 | **Duel scene** sufficient manual smoke | Complex flows need harness | `accepted` | §12 Step 3–5 QA — duel motor smoke **from 6c**; load-only before |
 | 14.2.8 | **§12.3 Tracking** sibling passes on schedule | Sibling drift during **6d** | `accepted` | |
-| 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | Duel mutual Flight spin → **post-6d** (§12.2); prey ≠ Flight threat |
+| 14.2.9 | **Carnivore prey chase deferred**; moving beliefs + ghosts ship **6d.3** | Half predator–prey | `accepted` | Prey chase + **prey ≠ Flight threat (D1)** → **post-6d-explore-prey**; close-range Flight spin → **post-6d** P2 (§12.2) |
 | 14.2.10 | **Acute fast-path** — `gate_dist ≤ flight_acute_panic_radius` | Implementers guess threshold | `done` — §1 keys table; default **220.0** |
 | 14.2.11 | **`arrival_tolerance` / interaction range** undefined | Step completion ambiguous | `done` | §7.2 **`action_max_distance`** — EAT **5** |
 | 14.2.12 | **Facing alignment** before `MOVE_FORWARD` | Turn/move flip-flop | `done` | §7.3.0 cone + fewest-turn pick; **`turn_commit_sign` retired on refactor** |
-| 14.2.13 | **Prey pursuit drop** when prey leaves awareness — `is_moving` beliefs skipped by food consult (§6.2) | Carnivore abandons chase for explore | `open` | **post-6d-explore** prey-tracking slice; not E4 |
+| 14.2.13 | **Prey pursuit drop** when prey leaves awareness — `is_moving` beliefs skipped by food consult (§6.2) | Carnivore abandons chase for explore | `accepted` | **post-6d-explore-prey** — D1–D13 + T1–T13 **2026-07-09** |
 
 ### 14.3 Edge cases (under-specified)
 

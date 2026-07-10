@@ -11,7 +11,7 @@
 | Capability | Where logic lives | Attached as | Driven by |
 |------------|-------------------|-------------|-----------|
 | **Vitals / calorie burn & plant clamp** | [creature_vitals_math.gd](../../creature/capabilities/creature_vitals_math.gd) (pure) | [creature_vitals_component.gd](../../creature/capabilities/creature_vitals_component.gd) (`Node`) | [GameConfig](../../game_config.gd) globals × [CreatureDefinition](../../creature/definition/creature_definition.gd) multipliers |
-| **Predator meal clamp** | [creature_predation_math.gd](../../creature/capabilities/creature_predation_math.gd) (pure) | (call from collision / AI) | [predator_prey_meal_calories](../../AI_int_lib/game_config_merge.gd), species caps |
+| **Predator meal clamp** | [creature_predation_math.gd](../../creature/capabilities/creature_predation_math.gd) (pure) | V3 **`EAT`** completion via motor stack (planned — [CREATURE_MOVEMENT_V3.md §12.2 D11](../Draft_Features/CREATURE_MOVEMENT_V3.md)); legacy `MobHitbox` contact **inert** until template cleanup | [predator_prey_meal_calories](../../AI_int_lib/game_config_merge.gd), species caps |
 | **Perception scale (3D)** | [creature_perception_3d.gd](../../creature/capabilities/creature_perception_3d.gd) (pure) | Radius/cone scale at ingest | Definition `perception_radius_scale`, cone scale |
 | **Line of sight (3D)** | [line_of_sight.gd](../../creature/motor/line_of_sight.gd) | Combined awareness gate in [motor_target_builder.gd](../../creature/motor/motor_target_builder.gd) | Optional `los_eye_height` in pack; default `0.9 ×` synced capsule height |
 | **Diet → default groups** | [diet_registry.gd](../../creature/capabilities/diet_registry.gd) (static) | Runs at setup / AI context build | [CreatureDefinition.FeedingMode](../../creature/definition/creature_definition.gd) |
@@ -36,7 +36,7 @@ Single Resource type (plus [LocomotionProfile](../../creature/definition/locomot
 
 | Scene | Physics | Use |
 |-------|---------|-----|
-| [creature_herbivore_kinematic_3d.tscn](../../creature/templates/creature_herbivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule + MobHitbox [code]Area3D[/code] | Herbivore / omnivore duel prey |
+| [creature_herbivore_kinematic_3d.tscn](../../creature/templates/creature_herbivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule + MobHitbox [code]Area3D[/code] (**inert** for predation post–D11 — remove in later phase) | Herbivore / omnivore duel prey |
 | [creature_carnivore_kinematic_3d.tscn](../../creature/templates/creature_carnivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule | Carnivore duel predator ([code]is_hostile[/code] on body script) |
 
 Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals[/code] ([CreatureVitalsComponent](res://creature/capabilities/creature_vitals_component.gd)). **Shared** scripts and definition; **only** leaf data and body exports differ. Physics layers applied at runtime in [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd) (`player` layer `2` / mask `1` for prey; `mob` layer `4` / mask `9` for predators).
@@ -47,7 +47,7 @@ Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals
 
 - **Kinematic:** `CreatureKinematicBody3D.apply_horizontal_move_intent` — pass **Vector3**; **Y is ignored**; horizontal velocity integrated and **gravity** applied on this node. **XZ ownership:** all flattening from motor-plane direction to world XZ happens **here** (via [MotorPlane](../../creature/motor/motor_plane.gd) adapter).
 - **Visual facing:** `Body/Visual.rotation.y` tracks **`last_move_direction`** via `_sync_visual_facing()` (after each physics step and in `_process` so AiDriver stationary 8-way turns stay aligned). Yaw from [MotorPlane.yaw_from_horizontal_dir](../../creature/motor/motor_plane.gd) assumes mesh default forward **−Z**; per-body **`visual_yaw_offset_rad`** export corrects mismatched imports. **Collision capsule does not rotate.**
-- **Size sync (M4):** `apply_effective_creature_size(size)` scales mesh + capsule with `creature_size`; `get_collision_capsule_radius()` / `get_los_eye_height()` feed nav + LoS.
+- **Size sync (M4):** `apply_effective_creature_size(size)` scales mesh + capsule with `creature_size`; `get_collision_capsule_radius()` / `get_los_eye_height()` feed nav + LoS. After [creature_root_3d.gd](../../creature/creature_root_3d.gd) mounts **Visual**, [apply_capsule_footprint_from_visual](../../creature/capabilities/creature_kinematic_body_3d.gd) sizes the capsule from mesh AABB ([creature_mesh_footprint.gd](../../creature/capabilities/creature_mesh_footprint.gd)) — **no** mesh colliders on **Body**.
 - **AiDriver / scripting:** single “direction in, motion out” contract on registered [code]CharacterBody3D[/code] duel bodies; cardinal motor output maps to [code]Vector3(x, 0, z)[/code] in one adapter — **not** scattered per species.
 
 ---
@@ -63,6 +63,7 @@ Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals
 
 | Date | Change |
 |------|--------|
+| 2026-07-09 | **Mesh-aligned collision:** creature capsule from mounted visual AABB; food shrubs convex bake — [ENVIRONMENT_MODEL_PLAN.md §6.3](ENVIRONMENT_MODEL_PLAN.md). |
 | 2026-06-09 | **Visual facing:** `Body/Visual` Y rotation synced to `last_move_direction` (awareness cone); `MotorPlane.yaw_from_horizontal_dir`; optional `visual_yaw_offset_rad`. |
 | 2026-06-09 | Promoted from `Draft_Features/` to `Definitive_Features/` (tier III). |
 | 2026-06-08 | **D4:** Unified kinematic templates only; removed rigid-body fork and stale 2D parallel wording (M3). |

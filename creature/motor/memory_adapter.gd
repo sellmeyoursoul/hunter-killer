@@ -14,6 +14,7 @@ const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const FEASIBILITY_PRECISE := 0.75
 const FEASIBILITY_COARSE := 0.45
 const FEASIBILITY_LOCALE := 0.25
+const FEASIBILITY_MEMORY_MOVING := 0.75
 
 var _beliefs: Dictionary = {}
 var _kind_profile: Dictionary = {}
@@ -297,6 +298,30 @@ func seed_precise_food_belief(
   }
 
 
+## Seeds one moving [code]find_food[/code] prey belief for headless fixtures (§12.2 post-6d-explore-prey).
+func seed_moving_prey_belief(
+  instance_id: int,
+  world_pos: Vector3,
+  velocity: Vector3,
+  now_ms: int,
+  stimulus_kind_id: StringName = &"rabbit",
+) -> void:
+  _beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_FIND_FOOD,
+    "tier": _GoalBelief.TIER_PRECISE,
+    "last_world_pos": world_pos,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": true,
+    "is_moving": true,
+    "last_velocity": velocity,
+    "passibility_fail_count": 0,
+    "last_passibility_fail_ms": 0,
+    "stimulus_kind_id": stimulus_kind_id,
+  }
+
+
 ## Seeds one coarse [code]find_food[/code] belief row for headless fixtures.
 func seed_coarse_food_belief(instance_id: int, world_pos: Vector3, now_ms: int) -> void:
   _beliefs[instance_id] = {
@@ -389,6 +414,65 @@ func consult_precise_food(
     "instance_id": best_iid,
     "stimulus_kind_id": _beliefs.get(best_iid, {}).get("stimulus_kind_id", &""),
     "source": &"precise",
+  }
+
+
+## Latch-gated moving prey dropout bridge — [CREATURE_MOVEMENT_V3.md §12.2 D4/D8/D9](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md).
+func consult_moving_prey_food(
+  engagement_instance_id: int,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  food_split: Dictionary,
+  now_ms: int,
+  consult_ctx: Dictionary = {},
+) -> Dictionary:
+  var inactive := {
+    "active": false,
+    "pos": Vector3.ZERO,
+    "instance_id": 0,
+    "stimulus_kind_id": &"",
+    "source": &"memory_moving",
+  }
+  if engagement_instance_id == 0:
+    return inactive
+  if bool(consult_ctx.get("flight_fast_path_active", false)):
+    return inactive
+  var panic_r := float(motor_v3.get("flight_acute_panic_radius", 220.0))
+  for sample_v in consult_ctx.get("threat_samples", []):
+    if typeof(sample_v) != TYPE_DICTIONARY:
+      continue
+    var sample: Dictionary = sample_v
+    if not bool(sample.get("in_awareness", true)):
+      continue
+    if float(sample.get("gate_dist", INF)) <= panic_r:
+      return inactive
+  var live_ids := _GoalBelief.live_food_instance_ids(food_split)
+  if live_ids.has(engagement_instance_id):
+    return inactive
+  if not _beliefs.has(engagement_instance_id):
+    return inactive
+  var row: Dictionary = _beliefs[engagement_instance_id]
+  if row.get("goal_kind", &"") != _GkReg.GK_FIND_FOOD:
+    return inactive
+  if not bool(row.get("is_moving", false)):
+    return inactive
+  if not _belief_instance_passes_diet(engagement_instance_id):
+    return inactive
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius", 2400.0))
+  var last_pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+  if creature_pos.distance_to(last_pos) > forget_r:
+    return inactive
+  var mover_ttl_ms := int(float(motor_v3.get("goal_memory_mover_ttl_sec", 10.0)) * 1000.0)
+  var age_ms := now_ms - int(row.get("last_observed_ms", 0))
+  if age_ms > mover_ttl_ms:
+    return inactive
+  var objective := _GoalBelief.moving_seek_objective_pos(row, motor_v3)
+  return {
+    "active": true,
+    "pos": objective,
+    "instance_id": engagement_instance_id,
+    "stimulus_kind_id": row.get("stimulus_kind_id", &""),
+    "source": &"memory_moving",
   }
 
 

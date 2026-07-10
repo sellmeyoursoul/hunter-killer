@@ -290,6 +290,13 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "goal_sated_patrol_urgency": 0.15,
     "goal_mapping_urgency": 0.35,
     "goal_consideration_chaos": 0.15,
+    "goal_memory_mover_ttl_sec": 10.0,
+    "predator_prey_engagement_latch_base_ticks": 40,
+    "predator_prey_engagement_latch_scale_min": 0.5,
+    "predator_prey_engagement_latch_scale_max": 1.5,
+    "predator_prey_engagement_latch_ticks_min": 8,
+    "predator_prey_engagement_latch_ticks_max": 120,
+    "flee_waypoint_latch_ticks": 16,
   }
 
 
