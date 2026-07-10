@@ -81,16 +81,16 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 - **Crossover:** two parents → child: per-gene blend on **`creature_motor`** and independently on **motivation traits** (same operators; no mandatory correlation until a spec adds one).
 - **Speciation (optional):** cluster genomes by behavior vectors (e.g. mean `weight_edge`, principal components of motivation traits) to preserve diversity.
 
-**Combat experience tables (deferred — cross-ref [COMBAT.md](COMBAT.md) §11.7 and §11.9):**
+**Combat experience tables (deferred — cross-ref [COMBAT_RESOLVED.md](COMBAT_RESOLVED.md) §8 and §9):**
 When the combat experience system ships, two per-creature-lifetime tables are candidates for hereditary inheritance:
 
-1. **Self-experience table** (§11.7) — keyed on `prev_action_id → curr_action_id → weight`. Child inherits a diluted blend of both parents' tables at a configured dilution factor (`combat_exp_inherit_dilution`, default TBD). Over generations, populations develop locally distinct action-chain tendencies without explicit encoding.
+1. **Self-experience table** (§8) — keyed on `prev_action_id → curr_action_id → weight`. Child inherits a diluted blend of both parents' tables at a configured dilution factor (`combat_exp_inherit_dilution`, default TBD). Over generations, populations develop locally distinct action-chain tendencies without explicit encoding.
 
-2. **Opponent observation table** (§11.9) — keyed on `opponent_action_id → own_response_id → weight`, plus a **spatial preference overlay** (named positional bias dict). Child inherits a blend of parents' opponent tables and overlay values. Populations in fox-heavy areas may accumulate elevated `maintain_awareness_arc` bias across generations — an emergent population-level tactical memory.
+2. **Opponent observation table** (§9) — keyed on `opponent_action_id → own_response_id → weight`, plus a **spatial preference overlay** (named positional bias dict). Child inherits a blend of parents' opponent tables and overlay values. Populations in fox-heavy areas may accumulate elevated `maintain_awareness_arc` bias across generations — an emergent population-level tactical memory.
 
 Both tables use the same per-gene EMA-blend crossover operator as the motor genome (normalize → blend → clamp). The dilution factor is a separate config key from `combat_exp_ema_alpha` since it governs cross-generation transfer, not within-lifetime learning.
 
-**Inheritance is deferred** until the base table implementations (§11.7, §11.9) are stable. Do not implement the inheritance path before the tables themselves are wired and unit-tested.
+**Inheritance is deferred** until the base table implementations (§8, §9) are stable. Do not implement the inheritance path before the tables themselves are wired and unit-tested.
 
 ## Risks and mitigations
 

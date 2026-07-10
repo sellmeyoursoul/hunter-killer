@@ -21,6 +21,18 @@ alwaysApply: false
 
 When moving or adding docs, update **only** `PROJECT_DOC_INDEX.md` for path registry changes.
 
+## Splitting large drafts
+
+Before splitting, check whether the feature decomposes into independent subsystems: parts that touch each other only through a one-line interface contract (not shared internals), could be implemented/tested without the rest of the doc open, and could plausibly promote to `Definitive_Features/` on a different schedule. If so, prefer several `<FEATURE>_<SUBSYSTEM>_RESOLVED.md` contracts over one `<FEATURE>_RESOLVED.md` — apply this same size gate recursively to each. `<FEATURE>_IMPLEMENTATION.md` stays a **single feature-level file** regardless — build order/gating spans subsystems and doesn't decompose the same way a contract does.
+
+A `Draft_Features/<FEATURE>.md` that crosses **~20,000 characters (~5,000 tokens)** should split into three files so implementation work doesn't require loading rationale/history to find "what's next":
+
+- **`<FEATURE>_RESOLVED.md`** — current contract only: formulas, schemas, config keys, one-line "why" per non-obvious call. No narrative. `<<Question>>`/`<<Comment>>` markers still apply here. Promotes to `Definitive_Features/` once implementation + testing land.
+- **`<FEATURE>_HISTORY.md`** — full decision narrative: superseded approaches, discovery notes, why we got here. Not a routine agent read — pull in only when asked "why did we do X." Promotes to `Completed_Features/` alongside `_RESOLVED.md`'s promotion.
+- **`<FEATURE>_IMPLEMENTATION.md`** — phase/status tracking, what's next. Deleted once the feature ships to `main`.
+
+Trigger on first crossing the size gate, going forward — don't split an existing large doc unless asked.
+
 ## Code ↔ doc sync playbook
 
 **Applies when:** Syncing active Project_Docs after a code or config change (see [core.mdc](./core.mdc) **Doc sync**).
