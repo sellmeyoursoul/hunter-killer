@@ -5,6 +5,7 @@ class_name MotorPlanner
 const _MotorAction := preload("res://creature/motor/motor_action.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
+const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _PathClear := preload("res://creature/motor/motor_path_clear.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
@@ -43,6 +44,9 @@ static func new_state() -> Dictionary:
     "precise_no_progress_ticks": 0,
     "precise_last_bearing_err_deg": INF,
     "precise_last_dist_sq": INF,
+    "locale_no_progress_ticks": 0,
+    "locale_last_bearing_err_deg": INF,
+    "locale_last_dist_sq": INF,
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
     "playfield_clamp_latch_ticks": 0,
@@ -52,6 +56,10 @@ static func new_state() -> Dictionary:
     "prey_engagement_latch_total": 0,
     "flee_waypoint": Vector3.ZERO,
     "flee_waypoint_ticks_remaining": 0,
+    "pursuit_detour_waypoint": Vector3.ZERO,
+    "pursuit_detour_ticks_remaining": 0,
+    "step_ultimate_pos": Vector3.ZERO,
+    "force_align_turn_before_move": false,
   }
 
 
@@ -168,6 +176,135 @@ static func _passed_explore_waypoint(
   if travel.length_squared() < 1e-12:
     return true
   return travel.dot(explore) > 0.0
+
+
+## Expected horizontal displacement for one [code]MOVE_FORWARD[/code] tick at cruise speed.
+static func _expected_forward_step_world(body: CharacterBody3D, delta: float) -> float:
+  var max_spd := _LocomotionExecutor._expected_horizontal_speed(body)
+  return maxf(0.01, max_spd * maxf(delta, 1.0 / 120.0))
+
+
+static func _is_fixed_objective_overshoot_source(step_source: StringName) -> bool:
+  # `live` deferred — moving prey retargets every tick; overshoot remint causes pursuit flutter.
+  return (
+    step_source == &"locale"
+    or step_source == &"precise"
+    or step_source == &"memory_moving"
+  )
+
+
+## Same [code]step_source[/code] + instance refresh (e.g. per-tick live prey pos) — not a discrete jump.
+static func _is_continuous_objective_retarget(
+  state: Dictionary,
+  step_source: StringName,
+  instance_id: int,
+) -> bool:
+  if instance_id == 0:
+    return false
+  return (
+    state.get("step_source", &"") == step_source
+    and int(state.get("step_instance_id", 0)) == instance_id
+  )
+
+
+## True when [param pos_after] lies past [param goal] along [param approach_dir] (horizontal).
+static func _passed_goal_along_approach(
+  pos_after: Vector3,
+  goal: Vector3,
+  approach_dir: Vector3,
+) -> bool:
+  if approach_dir.length_squared() < 1e-12:
+    return false
+  var travel := pos_after - goal
+  travel.y = 0.0
+  if travel.length_squared() < 1e-12:
+    return true
+  return travel.dot(approach_dir.normalized()) > 0.0
+
+
+static func _maybe_flag_material_step_goal_change(
+  state: Dictionary,
+  body: CharacterBody3D,
+  old_goal: Vector3,
+  new_goal: Vector3,
+  motor_v3: Dictionary,
+  delta: float,
+) -> void:
+  if old_goal.length_squared() < 1e-8 or new_goal.length_squared() < 1e-8:
+    return
+  var stuck_eps := _latched_stuck_move_epsilon(motor_v3, body, delta)
+  var flat_old := Vector3(old_goal.x, 0.0, old_goal.z)
+  var flat_new := Vector3(new_goal.x, 0.0, new_goal.z)
+  if flat_old.distance_to(flat_new) > stuck_eps:
+    state["force_align_turn_before_move"] = true
+
+
+static func _assign_resolved_step_goal(
+  state: Dictionary,
+  body: CharacterBody3D,
+  ultimate: Vector3,
+  resolved_goal: Vector3,
+  motor_v3: Dictionary,
+  delta: float,
+  flag_material_change: bool = true,
+) -> void:
+  var old_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if flag_material_change:
+    _maybe_flag_material_step_goal_change(state, body, old_goal, resolved_goal, motor_v3, delta)
+  state["step_goal"] = resolved_goal
+  if ultimate.length_squared() > 1e-8:
+    state["step_ultimate_pos"] = ultimate
+
+
+## Post-[code]MOVE_F[/code] overshoot recovery for fixed objectives (post-6d-approach-geometry Layer 1).
+static func _maybe_apply_fixed_objective_overshoot(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+  pos_before_tick: Vector3,
+  delta: float,
+) -> void:
+  var step_source: StringName = state.get("step_source", &"live")
+  if not _is_fixed_objective_overshoot_source(step_source):
+    return
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if ultimate.length_squared() < 1e-8:
+    ultimate = state.get("step_goal", Vector3.ZERO)
+  if ultimate.length_squared() < 1e-8:
+    return
+  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  if body.global_position.distance_to(ultimate) <= arrival_tol:
+    return
+  var close_steps := int(motor_v3.get("approach_overshoot_guard_move_steps", 2))
+  var close_band := close_steps * _expected_forward_step_world(body, delta)
+  if body.global_position.distance_to(ultimate) >= close_band:
+    return
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if step_goal.length_squared() < 1e-8:
+    return
+  var pos_after := body.global_position
+  var to_goal_before := Vector3(
+    step_goal.x - pos_before_tick.x, 0.0, step_goal.z - pos_before_tick.z
+  )
+  if to_goal_before.length_squared() < 1e-12:
+    return
+  var approach_dir := to_goal_before.normalized()
+  var dist_before := pos_before_tick.distance_to(step_goal)
+  var dist_after := pos_after.distance_to(step_goal)
+  var passed := _passed_goal_along_approach(pos_after, step_goal, approach_dir)
+  var rear_confirm := dist_after > dist_before and _facing_dot_to_target(body, step_goal) < 0.0
+  if not passed and not rear_confirm:
+    return
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var agent_r := _agent_radius(body)
+  var reminted := _PathClear.resolve_step_objective(map_rid, pos_after, ultimate, agent_r)
+  _assign_resolved_step_goal(state, body, ultimate, reminted, motor_v3, delta)
+  state["force_align_turn_before_move"] = true
+  if step_source == &"locale":
+    _reset_locale_progress_state(state)
+  elif step_source == &"precise":
+    _reset_precise_progress_state(state)
 
 
 ## Drop overshot explore latch; rim overshoot routes inward, interior rotates 60°.
@@ -430,31 +567,71 @@ static func _reset_precise_progress_state(state: Dictionary) -> void:
   state["precise_last_dist_sq"] = INF
 
 
-static func _note_precise_position_progress(
+static func _reset_locale_progress_state(state: Dictionary) -> void:
+  state["locale_no_progress_ticks"] = 0
+  state["locale_last_bearing_err_deg"] = INF
+  state["locale_last_dist_sq"] = INF
+
+
+## Bearing- or distance-improved progress toward [param step_goal] for fixed-objective stuck escalation.
+static func _note_fixed_objective_position_progress(
   state: Dictionary,
   body: CharacterBody3D,
   stuck_eps: float,
+  no_progress_key: String,
+  last_err_key: String,
+  last_dist_key: String,
 ) -> void:
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return
   var err_deg := absf(_signed_bearing_error_deg(body, step_goal))
   var dist_sq := body.global_position.distance_squared_to(step_goal)
-  var last_err := float(state.get("precise_last_bearing_err_deg", INF))
-  var last_dist := float(state.get("precise_last_dist_sq", INF))
+  var last_err := float(state.get(last_err_key, INF))
+  var last_dist := float(state.get(last_dist_key, INF))
   if is_inf(last_err) or is_inf(last_dist):
-    state["precise_last_bearing_err_deg"] = err_deg
-    state["precise_last_dist_sq"] = dist_sq
+    state[last_err_key] = err_deg
+    state[last_dist_key] = dist_sq
     return
   var improve_thresh := stuck_eps * stuck_eps
   var bearing_improved := err_deg + 0.25 < last_err
   var dist_improved := dist_sq + improve_thresh < last_dist
   if bearing_improved or dist_improved:
-    state["precise_no_progress_ticks"] = 0
+    state[no_progress_key] = 0
   else:
-    state["precise_no_progress_ticks"] = int(state.get("precise_no_progress_ticks", 0)) + 1
-  state["precise_last_bearing_err_deg"] = err_deg
-  state["precise_last_dist_sq"] = dist_sq
+    state[no_progress_key] = int(state.get(no_progress_key, 0)) + 1
+  state[last_err_key] = err_deg
+  state[last_dist_key] = dist_sq
+
+
+static func _note_precise_position_progress(
+  state: Dictionary,
+  body: CharacterBody3D,
+  stuck_eps: float,
+) -> void:
+  _note_fixed_objective_position_progress(
+    state,
+    body,
+    stuck_eps,
+    "precise_no_progress_ticks",
+    "precise_last_bearing_err_deg",
+    "precise_last_dist_sq",
+  )
+
+
+static func _note_locale_position_progress(
+  state: Dictionary,
+  body: CharacterBody3D,
+  stuck_eps: float,
+) -> void:
+  _note_fixed_objective_position_progress(
+    state,
+    body,
+    stuck_eps,
+    "locale_no_progress_ticks",
+    "locale_last_bearing_err_deg",
+    "locale_last_dist_sq",
+  )
 
 
 static func _note_boundary_scan_progress(
@@ -508,6 +685,7 @@ static func note_outcome(
   pos_before_tick: Vector3 = Vector3.ZERO,
   boundary_clamped: bool = false,
   delta: float = 1.0 / 60.0,
+  planner_ctx: Dictionary = {},
 ) -> bool:
   var act: int = _MotorAction.STAY
   if outcome != null:
@@ -539,6 +717,9 @@ static func note_outcome(
 
   if step_source == &"precise" and is_latched:
     _note_precise_position_progress(state, body, stuck_eps)
+
+  if step_source == &"locale":
+    _note_locale_position_progress(state, body, stuck_eps)
 
   if step_source == &"explore" and is_latched:
     var align_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
@@ -593,12 +774,32 @@ static func note_outcome(
       elif step_source == &"explore" and not boundary_clamped:
         state["playfield_clamp_latch_ticks"] = 0
         _reset_explore_align_progress_state(state)
+  elif step_source == &"locale":
+    var locale_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    if _tick_had_meaningful_progress(body, locale_goal, tick_disp, act, motor_v3, stuck_eps):
+      _reset_locale_progress_state(state)
   else:
     state["consecutive_blocked"] = 0
 
   _note_boundary_scan_progress(state, body, act, motor_v3, stuck_this_tick)
 
+  if (
+    act == _MotorAction.MOVE_FORWARD
+    and not stuck_this_tick
+    and not planner_ctx.is_empty()
+  ):
+    _maybe_apply_fixed_objective_overshoot(
+      planner_ctx, state, body, motor_v3, pos_before_tick, delta
+    )
+
   if step_source == &"precise" and int(state.get("precise_no_progress_ticks", 0)) >= min_ticks:
+    state["last_outcome_blocked"] = true
+    if outcome != null:
+      outcome.blocked = true
+    state["consecutive_blocked"] = maxi(int(state.get("consecutive_blocked", 0)), min_ticks)
+    return true
+
+  if step_source == &"locale" and int(state.get("locale_no_progress_ticks", 0)) >= min_ticks:
     state["last_outcome_blocked"] = true
     if outcome != null:
       outcome.blocked = true
@@ -641,9 +842,18 @@ static func note_tick_completion(
   pos_before_tick: Vector3,
   boundary_clamped: bool,
   delta: float = 1.0 / 60.0,
+  planner_ctx: Dictionary = {},
 ) -> bool:
   return note_outcome(
-    state, body, outcome, motor_v3, physics_tick, pos_before_tick, boundary_clamped, delta
+    state,
+    body,
+    outcome,
+    motor_v3,
+    physics_tick,
+    pos_before_tick,
+    boundary_clamped,
+    delta,
+    planner_ctx,
   )
 
 
@@ -660,8 +870,12 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["boundary_scan_egress_ticks"] = 0
     state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
+    _reset_locale_progress_state(state)
     _reset_explore_align_progress_state(state)
     _clear_prey_engagement(state)
+    _clear_pursuit_detour_latch(state)
+    state["step_ultimate_pos"] = Vector3.ZERO
+    state["force_align_turn_before_move"] = false
   var refresh_targets := bool(ctx.get("refresh_step_objective", false))
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   var has_step_goal := step_goal.length_squared() > 1e-8
@@ -674,7 +888,18 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
 
   match goal_kind:
     _GkReg.GK_FIND_FOOD:
-      if _live_ready_food_present(scan, creature_pos):
+      _maybe_locale_arrival_bind_or_clear(
+        ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+      )
+      step_goal = state.get("step_goal", Vector3.ZERO)
+      has_step_goal = step_goal.length_squared() > 1e-8
+      var live_food := _AwarenessScan.best_ready_food_target(
+        scan.get("food_split", {}), creature_pos
+      )
+      var live_moving := (
+        not live_food.is_empty() and bool(live_food.get("is_moving", false))
+      )
+      if live_moving:
         _derive_find_food_step_objective(
           ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
         )
@@ -687,6 +912,14 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         _derive_find_food_step_objective(
           ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
         )
+      elif not live_food.is_empty() and state.get("step_source", &"") != &"locale":
+        # Non-moving live remint while already bound (not holding a locale approach).
+        var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+        _apply_live_food_objective(
+          state, live_food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
+        )
+        _arm_prey_engagement_from_live_food(ctx, state, live_food, motor_v3)
+        _store_food_inventory_step_mode(ctx, state, motor_v3)
       elif state.get("step_source", &"") == &"explore":
         _maintain_explore_latch(ctx, state, motor_v3)
     _GkReg.GK_AVOID_HOSTILES:
@@ -716,9 +949,31 @@ static func _derive_find_food_step_objective(
   map_rid: RID,
   agent_r: float,
 ) -> void:
+  if _try_maintain_pursuit_detour_latch(ctx, state, motor_v3, scan, creature_pos):
+    _store_food_inventory_step_mode(ctx, state, motor_v3)
+    return
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
-    _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
+    var body: CharacterBody3D = ctx.get("body")
+    var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+    # Moving prey always remints live (Pass 1); handoff scoring is for stationary food only.
+    if not bool(food.get("is_moving", false)):
+      var locale_candidate := _peek_locale_memory_tier_winner(
+        ctx, creature_pos, motor_v3, scan
+      )
+      if not locale_candidate.is_empty():
+        var adapter: RefCounted = ctx.get("memory_adapter")
+        if not _live_vs_locale_handoff_prefers_live(
+          food, locale_candidate, adapter, motor_v3
+        ):
+          _apply_locale_food_objective(
+            ctx, state, locale_candidate, creature_pos, motor_v3, map_rid, agent_r
+          )
+          _store_food_inventory_step_mode(ctx, state, motor_v3)
+          return
+    _apply_live_food_objective(
+      state, food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
+    )
     _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
@@ -742,15 +997,191 @@ static func _derive_find_food_step_objective(
     _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
 
 
+## Calories-per-EAT v1 from live sample [code]kind_yield[/code] × reference calories.
+static func _calories_per_eat_from_live_food(food: Dictionary, motor_v3: Dictionary) -> float:
+  var ref := maxf(1.0, float(motor_v3.get("kind_nutrition_yield_reference_calories", 5.0)))
+  var neutral := float(motor_v3.get("kind_profile_neutral_prior", 0.5))
+  return float(food.get("kind_yield", neutral)) * ref
+
+
+## Locale calories-per-EAT v1: kind-facet when [code]stimulus_kind_id[/code] known, else neutral prior.
+static func _calories_per_eat_from_locale(
+  locale: Dictionary,
+  adapter: RefCounted,
+  motor_v3: Dictionary,
+) -> float:
+  var ref := maxf(1.0, float(motor_v3.get("kind_nutrition_yield_reference_calories", 5.0)))
+  var neutral := float(motor_v3.get("kind_profile_neutral_prior", 0.5))
+  var kind: StringName = locale.get("stimulus_kind_id", &"")
+  var yield_v := neutral
+  if kind != &"" and adapter != null and adapter.has_method(&"consult_kind_facet"):
+    yield_v = float(
+      adapter.consult_kind_facet(_LearnReg.FACET_NUTRITION_YIELD, kind, motor_v3)
+    )
+  return yield_v * ref
+
+
+## Resolve locale kind for handoff: consult field, or live kind when food is at the locale anchor.
+static func _locale_kind_for_handoff(
+  locale: Dictionary,
+  live_food: Dictionary,
+  motor_v3: Dictionary,
+) -> StringName:
+  var kind: StringName = locale.get("stimulus_kind_id", &"")
+  if kind != &"":
+    return kind
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
+  var food_pos: Vector3 = live_food.get("pos", Vector3.ZERO)
+  if anchor.length_squared() > 1e-8 and food_pos.distance_to(anchor) <= eat_max:
+    return live_food.get("stimulus_kind_id", &"")
+  return &""
+
+
+## Pass 4 C2 handoff: same [code]stimulus_kind_id[/code] → prefer live; else higher calories-per-EAT.
+static func _live_vs_locale_handoff_prefers_live(
+  live_food: Dictionary,
+  locale: Dictionary,
+  adapter: RefCounted,
+  motor_v3: Dictionary,
+) -> bool:
+  var live_kind: StringName = live_food.get("stimulus_kind_id", &"")
+  var locale_kind := _locale_kind_for_handoff(locale, live_food, motor_v3)
+  if live_kind != &"" and locale_kind != &"" and live_kind == locale_kind:
+    return true
+  var live_cal := _calories_per_eat_from_live_food(live_food, motor_v3)
+  var locale_cal := _calories_per_eat_from_locale(locale, adapter, motor_v3)
+  return live_cal >= locale_cal
+
+
+## Locale consult when precise/coarse are inactive (memory-tier winner would be locale).
+static func _peek_locale_memory_tier_winner(
+  ctx: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+) -> Dictionary:
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null:
+    return {}
+  var food_split: Dictionary = scan.get("food_split", {})
+  var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+  if adapter.has_method(&"consult_precise_food"):
+    var precise: Dictionary = adapter.consult_precise_food(
+      creature_pos, motor_v3, food_split, now_ms
+    )
+    if bool(precise.get("active", false)):
+      return {}
+  if adapter.has_method(&"consult_coarse_bearing"):
+    var coarse: Dictionary = adapter.consult_coarse_bearing(
+      creature_pos, motor_v3, food_split, 0, now_ms
+    )
+    if bool(coarse.get("active", false)):
+      return {}
+  if not adapter.has_method(&"consult_locale_seek"):
+    return {}
+  var env_grid: Variant = ctx.get("environment_grid", null)
+  var locale: Dictionary = adapter.consult_locale_seek(
+    creature_pos, motor_v3, env_grid, {}
+  )
+  if bool(locale.get("active", false)):
+    return locale
+  return {}
+
+
+## Clears locale approach fields so orbit stops (Pass 4 arrival without consumable).
+static func _clear_locale_step_fields(state: Dictionary) -> void:
+  state["step_goal"] = Vector3.ZERO
+  state["step_ultimate_pos"] = Vector3.ZERO
+  state["step_instance_id"] = 0
+  state["step_stimulus_kind_id"] = &""
+  state["step_source"] = &""
+  _reset_locale_progress_state(state)
+
+
+## Apply a locale memory-tier seek objective (anchor + nav substep).
+static func _apply_locale_food_objective(
+  ctx: Dictionary,
+  state: Dictionary,
+  locale: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> void:
+  if state.get("step_source", &"") != &"locale":
+    _reset_locale_progress_state(state)
+  var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
+  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, anchor, agent_r)
+  var body: CharacterBody3D = ctx.get("body")
+  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+  if body != null:
+    _assign_resolved_step_goal(state, body, anchor, resolved, motor_v3, tick_delta)
+  else:
+    state["step_goal"] = resolved
+    state["step_ultimate_pos"] = anchor
+  state["step_instance_id"] = 0
+  state["step_stimulus_kind_id"] = locale.get("stimulus_kind_id", &"")
+  state["step_source"] = &"locale"
+
+
+## At locale ultimate within eat range: bind nearby live food or clear locale orbit.
+static func _maybe_locale_arrival_bind_or_clear(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> void:
+  if state.get("step_source", &"") != &"locale":
+    return
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if ultimate.length_squared() < 1e-8:
+    ultimate = state.get("step_goal", Vector3.ZERO)
+  if ultimate.length_squared() < 1e-8:
+    return
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  if creature_pos.distance_to(ultimate) > eat_max:
+    return
+  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
+  if not food.is_empty():
+    var food_pos: Vector3 = food.get("pos", Vector3.ZERO)
+    if (
+      food_pos.distance_to(ultimate) <= eat_max
+      or food_pos.distance_to(creature_pos) <= eat_max
+    ):
+      var body: CharacterBody3D = ctx.get("body")
+      var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+      _apply_live_food_objective(
+        state, food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
+      )
+      _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
+      _store_food_inventory_step_mode(ctx, state, motor_v3)
+      return
+  _clear_locale_step_fields(state)
+
+
 static func _apply_live_food_objective(
   state: Dictionary,
   food: Dictionary,
   map_rid: RID,
   creature_pos: Vector3,
   agent_r: float,
+  body: CharacterBody3D = null,
+  motor_v3: Dictionary = {},
+  delta: float = 1.0 / 60.0,
 ) -> void:
   var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
-  state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  var iid := int(food.get("instance_id", 0))
+  var flag_material := not _is_continuous_objective_retarget(state, &"live", iid)
+  if body != null:
+    _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, delta, flag_material)
+  else:
+    state["step_goal"] = resolved
+    state["step_ultimate_pos"] = ultimate
   state["step_instance_id"] = int(food.get("instance_id", 0))
   state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
   state["step_source"] = &"live"
@@ -842,6 +1273,86 @@ static func _prey_engagement_latch_valid(state: Dictionary) -> bool:
     int(state.get("prey_engagement_instance_id", 0)) != 0
     and int(state.get("prey_engagement_ticks_remaining", 0)) > 0
   )
+
+
+static func _pursuit_detour_latch_valid(state: Dictionary) -> bool:
+  return (
+    int(state.get("pursuit_detour_ticks_remaining", 0)) > 0
+    and state.get("pursuit_detour_waypoint", Vector3.ZERO).length_squared() > 1e-8
+  )
+
+
+static func _clear_pursuit_detour_latch(state: Dictionary) -> void:
+  state["pursuit_detour_waypoint"] = Vector3.ZERO
+  state["pursuit_detour_ticks_remaining"] = 0
+
+
+## §9 pre-call gate (C1): skip persist/switch/seek while live prey visible + engagement latch.
+static func should_suppress_live_pursuit_blocked_resolution(
+  ctx: Dictionary,
+  state: Dictionary,
+) -> bool:
+  if not _prey_engagement_latch_valid(state):
+    return false
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return false
+  var scan: Dictionary = ctx.get("scan", {})
+  return _live_ready_food_present(scan, body.global_position)
+
+
+## Hold post-blocked-reeval detour substep during live prey pursuit (post-6d-approach-geometry C1).
+static func _try_maintain_pursuit_detour_latch(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+  creature_pos: Vector3,
+) -> bool:
+  if not _pursuit_detour_latch_valid(state):
+    return false
+  if not _prey_engagement_latch_valid(state):
+    _clear_pursuit_detour_latch(state)
+    return false
+  var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  state["step_goal"] = latched
+  state["step_source"] = &"live"
+  state["pursuit_detour_ticks_remaining"] = int(state.get("pursuit_detour_ticks_remaining", 0)) - 1
+  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
+  if not food.is_empty():
+    state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+    state["step_instance_id"] = int(food.get("instance_id", 0))
+    state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
+    _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
+  return true
+
+
+static func _maybe_mint_pursuit_detour_latch(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
+  if not _prey_engagement_latch_valid(state):
+    return
+  if state.get("step_source", &"") != &"live":
+    return
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return
+  var scan: Dictionary = ctx.get("scan", {})
+  if not _live_ready_food_present(scan, body.global_position):
+    return
+  var wp: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if wp.length_squared() < 1e-8:
+    return
+  state["pursuit_detour_waypoint"] = wp
+  state["pursuit_detour_ticks_remaining"] = maxi(
+    1, int(motor_v3.get("pursuit_detour_latch_ticks", 16))
+  )
+  state["consecutive_blocked"] = 0
+  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), body.global_position)
+  if not food.is_empty():
+    state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
 
 
 static func _clear_prey_engagement(state: Dictionary) -> void:
@@ -944,7 +1455,15 @@ static func _sync_moving_prey_memory_objective(
   if int(state.get("step_instance_id", 0)) != new_iid:
     _reset_precise_progress_state(state)
   var ultimate: Vector3 = moving.get("pos", Vector3.ZERO)
-  state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
+  var body: CharacterBody3D = ctx.get("body")
+  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+  var flag_material := not _is_continuous_objective_retarget(state, &"memory_moving", new_iid)
+  if body != null:
+    _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, tick_delta, flag_material)
+  else:
+    state["step_goal"] = resolved
+    state["step_ultimate_pos"] = ultimate
   state["step_instance_id"] = new_iid
   state["step_stimulus_kind_id"] = moving.get("stimulus_kind_id", &"")
   state["step_source"] = &"memory_moving"
@@ -1008,12 +1527,19 @@ static func _sync_food_memory_objective(
   var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
   var env_grid: Variant = ctx.get("environment_grid", null)
   var motor_ctx: Dictionary = {}
+  var body: CharacterBody3D = ctx.get("body")
+  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
   var precise: Dictionary = adapter.consult_precise_food(creature_pos, motor_v3, food_split, now_ms)
   if bool(precise.get("active", false)):
     var new_iid := int(precise.get("instance_id", 0))
     if int(state.get("step_instance_id", 0)) != new_iid:
       _reset_precise_progress_state(state)
-    state["step_goal"] = precise.get("pos", Vector3.ZERO)
+    var precise_pos: Vector3 = precise.get("pos", Vector3.ZERO)
+    if body != null:
+      _assign_resolved_step_goal(state, body, precise_pos, precise_pos, motor_v3, tick_delta)
+    else:
+      state["step_goal"] = precise_pos
+      state["step_ultimate_pos"] = precise_pos
     state["step_instance_id"] = new_iid
     state["step_stimulus_kind_id"] = precise.get("stimulus_kind_id", &"")
     state["step_source"] = &"precise"
@@ -1031,10 +1557,7 @@ static func _sync_food_memory_objective(
     return true
   var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, motor_ctx)
   if bool(locale.get("active", false)):
-    var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
-    state["step_goal"] = _PathClear.resolve_step_objective(map_rid, creature_pos, anchor, agent_r)
-    state["step_instance_id"] = 0
-    state["step_source"] = &"locale"
+    _apply_locale_food_objective(ctx, state, locale, creature_pos, motor_v3, map_rid, agent_r)
     return true
   return false
 
@@ -1196,6 +1719,7 @@ static func apply_immediate_blocked_path_reevaluation(
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return
+  var old_goal := step_goal
   var creature_pos := body.global_position
   var to_goal := Vector3(step_goal.x - creature_pos.x, 0.0, step_goal.z - creature_pos.z)
   if to_goal.length_squared() < 1e-8:
@@ -1213,8 +1737,11 @@ static func apply_immediate_blocked_path_reevaluation(
     move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
     state["step_goal"] = creature_pos + move_dir * to_goal.length()
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
+  var new_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  _maybe_flag_material_step_goal_change(state, body, old_goal, new_goal, motor_v3, float(ctx.get("delta", 1.0 / 60.0)))
   if bool(ctx.get("flight_fast_path_active", false)):
     state["flee_waypoint"] = state.get("step_goal", Vector3.ZERO)
+  _maybe_mint_pursuit_detour_latch(ctx, state, motor_v3)
 
 
 static func _run_path_clearance_los_nav(
@@ -1260,6 +1787,10 @@ static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: D
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
+  if bool(state.get("force_align_turn_before_move", false)):
+    state["force_align_turn_before_move"] = false
+    var forced_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
+    return _MotorAction.TURN_LEFT if forced_sign > 0 else _MotorAction.TURN_RIGHT
   if _is_facing_aligned_for_move(body, step_goal, motor_v3):
     return _MotorAction.MOVE_FORWARD
   var turn_sign := _pick_align_turn_sign(body, step_goal, motor_v3)

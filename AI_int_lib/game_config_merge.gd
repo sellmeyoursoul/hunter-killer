@@ -297,6 +297,7 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_ticks_min": 8,
     "predator_prey_engagement_latch_ticks_max": 120,
     "flee_waypoint_latch_ticks": 16,
+    "pursuit_detour_latch_ticks": 16,
   }
 
 
@@ -344,6 +345,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "dead_end_match_radius": 52.0,
     "dead_end_heading_dot": 0.55,
     "dead_end_record_min_blocked_ticks": 3,
+    "approach_overshoot_guard_move_steps": 2,
     ## Legacy ratio vs V2 ~400 u/s @ 60 Hz; planner scales per tick as [code]max_speed × delta × (epsilon / 6.67)[/code].
     "motor_stuck_move_epsilon": 1.25,
     ## Playfield edge hug band for explore boundary scan ([code]PlayfieldClamp[/code] margins).

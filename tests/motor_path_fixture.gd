@@ -15,7 +15,12 @@ static func build_blocked(parent: Node) -> Dictionary:
   return _build(parent, true)
 
 
-static func _build(parent: Node, with_wall: bool) -> Dictionary:
+## P→R corridor pinch for carnivore live-prey pursuit detour smoke (C1).
+static func build_pursuit_pinch(parent: Node) -> Dictionary:
+  return _build(parent, false, true)
+
+
+static func _build(parent: Node, with_wall: bool, pursuit_pinch: bool = false) -> Dictionary:
   var root := Node3D.new()
   root.name = "MotorPathFixture"
   parent.add_child(root)
@@ -45,6 +50,17 @@ static func _build(parent: Node, with_wall: bool) -> Dictionary:
     wall.add_child(wall_col)
     wall.position = Vector3(_FLOOR_SIZE.x * 0.5, 1.0, _FLOOR_SIZE.y * 0.5)
     nav_region.add_child(wall)
+  elif pursuit_pinch:
+    var pinch := StaticBody3D.new()
+    pinch.name = "PursuitPinchWall"
+    pinch.collision_layer = 1
+    var pinch_shape := BoxShape3D.new()
+    pinch_shape.size = Vector3(0.4, 2.0, 6.0)
+    var pinch_col := CollisionShape3D.new()
+    pinch_col.shape = pinch_shape
+    pinch.add_child(pinch_col)
+    pinch.position = Vector3(_FLOOR_SIZE.x * 0.5, 1.0, _FLOOR_SIZE.y * 0.5)
+    nav_region.add_child(pinch)
   var nm := NavigationMesh.new()
   nm.agent_radius = 0.25
   nm.agent_height = 2.0

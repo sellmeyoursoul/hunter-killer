@@ -1,4 +1,4 @@
-extends Node
+extends Node3D
 ## Minimal main stub for headless terrain motor tests.
 
 
@@ -22,6 +22,8 @@ func mount_motor_path_fixture(layout: String = "open") -> Dictionary:
   var built: Dictionary
   if layout == "blocked":
     built = _MotorPathFixture.build_blocked(self)
+  elif layout == "pursuit_pinch":
+    built = _MotorPathFixture.build_pursuit_pinch(self)
   else:
     built = _MotorPathFixture.build_open(self)
   _fixture_map_rid = built.get("map_rid", RID()) as RID

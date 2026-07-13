@@ -136,6 +136,16 @@ func _run_all() -> void:
   _test_creature_motor_v3_playfield_distance_scale()
   _test_locomotion_executor_turn_facing()
   _test_motor_planner_turn_alignment_no_flip_flop()
+  _test_motor_align_cone_contract()
+  _test_motor_planner_fixed_objective_overshoot_remints()
+  await _test_motor_locale_approach_no_oscillation_smoke()
+  await _test_motor_live_pursuit_no_turn_storm_smoke()
+  await _test_motor_pursuit_pinch_detour_smoke()
+  _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval()
+  _test_motor_planner_live_pursuit_blocked_seek_suppressed()
+  _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
+  _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ()
+  _test_motor_planner_locale_arrival_binds_live_or_clears()
   _test_motor_planner_precise_backtrack_ignored()
   _test_motor_planner_explore_latch()
   _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
@@ -733,6 +743,10 @@ func _test_creature_motor_v3_merge_defaults() -> void:
   )
   _assert(int(v3.get("goal_replan_base_ticks", -1)) == 8, "v3 goal_replan_base_ticks default")
   _assert(
+    int(v3.get("approach_overshoot_guard_move_steps", -1)) == 2,
+    "v3 approach_overshoot_guard_move_steps default",
+  )
+  _assert(
     not v3.has("blocked_objective_chaos"),
     "v3 merge omits retired blocked_objective_chaos",
   )
@@ -768,6 +782,7 @@ func _test_creature_motor_v3_explore_inventory_defaults() -> void:
     "goal_mapping_urgency": 0.35,
     "goal_consideration_chaos": 0.15,
     "flee_waypoint_latch_ticks": 16.0,
+    "pursuit_detour_latch_ticks": 16.0,
   }
   for key in expected:
     _assert(ship.has(key), "explore/inventory ship defaults include %s" % str(key))
@@ -2648,6 +2663,7 @@ func _motor_planner_note_outcome(
   pos_before_tick: Vector3,
   boundary_clamped: bool,
   delta: float = 1.0 / 60.0,
+  planner_ctx: Dictionary = {},
 ) -> bool:
   return (_MotorPlanner as GDScript).call(
     "note_outcome",
@@ -2659,6 +2675,7 @@ func _motor_planner_note_outcome(
     pos_before_tick,
     boundary_clamped,
     delta,
+    planner_ctx,
   )
 
 
@@ -2683,6 +2700,496 @@ func _test_locomotion_executor_turn_facing() -> void:
     "facing stays normalized after turns",
   )
   main.queue_free()
+
+
+func _test_motor_align_cone_contract() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_goal"] = Vector3(0.0, 1.0, 20.0)
+  var act := _MotorPlanner.align_and_move(body, motor_v3, state)
+  _assert(act != _MotorAction.MOVE_FORWARD, "cone contract: misaligned goal must not select MOVE_F")
+  _assert(
+    act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT,
+    "cone contract: misaligned goal selects TURN",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["approach_overshoot_guard_move_steps"] = 4
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 10.12))
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"locale"
+  state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  var pos_before := Vector3(0.0, 1.0, 9.95)
+  var ctx := {"map_rid": RID(), "delta": 1.0 / 60.0}
+  var outcome := _ActionOutcome.new(
+    body.global_position - pos_before, false, 0.0, _MotorAction.MOVE_FORWARD
+  )
+  _motor_planner_note_outcome(state, body, outcome, motor_v3, 1, pos_before, false, 1.0 / 60.0, ctx)
+  _assert(
+    bool(state.get("force_align_turn_before_move", false)),
+    "overshoot remint arms turn-first flag",
+  )
+  main.queue_free()
+
+
+func _test_motor_locale_approach_no_oscillation_smoke() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  var motor_v3 := _motor_v3_test_params()
+  var coverage_cell := _GoalMem.coverage_cell_from_motor(motor_v3)
+  var hotspot := Vector3((7.0 + 0.5) * coverage_cell, 0.0, (7.0 + 0.5) * coverage_cell)
+  var start_dist := body.global_position.distance_to(hotspot)
+  var min_dist := start_dist
+  var rear_hemisphere_moves := 0
+  for _tick_i in 90:
+    stack.tick(1.0 / 60.0)
+    if stack.get_planner_step_source() != &"locale":
+      break
+    var dist := body.global_position.distance_to(hotspot)
+    min_dist = minf(min_dist, dist)
+    var snap_after := stack.get_debug_snapshot()
+    if str(snap_after.get("action", "")) == "MOVE_F":
+      if float(snap_after.get("facing_dot_tgt", 1.0)) < 0.0:
+        rear_hemisphere_moves += 1
+  var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  _assert(
+    min_dist < start_dist - 0.05 or min_dist <= eat_dist * 2.0,
+    "locale smoke: distance to anchor decreases or reaches eat band (start=%.2f min=%.2f)"
+    % [start_dist, min_dist],
+  )
+  _assert(rear_hemisphere_moves < 8, "locale smoke: no rear-hemisphere MOVE_F runaway")
+  main.queue_free()
+
+
+func _test_motor_live_pursuit_no_turn_storm_smoke() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  const PREY_IID := 99001
+  var prey_pos := Vector3(12.0, 1.0, 0.0)
+  var move_count := 0
+  var max_consecutive_turns := 0
+  var consecutive_turns := 0
+  var start_dist := body.global_position.distance_to(prey_pos)
+  var min_dist := start_dist
+  for tick_i in 48:
+    prey_pos = Vector3(12.0, 1.0, float(tick_i) * 0.08)
+    stack.set_live_scan_for_test({
+      "food_split": {
+        "ready": [{
+          "pos": prey_pos,
+          "instance_id": PREY_IID,
+          "stimulus_kind_id": &"prey_rabbit",
+          "consumable_now": true,
+          "line_of_sight_clear": true,
+          "occluded": false,
+        }],
+        "unready": [],
+      },
+      "threat_samples": [],
+      "food_map_confidence": 1.0,
+    })
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      consecutive_turns += 1
+      max_consecutive_turns = maxi(max_consecutive_turns, consecutive_turns)
+    else:
+      consecutive_turns = 0
+    if act == _MotorAction.MOVE_FORWARD:
+      move_count += 1
+    if stack.get_planner_step_source() == &"live":
+      min_dist = minf(min_dist, body.global_position.distance_to(prey_pos))
+  _assert(stack.get_planner_step_source() == &"live", "live pursuit smoke: step_source stays live")
+  _assert(move_count >= 8, "live pursuit smoke: sustained MOVE_F during moving prey chase (moves=%d)" % move_count)
+  _assert(
+    max_consecutive_turns < 24,
+    "live pursuit smoke: no turn-in-place storm (max_consecutive_turns=%d)" % max_consecutive_turns,
+  )
+  _assert(
+    min_dist < start_dist - 0.05,
+    "live pursuit smoke: closes on moving prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
+  )
+  main.queue_free()
+
+
+func _motor_pursuit_pinch_live_scan(prey_pos: Vector3, prey_iid: int) -> Dictionary:
+  return {
+    "food_split": {
+      "ready": [{
+        "pos": prey_pos,
+        "instance_id": prey_iid,
+        "stimulus_kind_id": &"prey_rabbit",
+        "consumable_now": true,
+        "is_moving": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+      }],
+      "unready": [],
+    },
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+
+
+func _test_motor_pursuit_pinch_detour_smoke() -> void:
+  var main := _TerrainTestMainStub.new()
+  root.add_child(main)
+  var built := main.mount_motor_path_fixture("pursuit_pinch")
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(map_rid.is_valid(), "pursuit pinch fixture yields valid map_rid")
+  var predator_pos := Vector3(6.0, 1.0, 20.0)
+  var prey_pos := Vector3(34.0, 1.0, 20.0)
+  for _nav_i in 30:
+    await physics_frame
+    if _MotorPathFixture.assert_nav_path_ready(map_rid, predator_pos, prey_pos):
+      break
+  var body := _spawn_carnivore_body(main, predator_pos)
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+  await physics_frame
+  var stack := _motor_stack_test_configure(body)
+  const PREY_IID := 88050
+  var motor_v3 := _motor_v3_test_params()
+  stack.set_live_scan_for_test(_motor_pursuit_pinch_live_scan(prey_pos, PREY_IID))
+  stack.tick(1.0 / 60.0)
+  _assert(
+    stack.get_incumbent().get("goal_kind", &"") == _GkReg.GK_FIND_FOOD,
+    "pursuit pinch smoke: find_food incumbent on first tick",
+  )
+  _assert(
+    stack.get_planner_step_goal().length_squared() > 1e-4,
+    "pursuit pinch smoke: planner mints step_goal",
+  )
+  var start_dist := body.global_position.distance_to(prey_pos)
+  var min_dist := start_dist
+  var turn_count := 0
+  var move_count := 0
+  var max_cblk := 0
+  var saw_seek_while_live := false
+  for _tick_i in 240:
+    stack.set_live_scan_for_test(_motor_pursuit_pinch_live_scan(prey_pos, PREY_IID))
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    var act := int(outcome.action)
+    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
+      turn_count += 1
+    if act == _MotorAction.MOVE_FORWARD:
+      move_count += 1
+    var snap := stack.get_debug_snapshot()
+    max_cblk = maxi(max_cblk, int(snap.get("consecutive_blocked", 0)))
+    if (
+      stack.get_planner_step_source() == &"live"
+      and str(snap.get("blocked_objective_action", "")) == "seek"
+    ):
+      saw_seek_while_live = true
+    if stack.get_planner_step_source() == &"live":
+      min_dist = minf(min_dist, body.global_position.distance_to(prey_pos))
+  var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  _assert(
+    min_dist < start_dist - 0.15 or min_dist <= eat_dist * 2.5,
+    "pursuit pinch smoke: closes on prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
+  )
+  _assert(turn_count >= 1, "pursuit pinch smoke: at least one align/detour turn")
+  _assert(move_count >= 4, "pursuit pinch smoke: sustained forward progress (moves=%d)" % move_count)
+  _assert(
+    stack.get_planner_step_source() == &"live",
+    "pursuit pinch smoke: step_source stays live (not explore seek)",
+  )
+  _assert(not saw_seek_while_live, "pursuit pinch smoke: no §9 seek while live prey visible")
+  _assert(max_cblk <= 6, "pursuit pinch smoke: no blocked streak runaway (max_cblk=%d)" % max_cblk)
+  main.queue_free()
+
+
+func _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = Vector3(0.0, 1.0, 8.0)
+  state["step_ultimate_pos"] = prey_pos
+  state["prey_engagement_instance_id"] = 88051
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88051),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 2,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "_maybe_mint_pursuit_detour_latch",
+    ctx,
+    state,
+    motor_v3,
+  )
+  _assert(
+    int(state.get("pursuit_detour_ticks_remaining", 0)) == int(motor_v3.get("pursuit_detour_latch_ticks", 16)),
+    "blocked reeval mints pursuit_detour latch ticks",
+  )
+  _assert(
+    state.get("pursuit_detour_waypoint", Vector3.ZERO).distance_to(Vector3(0.0, 1.0, 8.0)) < 0.05,
+    "blocked reeval copies detour step_goal into pursuit_detour_waypoint",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_live_pursuit_blocked_seek_suppressed() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var prey_pos := Vector3(12.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["prey_engagement_instance_id"] = 88052
+  state["prey_engagement_ticks_remaining"] = 20
+  state["consecutive_blocked"] = 4
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88052),
+  }
+  _assert(
+    bool(
+      (_MotorPlanner as GDScript).call(
+        "should_suppress_live_pursuit_blocked_resolution",
+        ctx,
+        state,
+      )
+    ),
+    "live prey + engagement latch suppresses §9 blocked resolution",
+  )
+  ctx["scan"] = _motor_stack_empty_food_scan()
+  _assert(
+    not bool(
+      (_MotorPlanner as GDScript).call(
+        "should_suppress_live_pursuit_blocked_resolution",
+        ctx,
+        state,
+      )
+    ),
+    "ghost-only prey (no live ready food) does not suppress §9",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_live_locale_handoff_same_kind_prefers_live() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  var stack := _motor_stack_test_configure(body)
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  var motor_v3 := _motor_v3_test_params()
+  var coverage_cell := _GoalMem.coverage_cell_from_motor(motor_v3)
+  var hotspot := Vector3((7.0 + 0.5) * coverage_cell, 1.0, (7.0 + 0.5) * coverage_cell)
+  # Live at locale anchor with low yield — calories alone would prefer locale neutral; same-kind keeps live.
+  var live_entry := {
+    "pos": hotspot,
+    "instance_id": 88101,
+    "stimulus_kind_id": &"shrub_berries",
+    "kind_yield": 0.1,
+    "consumable_now": true,
+    "is_moving": false,
+  }
+  stack.set_live_scan_for_test({
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  })
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  ctx["scan"] = {
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+  ctx["refresh_step_objective"] = true
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    motor_v3,
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"live",
+    "same-kind live↔locale handoff prefers live over richer neutral locale",
+  )
+  _assert(int(state.get("step_instance_id", 0)) == 88101, "handoff binds live instance")
+  main.queue_free()
+
+
+func _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  var stack := _motor_stack_test_configure(body)
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  var motor_v3 := _motor_v3_test_params()
+  # Live far from locale hotspot with low yield → kinds differ → locale calories win.
+  var live_entry := {
+    "pos": Vector3(-40.0, 1.0, 0.0),
+    "instance_id": 88102,
+    "stimulus_kind_id": &"shrub_low",
+    "kind_yield": 0.1,
+    "consumable_now": true,
+    "is_moving": false,
+  }
+  stack.set_live_scan_for_test({
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  })
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  ctx["scan"] = {
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+  ctx["refresh_step_objective"] = true
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    motor_v3,
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_source", &"") == &"locale",
+    "different-kind handoff picks richer locale calories-per-EAT over poor live",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_locale_arrival_binds_live_or_clears() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(2.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var anchor := Vector3(2.0, 1.0, 0.0)
+  # Case A: locale arrival with live bush nearby → bind live.
+  var state_live := _MotorPlanner.new_state()
+  state_live["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state_live["step_source"] = &"locale"
+  state_live["step_goal"] = anchor
+  state_live["step_ultimate_pos"] = anchor
+  var bush_entry := {
+    "pos": anchor + Vector3(1.0, 0.0, 0.0),
+    "instance_id": 88103,
+    "stimulus_kind_id": &"shrub_berries",
+    "kind_yield": 0.8,
+    "consumable_now": true,
+    "is_moving": false,
+  }
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var ctx_live := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  ctx_live["scan"] = {
+    "food_split": {"ready": [bush_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "_maybe_locale_arrival_bind_or_clear",
+    ctx_live,
+    state_live,
+    body.global_position,
+    motor_v3,
+    ctx_live["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state_live.get("step_source", &"") == &"live",
+    "locale arrival with live bush binds live objective",
+  )
+  _assert(int(state_live.get("step_instance_id", 0)) == 88103, "locale arrival binds bush instance")
+  _assert(
+    body.global_position.distance_to(anchor) <= eat_max,
+    "arrival fixture places body inside eat distance",
+  )
+  # Case B: locale arrival without consumable → clear locale fields.
+  var state_clear := _MotorPlanner.new_state()
+  state_clear["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state_clear["step_source"] = &"locale"
+  state_clear["step_goal"] = anchor
+  state_clear["step_ultimate_pos"] = anchor
+  state_clear["locale_no_progress_ticks"] = 2
+  var ctx_clear := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  ctx_clear["scan"] = _motor_stack_empty_food_scan()
+  (_MotorPlanner as GDScript).call(
+    "_maybe_locale_arrival_bind_or_clear",
+    ctx_clear,
+    state_clear,
+    body.global_position,
+    motor_v3,
+    ctx_clear["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    (state_clear.get("step_goal", Vector3.ONE) as Vector3).length_squared() < 1e-8,
+    "locale arrival without consumable clears step_goal",
+  )
+  _assert(state_clear.get("step_source", &"locale") == &"", "locale arrival without consumable clears step_source")
+  _assert(
+    int(state_clear.get("locale_no_progress_ticks", -1)) == 0,
+    "locale arrival clear resets locale_no_progress_ticks",
+  )
+  main.queue_free()
+
 
 func _test_motor_planner_turn_alignment_no_flip_flop() -> void:
   var main := Node3D.new()
@@ -3136,6 +3643,29 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   _assert(
     int(precise_state.get("precise_no_progress_ticks", 0)) >= 3,
     "precise position-stuck increments precise_no_progress_ticks",
+  )
+  var locale_state := _MotorPlanner.new_state()
+  locale_state["step_source"] = &"locale"
+  locale_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  locale_state["step_ultimate_pos"] = Vector3(-20.0, 1.0, 0.0)
+  for tick_i in 4:
+    var locale_turn := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
+    var run_locale_s9: bool = _motor_planner_note_outcome(
+      locale_state,
+      body,
+      locale_turn,
+      motor_v3,
+      tick_i + 40,
+      pos_before,
+      false,
+    )
+    if tick_i < 3:
+      _assert(not run_locale_s9, "locale position-stuck waits until min no-progress ticks")
+    else:
+      _assert(run_locale_s9, "locale position-stuck triggers §9 after min ticks")
+  _assert(
+    int(locale_state.get("locale_no_progress_ticks", 0)) >= 3,
+    "locale position-stuck increments locale_no_progress_ticks",
   )
   var move_stuck_state := _MotorPlanner.new_state()
   move_stuck_state["step_source"] = &"precise"

@@ -141,6 +141,7 @@ func tick(delta: float) -> _ActionOutcome:
     pos_before_tick,
     boundary_clamped,
     delta,
+    planner_ctx,
   )
   _last_outcome = outcome
   if outcome != null and int(outcome.action) == _MotorAction.MOVE_FORWARD and outcome.blocked:
@@ -159,9 +160,14 @@ func tick(delta: float) -> _ActionOutcome:
       _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
   elif run_blocked_resolution:
     var blocked_ctx := _build_planner_context(ctx, delta)
-    _MotorPlanner.apply_blocked_objective_resolution(
-      blocked_ctx, _planner_state, _body, _motor_v3
-    )
+    if not (_MotorPlanner as GDScript).call(
+      "should_suppress_live_pursuit_blocked_resolution",
+      blocked_ctx,
+      _planner_state,
+    ):
+      _MotorPlanner.apply_blocked_objective_resolution(
+        blocked_ctx, _planner_state, _body, _motor_v3
+      )
   if _objective_completed_this_tick(action):
     _run_consideration(ctx)
   _advance_consideration_timer()
@@ -299,6 +305,7 @@ func get_debug_snapshot() -> Dictionary:
     "prey_engagement_instance_id": int(ps.get("prey_engagement_instance_id", 0)),
     "prey_engagement_ticks_remaining": int(ps.get("prey_engagement_ticks_remaining", 0)),
     "prey_engagement_latch_total": int(ps.get("prey_engagement_latch_total", 0)),
+    "pursuit_detour_ticks_remaining": int(ps.get("pursuit_detour_ticks_remaining", 0)),
     "food_inventory_step_mode": int(ps.get("food_inventory_step_mode", -1)),
     "is_carnivore": _is_carnivore_body(),
   }
@@ -523,7 +530,7 @@ func _build_context() -> Dictionary:
   }
 
 
-func _build_planner_context(hub_ctx: Dictionary, _delta: float) -> Dictionary:
+func _build_planner_context(hub_ctx: Dictionary, delta: float) -> Dictionary:
   var map_rid := RID()
   var main := _resolve_main()
   if main != null and main.has_method(&"get_navigation_map_rid"):
@@ -555,19 +562,25 @@ func _build_planner_context(hub_ctx: Dictionary, _delta: float) -> Dictionary:
     "environment_grid": _resolve_environment_grid(),
     "traits": _traits_from_body(),
     "calorie_ratio": _calorie_ratio(),
+    "delta": delta,
   }
 
 
 func _resolve_main() -> Node:
-  if _body == null or not _body.is_inside_tree():
-    return null
-  var tree := _body.get_tree()
-  if tree == null:
-    return null
-  var root_node := tree.current_scene
-  if root_node != null and root_node.has_method(&"get_navigation_map_rid"):
-    return root_node
-  return tree.root.get_child(0) if tree.root.get_child_count() > 0 else null
+  if _body != null and _body.is_inside_tree():
+    var walk: Node = _body
+    while walk != null:
+      if walk.has_method(&"get_navigation_map_rid"):
+        return walk
+      walk = walk.get_parent()
+    var tree := _body.get_tree()
+    if tree == null:
+      return null
+    var root_node := tree.current_scene
+    if root_node != null and root_node.has_method(&"get_navigation_map_rid"):
+      return root_node
+    return tree.root.get_child(0) if tree.root.get_child_count() > 0 else null
+  return null
 
 
 func _calorie_ratio() -> float:
