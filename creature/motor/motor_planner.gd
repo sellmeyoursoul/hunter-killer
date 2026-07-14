@@ -60,6 +60,8 @@ static func new_state() -> Dictionary:
     "pursuit_detour_ticks_remaining": 0,
     "step_ultimate_pos": Vector3.ZERO,
     "force_align_turn_before_move": false,
+    ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
+    "eat_orbit_turn_deg_accumulated": 0.0,
   }
 
 
@@ -82,13 +84,21 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   _sync_step_objective(ctx, state, goal_kind)
   if bool(state.get("boundary_scan_active", false)) and state.get("step_source") == &"explore":
     return _boundary_scan_action(body, motor_v3, state)
+  var delta := float(ctx.get("delta", 1.0 / 60.0))
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
-  if goal_kind == _GkReg.GK_FIND_FOOD and _can_eat_now(body, step_goal, state, motor_v3):
-    return _MotorAction.EAT
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    if _can_eat_now(body, step_goal, state, motor_v3, delta):
+      state["eat_orbit_turn_deg_accumulated"] = 0.0
+      return _MotorAction.EAT
+    var orbit_act := _select_eat_orbit_or_align(body, step_goal, state, motor_v3, delta)
+    if orbit_act >= 0:
+      return orbit_act
+  ## Bound food instance: do not STAY at arrival_tolerance before EAT step-range is reached.
   if _at_arrival(body, step_goal, motor_v3):
-    return _MotorAction.STAY
+    if goal_kind != _GkReg.GK_FIND_FOOD or int(state.get("step_instance_id", 0)) == 0:
+      return _MotorAction.STAY
   return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
 
@@ -257,6 +267,8 @@ static func _assign_resolved_step_goal(
 
 
 ## Post-[code]MOVE_F[/code] overshoot recovery for fixed objectives (post-6d-approach-geometry Layer 1).
+## Remint + turn-first only; retains [code]locale_no_progress_ticks[/code] /
+## [code]precise_no_progress_ticks[/code] so Layer 2 can still escalate §9 (CLEANUP 2026-07-14).
 static func _maybe_apply_fixed_objective_overshoot(
   ctx: Dictionary,
   state: Dictionary,
@@ -301,10 +313,9 @@ static func _maybe_apply_fixed_objective_overshoot(
   var reminted := _PathClear.resolve_step_objective(map_rid, pos_after, ultimate, agent_r)
   _assign_resolved_step_goal(state, body, ultimate, reminted, motor_v3, delta)
   state["force_align_turn_before_move"] = true
-  if step_source == &"locale":
-    _reset_locale_progress_state(state)
-  elif step_source == &"precise":
-    _reset_precise_progress_state(state)
+
+
+
 
 
 ## Drop overshot explore latch; rim overshoot routes inward, interior rotates 60°.
@@ -876,6 +887,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     _clear_pursuit_detour_latch(state)
     state["step_ultimate_pos"] = Vector3.ZERO
     state["force_align_turn_before_move"] = false
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
   var refresh_targets := bool(ctx.get("refresh_step_objective", false))
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   var has_step_goal := step_goal.length_squared() > 1e-8
@@ -1672,19 +1684,77 @@ static func _initial_explore_dir(ctx: Dictionary) -> Vector3:
   return _MotorPlane.HORIZONTAL_FORWARD
 
 
+## World point used for EAT distance/facing — prefers [code]step_ultimate_pos[/code], else [param step_goal].
+static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Vector3:
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if ultimate.length_squared() > 1e-8:
+    return ultimate
+  return step_goal
+
+
+## True when [param body] is within [code]eat_action_max_distance[/code] world meters of [param target].
+## [param delta] kept for call-site stability; unused for the meter range gate.
+static func _is_within_eat_range(
+  body: CharacterBody3D,
+  target: Vector3,
+  motor_v3: Dictionary,
+  _delta: float,
+) -> bool:
+  var max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  return body.global_position.distance_to(target) <= max_dist
+
+
+## Find-food EAT gate: ultimate within [code]eat_action_max_distance[/code] + facing arc + non-zero [code]step_instance_id[/code].
+## [param delta] retained for API/orbit callers; range uses world meters (not move-steps).
 static func _can_eat_now(
   body: CharacterBody3D,
   step_goal: Vector3,
   state: Dictionary,
   motor_v3: Dictionary,
+  delta: float = 1.0 / 60.0,
 ) -> bool:
-  var max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
-  var dist := body.global_position.distance_to(step_goal)
-  if dist > max_dist:
+  if int(state.get("step_instance_id", 0)) == 0:
     return false
-  if not _is_facing_aligned_for_eat(body, step_goal, motor_v3):
+  var eat_tgt := _resolve_eat_target_pos(state, step_goal)
+  if eat_tgt.length_squared() < 1e-8:
     return false
-  return int(state.get("step_instance_id", 0)) != 0
+  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta):
+    return false
+  return _is_facing_aligned_for_eat(body, eat_tgt, motor_v3)
+
+
+## While in eat range but not facing for EAT: turn toward ultimate; after N revolutions, one MOVE_BACKWARD.
+## Returns a motor action id, or [code]-1[/code] when the orbit path does not apply (caller continues normally).
+static func _select_eat_orbit_or_align(
+  body: CharacterBody3D,
+  step_goal: Vector3,
+  state: Dictionary,
+  motor_v3: Dictionary,
+  delta: float,
+) -> int:
+  if int(state.get("step_instance_id", 0)) == 0:
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
+    return -1
+  var eat_tgt := _resolve_eat_target_pos(state, step_goal)
+  if eat_tgt.length_squared() < 1e-8:
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
+    return -1
+  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta):
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
+    return -1
+  if _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
+    return -1
+  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  var revs := float(motor_v3.get("eat_orbit_break_revolutions", 3.0))
+  var limit_deg := revs * 360.0
+  var acc := float(state.get("eat_orbit_turn_deg_accumulated", 0.0))
+  if acc + turn_deg >= limit_deg:
+    state["eat_orbit_turn_deg_accumulated"] = 0.0
+    return _MotorAction.MOVE_BACKWARD
+  state["eat_orbit_turn_deg_accumulated"] = acc + turn_deg
+  var turn_sign := _pick_align_turn_sign(body, eat_tgt, motor_v3)
+  return _MotorAction.TURN_LEFT if turn_sign > 0 else _MotorAction.TURN_RIGHT
 
 
 static func _locomote_toward_step_goal(
@@ -1813,8 +1883,16 @@ static func _is_facing_aligned_with_tolerance(
   return facing.dot(to_target.normalized()) >= min_dot
 
 
+## EAT facing uses [code]eat_facing_arc_deg[/code] full arc (default 90° → half-angle 45°, [code]dot ≥ cos(45°)[/code]).
 static func _is_facing_aligned_for_eat(body: CharacterBody3D, target: Vector3, motor_v3: Dictionary) -> bool:
-  return _is_facing_aligned_with_tolerance(body, target, motor_v3, 0.5)
+  var creature_pos := body.global_position
+  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
+  if to_target.length_squared() < 1e-8:
+    return true
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
+  var arc_deg := float(motor_v3.get("eat_facing_arc_deg", 90.0))
+  var min_dot := cos(deg_to_rad(arc_deg * 0.5))
+  return facing.dot(to_target.normalized()) >= min_dot
 
 
 static func _is_facing_aligned_for_move(body: CharacterBody3D, target: Vector3, motor_v3: Dictionary) -> bool:

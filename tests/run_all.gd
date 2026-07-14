@@ -138,6 +138,9 @@ func _run_all() -> void:
   _test_motor_planner_turn_alignment_no_flip_flop()
   _test_motor_align_cone_contract()
   _test_motor_planner_fixed_objective_overshoot_remints()
+  _test_motor_planner_overshoot_retains_locale_no_progress()
+  _test_motor_planner_eat_uses_ultimate_not_step_goal()
+  _test_motor_planner_eat_orbit_break_after_revolutions()
   await _test_motor_locale_approach_no_oscillation_smoke()
   await _test_motor_live_pursuit_no_turn_storm_smoke()
   await _test_motor_pursuit_pinch_detour_smoke()
@@ -745,6 +748,22 @@ func _test_creature_motor_v3_merge_defaults() -> void:
   _assert(
     int(v3.get("approach_overshoot_guard_move_steps", -1)) == 2,
     "v3 approach_overshoot_guard_move_steps default",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("eat_action_max_distance", 0.0)), 5.0),
+    "v3 eat_action_max_distance default",
+  )
+  _assert(
+    not v3.has("eat_range_move_steps"),
+    "v3 merge omits deferred eat_range_move_steps",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("eat_facing_arc_deg", 0.0)), 90.0),
+    "v3 eat_facing_arc_deg default",
+  )
+  _assert(
+    int(v3.get("eat_orbit_break_revolutions", -1)) == 3,
+    "v3 eat_orbit_break_revolutions default",
   )
   _assert(
     not v3.has("blocked_objective_chaos"),
@@ -2723,6 +2742,8 @@ func _test_motor_align_cone_contract() -> void:
 func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   var motor_v3 := _motor_v3_test_params()
   motor_v3["approach_overshoot_guard_move_steps"] = 4
+  ## Below close-band dist so overshoot fires; default arrival_tol (5) would skip this fixture.
+  motor_v3["arrival_tolerance"] = 0.05
   var main := Node3D.new()
   root.add_child(main)
   _motor_v3_test_floor(main)
@@ -2741,6 +2762,175 @@ func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   _assert(
     bool(state.get("force_align_turn_before_move", false)),
     "overshoot remint arms turn-first flag",
+  )
+  main.queue_free()
+
+
+## CLEANUP 2026-07-14 — overshoot remint retains locale_no_progress_ticks for Layer 2 §9.
+func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["approach_overshoot_guard_move_steps"] = 4
+  motor_v3["arrival_tolerance"] = 0.05
+  motor_v3["dead_end_record_min_blocked_ticks"] = 3
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 10.12))
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"locale"
+  state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  state["locale_no_progress_ticks"] = 2
+  var pos_before := Vector3(0.0, 1.0, 9.95)
+  var ctx := {"map_rid": RID(), "delta": 1.0 / 60.0}
+  var outcome := _ActionOutcome.new(
+    body.global_position - pos_before, false, 0.0, _MotorAction.MOVE_FORWARD
+  )
+  _motor_planner_note_outcome(
+    state, body, outcome, motor_v3, 1, pos_before, false, 1.0 / 60.0, ctx
+  )
+  _assert(
+    bool(state.get("force_align_turn_before_move", false)),
+    "overshoot retain: remint still arms turn-first",
+  )
+  _assert(
+    int(state.get("locale_no_progress_ticks", -1)) >= 2,
+    "overshoot remint retains locale_no_progress_ticks (not zeroed)",
+  )
+  ## Counters already at threshold: retain must still allow Layer 2 §9 on this tick.
+  state["force_align_turn_before_move"] = false
+  state["locale_no_progress_ticks"] = 3
+  state["locale_last_bearing_err_deg"] = INF
+  state["locale_last_dist_sq"] = INF
+  state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  body.global_position = Vector3(0.0, 1.0, 10.12)
+  var outcome2 := _ActionOutcome.new(
+    body.global_position - pos_before, false, 0.0, _MotorAction.MOVE_FORWARD
+  )
+  var run_s9: bool = _motor_planner_note_outcome(
+    state, body, outcome2, motor_v3, 2, pos_before, false, 1.0 / 60.0, ctx
+  )
+  _assert(run_s9, "retained locale_no_progress_ticks >= min still triggers §9 after overshoot")
+  _assert(
+    int(state.get("locale_no_progress_ticks", -1)) >= 3,
+    "§9 path still leaves locale_no_progress_ticks unzeroed by overshoot",
+  )
+  main.queue_free()
+
+
+## C3 — EAT gate measures ultimate in eat_action_max_distance meters, not distant nav step_goal.
+func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  ## Ultimate within 5 m (not step×5) so meter gate arms despite distant substep.
+  var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
+  var distant_substep := Vector3(80.0, 1.0, 40.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = distant_substep
+  state["step_ultimate_pos"] = ultimate
+  state["step_instance_id"] = 424242
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "delta": delta,
+  }
+  var can_eat: bool = (_MotorPlanner as GDScript).call(
+    "_can_eat_now", body, distant_substep, state, motor_v3, delta
+  )
+  _assert(can_eat, "C3: _can_eat_now true via close ultimate despite distant step_goal")
+  var act := _MotorPlanner.select_action(ctx, state)
+  _assert(act == _MotorAction.EAT, "C3: select_action returns EAT from ultimate meter-range + facing")
+  ## Facing outside 90° arc must not EAT even when ultimate is in range.
+  body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  state["eat_orbit_turn_deg_accumulated"] = 0.0
+  var act_misaligned := _MotorPlanner.select_action(ctx, state)
+  _assert(
+    act_misaligned != _MotorAction.EAT,
+    "C3: misaligned facing does not select EAT (blocked MOVE alone is not eat)",
+  )
+  main.queue_free()
+
+
+## C3 — three full facing revolutions in eat range without EAT → one MOVE_BACKWARD, then resume turns.
+func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  ## Face away from ultimate so EAT cone fails while still within 5 m.
+  body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var ultimate := Vector3(eat_max * 0.4, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = ultimate
+  state["step_ultimate_pos"] = ultimate
+  state["step_instance_id"] = 911911
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "delta": delta,
+  }
+  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  var revs := float(motor_v3.get("eat_orbit_break_revolutions", 3))
+  var turns_before_break := int(ceil((revs * 360.0) / turn_deg)) - 1
+  var saw_turn := false
+  for _i in turns_before_break:
+    var act := _MotorPlanner.select_action(ctx, state)
+    _assert(
+      act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT,
+      "C3 orbit: expects TURN while in range before break (got %d)" % act,
+    )
+    saw_turn = true
+    _LocomotionExecutor.apply_action(body, act, delta, motor_v3)
+    ## Keep facing away so EAT never arms during the spin budget.
+    body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  _assert(saw_turn, "C3 orbit: accumulated at least one TURN before break")
+  var break_act := _MotorPlanner.select_action(ctx, state)
+  _assert(break_act == _MotorAction.MOVE_BACKWARD, "C3 orbit: MOVE_BACKWARD after 3 revolutions")
+  _assert(
+    is_equal_approx(float(state.get("eat_orbit_turn_deg_accumulated", -1.0)), 0.0),
+    "C3 orbit: counter resets after rearward break",
+  )
+  var resume := _MotorPlanner.select_action(ctx, state)
+  _assert(
+    resume == _MotorAction.TURN_LEFT or resume == _MotorAction.TURN_RIGHT,
+    "C3 orbit: resumes TURN toward ultimate after break",
   )
   main.queue_free()
 

@@ -463,6 +463,7 @@ func _spawn_interior_boulders() -> void:
     _boulder_scene = load(_BOULDER_SCENE) as PackedScene
   if _boulder_scene == null:
     return
+  # Pass 5 / C1 interior obstacles — denser field for chase detour smoke.
   var fracs: Array[Vector2] = [
     Vector2(0.12, 0.18),
     Vector2(0.28, 0.72),
@@ -470,6 +471,18 @@ func _spawn_interior_boulders() -> void:
     Vector2(0.74, 0.58),
     Vector2(0.42, 0.48),
     Vector2(0.86, 0.34),
+    Vector2(0.18, 0.42),
+    Vector2(0.24, 0.46),
+    Vector2(0.48, 0.66),
+    Vector2(0.54, 0.70),
+    Vector2(0.72, 0.28),
+    Vector2(0.78, 0.32),
+    Vector2(0.20, 0.26),
+    Vector2(0.26, 0.20),
+    Vector2(0.66, 0.76),
+    Vector2(0.72, 0.80),
+    Vector2(0.38, 0.34),
+    Vector2(0.58, 0.44),
   ]
   for frac in fracs:
     var pos := _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)

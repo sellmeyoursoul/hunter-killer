@@ -317,7 +317,12 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "awareness_cone_half_angle_deg": 45.0,
     "awareness_requires_los": true,
     "los_blocked_occlusion_fraction": 0.80,
+    ## EAT contact range in world meters to ultimate (not nav [code]step_goal[/code]).
     "eat_action_max_distance": 5.0,
+    ## Full front arc for EAT facing (half-angle = arc/2; default 90° → ±45°).
+    "eat_facing_arc_deg": 90.0,
+    ## Facing revolutions in eat range without EAT before one rearward break tick.
+    "eat_orbit_break_revolutions": 3,
     "arrival_tolerance": 5.0,
     "blocked_approach_memory_ticks": 45,
     "blocked_approach_backtrack_dot": 0.55,
