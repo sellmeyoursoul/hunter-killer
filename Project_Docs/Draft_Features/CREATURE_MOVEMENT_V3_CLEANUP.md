@@ -28,6 +28,9 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C1](#c1-pursuit-contact-geometry-stall-fox) | Pursuit contact geometry stall (fox) | `in_progress` | `post-6d-approach-geometry` (shared) |
 | [C2](#c2-locale-food-approach-oscillation-rabbit) | Locale food approach oscillation (rabbit) | `in_progress` | `post-6d-approach-geometry` (shared) |
 | [C3](#c3-prey-contact-without-eat--body-pin-stall-fox) | Prey contact without EAT / body-pin stall (fox) | `done` | `post-6d-prey-eat-contact` |
+| [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) | Stale `instance_id` lookups crash memory adapter diet filter (headless regression) | `done` | unassigned |
+| [C5](#c5-stale-test-vs-6e-executor-refactor-contract-seek_wall_filter_and_backtrack) | Stale test vs 6e executor refactor contract (`_test_seek_wall_filter_and_backtrack`) | `done` | unassigned |
+| [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence) | Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`) | `open` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -85,8 +88,8 @@ Pass 3 shipped detour latch + §9 gate; duel pinch residual shows **live prey re
 ### Acceptance (draft)
 
 - [ ] Headless: [C1 smoke fixture](#smoke-test-engineering-complex-geometry) — fox reaches within `action_max_distance` of prey without `cblk` runaway or explore fallback while prey live.
-- [ ] Headless: while `pursuit_detour_waypoint` latch is valid, per-tick live prey refresh updates `step_ultimate_pos` / engagement latch **without** overwriting detour `step_goal`.
-- [ ] Headless: repeated blocks against an **active** detour mint a **fresh** detour (or alternate-side nav/backtrack) — **not** live substep overwrite and **not** explore-at-origin fallback while prey live.
+- [x] Headless: while `pursuit_detour_waypoint` latch is valid, per-tick live prey refresh updates `step_ultimate_pos` / engagement latch **without** overwriting detour `step_goal` (`_test_motor_planner_pursuit_detour_sticky_live_refresh`).
+- [x] Headless: repeated blocks against an **active** detour mint a **fresh** detour (or alternate-side nav/backtrack) — **not** live substep overwrite and **not** explore-at-origin fallback while prey live (`_test_motor_planner_pursuit_detour_skips_reeval_while_latched`, `_test_motor_planner_pursuit_detour_alternate_on_persistent_block`).
 - [ ] Duel manual: fox clears an **interior pinch** and resumes chase (same session as rabbit flee / locale patch).
 - [ ] No regression: post-6d Flight tests (A/B/C) and flee latch still pass.
 
@@ -235,6 +238,132 @@ Blocked `MOVE_F` into prey is **not** itself the eat trigger; eat still requires
 
 ---
 
+## C4 — Stale `instance_id` lookups crash memory adapter diet filter (headless regression)
+
+**Status:** `done` — fix shipped 2026-07-14; 2 of 5 originally-listed acceptance tests confirmed unrelated (see below), remainder green  
+**Slice:** unassigned — cross-cutting [`memory_adapter.gd`](../../creature/motor/memory_adapter.gd) bug, distinct from `post-6d-approach-geometry` (C1/C2) and `post-6d-prey-eat-contact` (C3)  
+**Evidence:** Headless `godot --path . --headless -s res://tests/run_all.gd` — **2026-07-14** — **37 assertion(s) failed**. Confirmed via `git stash` isolation (parking only the in-flight `post-6d-approach-geometry` replay-capture instrumentation change — `creature_motor_stack.gd`, `project.godot`, `tests/run_all.gd` — while leaving other same-session WIP in place) that failure count and signatures are **identical with and without** that change — **not** caused by replay-capture instrumentation. **Not yet checked** against a stash of *all* current WIP (`motor_planner.gd`, `AI_int_lib/game_config_merge.gd` also modified uncommitted this session) or against last commit `de00439` — unconfirmed whether this predates this session or was introduced by the other in-flight work.
+
+### Symptom
+
+Recurring engine-level error, not an ordinary assertion mismatch:
+
+```
+ERROR: Condition "slot >= slot_max" is true. Returning: nullptr
+   at: get_instance (./core/object/object.h:912)
+   GDScript backtrace (most recent call first):
+       [0] _belief_instance_passes_diet (res://creature/motor/memory_adapter.gd:978)
+```
+
+Fires from multiple call chains into `_belief_instance_passes_diet` — `consult_precise_food`, `consult_coarse_bearing`, `_count_live_known_objectives` → `count_known_objectives`, and `_switch_score` ([`blocked_objective_resolver.gd`](../../creature/motor/blocked_objective_resolver.gd)) → `apply_blocked_objective_resolution`. Cascades into failures in `_test_creature_motor_stack_memory_feasibility_tiers` (precise + coarse), `_test_creature_motor_stack_memory_stale_instance_id`, `_test_memory_adapter_ghost_danger_without_live_los` (plus a follow-on out-of-bounds array read in the test itself), `_test_creature_motor_stack_safety_blocked_by_ghost`, and `_test_creature_motor_stack_blocked_memory_writes`. Separately, `_test_seek_wall_filter_and_backtrack` fails (`deflected step goal does not continue blocked approach heading`) — **not yet confirmed** as the same root cause or a second, unrelated regression. Suite exits with **2 leaked `P10JoltBody3D` RIDs**, **4 leaked ObjectDB instances**, **1 resource still in use** — plausible fallout from the same stale-lookup path skipping fixture teardown, **not yet confirmed**.
+
+### Root cause (confirmed 2026-07-14)
+
+`_belief_instance_passes_diet` ([memory_adapter.gd:975-979](../../creature/motor/memory_adapter.gd)) called `instance_from_id(instance_id)` with no validity check beyond `!= 0`. When the id doesn't decode to a live ObjectDB slot, Godot prints the `"slot >= slot_max"` engine error and returns `null`; that `null` then flows into `_DietRegistry.node_is_valid_food_for_policy(null, policy)` ([diet_registry.gd:55](../../creature/capabilities/diet_registry.gd)), which explicitly returns `false` for a null node — so the belief was silently **rejected as "fails diet"** instead of counted. Not just log noise: this under-counted every feasibility/inventory tally that filtered through it. **Smoking gun:** [`_test_creature_motor_stack_memory_stale_instance_id`](../../tests/run_all.gd) seeds a belief with `instance_id = 1` and asserts `"stale instance_id still drives precise seek"` — the test's own name shows the original author anticipated exactly this scenario (a belief with no resolvable live Node) and expected graceful handling; the assertion was red. Production code seeds real ids correctly (`awareness_zone_scan.gd:92` uses `plant.get_instance_id()`); the crash path is reachable both by legitimately-stale ids (a remembered object since freed) and by synthetic test fixture ids (small hand-picked ints like `88031`, `99001`, `1` used throughout `run_all.gd`, including the new replay-capture fixture from Phase 1).
+
+**Addendum (2026-07-14, Phase 1 replay-harness verification):** Confirmed **process-wide** blast radius, not scoped to the originally-failing tests. Adding two new, unrelated headless tests (`_test_motor_replay_fixture_load_and_rehydrate`, `_test_motor_replay_fixture_drives_stack_from_capture` — replay harness Phase 1, appended at the end of the `run_all.gd` list) produced **540** `"slot >= slot_max"` error lines across the run (vs isolated occurrences in the original 2026-07-14 evidence), including inside the new tests' own `stack.tick()` calls via `_derive_find_food_step_objective` → `consult_precise_food`. Total **assertion** failures stayed at **37** (the new tests' own `_assert` checks all passed — the corruption is caught/swallowed before it reaches their assertions) but the error-log noise confirmed this is a **cross-test, cumulative** corruption (an ObjectDB slot-error path that fires per bad lookup, not five-to-eight isolated test bugs).
+
+### Fix shipped (2026-07-14)
+
+`_belief_instance_passes_diet` now guards with `is_instance_id_valid(instance_id)` before calling `instance_from_id`, returning `true` (belief passes — no live node to check against, don't gate on diet) when the id doesn't resolve, instead of falling into the raw ObjectDB lookup:
+
+```gdscript
+func _belief_instance_passes_diet(instance_id: int) -> bool:
+  if _food_intake_policy == null or instance_id == 0:
+    return true
+  if not is_instance_id_valid(instance_id):
+    return true
+  var node := instance_from_id(instance_id)
+  return _DietRegistry.node_is_valid_food_for_policy(node, _food_intake_policy)
+```
+
+**Verified (headless, before/after diff of `run_all.gd` failures):** total assertion failures **37 → 15**. **19 assertion sites fixed**, including the smoking-gun `_test_creature_motor_stack_memory_stale_instance_id`, both `_test_creature_motor_stack_memory_feasibility_tiers` asserts, and `_test_creature_motor_stack_blocked_memory_writes` (now fully green). `"slot >= slot_max"` print volume dropped only slightly (540 → 502) — `is_instance_id_valid` itself still routes through the same low-level ObjectDB bounds check and prints on a garbage id, so the **noise** persists for synthetic test ids even though the **behavior** is now correct (no more silent diet mis-rejection). Silencing the print entirely would need either an engine-level change or a heuristic pre-filter on implausible id magnitudes — not done; out of scope (see [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence) note below on cost/benefit).
+
+**Not touched (unrelated, still red both before and after):** `_test_memory_adapter_ghost_danger_without_live_los` and `_test_creature_motor_stack_safety_blocked_by_ghost` fail in `consult_danger_samples` / occluded-ghost threat consult — a different code path (threat beliefs, not food diet filtering) that never calls `_belief_instance_passes_diet`. Confirmed present in both the pre-fix and post-fix runs; not a C4 symptom. Left as a known, separate, still-open gap — not logged as its own item yet since it wasn't investigated this session.
+
+**Newly exposed by this fix:** removing the crash let `_test_creature_motor_stack_memory_tier_precedence` run one statement further than it ever had before, surfacing a previously-masked real bug — see [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence).
+
+### Acceptance
+
+- [x] `_belief_instance_passes_diet` guards against invalid/uninitialized `instance_id` before the ObjectDB lookup (returns diet-pass cleanly instead of erroring).
+- [x] Headless green: `_test_creature_motor_stack_memory_feasibility_tiers`, `_test_creature_motor_stack_memory_stale_instance_id`, `_test_creature_motor_stack_blocked_memory_writes`.
+- [ ] `_test_memory_adapter_ghost_danger_without_live_los`, `_test_creature_motor_stack_safety_blocked_by_ghost` — confirmed **unrelated** to C4 (separate threat-ghost consult path); left open, not scheduled this session.
+- [x] Confirmed `_test_seek_wall_filter_and_backtrack` does **not** share this root cause — see [C5](#c5-stale-test-vs-6e-executor-refactor-contract-seek_wall_filter_and_backtrack).
+- [ ] No leaked RID / ObjectDB / Resource warnings at headless suite exit — not re-verified after the fix; likely improved (fewer aborted test functions means fewer skipped `queue_free()` calls) but not measured.
+
+### Open questions
+
+- None blocking — root cause confirmed and fixed. Remaining open item is the unrelated ghost-danger consult failures (not logged as their own item yet).
+
+---
+
+## C5 — Stale test vs 6e executor refactor contract (`_test_seek_wall_filter_and_backtrack`)
+
+**Status:** `done` — confirmed stale test, not a production bug; test corrected 2026-07-14  
+**Slice:** unassigned — [`motor_planner.gd`](../../creature/motor/motor_planner.gd) blocked-approach backtrack, distinct from C4 (confirmed: this test uses a real `bush.get_instance_id()`, not a synthetic id — never touches `_belief_instance_passes_diet`)  
+**Evidence:** Headless `run_all.gd`, present in both the pre- and post-C4-fix runs — `ERROR: ASSERT: deflected step goal does not continue blocked approach heading` at [`_test_seek_wall_filter_and_backtrack`](../../tests/run_all.gd).
+
+### Symptom
+
+The test pre-seeds `state["blocked_approach"]` (simulating "this creature already tried approaching due south and got blocked") via `_BlockedApproachScr.record(...)`, places a food bush on that **same** bearing, then calls `MotorPlanner.select_action(ctx, state)` **once** on a fresh state and asserts the resulting `step_goal` direction is deflected ≥ ~25° off the blocked heading (`dot < 0.9`). It fails — `step_goal` points straight at the bush, `dot ≈ 1.0`, no deflection applied.
+
+### Root cause hypothesis (leaning: stale test, not production bug)
+
+Traced the only call site that applies the 60° backtrack deflection: [`apply_immediate_blocked_path_reevaluation`](../../creature/motor/motor_planner.gd) (around line 1866-1876) reads `state["blocked_approach"]` and rotates `move_dir` by 60° when the current approach direction matches a recorded blocked heading. This function is **not** part of `select_action`'s normal `sync_step_objective` → path clearance → `align_and_move` pipeline — per [creature_motor_stack.gd `tick()`](../../creature/motor/creature_motor_stack.gd), it's called **only** reactively, after an actual `ActionOutcome.blocked` on a `MOVE_FORWARD` this tick. [CREATURE_MOVEMENT_V3.md §3.2](CREATURE_MOVEMENT_V3.md) resolves this explicitly: *"the 60° backtrack detour runs in §3.2 reevaluate only — not inside §3.1 before the solid branch. It is a within-goal escape for a dead-ended substep, not a competing branch."*
+
+The test calls `select_action` directly, one time, on a freshly-constructed state — it never drives a real blocked `MOVE_FORWARD` and never calls `apply_immediate_blocked_path_reevaluation`. There is no live obstacle in the test scene either (just body + bush, empty floor), so §3.1 path clearance finds a clear corridor and the planner correctly goes straight for the bush per the *documented* contract. This looks like a test that predates the **6e.1/6e.2** "simplified tick executor" refactor (§12.2, closed 2026-07-06) — which split the old combined pipeline into the current three-phase `sync_step_objective` / path clearance / `align_and_move` model — and was never updated to exercise deflection through the new reactive-only call path (e.g. driving a couple of `stack.tick()`s that produce a genuine blocked `MOVE_FORWARD`, or calling `apply_immediate_blocked_path_reevaluation` directly instead of `select_action`).
+
+**Confirmed 2026-07-14:** traced every call site that consults `state["blocked_approach"]` in `motor_planner.gd` — `apply_immediate_blocked_path_reevaluation` (line ~1866, the 60° deflection) and `apply_blocked_objective_resolution` (§9, line ~2025, dead-end marking). Both are reactive-only, called from `creature_motor_stack.gd` only after a genuine blocked `MOVE_FORWARD` outcome this tick (the former unconditionally on any blocked move, the latter once `consecutive_blocked` crosses `dead_end_record_min_blocked_ticks`). Neither is reachable from `select_action`'s fresh §3.1 derivation. This is design, not a gap — matches `CREATURE_MOVEMENT_V3.md` §3.2 exactly.
+
+### Fix shipped (2026-07-14)
+
+Corrected [`_test_seek_wall_filter_and_backtrack`](../../tests/run_all.gd) to exercise the intended two-stage contract instead of calling `select_action` once and expecting deflection on a fresh pick:
+
+1. Call `select_action` as before, but assert the **opposite** of the original (wrong) expectation: a fresh pick with no live obstacle goes straight at the bush (`dot(approach) > 0.9`) even with `blocked_approach` memory recorded on the same heading — locking in the reactive-only contract as a regression guard in its own right.
+2. Then call `_MotorPlanner.apply_immediate_blocked_path_reevaluation(ctx, state, body, motor_v3)` directly — simulating what `creature_motor_stack.gd` does after a real blocked `MOVE_FORWARD` — and assert the now-deflected `step_goal` (`dot(approach) < 0.9`), which is the original test's intent.
+
+**Verified (headless, exact before/after line diff):** only the one line `ERROR: ASSERT: deflected step goal does not continue blocked approach heading` dropped out of the failure list; no other assertion changed. Total: 15 (unchanged count, since the runner's printed summary was already undercounting real `ERROR: ASSERT` lines by one before this fix — see note below). Confirms the 60° deflection logic itself was never broken; only the test's call path was stale.
+
+**Resolved side note:** this also explains the earlier "37 → 15" vs. a stray "16 assertion(s) failed" readout seen right after the C4 fix — not run-to-run nondeterminism. The runner's printed `N assertion(s) failed` summary can undercount the actual number of `ERROR: ASSERT` lines by one in some runs (cause not further diagnosed — cosmetic, doesn't affect which assertions pass/fail). Cross-checking with `grep -c "ERROR: ASSERT"` against the full log, rather than trusting the summary line alone, is the reliable count going forward.
+
+### Acceptance
+
+- [x] Confirm blocked-approach 60° deflection still fires correctly when driven through the intended reactive path (direct `apply_immediate_blocked_path_reevaluation` call, matching `creature_motor_stack.gd`'s own call site).
+- [x] Fixed the test to exercise the correct call path (kept as a regression guard for both the reactive-only contract and the deflection itself).
+- [x] No regression to `_test_motor_pursuit_pinch_detour_smoke` / other backtrack-adjacent tests (confirmed via exact before/after failure-line diff).
+
+### Open questions
+
+- Should blocked-approach memory ever proactively bias a *fresh* `step_goal` pick (avoid a known-bad heading before re-attempting it), or is reactive-only (current documented contract) intentional and sufficient? Not changed this session — current behavior matches the documented §3.2 contract; worth a deliberate design call only if playtesting shows the reactive-only delay causes visible thrash.
+
+---
+
+## C6 — Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`)
+
+**Status:** `open`  
+**Slice:** unassigned — surfaced as a side effect of the [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) fix, not caused by it  
+**Evidence:** Headless `run_all.gd`, **2026-07-14**, post-C4-fix only — `ERROR: ASSERT: locale consult when no instance beliefs` at [`_test_creature_motor_stack_memory_tier_precedence`](../../tests/run_all.gd) (the `stack.get_planner_step_source() == &"locale"` check after clearing all instance beliefs). **Confirmed not present** in the pre-fix baseline — but not because it was passing: backtrace evidence shows the pre-fix run **never reached that line** in this test (last frame recorded stops two statements earlier, at the "coarse beats locale" assert). The C4 crash was aborting this test function partway through every run; fixing C4 let it run to completion for the first time and exposed a real, previously-invisible failure underneath.
+
+### Symptom
+
+Test sequence: seed a precise belief + coarse belief + locale prior → tick → assert `step_source == precise` (passes). Erase the precise belief → tick → assert `step_source == coarse` (still fails, unrelated pre-existing gap, unchanged by C4). Clear **all** instance beliefs (empty dict) → tick → assert `step_source == locale` (**new failure**) — with no instance beliefs left, the planner does not fall through to the locale prior as the next tier.
+
+### Root cause hypothesis (not yet investigated)
+
+Not root-caused this session — only just exposed. Worth checking whether `find_food` tier consult (`memory_adapter.gd` / `_derive_find_food_step_objective`) has a gap in the coarse→locale fallback specifically, or whether this is adjacent to the still-broken "coarse beats locale when precise absent" assertion in the same test (i.e. one underlying tier-fallback bug explains both, rather than two separate ones).
+
+### Acceptance (draft)
+
+- [ ] Root-cause why locale consult doesn't win when all instance beliefs are absent.
+- [ ] Determine whether this is the same root cause as the adjacent "coarse beats locale when precise absent" failure in the same test (also currently red, unaffected by C4) — one fix or two.
+- [ ] Headless green: `_test_creature_motor_stack_memory_tier_precedence` (all three asserts).
+
+### Open questions
+
+- Same underlying bug as the "coarse beats locale" failure in this test, or independent? Needs investigation before scoping a fix.
+
+---
+
 ## Shared implementation plan (C1 + C2)
 
 **Thesis:** C1 (fox live-prey pursuit) and C2 (rabbit locale seek) are the **same failure family** — a **fixed `step_goal`** with **bad approach geometry** (blocked corridor / overshoot) and **no progress-stall escalation**. They differ only in **trigger** (`blk=1` collision vs `blk=0` orbit) and **step source** (`live` vs `locale`). Ship the common foundation **once**; keep the small goal-specific tails behind it.
@@ -297,7 +426,7 @@ Blocked `MOVE_F` into prey is **not** itself the eat trigger; eat still requires
 
 **Layer 3 — Goal-specific tails (same PR, separate functions):**
 
-- **C1:** `pursuit_detour_waypoint` latch (`pursuit_detour_latch_ticks` — **16** shipped Pass 3; **32** initial target for [C1 residual follow-up](#follow-up-plan-locked--c1-residual-2026-07-14)); gate §9 seek while live prey visible (ghost-only prey keeps §9).
+- **C1:** `pursuit_detour_waypoint` latch (`pursuit_detour_latch_ticks` — **32** after C1 residual 2026-07-14; was **16** Pass 3); sticky vs live remint + alternate on persistent block; gate §9 seek while live prey visible (ghost-only prey keeps §9).
 - **C2:** live↔locale handoff scoring (same-kind → prefer live/in-range; else compare calories-per-`EAT`).
 
 ### One PR, two smoke tests
@@ -339,7 +468,7 @@ Smoke distance/tick constants (X, K, N) tune during pass 1–2 red→green runs.
 
 ### Resolved — Layer 3 tails (locked for pass 3–4)
 
-**C1 pursuit detour (Option A):** On blocked `MOVE_F` with live prey latch, copy post-`apply_immediate_blocked_path_reevaluation` `step_goal` into `pursuit_detour_waypoint` + hold `pursuit_detour_latch_ticks` (**16** shipped Pass 3). `step_ultimate_pos` = live prey ultimate. **C1 residual (2026-07-14):** latch must stay authoritative as `step_goal` through live ultimate refresh; remint rules + initial **32**-tick tune — see [Follow-up plan](#follow-up-plan-locked--c1-residual-2026-07-14).
+**C1 pursuit detour (Option A):** On blocked `MOVE_F` with live prey latch, copy post-`apply_immediate_blocked_path_reevaluation` `step_goal` into `pursuit_detour_waypoint` + hold `pursuit_detour_latch_ticks` (**32** after C1 residual; was **16** Pass 3). `step_ultimate_pos` = live prey ultimate. **C1 residual (2026-07-14 shipped):** latch stays authoritative as `step_goal` through live ultimate refresh; no per-block remint while latched; alternate-side remint when `consecutive_blocked >= dead_end_record_min_blocked_ticks` — see [Follow-up plan](#follow-up-plan-locked--c1-residual-2026-07-14).
 
 **C1 §9 gate:** [`creature_motor_stack.tick`](../../creature/motor/creature_motor_stack.gd) — if `note_outcome` requests blocked resolution **and** `prey_engagement_latch_valid` **and** live ready food visible in scan, **do not** call `apply_blocked_objective_resolution` (or call with seek suppressed). Ghost-only / no live prey: §9 seek unchanged.
 
@@ -543,3 +672,10 @@ No new nav wall required — use existing `_motor_v3_test_floor` + open walkable
 | 2026-07-14 | **Overshoot Response #3 shipped:** `_maybe_apply_fixed_objective_overshoot` no longer resets locale/precise progress; `_test_motor_planner_overshoot_retains_locale_no_progress` (+ remints fixture `arrival_tolerance` for close-band). |
 | 2026-07-14 | **C3 EAT range restored to 5 m:** `_can_eat_now` / orbit use `eat_action_max_distance` (world meters to ultimate); removed `eat_range_move_steps` (speed-scaled range deferred). Duel evidence: fox trailed with 0 EAT under ~0.4 m step band. Facing arc 90° + orbit break unchanged. |
 | 2026-07-14 | **C1 residual locked:** duel `winner=none` / `end_ai` t=2804–3203 — obstacle/pinch stall after Pass 3 (259 MOVE_F, 26 blk=1, err≈−50°–−80°, 0 EAT, cal 22%→11%); distinct from C3 open-field orbit. [Follow-up plan](#follow-up-plan-locked--c1-residual-2026-07-14): sticky `pursuit_detour_waypoint` vs live remint; no per-block remint; alternate detour on persistent block; `pursuit_detour_latch_ticks` **32** initial (tunable to 48); §9 gate preserved; pass/reopen recovery deferred; avoid hitbox/EAT-widen/rock-removal. C1 status → `in_progress`; Pass 5 not done. C2/C3 unchanged. |
+| 2026-07-14 | **C1 residual shipped:** sticky detour vs live remint (`_refresh_live_prey_meta_only`); skip per-block remint while latch valid; `_remint_alternate_pursuit_detour` on `consecutive_blocked >= dead_end_record_min_blocked_ticks`; `pursuit_detour_latch_ticks`=32; tests sticky / skips-reeval / alternate-remint. Pass 5 duel still open. |
+| 2026-07-14 | **C4 logged:** headless `run_all.gd` — 37 assertion(s) failed, `slot >= slot_max` ObjectDB errors in `_belief_instance_passes_diet` (`memory_adapter.gd:978`) cascading into 8+ test failures + leaked RID/ObjectDB/Resource at exit. Confirmed via `git stash` isolation **not** caused by in-flight replay-capture instrumentation change; root cause vs rest of session's WIP unconfirmed. Status `open`; slice unassigned. |
+| 2026-07-14 | **C4 root-caused + fixed:** `_belief_instance_passes_diet` called `instance_from_id` on an unvalidated `instance_id`; unresolvable ids (stale or synthetic test ids) both spammed the ObjectDB error and silently returned diet-fail, under-counting feasibility/inventory. Guarded with `is_instance_id_valid(...)` before the lookup. Headless: 37 → 15 assertion failures (19 sites fixed). Status `done`. |
+| 2026-07-14 | **C5 logged:** `_test_seek_wall_filter_and_backtrack` confirmed **not** a C4 symptom (uses a real `bush.get_instance_id()`). Traced to the 60° backtrack deflection living only in `apply_immediate_blocked_path_reevaluation` (reactive, post-blocked-MOVE per §3.2) while the test calls `select_action` once on a fresh state with no live obstacle — likely a stale test predating the 6e.1/6e.2 executor refactor rather than a production gap. Status `open`; not yet fixed. |
+| 2026-07-14 | **C6 logged:** fixing C4 let `_test_creature_motor_stack_memory_tier_precedence` run past a point it had never reached before (previously aborted by the C4 crash), exposing a real, previously-invisible failure — locale consult doesn't win when all instance beliefs are absent. Not caused by the C4 fix; only newly visible because of it. Status `open`; not yet root-caused. |
+| 2026-07-14 | **Replay-harness Phase 2 shipped:** retrofit `_test_motor_locale_approach_no_oscillation_smoke` (90 → 150 ticks) and `_test_motor_pursuit_pinch_detour_smoke` (240 → 300 ticks) to sample a `MotorStallDetector.Tracker` each tick and assert `not stall.stalled(...)`, alongside their existing hand-rolled progress signals (rear-hemisphere count, `consecutive_blocked` streak) rather than replacing them. Pinch-test prey (`PREY_IID` 88050) now drifts (`sin`-wave ±2.5 world units on `z`) instead of sitting frozen at a fixed point, so the detour latch is exercised against a genuinely moving target. Headless: both smokes green, total assertion failures unchanged at 15 (matches post-C4-fix baseline) — no regression. |
+| 2026-07-14 | **C5 fixed:** confirmed both `blocked_approach` consult sites in `motor_planner.gd` (`apply_immediate_blocked_path_reevaluation`, `apply_blocked_objective_resolution`) are reactive-only, called from `creature_motor_stack.gd` solely after a genuine blocked `MOVE_FORWARD` this tick — never from `select_action`'s fresh derivation. Not a production gap. Corrected `_test_seek_wall_filter_and_backtrack` to assert a fresh `select_action` pick ignores blocked-approach memory, then drive the reactive path directly via `apply_immediate_blocked_path_reevaluation` and assert the deflection there. Headless: exact before/after line diff shows only the one stale assertion cleared, nothing else changed. Status `done`. Also resolves the earlier "15 vs 16" mystery: the runner's summary count can undercount actual `ERROR: ASSERT` lines by one — cosmetic, not nondeterminism; `grep -c "ERROR: ASSERT"` is the reliable count. |

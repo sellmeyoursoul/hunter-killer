@@ -14,6 +14,7 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+const _ReplayCapture := preload("res://creature/motor/motor_planner_replay_capture.gd")
 const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 
@@ -91,6 +92,7 @@ func configure(
   if _body != null and _body.has_method(&"get_food_intake_policy"):
     _memory_adapter.set_food_intake_policy(_body.call(&"get_food_intake_policy"))
   _ExploreLog.reset_session()
+  _ReplayCapture.reset_session_for(_creature_log_label())
 
 
 ## One physics tick: awareness scan, consideration cadence, planner action, execution.
@@ -178,7 +180,35 @@ func tick(delta: float) -> _ActionOutcome:
 
 func _maybe_log_motor_tick() -> void:
   var snap := get_debug_snapshot()
-  _ExploreLog.maybe_log_tick(_creature_log_label(), snap)
+  var label := _creature_log_label()
+  _ExploreLog.maybe_log_tick(label, snap)
+  _ReplayCapture.maybe_capture_tick(label, _replay_capture_record())
+
+
+## Raw planner-input snapshot for [MotorPlannerReplayCapture] — the external stimulus
+## (position/facing/calories + live scan) that drove this tick's [method _MotorPlanner.select_action]
+## call, as opposed to [method get_debug_snapshot]'s derived planner-output state.
+func _replay_capture_record() -> Dictionary:
+  var pos := Vector3.ZERO
+  var facing := Vector3.ZERO
+  if _body != null:
+    pos = _body.global_position
+    facing = _MotorPlane.read_dir(_body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
+  var action_label := "?"
+  if _last_outcome != null:
+    action_label = _motor_action_debug_label(int(_last_outcome.action))
+  return {
+    "tick": _physics_tick_count,
+    "pos": pos,
+    "facing": facing,
+    "calorie_ratio": _calorie_ratio(),
+    "goal_kind": str(_incumbent.get("goal_kind", "")),
+    "step_source": str(_planner_state.get("step_source", "")),
+    "action": action_label,
+    "food_split": _food_split,
+    "threat_samples": _threat_samples,
+    "food_map_confidence": _food_map_confidence,
+  }
 
 
 func _creature_log_label() -> String:

@@ -297,7 +297,7 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_ticks_min": 8,
     "predator_prey_engagement_latch_ticks_max": 120,
     "flee_waypoint_latch_ticks": 16,
-    "pursuit_detour_latch_ticks": 16,
+    "pursuit_detour_latch_ticks": 32,
   }
 
 

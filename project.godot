@@ -38,6 +38,7 @@ use_ship_motor_profile=true
 draw_awareness=true
 draw_motor_planner_hud=true
 motor_explore_tick_log=true
+motor_replay_capture=false
 
 [input]
 

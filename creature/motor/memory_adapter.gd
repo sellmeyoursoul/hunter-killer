@@ -975,5 +975,11 @@ func _sample_world_pos(sample: Dictionary) -> Vector3:
 func _belief_instance_passes_diet(instance_id: int) -> bool:
   if _food_intake_policy == null or instance_id == 0:
     return true
+  if not is_instance_id_valid(instance_id):
+    # Remembered beliefs can outlive (or, in tests, never correspond to) a live scene Node —
+    # e.g. C4 (CREATURE_MOVEMENT_V3_CLEANUP.md): a stale/synthetic instance_id previously hit
+    # instance_from_id() directly and both spammed an engine-level ObjectDB error and silently
+    # failed the diet check. No live node to check against — do not gate on diet here.
+    return true
   var node := instance_from_id(instance_id)
   return _DietRegistry.node_is_valid_food_for_policy(node, _food_intake_policy)

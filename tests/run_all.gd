@@ -45,6 +45,8 @@ const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
 const _MotorPathFixture := preload("res://tests/motor_path_fixture.gd")
+const _MotorReplayFixture := preload("res://tests/motor_replay_fixture.gd")
+const _MotorStallDetector := preload("res://tests/motor_stall_detector.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
@@ -54,6 +56,7 @@ const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd"
 const _OccludedGhost := preload("res://creature/motor/occluded_in_zone_ghost.gd")
 const _BushFoodScr := preload("res://assets/plants/bush_food_3d.gd")
 const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd")
+const _ReplayCapture := preload("res://creature/motor/motor_planner_replay_capture.gd")
 const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
 
 const _Herbivore3DScenePath := "res://creature/templates/creature_herbivore_kinematic_3d.tscn"
@@ -145,6 +148,9 @@ func _run_all() -> void:
   await _test_motor_live_pursuit_no_turn_storm_smoke()
   await _test_motor_pursuit_pinch_detour_smoke()
   _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval()
+  _test_motor_planner_pursuit_detour_sticky_live_refresh()
+  _test_motor_planner_pursuit_detour_skips_reeval_while_latched()
+  _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
   _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
   _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ()
@@ -154,6 +160,10 @@ func _run_all() -> void:
   _test_motor_planner_explore_rear_hemisphere_no_flip_flop()
   _test_motor_planner_explore_align_no_premature_replan()
   _test_motor_planner_explore_log_format()
+  _test_motor_replay_capture_sanitize_round_trip()
+  _test_motor_replay_capture_disabled_by_default_no_file_write()
+  _test_motor_replay_fixture_load_and_rehydrate()
+  await _test_motor_replay_fixture_drives_stack_from_capture()
   _test_motor_planner_explore_move_not_falsely_blocked()
   _test_motor_planner_latched_stuck_replan()
   _test_motor_planner_explore_boundary_scan_inward_escape()
@@ -801,7 +811,7 @@ func _test_creature_motor_v3_explore_inventory_defaults() -> void:
     "goal_mapping_urgency": 0.35,
     "goal_consideration_chaos": 0.15,
     "flee_waypoint_latch_ticks": 16.0,
-    "pursuit_detour_latch_ticks": 16.0,
+    "pursuit_detour_latch_ticks": 32.0,
   }
   for key in expected:
     _assert(ship.has(key), "explore/inventory ship defaults include %s" % str(key))
@@ -2952,10 +2962,12 @@ func _test_motor_locale_approach_no_oscillation_smoke() -> void:
   var start_dist := body.global_position.distance_to(hotspot)
   var min_dist := start_dist
   var rear_hemisphere_moves := 0
-  for _tick_i in 90:
+  var stall := _MotorStallDetector.Tracker.new(20, 0.03)
+  for _tick_i in 150:
     stack.tick(1.0 / 60.0)
     if stack.get_planner_step_source() != &"locale":
       break
+    stall.sample(body.global_position)
     var dist := body.global_position.distance_to(hotspot)
     min_dist = minf(min_dist, dist)
     var snap_after := stack.get_debug_snapshot()
@@ -2969,6 +2981,10 @@ func _test_motor_locale_approach_no_oscillation_smoke() -> void:
     % [start_dist, min_dist],
   )
   _assert(rear_hemisphere_moves < 8, "locale smoke: no rear-hemisphere MOVE_F runaway")
+  _assert(
+    not stall.stalled(45),
+    "locale smoke: no trailing-window stall/orbit (max_stall_streak=%d)" % stall.max_stall_streak,
+  )
   main.queue_free()
 
 
@@ -3084,7 +3100,12 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
   var move_count := 0
   var max_cblk := 0
   var saw_seek_while_live := false
-  for _tick_i in 240:
+  var prey_base_z := prey_pos.z
+  var stall := _MotorStallDetector.Tracker.new(30, 0.03)
+  for tick_i in 300:
+    # Rabbit wanders in place (bounded side-to-side drift) rather than sitting frozen — the
+    # pinch detour must keep tracking a live, moving target, not just a static waypoint.
+    prey_pos.z = prey_base_z + sin(float(tick_i) * 0.05) * 2.5
     stack.set_live_scan_for_test(_motor_pursuit_pinch_live_scan(prey_pos, PREY_IID))
     var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
     var act := int(outcome.action)
@@ -3101,10 +3122,11 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
       saw_seek_while_live = true
     if stack.get_planner_step_source() == &"live":
       min_dist = minf(min_dist, body.global_position.distance_to(prey_pos))
+      stall.sample(body.global_position)
   var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
   _assert(
     min_dist < start_dist - 0.15 or min_dist <= eat_dist * 2.5,
-    "pursuit pinch smoke: closes on prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
+    "pursuit pinch smoke: closes on moving prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
   )
   _assert(turn_count >= 1, "pursuit pinch smoke: at least one align/detour turn")
   _assert(move_count >= 4, "pursuit pinch smoke: sustained forward progress (moves=%d)" % move_count)
@@ -3114,6 +3136,11 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
   )
   _assert(not saw_seek_while_live, "pursuit pinch smoke: no §9 seek while live prey visible")
   _assert(max_cblk <= 6, "pursuit pinch smoke: no blocked streak runaway (max_cblk=%d)" % max_cblk)
+  _assert(
+    not stall.stalled(60),
+    "pursuit pinch smoke: no trailing-window stall/orbit while chasing moving prey (max_stall_streak=%d)"
+    % stall.max_stall_streak,
+  )
   main.queue_free()
 
 
@@ -3148,12 +3175,178 @@ func _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval() -> void:
     motor_v3,
   )
   _assert(
-    int(state.get("pursuit_detour_ticks_remaining", 0)) == int(motor_v3.get("pursuit_detour_latch_ticks", 16)),
+    int(state.get("pursuit_detour_ticks_remaining", 0)) == int(motor_v3.get("pursuit_detour_latch_ticks", 32)),
     "blocked reeval mints pursuit_detour latch ticks",
   )
   _assert(
     state.get("pursuit_detour_waypoint", Vector3.ZERO).distance_to(Vector3(0.0, 1.0, 8.0)) < 0.05,
     "blocked reeval copies detour step_goal into pursuit_detour_waypoint",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_pursuit_detour_sticky_live_refresh() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_a := Vector3(20.0, 1.0, 0.0)
+  var prey_b := Vector3(22.0, 1.0, 1.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_ticks_remaining"] = 20
+  state["step_ultimate_pos"] = prey_a
+  state["step_instance_id"] = 88060
+  state["prey_engagement_instance_id"] = 88060
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "scan": _motor_pursuit_pinch_live_scan(prey_b, 88060),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 3,
+    "delta": 1.0 / 60.0,
+    "refresh_step_objective": true,
+  }
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    motor_v3,
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(detour_wp) < 0.05,
+    "sticky detour: step_goal stays latched through live refresh",
+  )
+  _assert(
+    state.get("step_ultimate_pos", Vector3.ZERO).distance_to(prey_b) < 0.05,
+    "sticky detour: live refresh updates step_ultimate_pos",
+  )
+  _assert(
+    int(state.get("pursuit_detour_ticks_remaining", 0)) == 19,
+    "sticky detour: maintain path decrements latch ticks",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_pursuit_detour_skips_reeval_while_latched() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_ticks_remaining"] = 24
+  state["step_ultimate_pos"] = prey_pos
+  state["prey_engagement_instance_id"] = 88061
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["consecutive_blocked"] = 1
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88061),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 4,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    state.get("pursuit_detour_waypoint", Vector3.ZERO).distance_to(detour_wp) < 0.05,
+    "active detour: early block does not remint waypoint",
+  )
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(detour_wp) < 0.05,
+    "active detour: early block keeps sticky step_goal",
+  )
+  _assert(
+    int(state.get("pursuit_detour_ticks_remaining", 0)) == 24,
+    "active detour: early block does not refresh latch TTL",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_pursuit_detour_alternate_on_persistent_block() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_ticks_remaining"] = 24
+  state["step_ultimate_pos"] = prey_pos
+  state["prey_engagement_instance_id"] = 88062
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88062),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  var new_wp: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  _assert(
+    new_wp.distance_to(detour_wp) > 0.5,
+    "persistent block remints a fresh alternate detour waypoint",
+  )
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(new_wp) < 0.05,
+    "alternate remint keeps step_goal aligned with detour latch",
+  )
+  _assert(
+    int(state.get("pursuit_detour_ticks_remaining", 0))
+    == int(motor_v3.get("pursuit_detour_latch_ticks", 32)),
+    "alternate remint refreshes latch TTL",
+  )
+  _assert(
+    bool(state.get("force_align_turn_before_move", false)),
+    "alternate remint arms turn-first after detour jump",
+  )
+  _assert(
+    state.get("step_ultimate_pos", Vector3.ZERO).distance_to(prey_pos) < 0.05,
+    "alternate remint retains live prey ultimate",
   )
   main.queue_free()
 
@@ -3734,6 +3927,135 @@ func _test_motor_planner_explore_log_format() -> void:
   _assert(_ExploreLog.scan_label_from_snap(snap) == "sR", "scan label sR when boundary_scan_sign negative")
   var hud: String = _explore_log_script.call("format_explore_tick_hud", snap, "Fox")
   _assert(hud.count("\n") >= 3, "explore HUD block uses multiple lines")
+
+
+func _test_motor_replay_capture_sanitize_round_trip() -> void:
+  var record := {
+    "tick": 42,
+    "pos": Vector3(1.5, 0.0, -2.25),
+    "facing": Vector3(0.0, 0.0, 1.0),
+    "calorie_ratio": 0.42,
+    "goal_kind": "find_food",
+    "step_source": &"live",
+    "action": "MOVE_F",
+    "food_split": {
+      "ready": [{
+        "pos": Vector3(4.0, 1.0, 5.0),
+        "instance_id": 88050,
+        "stimulus_kind_id": &"prey_rabbit",
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+      }],
+      "unready": [],
+    },
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+  var sanitized: Variant = _ReplayCapture._sanitize(record)
+  var line := JSON.stringify(sanitized)
+  var parsed: Variant = JSON.parse_string(line)
+  _assert(parsed is Dictionary, "replay capture line parses back to a dictionary")
+  var parsed_dict: Dictionary = parsed
+  _assert(int(parsed_dict.get("tick", -1)) == 42, "replay capture round-trips tick")
+  var pos_arr: Array = parsed_dict.get("pos", [])
+  _assert(
+    pos_arr.size() == 3 and is_equal_approx(float(pos_arr[0]), 1.5),
+    "replay capture round-trips Vector3 position as a 3-element array",
+  )
+  _assert(
+    str(parsed_dict.get("step_source", "")) == "live",
+    "replay capture stringifies top-level StringName fields",
+  )
+  var food_split: Dictionary = parsed_dict.get("food_split", {})
+  var ready: Array = food_split.get("ready", [])
+  _assert(ready.size() == 1, "replay capture round-trips nested food_split.ready")
+  var first_ready: Dictionary = ready[0]
+  _assert(
+    str(first_ready.get("stimulus_kind_id", "")) == "prey_rabbit",
+    "replay capture stringifies nested StringName fields inside food_split entries",
+  )
+  var ready_pos: Array = first_ready.get("pos", [])
+  _assert(
+    ready_pos.size() == 3 and is_equal_approx(float(ready_pos[2]), 5.0),
+    "replay capture round-trips nested Vector3 fields inside food_split entries",
+  )
+
+
+func _test_motor_replay_capture_disabled_by_default_no_file_write() -> void:
+  var label := "replay_capture_disabled_test_%d" % Time.get_ticks_usec()
+  _ReplayCapture.maybe_capture_tick(label, {"tick": 1})
+  var path := "user://logs/motor_replay_capture/%s.jsonl" % label.to_lower()
+  _assert(
+    not FileAccess.file_exists(path),
+    "replay capture writes no file when the debug flag is off (default)",
+  )
+
+
+func _test_motor_replay_fixture_load_and_rehydrate() -> void:
+  var path := "res://tests/fixtures/duel_replays/sample_synthetic_live_pursuit.jsonl"
+  var records := _MotorReplayFixture.load_capture(path)
+  _assert(records.size() == 60, "replay fixture loads all captured lines (got %d)" % records.size())
+  var first: Dictionary = records[0]
+  _assert(first.get("pos") is Vector3, "replay fixture rehydrates top-level pos to Vector3")
+  _assert(first.get("facing") is Vector3, "replay fixture rehydrates top-level facing to Vector3")
+  var food_split: Dictionary = first.get("food_split", {})
+  var ready: Array = food_split.get("ready", [])
+  _assert(ready.size() == 1, "replay fixture preserves food_split.ready entries")
+  var prey: Dictionary = ready[0]
+  _assert(prey.get("pos") is Vector3, "replay fixture rehydrates nested food pos to Vector3")
+  _assert(
+    prey.get("stimulus_kind_id") == &"prey_rabbit",
+    "replay fixture rehydrates stimulus_kind_id to StringName",
+  )
+  var last: Dictionary = records[records.size() - 1]
+  var last_prey: Dictionary = (last.get("food_split", {}) as Dictionary).get("ready", [])[0]
+  var last_prey_pos: Vector3 = last_prey.get("pos", Vector3.ZERO)
+  _assert(
+    last_prey_pos.z > (prey.get("pos", Vector3.ZERO) as Vector3).z,
+    "replay fixture preserves the captured prey trajectory across ticks",
+  )
+
+
+func _test_motor_replay_fixture_drives_stack_from_capture() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var path := "res://tests/fixtures/duel_replays/sample_synthetic_live_pursuit.jsonl"
+  var records := _MotorReplayFixture.load_capture(path)
+  _assert(not records.is_empty(), "replay fixture: capture loads before driving the stack")
+  var positions := _MotorReplayFixture.drive_stack(stack, body, records)
+  _assert(
+    positions.size() == records.size(),
+    "replay fixture: one position sample per captured tick (got %d of %d)"
+    % [positions.size(), records.size()],
+  )
+  var first_prey: Vector3 = (
+    (records[0].get("food_split", {}) as Dictionary).get("ready", [])[0] as Dictionary
+  ).get("pos", Vector3.ZERO)
+  var start_dist := positions[0].distance_to(first_prey)
+  var last_prey: Vector3 = (
+    (records[records.size() - 1].get("food_split", {}) as Dictionary).get("ready", []
+    )[0] as Dictionary
+  ).get("pos", Vector3.ZERO)
+  var end_dist := positions[positions.size() - 1].distance_to(last_prey)
+  _assert(
+    end_dist < start_dist - 0.05,
+    "replay fixture: stack driven from capture closes on the captured prey trajectory (start=%.2f end=%.2f)"
+    % [start_dist, end_dist],
+  )
+  var max_stall_streak := _MotorStallDetector.max_stall_streak_for(positions, 20, 0.05)
+  _assert(
+    max_stall_streak < 20,
+    "replay fixture: MotorStallDetector reports no stall while closing on live prey (streak=%d)"
+    % max_stall_streak,
+  )
+  main.queue_free()
 
 
 func _test_motor_planner_explore_move_not_falsely_blocked() -> void:
@@ -6428,9 +6750,26 @@ func _test_seek_wall_filter_and_backtrack() -> void:
     "physics_tick": 6,
   }
   _MotorPlanner.select_action(ctx, state)
+  var to_goal_fresh: Vector3 = state["step_goal"] - body.global_position
+  to_goal_fresh.y = 0.0
+  _assert(
+    to_goal_fresh.length_squared() > 1e-4,
+    "planner resolves food step goal under backtrack memory",
+  )
+  # Per CREATURE_MOVEMENT_V3.md §3.2, the 60° backtrack deflection is reactive-only — it runs
+  # from apply_immediate_blocked_path_reevaluation after a genuine blocked MOVE_FORWARD, never
+  # inside select_action's fresh §3.1 derivation. A fresh pick with no live obstacle should go
+  # straight at the bush even though blocked_approach memory is recorded on the same heading.
+  _assert(
+    to_goal_fresh.normalized().dot(approach) > 0.9,
+    "fresh select_action ignores blocked-approach memory (reactive-only per §3.2)",
+  )
+  # Simulate the reactive path: creature_motor_stack.gd calls this only after this tick's
+  # MOVE_FORWARD outcome was genuinely blocked (creature_motor_stack.gd tick()).
+  _MotorPlanner.apply_immediate_blocked_path_reevaluation(ctx, state, body, motor_v3)
   var to_goal: Vector3 = state["step_goal"] - body.global_position
   to_goal.y = 0.0
-  _assert(to_goal.length_squared() > 1e-4, "planner resolves food step goal under backtrack memory")
+  _assert(to_goal.length_squared() > 1e-4, "reactive reeval keeps a resolvable step goal")
   _assert(
     to_goal.normalized().dot(approach) < 0.9,
     "deflected step goal does not continue blocked approach heading",

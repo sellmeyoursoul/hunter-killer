@@ -58,6 +58,7 @@ static func new_state() -> Dictionary:
     "flee_waypoint_ticks_remaining": 0,
     "pursuit_detour_waypoint": Vector3.ZERO,
     "pursuit_detour_ticks_remaining": 0,
+    "pursuit_detour_alt_flip": false,
     "step_ultimate_pos": Vector3.ZERO,
     "force_align_turn_before_move": false,
     ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
@@ -926,11 +927,16 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         )
       elif not live_food.is_empty() and state.get("step_source", &"") != &"locale":
         # Non-moving live remint while already bound (not holding a locale approach).
-        var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
-        _apply_live_food_objective(
-          state, live_food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
-        )
-        _arm_prey_engagement_from_live_food(ctx, state, live_food, motor_v3)
+        if _pursuit_detour_latch_valid(state) and _prey_engagement_latch_valid(state):
+          state["step_goal"] = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+          state["step_source"] = &"live"
+          _refresh_live_prey_meta_only(ctx, state, live_food, motor_v3)
+        else:
+          var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
+          _apply_live_food_objective(
+            state, live_food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
+          )
+          _arm_prey_engagement_from_live_food(ctx, state, live_food, motor_v3)
         _store_food_inventory_step_mode(ctx, state, motor_v3)
       elif state.get("step_source", &"") == &"explore":
         _maintain_explore_latch(ctx, state, motor_v3)
@@ -1297,6 +1303,20 @@ static func _pursuit_detour_latch_valid(state: Dictionary) -> bool:
 static func _clear_pursuit_detour_latch(state: Dictionary) -> void:
   state["pursuit_detour_waypoint"] = Vector3.ZERO
   state["pursuit_detour_ticks_remaining"] = 0
+  state["pursuit_detour_alt_flip"] = false
+
+
+## Live prey refresh without overwriting an active pursuit detour substep (C1 residual).
+static func _refresh_live_prey_meta_only(
+  ctx: Dictionary,
+  state: Dictionary,
+  food: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
+  state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+  state["step_instance_id"] = int(food.get("instance_id", 0))
+  state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
+  _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
 
 
 ## §9 pre-call gate (C1): skip persist/switch/seek while live prey visible + engagement latch.
@@ -1357,12 +1377,51 @@ static func _maybe_mint_pursuit_detour_latch(
   var wp: Vector3 = state.get("step_goal", Vector3.ZERO)
   if wp.length_squared() < 1e-8:
     return
+  var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["pursuit_detour_waypoint"] = wp
-  state["pursuit_detour_ticks_remaining"] = maxi(
-    1, int(motor_v3.get("pursuit_detour_latch_ticks", 16))
-  )
+  state["step_goal"] = wp
+  state["pursuit_detour_ticks_remaining"] = latch_ticks
   state["consecutive_blocked"] = 0
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), body.global_position)
+  if not food.is_empty():
+    state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+
+
+## Mint a fresh pursuit detour on the opposite side after persistent block (C1 residual).
+static func _remint_alternate_pursuit_detour(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  var creature_pos := body.global_position
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if ultimate.length_squared() < 1e-8:
+    return
+  var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  var to_latched := Vector3(latched.x - creature_pos.x, 0.0, latched.z - creature_pos.z)
+  var dist := to_latched.length()
+  if dist < 1e-6:
+    to_latched = Vector3(ultimate.x - creature_pos.x, 0.0, ultimate.z - creature_pos.z)
+    dist = to_latched.length()
+  if dist < 1e-6:
+    return
+  var dir := to_latched.normalized()
+  var alt_sign := -1.0 if bool(state.get("pursuit_detour_alt_flip", false)) else 1.0
+  state["pursuit_detour_alt_flip"] = not bool(state.get("pursuit_detour_alt_flip", false))
+  dir = dir.rotated(Vector3.UP, deg_to_rad(60.0 * alt_sign))
+  var wp := creature_pos + dir * maxf(dist, 3.0)
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var agent_r := _agent_radius(body)
+  wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
+  var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
+  state["pursuit_detour_waypoint"] = wp
+  state["step_goal"] = wp
+  state["pursuit_detour_ticks_remaining"] = latch_ticks
+  state["consecutive_blocked"] = 0
+  state["force_align_turn_before_move"] = true
+  var scan: Dictionary = ctx.get("scan", {})
+  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
 
@@ -1786,6 +1845,15 @@ static func apply_immediate_blocked_path_reevaluation(
   body: CharacterBody3D,
   motor_v3: Dictionary,
 ) -> void:
+  if (
+    _pursuit_detour_latch_valid(state)
+    and _prey_engagement_latch_valid(state)
+    and state.get("step_source", &"") == &"live"
+  ):
+    var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+    if int(state.get("consecutive_blocked", 0)) >= min_ticks:
+      _remint_alternate_pursuit_detour(ctx, state, body, motor_v3)
+    return
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return
