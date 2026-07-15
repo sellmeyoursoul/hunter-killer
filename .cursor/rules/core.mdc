@@ -93,3 +93,8 @@ Does not apply when the user is in question/review-only mode, when `feature-desi
 **Feature hub (not a Cursor rule):** [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) — movement in [CREATURE_MOVEMENT_V3.md](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md), memory in [CREATURE_MEMORY.md](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md).
 
 **Archived docs:** `Completed_Features/` drift is expected unless explicitly cited.
+
+# Session Metadata Rule
+At the very end of every response, output a single, ultra-brief markdown line showing estimated token usage and remaining capacity. Use the format:
+`[Context: ~X / Max Y tokens (Z% used)]`
+Do not write conversational filler surrounding this metric.

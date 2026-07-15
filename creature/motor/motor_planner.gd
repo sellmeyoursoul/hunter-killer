@@ -925,6 +925,14 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         _derive_find_food_step_objective(
           ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
         )
+      elif live_food.is_empty() and _find_food_memory_tier_stale(
+        ctx, state, creature_pos, motor_v3, scan
+      ):
+        # Incumbent precise/coarse/locale belief no longer consults active — fall
+        # through the tier hierarchy again instead of holding a stale step_goal.
+        _derive_find_food_step_objective(
+          ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
+        )
       elif not live_food.is_empty() and state.get("step_source", &"") != &"locale":
         # Non-moving live remint while already bound (not holding a locale approach).
         if _pursuit_detour_latch_valid(state) and _prey_engagement_latch_valid(state):
@@ -1070,6 +1078,47 @@ static func _live_vs_locale_handoff_prefers_live(
   var live_cal := _calories_per_eat_from_live_food(live_food, motor_v3)
   var locale_cal := _calories_per_eat_from_locale(locale, adapter, motor_v3)
   return live_cal >= locale_cal
+
+
+## True when the incumbent precise/coarse/locale [code]step_source[/code] no longer
+## consults active (e.g. its belief was erased) — C6: without this, a stale
+## [code]step_goal[/code] latches forever since nothing else re-triggers a tier fallback.
+static func _find_food_memory_tier_stale(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  scan: Dictionary,
+) -> bool:
+  var step_source: StringName = state.get("step_source", &"")
+  if step_source != &"precise" and step_source != &"coarse" and step_source != &"locale":
+    return false
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null:
+    return false
+  var food_split: Dictionary = scan.get("food_split", {})
+  var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+  if step_source == &"precise":
+    if not adapter.has_method(&"consult_precise_food"):
+      return false
+    var precise: Dictionary = adapter.consult_precise_food(
+      creature_pos, motor_v3, food_split, now_ms
+    )
+    if not bool(precise.get("active", false)):
+      return true
+    return int(precise.get("instance_id", 0)) != int(state.get("step_instance_id", 0))
+  if step_source == &"coarse":
+    if not adapter.has_method(&"consult_coarse_bearing"):
+      return false
+    var coarse: Dictionary = adapter.consult_coarse_bearing(
+      creature_pos, motor_v3, food_split, int(state.get("step_instance_id", 0)), now_ms
+    )
+    return not bool(coarse.get("active", false))
+  if not adapter.has_method(&"consult_locale_seek"):
+    return false
+  var env_grid: Variant = ctx.get("environment_grid", null)
+  var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, {})
+  return not bool(locale.get("active", false))
 
 
 ## Locale consult when precise/coarse are inactive (memory-tier winner would be locale).

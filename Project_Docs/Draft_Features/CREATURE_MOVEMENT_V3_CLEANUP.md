@@ -25,12 +25,12 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 
 | ID | Title | Status | Slice |
 |----|-------|--------|-------|
-| [C1](#c1-pursuit-contact-geometry-stall-fox) | Pursuit contact geometry stall (fox) | `in_progress` | `post-6d-approach-geometry` (shared) |
-| [C2](#c2-locale-food-approach-oscillation-rabbit) | Locale food approach oscillation (rabbit) | `in_progress` | `post-6d-approach-geometry` (shared) |
+| [C1](#c1-pursuit-contact-geometry-stall-fox) | Pursuit contact geometry stall (fox) | `in_progress` — headless smoke green, duel manual (Pass 5) pending | `post-6d-approach-geometry` (shared) |
+| [C2](#c2-locale-food-approach-oscillation-rabbit) | Locale food approach oscillation (rabbit) | `in_progress` — same-tick clamp fix shipped, headless smoke green, duel manual pending | `post-6d-approach-geometry` (shared) |
 | [C3](#c3-prey-contact-without-eat--body-pin-stall-fox) | Prey contact without EAT / body-pin stall (fox) | `done` | `post-6d-prey-eat-contact` |
 | [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) | Stale `instance_id` lookups crash memory adapter diet filter (headless regression) | `done` | unassigned |
 | [C5](#c5-stale-test-vs-6e-executor-refactor-contract-seek_wall_filter_and_backtrack) | Stale test vs 6e executor refactor contract (`_test_seek_wall_filter_and_backtrack`) | `done` | unassigned |
-| [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence) | Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`) | `open` | unassigned |
+| [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence) | Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`) | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -87,7 +87,7 @@ Pass 3 shipped detour latch + §9 gate; duel pinch residual shows **live prey re
 
 ### Acceptance (draft)
 
-- [ ] Headless: [C1 smoke fixture](#smoke-test-engineering-complex-geometry) — fox reaches within `action_max_distance` of prey without `cblk` runaway or explore fallback while prey live.
+- [x] Headless: [C1 smoke fixture](#smoke-test-engineering-complex-geometry) — fox reaches within `action_max_distance` of prey without `cblk` runaway or explore fallback while prey live (`_test_motor_pursuit_pinch_detour_smoke` green; unaffected by the C2 same-tick clamp fix — full-suite diff shows no new failures).
 - [x] Headless: while `pursuit_detour_waypoint` latch is valid, per-tick live prey refresh updates `step_ultimate_pos` / engagement latch **without** overwriting detour `step_goal` (`_test_motor_planner_pursuit_detour_sticky_live_refresh`).
 - [x] Headless: repeated blocks against an **active** detour mint a **fresh** detour (or alternate-side nav/backtrack) — **not** live substep overwrite and **not** explore-at-origin fallback while prey live (`_test_motor_planner_pursuit_detour_skips_reeval_while_latched`, `_test_motor_planner_pursuit_detour_alternate_on_persistent_block`).
 - [ ] Duel manual: fox clears an **interior pinch** and resumes chase (same session as rabbit flee / locale patch).
@@ -101,11 +101,13 @@ _Resolved 2026-07-10:_ `pursuit_detour_latch_ticks` = **16** (mirror flee) for P
 
 ## C2 — Locale food approach oscillation (rabbit)
 
-**Status:** `design`  
+**Status:** `in_progress`  
 **Slice:** `post-6d-approach-geometry` (shared with C1; herbivore memory-seek tail)  
 **Evidence:** Duel playtest **2026-07-10** (session ~16:00) — after live bush seek at `(32.2, 65.0)`, rabbit hub retargets to **locale prior** `(26.0, 78.0)` at **t≈2201** (`src=locale`, `w≈0.294`). From **t≈2366** through session end (**t≈2617**): repeating **TURN_*** sweep → **`MOVE_F` with `err≈±137°`–`180°`** (`dot` negative) while `blk=0`, `cblk=0`, `ff=0`, `thr=0`. Log: `%APPDATA%\Godot\app_userdata\Hunter Killer\logs\motor_explore_tick.log` (rolling tail t=2218+) and `hunter_killer.log` (`MotorExplore` DEBUG lines).
 
 **C2 residual (2026-07-14 ~10:34–10:35 UTC):** Pass 1–4 shipped, but duel still showed rabbit live bush `(32.2, 65)` → locale `(26, 78)` → **overshoot spin for hundreds of ticks** (`food=0`, 0 `EAT`, rear-hemisphere `MOVE_F`). Root cause: Layer 1 overshoot remint **reset** `locale_no_progress_ticks`, starving Layer 2 so §9 never fired while the orbit continued. **Design lock:** retain progress counters on overshoot remint — see [Response #3](#resolved--overshoot-guard-layer-1) (supersedes 2026-07-13 reset rule). Pass 4 empty-locale clear remains correct; progress retention is the Layer 2 escape hatch if orbit keeps the creature outside `eat_action_max_distance` or locale remints after clear. Verify sticky clear separately if remint-after-clear still observed.
+
+**C2 residual #2 shipped (2026-07-14, same-tick clamp):** `_test_motor_locale_approach_no_oscillation_smoke` was still red after the progress-retention fix above — headless replay of the fixture and a fresh `motor_explore_tick.log` capture both showed the same rear-hemisphere flip (`err` jumping from ~`-19°` to `+154°` in one tick) at ranges the reactive Layer 1 remint (2-move-step close band, sub-meter at typical speeds) never reaches. Root cause: `LocomotionExecutor._displace_along_facing` moves the body via acceleration/friction (`apply_horizontal_move_intent`) and never checks remaining distance to `step_goal` — a single aligned `MOVE_FORWARD` can travel straight through a near anchor, flipping the bearing to the rear hemisphere before any next-tick remint has a chance to react. **Fix:** [`LocomotionExecutor.apply_action`](../../creature/motor/locomotion_executor.gd) now accepts an optional `step_goal` and, after a `MOVE_FORWARD`, `_clamp_overshoot_to_goal` snaps the body back onto the goal (and zeroes horizontal velocity) if displacement carried it past the goal along the pre-move approach line — same tick, before any bearing flip can occur. [`creature_motor_stack.tick`](../../creature/motor/creature_motor_stack.gd) threads `_planner_state.step_goal` through when the selected action is `MOVE_FORWARD`. This supersedes relying solely on the reactive Layer 1 remint (which still runs for the next-tick case where nav-substep resolution is needed after a real overshoot). Headless: `_test_motor_locale_approach_no_oscillation_smoke` green; full-suite diff against pre-change baseline shows **zero new failures** (only the two C6 asserts flipped green, same 13 pre-existing/unrelated failures remain).
 
 **Not in scope:** Flight / flee waypoint latch (post-6d P2–P4); carnivore live-prey pursuit (C1). This run showed `avoid_hostiles` early but **no `ff=1`** — stall is **not** threat egress.
 
@@ -149,10 +151,10 @@ C2-specific tails on top of the [shared foundation](#shared-implementation-plan-
 
 ### Acceptance (draft)
 
-- [ ] Headless: [C2 smoke fixture](#l1-fixture-layout-locale_orbit) — herbivore reaches within `action_max_distance` of seeded locale anchor without err sign-flip loop or `locale_no_progress_ticks` runaway.
+- [x] Headless: [C2 smoke fixture](#l1-fixture-layout-locale_orbit) — herbivore reaches within `action_max_distance` of seeded locale anchor without err sign-flip loop or `locale_no_progress_ticks` runaway (`_test_motor_locale_approach_no_oscillation_smoke` green after the same-tick clamp fix).
 - [ ] Headless: assert **no** `MOVE_F` **selected** when misaligned at `select_action` time (`|err| > turn_increment_deg` at decision time — not post-tick snapshot; see cone gate note).
 - [ ] Duel manual: rabbit eats or leaves locale patch — no in-place spin at `(26, 78)`-class anchor after live food session.
-- [ ] No regression: `_test_creature_motor_stack_seek_locale_prior`, `_test_motor_planner_latched_stuck_replan`, post-6d Flight A/B/C.
+- [x] No regression (headless): full-suite diff against pre-change baseline shows zero new failures. **Not yet re-verified in duel.**
 
 ### Open questions
 
@@ -340,27 +342,29 @@ Corrected [`_test_seek_wall_filter_and_backtrack`](../../tests/run_all.gd) to ex
 
 ## C6 — Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`)
 
-**Status:** `open`  
+**Status:** `done`  
 **Slice:** unassigned — surfaced as a side effect of the [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) fix, not caused by it  
 **Evidence:** Headless `run_all.gd`, **2026-07-14**, post-C4-fix only — `ERROR: ASSERT: locale consult when no instance beliefs` at [`_test_creature_motor_stack_memory_tier_precedence`](../../tests/run_all.gd) (the `stack.get_planner_step_source() == &"locale"` check after clearing all instance beliefs). **Confirmed not present** in the pre-fix baseline — but not because it was passing: backtrace evidence shows the pre-fix run **never reached that line** in this test (last frame recorded stops two statements earlier, at the "coarse beats locale" assert). The C4 crash was aborting this test function partway through every run; fixing C4 let it run to completion for the first time and exposed a real, previously-invisible failure underneath.
 
 ### Symptom
 
-Test sequence: seed a precise belief + coarse belief + locale prior → tick → assert `step_source == precise` (passes). Erase the precise belief → tick → assert `step_source == coarse` (still fails, unrelated pre-existing gap, unchanged by C4). Clear **all** instance beliefs (empty dict) → tick → assert `step_source == locale` (**new failure**) — with no instance beliefs left, the planner does not fall through to the locale prior as the next tier.
+Test sequence: seed a precise belief + coarse belief + locale prior → tick → assert `step_source == precise` (passes). Erase the precise belief → tick → assert `step_source == coarse` (was also failing, same root cause as below). Clear **all** instance beliefs (empty dict) → tick → assert `step_source == locale` (new failure) — with no instance beliefs left, the planner does not fall through to the locale prior as the next tier.
 
-### Root cause hypothesis (not yet investigated)
+### Root cause (found and fixed 2026-07-14)
 
-Not root-caused this session — only just exposed. Worth checking whether `find_food` tier consult (`memory_adapter.gd` / `_derive_find_food_step_objective`) has a gap in the coarse→locale fallback specifically, or whether this is adjacent to the still-broken "coarse beats locale when precise absent" assertion in the same test (i.e. one underlying tier-fallback bug explains both, rather than two separate ones).
+One underlying bug explained both the "coarse beats locale" and "locale consult" failures — not two. [`_sync_step_objective`](../../creature/motor/motor_planner.gd)'s `GK_FIND_FOOD` branch only calls `_derive_find_food_step_objective` (the function that walks precise → coarse → locale) when: live food appears/moves, `refresh_targets` is set, `step_goal` is unset, or the food-inventory mode changed. None of those conditions fire when an **incumbent belief is simply erased out from under an already-latched `precise`/`coarse` step_source** — `has_step_goal` stays true (the stale goal from the prior tick), so the elif chain falls through to nothing and the stale `step_source` (and stale `step_goal`) latches forever instead of re-consulting the tier hierarchy.
 
-### Acceptance (draft)
+**Fix:** added `_find_food_memory_tier_stale(...)` — when `live_food` is empty and the current `step_source` is `precise`/`coarse`/`locale`, re-run that tier's own consult (`consult_precise_food` / `consult_coarse_bearing` / `consult_locale_seek`) and report stale if it no longer reports `active` (or, for `precise`, if the active belief's `instance_id` no longer matches the incumbent). Wired as a new elif branch in `_sync_step_objective` before the live-remint branch, so a stale tier now falls through to `_derive_find_food_step_objective` and re-derives (precise → coarse → locale) instead of holding a dead `step_goal`.
 
-- [ ] Root-cause why locale consult doesn't win when all instance beliefs are absent.
-- [ ] Determine whether this is the same root cause as the adjacent "coarse beats locale when precise absent" failure in the same test (also currently red, unaffected by C4) — one fix or two.
-- [ ] Headless green: `_test_creature_motor_stack_memory_tier_precedence` (all three asserts).
+### Acceptance
+
+- [x] Root-caused why locale consult doesn't win when all instance beliefs are absent (stale latched `step_source` with no re-derivation trigger).
+- [x] Confirmed same root cause as the "coarse beats locale when precise absent" failure — one fix for both.
+- [x] Headless green: `_test_creature_motor_stack_memory_tier_precedence` (all three asserts).
 
 ### Open questions
 
-- Same underlying bug as the "coarse beats locale" failure in this test, or independent? Needs investigation before scoping a fix.
+- None blocking. Remaining headless noise in the same run (`slot_max` ObjectDB errors, ghost-danger asserts) is pre-existing/unrelated — see [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) open items.
 
 ---
 
@@ -677,5 +681,7 @@ No new nav wall required — use existing `_motor_v3_test_floor` + open walkable
 | 2026-07-14 | **C4 root-caused + fixed:** `_belief_instance_passes_diet` called `instance_from_id` on an unvalidated `instance_id`; unresolvable ids (stale or synthetic test ids) both spammed the ObjectDB error and silently returned diet-fail, under-counting feasibility/inventory. Guarded with `is_instance_id_valid(...)` before the lookup. Headless: 37 → 15 assertion failures (19 sites fixed). Status `done`. |
 | 2026-07-14 | **C5 logged:** `_test_seek_wall_filter_and_backtrack` confirmed **not** a C4 symptom (uses a real `bush.get_instance_id()`). Traced to the 60° backtrack deflection living only in `apply_immediate_blocked_path_reevaluation` (reactive, post-blocked-MOVE per §3.2) while the test calls `select_action` once on a fresh state with no live obstacle — likely a stale test predating the 6e.1/6e.2 executor refactor rather than a production gap. Status `open`; not yet fixed. |
 | 2026-07-14 | **C6 logged:** fixing C4 let `_test_creature_motor_stack_memory_tier_precedence` run past a point it had never reached before (previously aborted by the C4 crash), exposing a real, previously-invisible failure — locale consult doesn't win when all instance beliefs are absent. Not caused by the C4 fix; only newly visible because of it. Status `open`; not yet root-caused. |
+| 2026-07-14 | **C6 root-caused + fixed:** stale latched `precise`/`coarse` `step_source` had no re-derivation trigger when its incumbent belief was erased (`_sync_step_objective`'s elif chain never re-entered `_derive_find_food_step_objective`). Added `_find_food_memory_tier_stale` — re-consults the incumbent tier and falls through to precise→coarse→locale re-derivation when it's no longer active. Same fix resolved both the "coarse beats locale" and "locale consult" asserts in `_test_creature_motor_stack_memory_tier_precedence` (one root cause, not two). Headless green for all three asserts. Status `done`. |
 | 2026-07-14 | **Replay-harness Phase 2 shipped:** retrofit `_test_motor_locale_approach_no_oscillation_smoke` (90 → 150 ticks) and `_test_motor_pursuit_pinch_detour_smoke` (240 → 300 ticks) to sample a `MotorStallDetector.Tracker` each tick and assert `not stall.stalled(...)`, alongside their existing hand-rolled progress signals (rear-hemisphere count, `consecutive_blocked` streak) rather than replacing them. Pinch-test prey (`PREY_IID` 88050) now drifts (`sin`-wave ±2.5 world units on `z`) instead of sitting frozen at a fixed point, so the detour latch is exercised against a genuinely moving target. Headless: both smokes green, total assertion failures unchanged at 15 (matches post-C4-fix baseline) — no regression. |
 | 2026-07-14 | **C5 fixed:** confirmed both `blocked_approach` consult sites in `motor_planner.gd` (`apply_immediate_blocked_path_reevaluation`, `apply_blocked_objective_resolution`) are reactive-only, called from `creature_motor_stack.gd` solely after a genuine blocked `MOVE_FORWARD` this tick — never from `select_action`'s fresh derivation. Not a production gap. Corrected `_test_seek_wall_filter_and_backtrack` to assert a fresh `select_action` pick ignores blocked-approach memory, then drive the reactive path directly via `apply_immediate_blocked_path_reevaluation` and assert the deflection there. Headless: exact before/after line diff shows only the one stale assertion cleared, nothing else changed. Status `done`. Also resolves the earlier "15 vs 16" mystery: the runner's summary count can undercount actual `ERROR: ASSERT` lines by one — cosmetic, not nondeterminism; `grep -c "ERROR: ASSERT"` is the reliable count. |
+| 2026-07-14 | **C2 residual #2 (same-tick overshoot clamp) shipped:** `_test_motor_locale_approach_no_oscillation_smoke` was still red after Response #3 (progress-counter retention) — a fresh `motor_explore_tick.log` capture showed the same rear-hemisphere flip (`err` jumping from ~`-19°` to `+154°` in one tick) inside `LocomotionExecutor._displace_along_facing`, at ranges beyond the reactive Layer 1 remint's sub-meter close band. `apply_action` now takes an optional `step_goal`; `_clamp_overshoot_to_goal` snaps the body back onto the goal (zeroing horizontal velocity) if the tick's displacement carried it past the goal along the pre-move approach line, same tick. `creature_motor_stack.tick` threads `_planner_state.step_goal` through on `MOVE_FORWARD`. Headless: `_test_motor_locale_approach_no_oscillation_smoke` green; full-suite diff vs. pre-change baseline shows zero new failures (`_test_motor_pursuit_pinch_detour_smoke` / C1 unaffected). Duel manual (Pass 5) still pending for both C1 and C2. |

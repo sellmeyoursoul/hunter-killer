@@ -4,7 +4,6 @@ class_name CreatureMotorStack
 
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _MotorAction := preload("res://creature/motor/motor_action.gd")
-const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
 const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
@@ -129,7 +128,14 @@ func tick(delta: float) -> _ActionOutcome:
 
   var pos_before_tick := _body.global_position
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
-  var outcome: _ActionOutcome = _LocomotionExecutor.apply_action(_body, action, delta, _motor_v3)
+  var step_goal_for_clamp: Variant = null
+  if int(_MotorAction.normalize(action)) == _MotorAction.MOVE_FORWARD:
+    var candidate: Vector3 = _planner_state.get("step_goal", Vector3.ZERO)
+    if candidate.length_squared() > 1e-8:
+      step_goal_for_clamp = candidate
+  var outcome: _ActionOutcome = LocomotionExecutor.apply_action(
+    _body, action, delta, _motor_v3, step_goal_for_clamp
+  )
   var boundary_clamped := _clamp_playfield_if_needed()
   var run_blocked_resolution: bool = (
     _MotorPlanner as GDScript

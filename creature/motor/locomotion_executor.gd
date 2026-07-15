@@ -12,11 +12,17 @@ const _BLOCKED_PROGRESS_EPS := 0.001
 
 
 ## Applies [param action] to [param body] for one tick; debits calories on the body when supported.
+## [param step_goal], when a [Vector3], clamps a [code]MOVE_FORWARD[/code] that would cross past
+## it this tick — same-tick geometry guard against overshoot/oscillation on fixed objectives
+## (CLEANUP C1/C2: acceleration-based movement can travel further than expected in one tick,
+## so an ultimate-remint-next-tick reaction was arriving too late to stop the flip-flop).
+## Optional [param step_goal] keeps 4-arg call sites valid (tests / body shim).
 static func apply_action(
   body: CharacterBody3D,
   action: Variant,
   delta: float,
   motor_v3: Dictionary,
+  step_goal: Variant = null,
 ) -> ActionOutcome:
   var act := _MotorAction.normalize(action)
   var cost := _MotorAction.calorie_cost_for(act, delta, motor_v3)
@@ -30,6 +36,7 @@ static func apply_action(
       _rotate_facing(body, motor_v3, -1.0)
     _MotorAction.Action.MOVE_FORWARD:
       blocked = _displace_along_facing(body, 1.0, delta, pos_before)
+      _clamp_overshoot_to_goal(body, pos_before, step_goal)
     _MotorAction.Action.MOVE_BACKWARD:
       blocked = _displace_along_facing(body, -1.0, delta, pos_before)
     _MotorAction.Action.STAY, _MotorAction.Action.REST, _MotorAction.Action.EAT:
@@ -44,6 +51,36 @@ static func apply_action(
     body.call(&"debit_action_calories", cost)
 
   return _ActionOutcome.new(disp, blocked, cost, act)
+
+
+## Clamps [param body] back onto the [param step_goal] when this tick's displacement carried it
+## past the goal along the straight approach line from [param pos_before] — prevents a fixed
+## objective from ever being flown through in one [code]MOVE_FORWARD[/code], regardless of the
+## body's own acceleration/friction curve.
+static func _clamp_overshoot_to_goal(
+  body: CharacterBody3D,
+  pos_before: Vector3,
+  step_goal: Variant,
+) -> void:
+  if typeof(step_goal) != TYPE_VECTOR3:
+    return
+  var goal: Vector3 = step_goal
+  var to_goal_before := Vector3(goal.x - pos_before.x, 0.0, goal.z - pos_before.z)
+  var dist_before := to_goal_before.length()
+  if dist_before < 1e-6:
+    return
+  var approach_dir := to_goal_before / dist_before
+  var pos_after := body.global_position
+  var travel := Vector3(pos_after.x - pos_before.x, 0.0, pos_after.z - pos_before.z)
+  if travel.length_squared() < 1e-12:
+    return
+  var traveled := travel.dot(approach_dir)
+  if traveled <= dist_before:
+    return
+  var clamped := pos_before + approach_dir * dist_before
+  body.global_position = Vector3(clamped.x, pos_after.y, clamped.z)
+  body.velocity.x = 0.0
+  body.velocity.z = 0.0
 
 
 static func _turn_increment_rad(motor_v3: Dictionary) -> float:
