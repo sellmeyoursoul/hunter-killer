@@ -128,13 +128,30 @@ func tick(delta: float) -> _ActionOutcome:
 
   var pos_before_tick := _body.global_position
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
-  var step_goal_for_clamp: Variant = null
+  var dist_to_goal_for_move: Variant = null
+  var move_turn_target: Variant = null
   if int(_MotorAction.normalize(action)) == _MotorAction.MOVE_FORWARD:
-    var candidate: Vector3 = _planner_state.get("step_goal", Vector3.ZERO)
-    if candidate.length_squared() > 1e-8:
-      step_goal_for_clamp = candidate
+    # Arrival damping only applies to fixed/latched objectives (locale/precise/memory_moving) —
+    # `live` pursuit's step_goal is the prey's own position, re-targeted every tick, so its
+    # distance shrinks exactly as the fox closes in; damping it there throttles the predator
+    # right when closing the last few meters matters most, while the fleeing prey's own step_goal
+    # (a distant flee waypoint) never enters damping range — an asymmetric speed penalty that let
+    # a matched-speed prey out-run a nominally faster predator (CLEANUP R1, duel 2026-07-15).
+    # Mirrors the same `live`-exclusion already applied to the overshoot remint
+    # (`_is_fixed_objective_overshoot_source` in motor_planner.gd) and for the same reason.
+    if _planner_state.get("step_source", &"live") != &"live":
+      var candidate := float(_planner_state.get("dist_to_goal", -1.0))
+      if candidate >= 0.0:
+        dist_to_goal_for_move = candidate
+    # Turn+move blend (CLEANUP R1 mitigation #2) applies to every step source, `live` included —
+    # unlike arrival damping, blending a bounded heading correction into the move is exactly what
+    # keeps a continuously-retargeting live pursuit from committing to a stale heading and
+    # overshooting through the target (the duel bug this mitigation targets).
+    var step_goal: Vector3 = _planner_state.get("step_goal", Vector3.ZERO)
+    if step_goal.length_squared() > 1e-8:
+      move_turn_target = step_goal
   var outcome: _ActionOutcome = LocomotionExecutor.apply_action(
-    _body, action, delta, _motor_v3, step_goal_for_clamp
+    _body, action, delta, _motor_v3, dist_to_goal_for_move, move_turn_target
   )
   var boundary_clamped := _clamp_playfield_if_needed()
   var run_blocked_resolution: bool = (
@@ -296,7 +313,7 @@ func get_debug_snapshot() -> Dictionary:
   if _last_outcome != null:
     action_label = _motor_action_debug_label(int(_last_outcome.action))
     blocked = _last_outcome.blocked
-  var bearing := {"bearing_error_deg": 0.0, "facing_dot_tgt": 0.0}
+  var bearing := {"bearing_error_deg": 0.0, "facing_dot_tgt": 0.0, "dist_to_goal": 0.0}
   if _body != null and step_goal.length_squared() > 1e-8:
     var creature_pos := _body.global_position
     var to_target := Vector3(step_goal.x - creature_pos.x, 0.0, step_goal.z - creature_pos.z)
@@ -306,6 +323,10 @@ func get_debug_snapshot() -> Dictionary:
     var dot := clampf(facing.dot(to_n), -1.0, 1.0)
     bearing["bearing_error_deg"] = rad_to_deg(atan2(cross, dot))
     bearing["facing_dot_tgt"] = facing.dot(to_n)
+    # Recomputed fresh here (not read from planner state's dist_to_goal) so it reflects this
+    # exact tick's body position even on ticks that never reach align_and_move (EAT, orbit,
+    # STAY-at-arrival) — CLEANUP R1 debugging follow-up (2026-07-15 duel review).
+    bearing["dist_to_goal"] = to_target.length()
   return {
     "action": action_label,
     "blocked": blocked,
@@ -324,6 +345,7 @@ func get_debug_snapshot() -> Dictionary:
     "boundary_scan_sign": int(ps.get("boundary_scan_sign", 0)),
     "bearing_error_deg": float(bearing.get("bearing_error_deg", 0.0)),
     "facing_dot_tgt": float(bearing.get("facing_dot_tgt", 0.0)),
+    "dist_to_goal": float(bearing.get("dist_to_goal", 0.0)),
     "physics_tick": _physics_tick_count,
     "consideration_interval": _consideration_interval,
     "ticks_since_consideration": _ticks_since_consideration,

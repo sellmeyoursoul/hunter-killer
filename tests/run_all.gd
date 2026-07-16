@@ -202,6 +202,7 @@ func _run_all() -> void:
   _test_motor_planner_flight_flee_waypoint_orbit_stable()
   _test_motor_planner_flight_entry_telemetry_reset()
   _test_motor_planner_blocked_move_immediate_path_reevaluation()
+  _test_motor_planner_blocked_move_reeval_preserves_flee_latch()
   _test_creature_motor_stack_dual_isolation()
   _test_creature_motor_stack_integration_single_debit()
   await _test_awareness_zone_scan_live_food()
@@ -3712,6 +3713,10 @@ func _test_motor_planner_explore_latch() -> void:
   stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
   body.current_calories = 2.0
   var motor_v3 := _motor_v3_test_params()
+  ## Explore direction picking is a scored multi-factor bearing choice (spawn/open/unexplored/
+  ## forward), not a pure "seed from facing" — zero chaos so the deterministic spawn-facing term
+  ## actually wins on this empty-map fixture.
+  motor_v3["goal_consideration_chaos"] = 0.0
   var state := _MotorPlanner.new_state()
   var ctx := {
     "body": body,
@@ -3731,8 +3736,12 @@ func _test_motor_planner_explore_latch() -> void:
   _MotorPlanner.select_action(ctx, state)
   _assert(state.get("step_source", &"") == &"explore", "no food uses explore step source")
   var explore_dir: Vector3 = state.get("explore_dir", Vector3.ZERO)
+  ## The 8-wedge bearing pick is centered at 22.5°/67.5°/... (offset from cardinals), so no wedge
+  ## can ever score a >0.99 dot against an exact cardinal facing — cos(22.5°)~=0.924 is the best
+  ## any wedge can achieve. Threshold loosened to match that geometry (still asserts the *nearest*
+  ## wedge to spawn-facing wins, not an arbitrary one).
   _assert(
-    explore_dir.normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99,
+    explore_dir.normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.9,
     "explore_dir seeds from body facing (east), not random",
   )
   var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
@@ -3797,7 +3806,10 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
   _assert(latched.length_squared() > 1e-4, "explore rear test latches waypoint")
   body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
   body.global_position = Vector3(10.0, 1.0, 0.0)
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate from `turn_increment_deg` to
+  ## `move_blend_max_error_deg` — the executor now blends a bounded turn into the move instead of
+  ## requiring full alignment first.
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
   var actions: Array[int] = []
   var saw_move := false
   var prev_dot := -2.0
@@ -3814,7 +3826,7 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
     prev_dot = dot
     if act == _MotorAction.MOVE_FORWARD:
       saw_move = true
-      _assert(dot >= move_min_dot - 0.01, "rear explore MOVE when within turn increment cone")
+      _assert(dot >= move_min_dot - 0.01, "rear explore MOVE when within move blend arc")
       break
     if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
       var pos_before := body.global_position
@@ -4072,9 +4084,15 @@ func _test_motor_planner_explore_move_not_falsely_blocked() -> void:
   state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
   state["step_goal"] = state["explore_waypoint"]
   var delta := 1.0 / 60.0
-  var pos_before := body.global_position
-  var outcome := _LocomotionExecutor.apply_action(body, _MotorAction.MOVE_FORWARD, delta, motor_v3)
-  _motor_planner_note_outcome(state, body, outcome, motor_v3, 1, pos_before, false, delta)
+  ## Movement is acceleration-ramped (`apply_horizontal_move_intent`), so a single tick from a cold
+  ## stop (velocity 0) doesn't cover enough ground to clear the no-progress epsilon on its own —
+  ## that's expected physics, not a bug. Run a few ticks so velocity ramps up to a realistic
+  ## mid-stride speed before asserting "normal displacement" isn't flagged blocked/no-progress.
+  var outcome: _ActionOutcome
+  for _i in 30:
+    var pos_before := body.global_position
+    outcome = _LocomotionExecutor.apply_action(body, _MotorAction.MOVE_FORWARD, delta, motor_v3)
+    _motor_planner_note_outcome(state, body, outcome, motor_v3, 1, pos_before, false, delta)
   _assert(not outcome.blocked, "explore MOVE with normal displacement is not latched-stuck blocked")
   _assert(
     int(state.get("explore_no_progress_ticks", 99)) == 0,
@@ -4788,6 +4806,11 @@ func _test_motor_planner_explore_rim_overshoot_replans_inward() -> void:
   var body := _motor_planner_east_rim_fixture(main)
   var latched := Vector3(body.global_position.x, 1.0, 60.0)
   var state := _MotorPlanner.new_state()
+  ## `goal_kind` must be pre-set to match the call below — `_sync_step_objective` wipes
+  ## `explore_dir`/`explore_waypoint` back to zero on its first call whenever `state.goal_kind`
+  ## differs from the tick's goal_kind (fresh-state default is `""`), which would erase this
+  ## fixture's pre-seeded overshoot state before the overshoot-detection logic ever sees it.
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
   state["explore_waypoint"] = latched
@@ -4806,6 +4829,9 @@ func _test_motor_planner_explore_rim_overshoot_replans_inward() -> void:
     "memory_adapter": null,
     "now_ms": Time.get_ticks_msec(),
     "environment_grid": null,
+    ## Consideration-tick refresh, matching when `select_action` normally re-derives the find_food
+    ## objective (self-heals overshoot with a fresh mint same-tick via `_derive_find_food_step_objective`).
+    "refresh_step_objective": true,
   }
   _assert(
     (_MotorPlanner as GDScript).call("_passed_explore_waypoint", body, latched, state),
@@ -4854,11 +4880,19 @@ func _test_motor_planner_explore_overshoot_replans() -> void:
   var main := Node3D.new()
   root.add_child(main)
   _motor_v3_test_floor(main)
-  var body := _spawn_herbivore_body(main, Vector3(55.0, 1.0, 0.0))
+  ## Body 10 world units past `latched` — clearly beyond default `arrival_tolerance` (5.0), not at
+  ## its exact boundary (a prior fixture placed the body exactly `arrival_tolerance` away, which
+  ## silently took the "arrived normally" branch instead of the overshoot branch being tested).
+  var body := _spawn_herbivore_body(main, Vector3(60.0, 1.0, 0.0))
   body.set_use_v3_action_calories(true)
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var latched := Vector3(50.0, 1.0, 0.0)
   var state := _MotorPlanner.new_state()
+  ## `goal_kind` must be pre-set to match the call below — `_sync_step_objective` wipes
+  ## `explore_dir`/`explore_waypoint` back to zero on its first call whenever `state.goal_kind`
+  ## differs from the tick's goal_kind (fresh-state default is `""`), which would erase this
+  ## fixture's pre-seeded overshoot state before the overshoot-detection logic ever sees it.
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = latched
@@ -4877,6 +4911,12 @@ func _test_motor_planner_explore_overshoot_replans() -> void:
     "memory_adapter": null,
     "now_ms": Time.get_ticks_msec(),
     "environment_grid": null,
+    ## Consideration-tick refresh, matching when `select_action` normally re-derives the find_food
+    ## objective (`_derive_find_food_step_objective`, which self-heals overshoot with a fresh mint
+    ## same-tick). Without it, the non-refresh path (`_maintain_explore_latch`) detects the
+    ## overshoot and clears the waypoint too, but doesn't re-mint until the next consideration
+    ## tick — a real but out-of-scope-here asymmetry between the two paths.
+    "refresh_step_objective": true,
   }
   _assert(
     (_MotorPlanner as GDScript).call("_passed_explore_waypoint", body, latched, state),
@@ -5320,7 +5360,7 @@ func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
   (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
   var first_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   _assert(first_goal.length_squared() > 1e-4, "initial flee objective minted")
-  threat["world_pos_3d"] = Vector3(30.0, 1.0, 0.0)
+  threat["world_pos_3d"] = Vector3(10.0, 1.0, 30.0)
   ctx["threat_samples"] = [threat]
   ctx["scan"]["threat_samples"] = [threat]
   ctx["refresh_step_objective"] = false
@@ -5329,6 +5369,11 @@ func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
     state.get("step_goal", Vector3.ZERO).distance_to(first_goal) < 0.01,
     "flee step_goal held between consideration ticks",
   )
+  ## Flee waypoint is a pure bearing (direction away from threat, scaled by awareness_radius) — the
+  ## first threat move (10,0,0)->(30,0,0) kept the exact same bearing from origin, so a correct
+  ## recompute would legitimately produce the identical waypoint (not a "refresh failed" case).
+  ## Move to a different bearing (30 north instead of 30 further east) so a real refresh is
+  ## actually observable.
   ctx["refresh_step_objective"] = true
   (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
   _assert(
@@ -5386,7 +5431,9 @@ func _test_motor_planner_flight_close_range_forward_egress() -> void:
   var threat_bearing := (threat["world_pos_3d"] as Vector3) - start_pos
   threat_bearing.y = 0.0
   threat_bearing = threat_bearing.normalized()
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate to `move_blend_max_error_deg` (the
+  ## executor blends a bounded turn into the move instead of requiring full alignment first).
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
   var stuck_eps: float = (_MotorPlanner as GDScript).call(
     "_latched_stuck_move_epsilon", motor_v3, body, 1.0 / 60.0
   )
@@ -5446,7 +5493,9 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
   var threat := _flight_test_threat_at(Vector3(8.0, 1.0, 0.0), 8.0)
   var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
   var state := _MotorPlanner.new_state()
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
+  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate to `move_blend_max_error_deg` (the
+  ## executor blends a bounded turn into the move instead of requiring full alignment first).
+  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
   var actions: Array[int] = []
   var saw_aligned_move := false
   for tick_i in 24:
@@ -5586,6 +5635,51 @@ func _test_motor_planner_blocked_move_immediate_path_reevaluation() -> void:
   _assert(
     state["step_goal"].distance_to(before) > 0.5,
     "blocked MOVE immediate reeval applies §3.2 backtrack detour",
+  )
+  main.queue_free()
+
+## CLEANUP R1 follow-up regression check (2026-07-16 duel review — rabbit stuck at playfield
+## edge): §3.2's reactive backtrack deflection used to be stamped back into the latched
+## `flee_waypoint`, so each blocked tick's deflection became the input to the *next* tick's own
+## deflection — a self-referential drift with no path back to the real flee objective short of
+## the whole Flight episode exiting. `flee_waypoint` must stay pinned to the original mint while
+## `step_goal` is free to deflect for the current tick's movement only.
+func _test_motor_planner_blocked_move_reeval_preserves_flee_latch() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var state := _MotorPlanner.new_state()
+  var flee_goal := Vector3(0.0, 1.0, 40.0)
+  state["step_goal"] = flee_goal
+  state["flee_waypoint"] = flee_goal
+  state["flee_waypoint_ticks_remaining"] = 10
+  state["step_source"] = &"live"
+  var approach := Vector3(0.0, 0.0, 1.0)
+  _BlockedApproachScr.record(state["blocked_approach"], approach, 1, 45)
+  var ctx := {
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 2,
+    "flight_fast_path_active": true,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    (state["step_goal"] as Vector3).distance_to(flee_goal) > 0.5,
+    "blocked flight reeval still deflects step_goal for this tick's movement",
+  )
+  _assert(
+    (state["flee_waypoint"] as Vector3).distance_to(flee_goal) < 0.01,
+    "blocked flight reeval does not corrupt the latched flee_waypoint",
   )
   main.queue_free()
 

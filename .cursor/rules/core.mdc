@@ -94,7 +94,7 @@ Does not apply when the user is in question/review-only mode, when `feature-desi
 
 **Archived docs:** `Completed_Features/` drift is expected unless explicitly cited.
 
-# Session Metadata Rule
+# Session Metadata Rule **Cursor only, not to be used by Claude**
 At the very end of every response, output a single, ultra-brief markdown line showing estimated token usage and remaining capacity. Use the format:
 `[Context: ~X / Max Y tokens (Z% used)]`
 Do not write conversational filler surrounding this metric.

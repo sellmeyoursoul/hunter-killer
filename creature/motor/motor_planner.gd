@@ -63,6 +63,10 @@ static func new_state() -> Dictionary:
     "force_align_turn_before_move": false,
     ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
     "eat_orbit_turn_deg_accumulated": 0.0,
+    ## Horizontal distance to `step_goal` as of the last `align_and_move` tick; -1.0 = not yet
+    ## computed this session. Planner-owned so future range-gated goals (e.g. ranged combat) can
+    ## consult it without recomputing (CLEANUP R1).
+    "dist_to_goal": -1.0,
   }
 
 
@@ -1926,8 +1930,15 @@ static func apply_immediate_blocked_path_reevaluation(
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
   var new_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   _maybe_flag_material_step_goal_change(state, body, old_goal, new_goal, motor_v3, float(ctx.get("delta", 1.0 / 60.0)))
-  if bool(ctx.get("flight_fast_path_active", false)):
-    state["flee_waypoint"] = state.get("step_goal", Vector3.ZERO)
+  # Deliberately NOT stamped back into `flee_waypoint` (removed CLEANUP R1 follow-up,
+  # 2026-07-16 duel review — rabbit stuck at playfield edge): this function's backtrack/LOS
+  # deflection is meant to be an ephemeral per-tick correction. Persisting it into the latch used
+  # to make each blocked tick's deflection become the "ultimate" input to the next tick's own
+  # deflection — a self-referential drift with no path back to the real flee objective until the
+  # whole Flight episode exited. `_maintain_flee_latch` already re-holds the true flee_waypoint
+  # every tick the countdown hasn't expired, and `_locomote_toward_step_goal` (`_select_flight_action`'s
+  # own call, not just this reactive recheck) re-derives a fresh LOS/nav deflection from that stable
+  # target on every consideration tick, so no separate stamp is needed here.
   _maybe_mint_pursuit_detour_latch(ctx, state, motor_v3)
 
 
@@ -1974,14 +1985,35 @@ static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: D
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
+  ## Sole source of MOVE_FORWARD (CLEANUP R1) — computed here so it's fresh on any tick the
+  ## executor sees that action, and available to any future consumer that needs "how far to the
+  ## current step objective" without recomputing (e.g. ranged-combat reachability checks).
+  state["dist_to_goal"] = _horizontal_distance(body, step_goal)
   if bool(state.get("force_align_turn_before_move", false)):
     state["force_align_turn_before_move"] = false
     var forced_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
     return _MotorAction.TURN_LEFT if forced_sign > 0 else _MotorAction.TURN_RIGHT
-  if _is_facing_aligned_for_move(body, step_goal, motor_v3):
+  if _is_within_move_blend_arc(body, step_goal, motor_v3):
     return _MotorAction.MOVE_FORWARD
   var turn_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
   return _MotorAction.TURN_LEFT if turn_sign > 0 else _MotorAction.TURN_RIGHT
+
+
+## Widened MOVE_FORWARD gate (CLEANUP R1 mitigation #2 — blend turn+move in one tick). True
+## whenever heading error is within [code]move_blend_max_error_deg[/code] — wider than
+## [method _is_facing_aligned_for_move]'s tight `turn_increment_deg` cone — because the executor
+## now blends a bounded turn toward the target into the same tick's move instead of requiring full
+## alignment before `MOVE_FORWARD` is legal. Only gates action *selection*; LOS/nav path clearance
+## (`_run_path_clearance_los_nav`) still uses the tight cone unchanged.
+static func _is_within_move_blend_arc(body: CharacterBody3D, target: Vector3, motor_v3: Dictionary) -> bool:
+  var creature_pos := body.global_position
+  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
+  if to_target.length_squared() < 1e-8:
+    return true
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
+  var arc_deg := float(motor_v3.get("move_blend_max_error_deg", 60.0))
+  var min_dot := cos(deg_to_rad(arc_deg))
+  return facing.dot(to_target.normalized()) >= min_dot
 
 
 static func _is_facing_aligned_with_tolerance(
@@ -2015,6 +2047,11 @@ static func _is_facing_aligned_for_eat(body: CharacterBody3D, target: Vector3, m
 static func _is_facing_aligned_for_move(body: CharacterBody3D, target: Vector3, motor_v3: Dictionary) -> bool:
   # One full turn increment: a single atomic turn can overshoot the half-increment EAT cone.
   return _is_facing_aligned_with_tolerance(body, target, motor_v3, 1.0)
+
+
+static func _horizontal_distance(body: CharacterBody3D, target: Vector3) -> float:
+  var creature_pos := body.global_position
+  return Vector2(target.x - creature_pos.x, target.z - creature_pos.z).length()
 
 
 static func _facing_dot_to_target(body: CharacterBody3D, target: Vector3) -> float:

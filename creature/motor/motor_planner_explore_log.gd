@@ -95,7 +95,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + "t=%04d act=%s blk=%s cal=%3d%% "
     + "inc=%s w=%6.3f src=%s gk=%s "
     + "tgt=(%8.1f,%8.1f) id=%5d "
-    + "err=%+7.1f dot=%7.3f enp=%d "
+    + "err=%+7.1f dot=%7.3f dist=%7.2f enp=%d "
     + "scan=%s blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
   ) % [
     int(snap.get("physics_tick", 0)),
@@ -111,6 +111,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     int(snap.get("step_instance_id", 0)),
     float(snap.get("bearing_error_deg", 0.0)),
     float(snap.get("facing_dot_tgt", 0.0)),
+    float(snap.get("dist_to_goal", 0.0)),
     int(snap.get("explore_no_progress_ticks", 0)),
     _fw(scan_lbl, 2),
     _fw(blk_act, 16),
@@ -140,7 +141,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
     + "t=%04d act=%s blk=%s cal=%3d%% inc=%s w=%6.3f\n"
     + "src=%s gk=%s\n"
     + "tgt=(%8.1f,%8.1f) id=%5d\n"
-    + "err=%+7.1f dot=%7.3f enp=%d scan=%s\n"
+    + "err=%+7.1f dot=%7.3f dist=%7.2f enp=%d scan=%s\n"
     + "blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
     + hunt_suffix
   ) % [
@@ -157,6 +158,7 @@ static func format_explore_tick_hud(snap: Dictionary, creature_label: String = "
     int(snap.get("step_instance_id", 0)),
     float(snap.get("bearing_error_deg", 0.0)),
     float(snap.get("facing_dot_tgt", 0.0)),
+    float(snap.get("dist_to_goal", 0.0)),
     int(snap.get("explore_no_progress_ticks", 0)),
     _fw(scan_lbl, 2),
     _fw(blk_act, 16),

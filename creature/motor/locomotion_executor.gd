@@ -9,20 +9,33 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _BLOCKED_DISPLACEMENT_FRAC := 0.15
 ## Min forward progress (world units) along intent before a move is considered to have advanced.
 const _BLOCKED_PROGRESS_EPS := 0.001
+## Speed fraction retained at the goal itself (arrival damping — CLEANUP R1). Kept comfortably
+## above [code]motor_stuck_move_epsilon[/code]'s implied per-tick fraction (~0.19 at defaults,
+## [code]motor_planner.gd[/code] `_latched_stuck_move_epsilon`) so a damped final approach still
+## registers as progress for `precise`/`locale` no-progress tracking — retune both together if
+## either default changes.
+const _ARRIVAL_DAMPING_MIN_SPEED_FRAC := 0.35
 
 
 ## Applies [param action] to [param body] for one tick; debits calories on the body when supported.
-## [param step_goal], when a [Vector3], clamps a [code]MOVE_FORWARD[/code] that would cross past
-## it this tick — same-tick geometry guard against overshoot/oscillation on fixed objectives
-## (CLEANUP C1/C2: acceleration-based movement can travel further than expected in one tick,
-## so an ultimate-remint-next-tick reaction was arriving too late to stop the flip-flop).
-## Optional [param step_goal] keeps 4-arg call sites valid (tests / body shim).
+## [param dist_to_goal], when set, tapers a [code]MOVE_FORWARD[/code]'s speed as the body nears
+## the goal (arrival damping, CLEANUP R1) instead of moving at full speed and clamping position
+## after the fact (CLEANUP C1/C2's prior fix — removed: it fought `motor_planner.gd`'s
+## fixed-objective overshoot remint by preventing "passed the goal" from ever being observed).
+## Goal-agnostic — applies to any [code]MOVE_FORWARD[/code] with a known distance regardless of
+## which goal kind produced it, not just EAT. Optional so 4-arg call sites (tests / body shim)
+## and [code]MOVE_BACKWARD[/code] (no meaningful goal to damp toward) stay at full speed.
+## [param move_turn_target], when set, blends a bounded turn toward it into this tick's
+## [code]MOVE_FORWARD[/code] (tank/car-style — CLEANUP R1 mitigation #2) instead of moving along a
+## frozen heading. Pairs with [code]motor_planner.gd[/code]'s widened `move_blend_max_error_deg`
+## gate, which now allows `MOVE_FORWARD` before facing is fully aligned.
 static func apply_action(
   body: CharacterBody3D,
   action: Variant,
   delta: float,
   motor_v3: Dictionary,
-  step_goal: Variant = null,
+  dist_to_goal: Variant = null,
+  move_turn_target: Variant = null,
 ) -> ActionOutcome:
   var act := _MotorAction.normalize(action)
   var cost := _MotorAction.calorie_cost_for(act, delta, motor_v3)
@@ -35,10 +48,10 @@ static func apply_action(
     _MotorAction.Action.TURN_RIGHT:
       _rotate_facing(body, motor_v3, -1.0)
     _MotorAction.Action.MOVE_FORWARD:
-      blocked = _displace_along_facing(body, 1.0, delta, pos_before)
-      _clamp_overshoot_to_goal(body, pos_before, step_goal)
+      _blend_turn_toward(body, motor_v3, move_turn_target)
+      blocked = _displace_along_facing(body, 1.0, delta, pos_before, dist_to_goal, motor_v3)
     _MotorAction.Action.MOVE_BACKWARD:
-      blocked = _displace_along_facing(body, -1.0, delta, pos_before)
+      blocked = _displace_along_facing(body, -1.0, delta, pos_before, null, motor_v3)
     _MotorAction.Action.STAY, _MotorAction.Action.REST, _MotorAction.Action.EAT:
       pass
     _:
@@ -53,38 +66,53 @@ static func apply_action(
   return _ActionOutcome.new(disp, blocked, cost, act)
 
 
-## Clamps [param body] back onto the [param step_goal] when this tick's displacement carried it
-## past the goal along the straight approach line from [param pos_before] — prevents a fixed
-## objective from ever being flown through in one [code]MOVE_FORWARD[/code], regardless of the
-## body's own acceleration/friction curve.
-static func _clamp_overshoot_to_goal(
-  body: CharacterBody3D,
-  pos_before: Vector3,
-  step_goal: Variant,
-) -> void:
-  if typeof(step_goal) != TYPE_VECTOR3:
-    return
-  var goal: Vector3 = step_goal
-  var to_goal_before := Vector3(goal.x - pos_before.x, 0.0, goal.z - pos_before.z)
-  var dist_before := to_goal_before.length()
-  if dist_before < 1e-6:
-    return
-  var approach_dir := to_goal_before / dist_before
-  var pos_after := body.global_position
-  var travel := Vector3(pos_after.x - pos_before.x, 0.0, pos_after.z - pos_before.z)
-  if travel.length_squared() < 1e-12:
-    return
-  var traveled := travel.dot(approach_dir)
-  if traveled <= dist_before:
-    return
-  var clamped := pos_before + approach_dir * dist_before
-  body.global_position = Vector3(clamped.x, pos_after.y, clamped.z)
-  body.velocity.x = 0.0
-  body.velocity.z = 0.0
+## Speed fraction to apply this tick: [code]1.0[/code] when [param dist_to_goal] is unset (null)
+## or at/beyond [code]approach_arrival_damping_radius[/code], tapering linearly down to
+## [const _ARRIVAL_DAMPING_MIN_SPEED_FRAC] as the body closes on the goal.
+static func _arrival_damping_frac(dist_to_goal: Variant, motor_v3: Dictionary) -> float:
+  var vt := typeof(dist_to_goal)
+  if vt != TYPE_FLOAT and vt != TYPE_INT:
+    return 1.0
+  var dist := float(dist_to_goal)
+  if dist < 0.0:
+    return 1.0
+  var radius := maxf(0.01, float(motor_v3.get("approach_arrival_damping_radius", 2.5)))
+  if dist >= radius:
+    return 1.0
+  return lerpf(_ARRIVAL_DAMPING_MIN_SPEED_FRAC, 1.0, dist / radius)
 
 
 static func _turn_increment_rad(motor_v3: Dictionary) -> float:
   return deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
+
+
+## Rotates [member CharacterBody3D.last_move_direction] toward [param target] by up to one turn
+## increment (CLEANUP R1 mitigation #2 — blend turn+move in one tick). No-op when [param target]
+## is unset (plain move, e.g. non-goal-directed callers) or the body is already on top of it
+## (direction undefined at zero distance). Signed angle derived the same way as
+## `motor_planner.gd`'s `_pick_align_turn_sign`/bearing-error math, but solved for the exact
+## rotation [method Vector3.rotated] needs rather than just a left/right pick, so the turn can be
+## clamped to whatever fraction of a full increment closes the remaining error.
+static func _blend_turn_toward(body: CharacterBody3D, motor_v3: Dictionary, target: Variant) -> void:
+  if typeof(target) != TYPE_VECTOR3:
+    return
+  var creature_pos := body.global_position
+  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
+  if to_target.length_squared() < 1e-8:
+    return
+  var facing: Vector3 = body.get("last_move_direction")
+  if facing.length_squared() < 1e-12:
+    facing = _MotorPlane.HORIZONTAL_RIGHT
+  var to_n := to_target.normalized()
+  var cross := facing.x * to_n.z - facing.z * to_n.x
+  var dot := clampf(facing.dot(to_n), -1.0, 1.0)
+  var max_turn := _turn_increment_rad(motor_v3)
+  var turn := clampf(atan2(-cross, dot), -max_turn, max_turn)
+  if absf(turn) < 1e-6:
+    return
+  body.set("last_move_direction", facing.rotated(Vector3.UP, turn).normalized())
+  if body.has_method(&"_sync_visual_facing"):
+    body.call(&"_sync_visual_facing")
 
 
 static func _rotate_facing(body: CharacterBody3D, motor_v3: Dictionary, direction_sign: float) -> void:
@@ -109,18 +137,26 @@ static func _displace_along_facing(
   direction_sign: float,
   delta: float,
   pos_before: Vector3,
+  dist_to_goal: Variant = null,
+  motor_v3: Dictionary = {},
 ) -> bool:
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
-  var intent := (facing * direction_sign).normalized()
+  var dir := (facing * direction_sign).normalized()
+  var damp_frac := _arrival_damping_frac(dist_to_goal, motor_v3)
+  # Sub-unit magnitude reads as partial thrust to `apply_horizontal_move_intent` (only normalizes
+  # when length exceeds 1) — reuses that existing seam instead of adding a speed-scale parameter.
+  var intent := dir * damp_frac
   if body.has_method(&"apply_horizontal_move_intent"):
     body.call(&"apply_horizontal_move_intent", intent, delta)
   else:
-    var spd := _expected_horizontal_speed(body)
-    body.velocity = Vector3(intent.x * spd, body.velocity.y, intent.z * spd)
+    var spd := _expected_horizontal_speed(body) * damp_frac
+    body.velocity = Vector3(dir.x * spd, body.velocity.y, dir.z * spd)
     body.move_and_slide()
-  return _is_move_blocked(body, intent, pos_before)
+  # Blocked-detection uses the unit direction, not the damped intent — a slow-but-real approach
+  # near the goal must not register as blocked just because commanded speed is intentionally low.
+  return _is_move_blocked(body, dir, pos_before)
 
 
 static func _expected_horizontal_speed(body: CharacterBody3D) -> float:

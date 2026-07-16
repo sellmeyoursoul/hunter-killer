@@ -351,6 +351,17 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "dead_end_heading_dot": 0.55,
     "dead_end_record_min_blocked_ticks": 3,
     "approach_overshoot_guard_move_steps": 2,
+    ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
+    ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of
+    ## `eat_action_max_distance` / `arrival_tolerance` (goal-agnostic, not EAT-specific; CLEANUP R1).
+    "approach_arrival_damping_radius": 2.5,
+    ## Widened MOVE_FORWARD heading gate (CLEANUP R1 mitigation #2 — blend turn+move in one tick).
+    ## MOVE_FORWARD is legal whenever heading error is within this arc (vs. the tight
+    ## `turn_increment_deg` cone); the executor blends a bounded turn toward `step_goal` into the
+    ## same tick's move instead of requiring full alignment first. 60° keeps guaranteed forward
+    ## progress at the edge (cos 60° = 0.5) and stays clear of `eat_facing_arc_deg`'s 90°-off
+    ## `_test_motor_align_cone_contract` fixture. Not derived from duel evidence — a starting point.
+    "move_blend_max_error_deg": 60.0,
     ## Legacy ratio vs V2 ~400 u/s @ 60 Hz; planner scales per tick as [code]max_speed × delta × (epsilon / 6.67)[/code].
     "motor_stuck_move_epsilon": 1.25,
     ## Playfield edge hug band for explore boundary scan ([code]PlayfieldClamp[/code] margins).
