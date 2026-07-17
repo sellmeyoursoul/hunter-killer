@@ -67,6 +67,12 @@ static func new_state() -> Dictionary:
     ## computed this session. Planner-owned so future range-gated goals (e.g. ranged combat) can
     ## consult it without recomputing (CLEANUP R1).
     "dist_to_goal": -1.0,
+    ## Latched LoS-blocked verdict for `_run_path_clearance_los_nav` hysteresis (§3.2 thrash fix):
+    ## a flip clear->blocked or blocked->clear only takes effect after `los_hysteresis_ticks`
+    ## consecutive same-direction raw verdicts, so a single grazing ray at a tight obstacle pocket
+    ## can't alternate the step goal every tick.
+    "los_blocked_latched": false,
+    "los_verdict_streak": 0,
   }
 
 
@@ -160,6 +166,8 @@ static func _apply_explore_stuck_replan(state: Dictionary) -> void:
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   _reset_explore_align_progress_state(state)
 
 
@@ -340,6 +348,8 @@ static func _seed_explore_after_seek(state: Dictionary, _ctx: Dictionary) -> voi
   state["step_instance_id"] = 0
   state["step_source"] = &"explore"
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   _reset_explore_align_progress_state(state)
 
 
@@ -460,6 +470,8 @@ static func _apply_explore_rim_escape_replan(
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   state["playfield_clamp_latch_ticks"] = 0
   state["boundary_scan_egress_ticks"] = 0
   _reset_explore_align_progress_state(state)
@@ -540,6 +552,8 @@ static func _begin_boundary_scan(
   state["boundary_scan_sign"] = scan_sign
   state["boundary_scan_turns"] = 0
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = &"boundary_scan"
 
@@ -562,6 +576,8 @@ static func _end_boundary_scan(
   state["explore_waypoint"] = Vector3.ZERO
   state["step_goal"] = Vector3.ZERO
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   state["playfield_clamp_latch_ticks"] = 0
   state["blocked_objective_action"] = action
   if action == &"boundary_scan_done":
@@ -1435,6 +1451,8 @@ static func _maybe_mint_pursuit_detour_latch(
   state["step_goal"] = wp
   state["pursuit_detour_ticks_remaining"] = latch_ticks
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), body.global_position)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
@@ -1472,6 +1490,8 @@ static func _remint_alternate_pursuit_detour(
   state["step_goal"] = wp
   state["pursuit_detour_ticks_remaining"] = latch_ticks
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   state["force_align_turn_before_move"] = true
   var scan: Dictionary = ctx.get("scan", {})
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
@@ -1698,6 +1718,8 @@ static func _reset_flight_entry_telemetry(state: Dictionary) -> void:
   state["step_stimulus_kind_id"] = &""
   state["blocked_objective_action"] = &""
   state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
   state["boundary_scan_active"] = false
   state["boundary_scan_sign"] = 0
 
@@ -1956,12 +1978,37 @@ static func _run_path_clearance_los_nav(
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
   var eye_h := float(ctx.get("eye_height", 1.0))
   var creature_pos := body.global_position
-  if not _PathClear.has_clear_los(space, creature_pos, eye_h, step_goal, motor_v3):
+  var raw_blocked := not _PathClear.has_clear_los(space, creature_pos, eye_h, step_goal, motor_v3)
+  if _latch_los_blocked(state, motor_v3, raw_blocked):
     var map_rid: RID = ctx.get("map_rid", RID())
     var agent_r := _agent_radius(body)
     state["step_goal"] = _PathClear.resolve_step_objective(
       map_rid, creature_pos, step_goal, agent_r,
     )
+
+
+## Debounces the raw per-tick LoS verdict so a flip only lands after
+## [code]los_hysteresis_ticks[/code] consecutive same-direction raw reads (default 3, matching
+## [code]dead_end_record_min_blocked_ticks[/code]) — stops single grazing rays at a tight
+## obstacle pocket (e.g. a plant wedged between two rocks) from alternating the step goal
+## clear/blocked every tick.
+static func _latch_los_blocked(
+  state: Dictionary,
+  motor_v3: Dictionary,
+  raw_blocked: bool,
+) -> bool:
+  var latched := bool(state.get("los_blocked_latched", false))
+  if raw_blocked == latched:
+    state["los_verdict_streak"] = 0
+    return latched
+  var min_ticks := int(motor_v3.get("los_hysteresis_ticks", 3))
+  var streak := int(state.get("los_verdict_streak", 0)) + 1
+  if streak >= min_ticks:
+    state["los_blocked_latched"] = raw_blocked
+    state["los_verdict_streak"] = 0
+    return raw_blocked
+  state["los_verdict_streak"] = streak
+  return latched
 
 
 ## True when the tick's action completed a step objective (EAT or arrival STAY).

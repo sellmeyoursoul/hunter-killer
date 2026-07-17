@@ -317,6 +317,9 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "awareness_cone_half_angle_deg": 45.0,
     "awareness_requires_los": true,
     "los_blocked_occlusion_fraction": 0.80,
+    ## Consecutive same-direction raw LoS verdicts required before `_run_path_clearance_los_nav`
+    ## flips its latched clear/blocked state (thrash-guard for tight obstacle pockets).
+    "los_hysteresis_ticks": 3,
     ## EAT contact range in world meters to ultimate (not nav [code]step_goal[/code]).
     "eat_action_max_distance": 5.0,
     ## Full front arc for EAT facing (half-angle = arc/2; default 90° → ±45°).
