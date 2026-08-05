@@ -49,6 +49,22 @@ var _last_outcome: _ActionOutcome
 var _benign_episode_pending: bool = false
 var _was_flight_fast_path: bool = false
 
+## TEMP-DEBUG (CLEANUP C9/C10 fail-fast harness): live invariant checks at the end of every
+## [method tick] — flags known bug signatures (stuck-under-geometry, flee-waypoint loop, silent
+## stall) the instant they happen instead of reconstructing them from logs afterward. No-op cost
+## when disabled; flip to false once C9/C10 are closed out.
+const _DEBUG_ASSERT_MOTOR_INVARIANTS := true
+const _INVARIANT_POS_HISTORY_LEN := 30
+const _INVARIANT_FLEE_WP_HISTORY_LEN := 20
+const _INVARIANT_STALL_MIN_DISP := 0.02
+const _INVARIANT_SETTLE_TICKS := 45
+const _INVARIANT_MAX_AIRBORNE_TICKS := 45
+var _invariant_pos_history: Array = []
+var _invariant_flee_wp_history: Array = []
+var _invariant_last_flee_wp: Vector3 = Vector3.ZERO
+var _invariant_airborne_ticks: int = 0
+var _invariant_tripped: bool = false
+
 
 ## Wires body, vitals, merged [code]creature_motor_v3[/code], and goal catalog at spawn.
 func configure(
@@ -198,7 +214,85 @@ func tick(delta: float) -> _ActionOutcome:
   _advance_consideration_timer()
   _apply_gravity_if_stationary(action, delta)
   _maybe_log_motor_tick()
+  if _DEBUG_ASSERT_MOTOR_INVARIANTS:
+    _assert_motor_invariants(action, outcome)
   return outcome
+
+
+## TEMP-DEBUG (CLEANUP C9/C10): fail-fast the instant a known bug signature reproduces, with the
+## exact tick's state dumped to stderr — see [const _DEBUG_ASSERT_MOTOR_INVARIANTS].
+func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
+  if _invariant_tripped or _body == null or not is_instance_valid(_body):
+    return
+  var pos := _body.global_position
+  var label := _creature_log_label()
+
+  if not (is_finite(pos.x) and is_finite(pos.y) and is_finite(pos.z)):
+    _trip_invariant(label, "NaN/Inf position", {"pos": pos, "tick": _physics_tick_count})
+    return
+
+  if _physics_tick_count <= _INVARIANT_SETTLE_TICKS:
+    return
+
+  if _body.is_on_floor():
+    _invariant_airborne_ticks = 0
+  else:
+    _invariant_airborne_ticks += 1
+    if _invariant_airborne_ticks > _INVARIANT_MAX_AIRBORNE_TICKS:
+      _trip_invariant(
+        label,
+        "airborne/off-floor for %d+ ticks (stuck-under-geometry, C10)" % _INVARIANT_MAX_AIRBORNE_TICKS,
+        {"pos": pos, "airborne_ticks": _invariant_airborne_ticks, "tick": _physics_tick_count},
+      )
+      return
+
+  var flee_wp: Vector3 = _planner_state.get("flee_waypoint", Vector3.ZERO)
+  if flee_wp == Vector3.ZERO:
+    # Flight episode ended — history from a prior episode shouldn't indict a new one that
+    # happens to mint near the same spot (e.g. a recurring corner) on its very first remint.
+    _invariant_flee_wp_history.clear()
+    _invariant_last_flee_wp = Vector3.ZERO
+  elif flee_wp.distance_to(_invariant_last_flee_wp) >= 0.05:
+    # Only a genuine remint (the waypoint just changed) counts as a history event — while a
+    # waypoint is latched it's expected to read back identical tick after tick, so comparing
+    # every tick's value (rather than only value-change events) against history flagged normal
+    # latch persistence as a false "repeat."
+    for prior in _invariant_flee_wp_history:
+      if (prior as Vector3).distance_to(flee_wp) < 0.05:
+        _trip_invariant(
+          label,
+          "flee_waypoint remint repeated a recent remint (boundary ping-pong, C9)",
+          {"flee_waypoint": flee_wp, "tick": _physics_tick_count},
+        )
+        return
+    _invariant_flee_wp_history.append(flee_wp)
+    if _invariant_flee_wp_history.size() > _INVARIANT_FLEE_WP_HISTORY_LEN:
+      _invariant_flee_wp_history.pop_front()
+    _invariant_last_flee_wp = flee_wp
+
+  if int(_MotorAction.normalize(action)) == _MotorAction.MOVE_FORWARD and not outcome.blocked:
+    _invariant_pos_history.append(pos)
+    if _invariant_pos_history.size() > _INVARIANT_POS_HISTORY_LEN:
+      _invariant_pos_history.pop_front()
+    if _invariant_pos_history.size() == _INVARIANT_POS_HISTORY_LEN:
+      var oldest: Vector3 = _invariant_pos_history[0]
+      if oldest.distance_to(pos) < _INVARIANT_STALL_MIN_DISP:
+        _trip_invariant(
+          label,
+          "unblocked MOVE_FORWARD made no progress over %d ticks (silent stall)"
+          % _INVARIANT_POS_HISTORY_LEN,
+          {"pos": pos, "oldest_pos": oldest, "tick": _physics_tick_count},
+        )
+        return
+  else:
+    _invariant_pos_history.clear()
+
+
+func _trip_invariant(label: String, reason: String, data: Dictionary) -> void:
+  _invariant_tripped = true
+  push_error("MOTOR_INVARIANT [%s] %s | %s" % [label, reason, JSON.stringify(data)])
+  if _body != null and _body.is_inside_tree():
+    _body.get_tree().quit(1)
 
 
 func _maybe_log_motor_tick() -> void:
