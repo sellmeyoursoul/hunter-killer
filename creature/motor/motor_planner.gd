@@ -47,8 +47,17 @@ static func new_state() -> Dictionary:
     "locale_no_progress_ticks": 0,
     "locale_last_bearing_err_deg": INF,
     "locale_last_dist_sq": INF,
+    ## Anchor cleared by `_maybe_locale_arrival_bind_or_clear` (arrived, no consumable) plus a
+    ## countdown so the very next re-derivation doesn't immediately re-pick the same empty spot —
+    ## re-approaching a point the creature is already standing on makes bearing math degenerate
+    ## and produces an in-place turn-storm (CLEANUP C2 duel-manual finding, 2026-07-17).
+    "locale_arrival_clear_anchor": Vector3.ZERO,
+    "locale_arrival_clear_cooldown_ticks": 0,
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
+    ## Prior tick's MOVE_FORWARD displacement magnitude for the still-ramping check in
+    ## `note_outcome` (§ explore-idle-stuck cold-start fix): -1.0 = no baseline yet this commit.
+    "explore_last_move_disp_len": -1.0,
     "playfield_clamp_latch_ticks": 0,
     "food_inventory_step_mode": -1,
     "prey_engagement_instance_id": 0,
@@ -56,9 +65,11 @@ static func new_state() -> Dictionary:
     "prey_engagement_latch_total": 0,
     "flee_waypoint": Vector3.ZERO,
     "flee_waypoint_ticks_remaining": 0,
+    "flee_backtrack_streak": 0,
     "pursuit_detour_waypoint": Vector3.ZERO,
     "pursuit_detour_ticks_remaining": 0,
     "pursuit_detour_alt_flip": false,
+    "pursuit_detour_escalation_count": 0,
     "step_ultimate_pos": Vector3.ZERO,
     "force_align_turn_before_move": false,
     ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
@@ -356,6 +367,7 @@ static func _seed_explore_after_seek(state: Dictionary, _ctx: Dictionary) -> voi
 static func _reset_explore_align_progress_state(state: Dictionary) -> void:
   state["explore_no_progress_ticks"] = 0
   state["explore_last_facing_dot"] = -2.0
+  state["explore_last_move_disp_len"] = -1.0
 
 
 static func _note_explore_align_progress(
@@ -735,11 +747,26 @@ static func note_outcome(
   var boundary_stuck := boundary_clamped and act == _MotorAction.MOVE_FORWARD
   var move_stuck: bool = executor_blocked or boundary_stuck
   var scan_active := bool(state.get("boundary_scan_active", false))
+  ## Cold-start acceleration ramp (`apply_horizontal_move_intent`) can hold a genuinely-progressing
+  ## MOVE_FORWARD below `stuck_eps` for several ticks after a stop (e.g. right after an align turn) —
+  ## treating that as a dead end fired a stuck-replan before the creature ever reached cruising speed.
+  ## Displacement still climbing tick-over-tick means it's ramping, not stuck, so it's exempted from
+  ## the no-progress count until it plateaus (same "improving disqualifies" idiom as the facing-dot
+  ## check just above).
+  var still_ramping := false
+  if step_source == &"explore" and act == _MotorAction.MOVE_FORWARD:
+    var last_disp_len := float(state.get("explore_last_move_disp_len", -1.0))
+    var disp_len := tick_disp.length()
+    still_ramping = last_disp_len >= 0.0 and disp_len > last_disp_len + 0.001
+    state["explore_last_move_disp_len"] = disp_len
+  elif step_source == &"explore":
+    state["explore_last_move_disp_len"] = -1.0
   var explore_idle_stuck := (
     step_source == &"explore"
     and is_latched
     and no_progress
     and not scan_active
+    and not still_ramping
   )
   var stuck_this_tick: bool = move_stuck or explore_idle_stuck
 
@@ -767,6 +794,11 @@ static func note_outcome(
       state["playfield_clamp_latch_ticks"] = _playfield_clamp_latch_ttl(motor_v3)
     elif int(state.get("playfield_clamp_latch_ticks", 0)) > 0:
       state["playfield_clamp_latch_ticks"] = int(state["playfield_clamp_latch_ticks"]) - 1
+
+  if int(state.get("locale_arrival_clear_cooldown_ticks", 0)) > 0:
+    state["locale_arrival_clear_cooldown_ticks"] = (
+      int(state["locale_arrival_clear_cooldown_ticks"]) - 1
+    )
 
   # Post-scan inward-egress grace: run down while turning inward; clear on a real forward step
   # off the tight rim band (not a tangent slide still at the wall) or on rim clamp / scan re-entry.
@@ -903,6 +935,8 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["playfield_clamp_latch_ticks"] = 0
     _reset_precise_progress_state(state)
     _reset_locale_progress_state(state)
+    state["locale_arrival_clear_anchor"] = Vector3.ZERO
+    state["locale_arrival_clear_cooldown_ticks"] = 0
     _reset_explore_align_progress_state(state)
     _clear_prey_engagement(state)
     _clear_pursuit_detour_latch(state)
@@ -1177,13 +1211,24 @@ static func _peek_locale_memory_tier_winner(
 
 
 ## Clears locale approach fields so orbit stops (Pass 4 arrival without consumable).
-static func _clear_locale_step_fields(state: Dictionary) -> void:
+## Stamps the cleared anchor + a short cooldown (CLEANUP C2 duel-manual finding, 2026-07-17) so
+## `_sync_food_memory_objective` doesn't immediately re-pick the same empty spot next tick — see
+## `locale_arrival_clear_anchor` in `new_state()`.
+static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = {}) -> void:
+  var cleared_anchor: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if cleared_anchor.length_squared() < 1e-8:
+    cleared_anchor = state.get("step_goal", Vector3.ZERO)
   state["step_goal"] = Vector3.ZERO
   state["step_ultimate_pos"] = Vector3.ZERO
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = &""
   state["step_source"] = &""
   _reset_locale_progress_state(state)
+  if cleared_anchor.length_squared() > 1e-8:
+    state["locale_arrival_clear_anchor"] = cleared_anchor
+    state["locale_arrival_clear_cooldown_ticks"] = int(
+      motor_v3.get("locale_revisit_cooldown_ticks", 90)
+    )
 
 
 ## Apply a locale memory-tier seek objective (anchor + nav substep).
@@ -1213,6 +1258,19 @@ static func _apply_locale_food_objective(
 
 
 ## At locale ultimate within eat range: bind nearby live food or clear locale orbit.
+## Debug-only label for the ARR_DBG/SYNCFOOD_DBG instrumentation (CLEANUP C2 live-repro tracing).
+static func _dbg_label(ctx: Dictionary) -> String:
+  var body: Object = ctx.get("body")
+  if body == null:
+    return "?"
+  var def_v: Variant = body.get("definition")
+  if def_v is Resource:
+    var species := str((def_v as Resource).get("species_id")).strip_edges()
+    if not species.is_empty():
+      return species
+  return "?"
+
+
 static func _maybe_locale_arrival_bind_or_clear(
   ctx: Dictionary,
   state: Dictionary,
@@ -1222,15 +1280,24 @@ static func _maybe_locale_arrival_bind_or_clear(
   map_rid: RID,
   agent_r: float,
 ) -> void:
+  var dbg_tag := "ARR_DBG [%s t=%s]" % [_dbg_label(ctx), str(ctx.get("physics_tick", -1))]
   if state.get("step_source", &"") != &"locale":
+    print(dbg_tag, " skip: step_source=", state.get("step_source", &""))
     return
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
   if ultimate.length_squared() < 1e-8:
     ultimate = state.get("step_goal", Vector3.ZERO)
   if ultimate.length_squared() < 1e-8:
+    print(dbg_tag, " skip: ultimate zero")
     return
   var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
-  if creature_pos.distance_to(ultimate) > eat_max:
+  var d := creature_pos.distance_to(ultimate)
+  if d > eat_max:
+    print(
+      dbg_tag, " skip: dist=", d, " > eat_max=", eat_max,
+      " ultimate=", ultimate, " step_goal=", state.get("step_goal", Vector3.ZERO),
+      " creature_pos=", creature_pos,
+    )
     return
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
@@ -1239,6 +1306,7 @@ static func _maybe_locale_arrival_bind_or_clear(
       food_pos.distance_to(ultimate) <= eat_max
       or food_pos.distance_to(creature_pos) <= eat_max
     ):
+      print(dbg_tag, " bind live food at ", food_pos)
       var body: CharacterBody3D = ctx.get("body")
       var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
       _apply_live_food_objective(
@@ -1247,7 +1315,8 @@ static func _maybe_locale_arrival_bind_or_clear(
       _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
       _store_food_inventory_step_mode(ctx, state, motor_v3)
       return
-  _clear_locale_step_fields(state)
+  print(dbg_tag, " clearing locale step fields, ultimate=", ultimate, " dist=", d)
+  _clear_locale_step_fields(state, motor_v3)
 
 
 static func _apply_live_food_objective(
@@ -1373,6 +1442,7 @@ static func _clear_pursuit_detour_latch(state: Dictionary) -> void:
   state["pursuit_detour_waypoint"] = Vector3.ZERO
   state["pursuit_detour_ticks_remaining"] = 0
   state["pursuit_detour_alt_flip"] = false
+  state["pursuit_detour_escalation_count"] = 0
 
 
 ## Live prey refresh without overwriting an active pursuit detour substep (C1 residual).
@@ -1453,6 +1523,7 @@ static func _maybe_mint_pursuit_detour_latch(
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
+  state["pursuit_detour_escalation_count"] = 0
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), body.global_position)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
@@ -1465,6 +1536,21 @@ static func _remint_alternate_pursuit_detour(
   body: CharacterBody3D,
   motor_v3: Dictionary,
 ) -> void:
+  # CLEANUP C9 follow-up (2026-08-05, boundary-ping-pong root cause): alternating +-60 deg tries
+  # "the other side" of a blocked detour, but near a boundary/corner both sides can be equally
+  # blocked, so this alone just flips between two dead-end waypoints forever (confirmed live via
+  # forced-repro capture — `cblk` cycling 0-1-2-0 with `tgt` alternating between exactly 2 points,
+  # `dist` pinned at this function's `maxf(dist, 3.0)` floor). After both sides have been tried
+  # once (escalation 1 then 2) and blocked again, give up on detouring around this waypoint and
+  # clear the latch so `_derive_find_food_step_objective` falls through to a full fresh
+  # `_apply_live_food_objective` recompute next tick, using the prey's actual current position
+  # instead of another blind bearing rotation.
+  var escalation := int(state.get("pursuit_detour_escalation_count", 0)) + 1
+  if escalation > 2:
+    _clear_pursuit_detour_latch(state)
+    state["consecutive_blocked"] = 0
+    return
+  state["pursuit_detour_escalation_count"] = escalation
   var creature_pos := body.global_position
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
   if ultimate.length_squared() < 1e-8:
@@ -1700,16 +1786,35 @@ static func _sync_food_memory_objective(
     state["step_source"] = &"coarse"
     return true
   var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, motor_ctx)
-  if bool(locale.get("active", false)):
+  var on_cd := _locale_anchor_on_arrival_cooldown(state, locale.get("anchor", Vector3.ZERO))
+  print(
+    "SYNCFOOD_DBG [", _dbg_label(ctx), " t=", ctx.get("physics_tick", -1),
+    "] locale.active=", locale.get("active", false),
+    " anchor=", locale.get("anchor", Vector3.ZERO), " on_cooldown=", on_cd,
+    " cd_ticks=", state.get("locale_arrival_clear_cooldown_ticks", 0),
+    " cleared_anchor=", state.get("locale_arrival_clear_anchor", Vector3.ZERO),
+  )
+  if bool(locale.get("active", false)) and not on_cd:
     _apply_locale_food_objective(ctx, state, locale, creature_pos, motor_v3, map_rid, agent_r)
     return true
   return false
+
+
+## True when [param anchor] matches the locale spot just cleared by an empty arrival and its
+## cooldown hasn't expired yet — prevents immediately re-picking a point the creature is already
+## standing on (degenerate bearing math -> in-place turn-storm; CLEANUP C2, 2026-07-17).
+static func _locale_anchor_on_arrival_cooldown(state: Dictionary, anchor: Vector3) -> bool:
+  if int(state.get("locale_arrival_clear_cooldown_ticks", 0)) <= 0:
+    return false
+  var cleared: Vector3 = state.get("locale_arrival_clear_anchor", Vector3.ZERO)
+  return cleared.distance_squared_to(anchor) < 1.0
 
 
 ## Clears acute Flight flee latch (stack calls on [code]ff=0[/code] episode exit).
 static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_waypoint"] = Vector3.ZERO
   state["flee_waypoint_ticks_remaining"] = 0
+  state["flee_backtrack_streak"] = 0
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -1731,9 +1836,33 @@ static func _mint_flee_waypoint(
   motor_v3: Dictionary,
 ) -> Vector3:
   var wp := _flee_objective(ctx, body.global_position, motor_v3)
+  var creature_pos := body.global_position
+  var to_wp := Vector3(wp.x - creature_pos.x, 0.0, wp.z - creature_pos.z)
+  # CLEANUP C9 follow-up (2026-08-05, boundary-ping-pong root cause, 2nd pass): the escalation
+  # fix below only guards the *reactive* blocked-tick path. Verified live that this alone still
+  # loops — `_flee_objective` is a pure bearing-away-from-current-threat calculation with no
+  # geometry/obstacle awareness, so once the natural `flee_waypoint_latch_ticks` countdown expires
+  # (independent of any blocked/escalation state) it happily re-derives the exact same wall-facing
+  # direction the creature had just escaped from moments earlier, undoing the escalation's
+  # progress. Close the gap by applying the same backtrack check to *every* fresh mint, natural or
+  # escalated: if the recomputed bearing itself is a backtrack relative to a recently recorded
+  # blocked direction, rotate it away before latching it in.
+  if to_wp.length_squared() > 1e-8:
+    var blocked_dir := _BlockedApproach.active_dir(
+      state.get("blocked_approach", {}),
+      int(ctx.get("physics_tick", 0)),
+    )
+    var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
+    if (
+      blocked_dir.length_squared() > 1e-12
+      and _BlockedApproach.is_backtrack_step(to_wp.normalized(), blocked_dir, backtrack_dot)
+    ):
+      var dir := to_wp.normalized().rotated(Vector3.UP, deg_to_rad(60.0))
+      wp = creature_pos + dir * to_wp.length()
   state["flee_waypoint"] = wp
   var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
   state["flee_waypoint_ticks_remaining"] = latch_ticks
+  state["flee_backtrack_streak"] = 0
   return wp
 
 
@@ -1948,7 +2077,35 @@ static func apply_immediate_blocked_path_reevaluation(
     and _BlockedApproach.is_backtrack_step(move_dir, blocked_dir, backtrack_dot)
   ):
     move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
-    state["step_goal"] = creature_pos + move_dir * to_goal.length()
+    var deflected := creature_pos + move_dir * to_goal.length()
+    state["step_goal"] = deflected
+    # CLEANUP C9 follow-up (2026-08-05, boundary-ping-pong root cause): when the goal being
+    # deflected *is* the latched `flee_waypoint`, this per-tick rotation never sticks —
+    # `_maintain_flee_latch` restores the original (still-blocked) waypoint next tick, so a
+    # waypoint pinned against the playfield boundary makes the rabbit alternate forever between
+    # the wall-facing latch and this tick's escape deflection, never net-progressing.
+    #
+    # First attempt (superseded below): re-derive via `_mint_flee_waypoint` after a sustained
+    # streak. Verified live 2026-08-05 that this doesn't help — `_flee_objective` is a pure
+    # bearing-away-from-threat calculation with no boundary/geometry awareness, so when both
+    # creatures are stalemated near a corner the threat bearing barely changes tick to tick and
+    # the "fresh" mint recomputes essentially the same wall-facing point every time.
+    #
+    # Escalate instead by *promoting* this tick's already-rotated `deflected` point into the
+    # persistent `flee_waypoint` latch — a point we know points somewhere directionally different
+    # from the blocked bearing, unlike a from-scratch `_flee_objective` recompute. This only fires
+    # after `dead_end_record_min_blocked_ticks` sustained backtrack deflections off the *same*
+    # latched waypoint (not every blocked tick, unlike the original C9 bug this guards against),
+    # and each escalation re-reads the then-current `flee_waypoint` as its rotation base, so
+    # repeated escalations walk incrementally around rather than compounding into unbounded drift.
+    var flee_latched: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+    if flee_latched.length_squared() > 1e-8 and old_goal.is_equal_approx(flee_latched):
+      var streak := int(state.get("flee_backtrack_streak", 0)) + 1
+      state["flee_backtrack_streak"] = streak
+      if streak >= int(motor_v3.get("dead_end_record_min_blocked_ticks", 3)):
+        state["flee_waypoint"] = deflected
+        state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+        state["flee_backtrack_streak"] = 0
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
   var new_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   _maybe_flag_material_step_goal_change(state, body, old_goal, new_goal, motor_v3, float(ctx.get("delta", 1.0 / 60.0)))
@@ -1979,12 +2136,14 @@ static func _run_path_clearance_los_nav(
   var eye_h := float(ctx.get("eye_height", 1.0))
   var creature_pos := body.global_position
   var raw_blocked := not _PathClear.has_clear_los(space, creature_pos, eye_h, step_goal, motor_v3)
-  if _latch_los_blocked(state, motor_v3, raw_blocked):
+  var latched := _latch_los_blocked(state, motor_v3, raw_blocked)
+  if latched:
     var map_rid: RID = ctx.get("map_rid", RID())
     var agent_r := _agent_radius(body)
-    state["step_goal"] = _PathClear.resolve_step_objective(
+    var resolved := _PathClear.resolve_step_objective(
       map_rid, creature_pos, step_goal, agent_r,
     )
+    state["step_goal"] = resolved
 
 
 ## Debounces the raw per-tick LoS verdict so a flip only lands after

@@ -18,6 +18,11 @@ const _BOULDER_SCENE := "res://assets/environment/obstacle_boulder/h-k-boulder1.
 const _SOLID_SHRUB_3D := "res://assets/plants/solid_shrub/solid_shrub_3d.tscn"
 const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 
+## TEMP-REPRO (CLEANUP C9/C8 boundary-ping-pong live investigation, remove after root-caused):
+## forces the duel spawn to the playfield edge so fox-chases-rabbit-into-a-corner reproduces on
+## demand instead of by chance. Flip to false (or delete this block) once no longer needed.
+const _DEBUG_FORCE_EDGE_CHASE_SPAWN := true
+
 const _FALLBACK_PLAYFIELD_SIZE := Vector2(40.0, 40.0)
 const _TOP_DOWN_MARGIN := 1.12
 const _SHOULDER_BACK := 2.4
@@ -321,6 +326,10 @@ func _bake_playfield_navmesh() -> void:
   nm.agent_height = 2.0
   nm.cell_size = 0.25
   nm.cell_height = 0.15
+  ## Map cell_height defaults to 0.25 and must match the baked mesh's or the engine logs
+  ## "rasterization errors with navigation mesh edges" — that mismatch can corrupt the mesh
+  ## along elevation changes (e.g. the valley depression), so align the map before baking.
+  NavigationServer3D.map_set_cell_height(_nav_region.get_navigation_map(), nm.cell_height)
   _nav_region.navigation_mesh = nm
   _nav_region.bake_navigation_mesh()
 
@@ -671,6 +680,12 @@ func _spawn_duel_pair() -> void:
     if spawn_fracs.size() >= 2:
       herb_frac = spawn_fracs[0] as Vector2
       carn_frac = spawn_fracs[1] as Vector2
+  if _DEBUG_FORCE_EDGE_CHASE_SPAWN:
+    # Rabbit pinned near the left edge; fox spawns to its interior side so fleeing the fox drives
+    # the rabbit straight into the corner instead of away from it — reproduces the boundary
+    # ping-pong on demand (awareness_radius default 1500 means separation distance doesn't matter).
+    herb_frac = Vector2(0.05, 0.5)
+    carn_frac = Vector2(0.20, 0.5)
   var hpos := _spawn_position("HerbivoreSpawn", herb_frac)
   var cpos := _spawn_position("CarnivoreSpawn", carn_frac)
   var hint_y := float(_playfield_bounds.get("floor_y", 0.0))

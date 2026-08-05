@@ -37,6 +37,9 @@ var _base_capsule_radius: float = 0.35
 var _base_capsule_height: float = 1.2
 var caloric_needs: int = 30
 var current_calories: float = 30.0
+## Stable per-instance identity for logs/debugging (distinct from `definition.species_id`, which is
+## shared by every creature of that species) — set once in `_ready()` from `get_instance_id()`.
+var creature_instance_id: int = 0
 
 var _food_intake_policy: Resource
 var _starvation_fired: bool = false
@@ -51,6 +54,7 @@ var _motor_stack_drives_physics: bool = false
 
 
 func _ready() -> void:
+  creature_instance_id = get_instance_id()
   control_mode = _ControlMode.engine_as_int()
   _apply_definition_defaults()
   _sync_calories_from_vitals()

@@ -353,6 +353,11 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "dead_end_match_radius": 52.0,
     "dead_end_heading_dot": 0.55,
     "dead_end_record_min_blocked_ticks": 3,
+    ## Ticks a locale food anchor stays skipped after an empty arrival (no consumable found) before
+    ## it can be re-picked — prevents immediately re-targeting a point the creature is already
+    ## standing on, which produces degenerate bearing math and an in-place turn-storm
+    ## (CLEANUP C2 duel-manual finding, 2026-07-17).
+    "locale_revisit_cooldown_ticks": 90,
     "approach_overshoot_guard_move_steps": 2,
     ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
     ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of

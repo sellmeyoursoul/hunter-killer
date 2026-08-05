@@ -234,20 +234,25 @@ func _replay_capture_record() -> Dictionary:
   }
 
 
+## Per-instance label, e.g. `rabbit#116937200019` — the numeric suffix is `creature_instance_id`
+## (`Node.get_instance_id()`, stable for the instance's lifetime), so logs stay unambiguous once
+## more than one creature of the same species is alive at once (CLEANUP C2 live-repro finding).
 func _creature_log_label() -> String:
   if _body == null:
     return "creature"
+  var iid := int(_body.get("creature_instance_id")) if _body.get("creature_instance_id") != null else 0
+  var suffix := ("#%d" % iid) if iid != 0 else ""
   var def_v: Variant = _body.get("definition")
   if def_v is Resource:
     var species := str((def_v as Resource).get("species_id")).strip_edges()
     if not species.is_empty():
-      return species
+      return species + suffix
     var display := str((def_v as Resource).get("display_name")).strip_edges()
     if not display.is_empty():
-      return display
+      return display + suffix
   if not _body.name.is_empty():
-    return str(_body.name)
-  return "creature"
+    return str(_body.name) + suffix
+  return "creature" + suffix
 
 
 func get_physics_tick_count() -> int:

@@ -4542,6 +4542,7 @@ func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
 
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"explore"
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
   state["boundary_scan_active"] = true
   state["boundary_scan_sign"] = -1
@@ -4573,6 +4574,13 @@ func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
     actions.append(act)
     if act == _MotorAction.MOVE_FORWARD:
       saw_move = true
+      ## Mirror the real caller (creature_motor_stack.gd tick()): MOVE_FORWARD's heading is only
+      ## finalized once the executor applies the turn+move blend (CLEANUP R1 mitigation #2) with
+      ## `move_turn_target` set to the current step_goal — `select_action` alone commits to MOVE
+      ## within a wider `move_blend_max_error_deg` cone and relies on that same-tick blend to correct
+      ## the rest of the way, so checking `last_move_direction` before applying it is premature.
+      var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
       var inward: Vector3 = state.get("explore_dir", Vector3.ZERO).normalized()
       _assert(body.last_move_direction.normalized().dot(inward) >= move_min_dot - 0.01, "post-scan MOVE faces inward")
       break
