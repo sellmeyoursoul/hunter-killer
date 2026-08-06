@@ -454,10 +454,19 @@ func _test_boulder_obstacle_collision_bake() -> void:
   root.add_child(rock)
   _assert(_PlayfieldBounds3D.count_static_bodies(rock) == 0, "boulder import has no physics bodies")
   var colliders: int = PlayfieldBounds3D.ensure_obstacle_physics(rock)
-  _assert(colliders >= 1, "boulder mesh bakes trimesh collision")
-  var sb := rock.get_node_or_null("AutoCollision_Cube") as StaticBody3D
+  _assert(colliders >= 1, "boulder mesh bakes convex collision")
+  var sb := rock.get_node_or_null("AutoConvexCollision") as StaticBody3D
   _assert(sb != null, "baked boulder collider is registered on rock")
   _assert(sb.is_in_group(&"obstacles"), "baked boulder collider joins obstacles group")
+  var cs: CollisionShape3D = null
+  for ch in sb.get_children():
+    if ch is CollisionShape3D:
+      cs = ch as CollisionShape3D
+      break
+  _assert(
+    cs != null and cs.shape is ConvexPolygonShape3D,
+    "baked boulder collider shape is convex, not trimesh (CLEANUP C10)",
+  )
   rock.queue_free()
 
 func _test_bundled_inference_helpers() -> void:

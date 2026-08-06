@@ -22,6 +22,18 @@ func _begin() -> void:
   root.add_child(_main)
   await process_frame
   await process_frame
+  ## Navmesh bakes on a background thread (main_3d.gd `_bake_playfield_navmesh`) — without this
+  ## wait, nav-aware planner code (e.g. CLEANUP C9's geometry-scored flee targeting) silently gets
+  ## empty path queries for the whole run instead of a real signal to test against.
+  var bake_wait_frames := 0
+  while (
+    _main.has_method(&"is_navigation_ready")
+    and not bool(_main.call("is_navigation_ready"))
+    and bake_wait_frames < 600
+  ):
+    await process_frame
+    bake_wait_frames += 1
+  print("SMOKE: navmesh ready=", _main.call("is_navigation_ready") if _main.has_method(&"is_navigation_ready") else "n/a", " waited ", bake_wait_frames, " frames")
   var ad: Variant = _main.call("_ai_driver") if _main.has_method(&"_ai_driver") else null
   if ad == null:
     print("SMOKE: no AiDriver found")

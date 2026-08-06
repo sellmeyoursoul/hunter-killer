@@ -5,6 +5,7 @@ class_name PlayfieldBounds3D
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _MeshWorldAabb3D := preload("res://environment/mesh_world_aabb_3d.gd")
+const _StaticObstacleCollision := preload("res://environment/static_obstacle_collision.gd")
 
 const WORLD_STATIC_COLLISION_MASK := 1
 const GROUND_RAY_HEIGHT := 256.0
@@ -385,9 +386,16 @@ static func ensure_world_static_layers(node: Node) -> void:
     ensure_world_static_layers(ch)
 
 
-## Bakes trimesh colliders for mesh-only obstacle imports and tags bodies for motor + physics.
+## Bakes convex colliders for mesh-only obstacle imports and tags bodies for motor + physics.
 ## Policy: skips baking when any [StaticBody3D] already exists (authored shells bake in scene code).
-## Mesh-only imports (e.g. boulders) must ship without [StaticBody3D] so spawn-time trimesh bake runs.
+## Mesh-only imports (e.g. boulders) must ship without [StaticBody3D] so spawn-time convex bake runs.
+## Convex, not trimesh (CLEANUP C10, 2026-08-06): a boulder's raw concave-trimesh collision resting
+## un-tilted on a steep terrain slope left a seam a fast-moving creature capsule could tunnel
+## through — root-caused via direct raycast probing, see CREATURE_MOVEMENT_V3_CLEANUP.md C10. Convex
+## hulls (the same [StaticObstacleCollision] helper food-plant blockers already use) resolve far more
+## stably against both terrain and capsules. Terrain itself still bakes as trimesh (a convex hull of
+## the whole playfield would erase its shape) via [method supplement_trimesh_collision_from_meshes] —
+## that path is unchanged; only obstacle props route through this convex path now.
 ## See [StaticObstacleCollision] and [ENVIRONMENT_MODEL_PLAN.md §6.3](../../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
 ## Returns the number of [StaticBody3D] colliders now under [param root] (existing or newly added).
 static func ensure_obstacle_physics(root: Node3D) -> int:
@@ -395,7 +403,10 @@ static func ensure_obstacle_physics(root: Node3D) -> int:
     return 0
   var existing := count_static_bodies(root)
   if existing == 0:
-    supplement_trimesh_collision_from_meshes(root, root)
+    var blocker := StaticBody3D.new()
+    blocker.name = "AutoConvexCollision"
+    root.add_child(blocker)
+    _StaticObstacleCollision.sync_convex_blocker_from_visual(blocker, root)
   ensure_world_static_layers(root)
   _tag_obstacle_static_bodies(root)
   return count_static_bodies(root)
