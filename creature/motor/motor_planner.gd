@@ -66,6 +66,7 @@ static func new_state() -> Dictionary:
     "flee_waypoint": Vector3.ZERO,
     "flee_waypoint_ticks_remaining": 0,
     "flee_backtrack_streak": 0,
+    "flee_recent_dirs": [],
     "pursuit_detour_waypoint": Vector3.ZERO,
     "pursuit_detour_ticks_remaining": 0,
     "pursuit_detour_alt_flip": false,
@@ -1815,6 +1816,7 @@ static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_waypoint"] = Vector3.ZERO
   state["flee_waypoint_ticks_remaining"] = 0
   state["flee_backtrack_streak"] = 0
+  state["flee_recent_dirs"] = []
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -1829,6 +1831,26 @@ static func _reset_flight_entry_telemetry(state: Dictionary) -> void:
   state["boundary_scan_sign"] = 0
 
 
+## Real reachable distance toward [code]creature_pos + dir * dist[/code], per the navmesh —
+## clamped short of the requested distance when geometry blocks the way (CLEANUP C9, 2026-08-06:
+## a candidate-scoring signal for [method _mint_flee_waypoint] so bearing selection can tell "open"
+## from "corner" instead of reasoning about direction alone). Falls back to the full requested
+## distance when no navmesh map is available (e.g. synthetic headless fixtures with no baked nav).
+static func _flee_candidate_reach(
+  map_rid: RID,
+  creature_pos: Vector3,
+  dir: Vector3,
+  dist: float,
+) -> float:
+  if not map_rid.is_valid() or dist <= 0.0:
+    return dist
+  var candidate := creature_pos + dir * dist
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, candidate, true)
+  if path.size() < 2:
+    return 0.0
+  return creature_pos.distance_to(path[path.size() - 1])
+
+
 static func _mint_flee_waypoint(
   ctx: Dictionary,
   state: Dictionary,
@@ -1838,27 +1860,77 @@ static func _mint_flee_waypoint(
   var wp := _flee_objective(ctx, body.global_position, motor_v3)
   var creature_pos := body.global_position
   var to_wp := Vector3(wp.x - creature_pos.x, 0.0, wp.z - creature_pos.z)
-  # CLEANUP C9 follow-up (2026-08-05, boundary-ping-pong root cause, 2nd pass): the escalation
-  # fix below only guards the *reactive* blocked-tick path. Verified live that this alone still
-  # loops — `_flee_objective` is a pure bearing-away-from-current-threat calculation with no
-  # geometry/obstacle awareness, so once the natural `flee_waypoint_latch_ticks` countdown expires
-  # (independent of any blocked/escalation state) it happily re-derives the exact same wall-facing
-  # direction the creature had just escaped from moments earlier, undoing the escalation's
-  # progress. Close the gap by applying the same backtrack check to *every* fresh mint, natural or
-  # escalated: if the recomputed bearing itself is a backtrack relative to a recently recorded
-  # blocked direction, rotate it away before latching it in.
+  var physics_tick := int(ctx.get("physics_tick", 0))
+  var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
+  var history: Array = []
+  for entry_v in state.get("flee_recent_dirs", []):
+    if typeof(entry_v) != TYPE_DICTIONARY:
+      continue
+    var entry: Dictionary = entry_v
+    if physics_tick < int(entry.get("until_tick", 0)):
+      history.append(entry)
+  # CLEANUP C9 follow-up (2026-08-05 -> 2026-08-06, boundary-ping-pong root cause, 3rd pass):
+  # rotating a fixed +60° away from only the single most-recently-blocked direction produced an
+  # exact 2-point limit cycle when cornered (confirmed live + headless, see
+  # CREATURE_MOVEMENT_V3_CLEANUP.md C9): mint N gets flagged as a backtrack vs the direction it
+  # was just physically blocked walking and rotates +60°; mint N+1's raw re-derived bearing
+  # (`_flee_objective` has no obstacle awareness, so it's ~unchanged while cornered) is only 60°
+  # off *that* rotated escape — dot(60°) = 0.5, just under the 0.55 backtrack threshold — so it
+  # reads as clear and un-rotates straight back to the original blocked bearing. The single-slot
+  # `blocked_approach` memory has no way to remember "the rotated direction was *also* tried and
+  # failed" once a later block overwrites it. Checking against a short rolling history of this
+  # Flight episode's last few minted directions (4th pass, still 2026-08-06) closed the exact
+  # resonance, but headless re-verification showed it just cycles a *wider* set of equally bad
+  # nearby points near a real corner — zero net progress, invariant still trips — because bearing
+  # rotation alone never asks whether a candidate direction actually leads anywhere open. Fix
+  # (5th pass): score each of 6 candidate bearings (60° apart) by how far the navmesh actually
+  # lets the creature travel toward it — same `NavigationServer3D.map_get_path` primitive
+  # `_remint_alternate_pursuit_detour` already uses for C1 — and pick the best-reaching candidate
+  # that isn't a recent-history backtrack, falling back to the best-reaching candidate overall if
+  # every one collides with history.
   if to_wp.length_squared() > 1e-8:
+    var avoid_dirs: Array = []
     var blocked_dir := _BlockedApproach.active_dir(
       state.get("blocked_approach", {}),
-      int(ctx.get("physics_tick", 0)),
+      physics_tick,
     )
-    var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
-    if (
-      blocked_dir.length_squared() > 1e-12
-      and _BlockedApproach.is_backtrack_step(to_wp.normalized(), blocked_dir, backtrack_dot)
-    ):
-      var dir := to_wp.normalized().rotated(Vector3.UP, deg_to_rad(60.0))
-      wp = creature_pos + dir * to_wp.length()
+    if blocked_dir.length_squared() > 1e-12:
+      avoid_dirs.append(blocked_dir)
+    for entry_v in history:
+      avoid_dirs.append((entry_v as Dictionary).get("dir", Vector3.ZERO))
+
+    var map_rid: RID = ctx.get("map_rid", RID())
+    var base_dir := to_wp.normalized()
+    var flee_dist := to_wp.length()
+    var best_dir := base_dir
+    var best_reach := -1.0
+    var best_clear_dir := Vector3.ZERO
+    var best_clear_reach := -1.0
+    var found_clear := false
+    for i in range(6):
+      var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i))
+      var reach := _flee_candidate_reach(map_rid, creature_pos, candidate_dir, flee_dist)
+      if reach > best_reach:
+        best_reach = reach
+        best_dir = candidate_dir
+      var avoided := false
+      for avoid_v in avoid_dirs:
+        if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
+          avoided = true
+          break
+      if not avoided and reach > best_clear_reach:
+        best_clear_reach = reach
+        best_clear_dir = candidate_dir
+        found_clear = true
+    var final_dir := best_clear_dir if found_clear else best_dir
+    wp = creature_pos + final_dir * flee_dist
+
+  var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
+  history.append({"dir": (wp - creature_pos).normalized(), "until_tick": physics_tick + ttl})
+  if history.size() > 3:
+    history = history.slice(history.size() - 3, history.size())
+  state["flee_recent_dirs"] = history
+
   state["flee_waypoint"] = wp
   var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
   state["flee_waypoint_ticks_remaining"] = latch_ticks

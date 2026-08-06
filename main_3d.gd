@@ -59,6 +59,11 @@ var _food_root: Node3D
 var _using_fallback_floor: bool = false
 var _ground_sampler: PlayfieldGroundSampler
 var _nav_region: NavigationRegion3D
+## `NavigationRegion3D.bake_navigation_mesh()` runs on a background thread — `get_navigation_map_rid()`
+## returns a valid RID immediately, but `NavigationServer3D.map_get_path` on it returns empty until
+## the bake actually finishes (CLEANUP C9, 2026-08-06: headless smoke driver was querying paths for
+## flee-target scoring before the bake completed, silently getting empty paths every time).
+var _nav_baked: bool = false
 
 
 func _ready() -> void:
@@ -331,7 +336,21 @@ func _bake_playfield_navmesh() -> void:
   ## along elevation changes (e.g. the valley depression), so align the map before baking.
   NavigationServer3D.map_set_cell_height(_nav_region.get_navigation_map(), nm.cell_height)
   _nav_region.navigation_mesh = nm
+  _nav_baked = false
+  if not _nav_region.bake_finished.is_connected(_on_playfield_navmesh_baked):
+    _nav_region.bake_finished.connect(_on_playfield_navmesh_baked)
   _nav_region.bake_navigation_mesh()
+
+
+func _on_playfield_navmesh_baked() -> void:
+  _nav_baked = true
+
+
+## True once the current playfield navmesh bake has finished — [method get_navigation_map_rid]
+## returns a valid RID immediately on bake start, but path queries against it are silently empty
+## until this is true.
+func is_navigation_ready() -> bool:
+  return _nav_baked
 
 
 func _mount_grasslands_floor() -> void:
