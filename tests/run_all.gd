@@ -1076,6 +1076,14 @@ func _test_memory_adapter_count_known_objectives_fractional() -> void:
     _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
   )
   _assert(is_equal_approx(count, 2.75), "fractional inventory: 2 precise + 0.5 coarse + 0.25 locale")
+  # explore_bearing_coverage's documented contract (CREATURE_MOVEMENT_V3.md §7.3.2 / §8.4) is
+  # instance beliefs per wedge + near-live overlay only — it does NOT consult the locale-prior
+  # store seeded above (that's `count_known_objectives`-only). A single precise belief per wedge
+  # at the same distance/tier as another scores identically by design, so a second precise belief
+  # sharing the north wedge is needed to actually exercise per-wedge differentiation (CLEANUP C8
+  # fix, 2026-08-07 — the original fixture had no real source of asymmetry between wedge 0 and
+  # wedge 2 under the current, correct implementation).
+  adapter.seed_precise_food_belief(8004, Vector3(10.0, 0.0, -45.0), now_ms)
   var wedges := adapter.explore_bearing_coverage(
     _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
   )
@@ -2277,8 +2285,13 @@ func _test_creature_motor_stack_food_map_confidence_inventory_ratio() -> void:
     "three known bushes saturate inventory_ratio at goal_inventory_min_find_food=3",
   )
   var adapter := stack.get_memory_adapter()
-  adapter.get_beliefs().erase(89003)
-  adapter.set_beliefs_for_test(adapter.get_beliefs())
+  # get_beliefs() returns a defensive `_beliefs.duplicate(true)`, not a live reference — erasing
+  # directly off the return value mutated a throwaway copy and the immediately-following
+  # get_beliefs() call fetched a fresh, still-unerased duplicate, silently undoing the erase
+  # (CLEANUP C8 fix, 2026-08-07 — the previous form never actually removed 89003).
+  var beliefs := adapter.get_beliefs()
+  beliefs.erase(89003)
+  adapter.set_beliefs_for_test(beliefs)
   stack.tick(1.0 / 60.0)
   _assert(
     is_equal_approx(stack.get_food_map_confidence(), 2.0 / 3.0),
