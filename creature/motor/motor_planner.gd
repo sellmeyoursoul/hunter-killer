@@ -1822,14 +1822,52 @@ static func _flee_candidate_reach(
   return creature_pos.distance_to(path[path.size() - 1])
 
 
+## True when at least one [code]threat_samples[/code] entry is currently [code]in_awareness[/code].
+## [method _flee_objective] has no meaningful answer without one (returns [code]Vector3.ZERO[/code]
+## as a "no threat" sentinel) — callers must check this directly rather than trust that return
+## value, since [code]Vector3.ZERO[/code] is also a valid world position (CLEANUP C9, 2026-08-07).
+static func _flee_has_visible_threat(ctx: Dictionary) -> bool:
+  for sample_v in ctx.get("threat_samples", []):
+    if typeof(sample_v) != TYPE_DICTIONARY:
+      continue
+    if bool((sample_v as Dictionary).get("in_awareness", false)):
+      return true
+  return false
+
+
 static func _mint_flee_waypoint(
   ctx: Dictionary,
   state: Dictionary,
   body: CharacterBody3D,
   motor_v3: Dictionary,
 ) -> Vector3:
-  var wp := _flee_objective(ctx, body.global_position, motor_v3)
   var creature_pos := body.global_position
+  if not _flee_has_visible_threat(ctx):
+    # CLEANUP C9 (2026-08-07): the raw per-tick `in_awareness` LoS check (awareness_zone.gd,
+    # unlike path-clearance LoS it has no hysteresis) can flicker false for a tick near corner
+    # geometry — exactly where flee is most likely to be re-minting — even while
+    # `_flight_fast_path_active` stays latched true (it doesn't require a fresh acute threat every
+    # tick). When that flicker lands on the tick the flee latch expires, minting from
+    # `_flee_objective`'s `Vector3.ZERO` "no threat" sentinel previously produced a nonsense
+    # waypoint literally targeting the world origin (found via the give-up escalation's tick-927
+    # headless trip — the escalation didn't cause this, it just searched hard enough to land on
+    # it). A real animal that loses sight of a predator for a moment keeps running the way it was
+    # already going, it doesn't reroute toward a fixed point — hold the existing latched waypoint.
+    var prior: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+    if prior.length_squared() > 1e-8:
+      state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+      return prior
+    # No prior waypoint to hold (Flight entry with no live threat this exact tick — shouldn't
+    # normally happen since entry requires an acute threat, but stay defensive): fall back to
+    # spawn-facing, matching `_flee_objective`'s own co-located-threat fallback below.
+    var fallback_dist := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+    var fallback_wp := creature_pos + _MotorPlane.HORIZONTAL_FORWARD * fallback_dist
+    state["flee_waypoint"] = fallback_wp
+    state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+    state["flee_backtrack_streak"] = 0
+    return fallback_wp
+
+  var wp := _flee_objective(ctx, creature_pos, motor_v3)
   var to_wp := Vector3(wp.x - creature_pos.x, 0.0, wp.z - creature_pos.z)
   var physics_tick := int(ctx.get("physics_tick", 0))
   var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
