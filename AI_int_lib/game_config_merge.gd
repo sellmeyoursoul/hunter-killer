@@ -305,6 +305,19 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_ticks_max": 120,
     "flee_waypoint_latch_ticks": 16,
     "pursuit_detour_latch_ticks": 32,
+    ## CLEANUP C9 give-up escalation (2026-08-07): once even the best of `_mint_flee_waypoint`'s
+    ## 6 geometry-scored candidate bearings reaches less than this fraction of the requested flee
+    ## distance, the creature is treated as genuinely cornered (not just locally obstructed).
+    "flee_give_up_reach_frac": 0.35,
+    ## Full-circle candidate count used only once `flee_give_up_reach_frac` triggers — finer than
+    ## the normal 6-bearing sweep, and (unlike that sweep) ignores recent-backtrack history
+    ## entirely: a cornered animal takes whatever real opening exists, threat-bearing and prior
+    ## missteps be damned.
+    "flee_give_up_scan_directions": 16,
+    ## Latch duration while give-up-escalated, vs. the normal `flee_waypoint_latch_ticks` — a
+    ## cornered animal re-assesses far more often than one calmly fleeing, because the situation
+    ## (and the predator's position) changes fast at this range.
+    "flee_give_up_latch_ticks": 5,
   }
 
 

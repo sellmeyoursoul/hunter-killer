@@ -823,6 +823,9 @@ func _test_creature_motor_v3_explore_inventory_defaults() -> void:
     "goal_consideration_chaos": 0.15,
     "flee_waypoint_latch_ticks": 16.0,
     "pursuit_detour_latch_ticks": 32.0,
+    "flee_give_up_reach_frac": 0.35,
+    "flee_give_up_scan_directions": 16.0,
+    "flee_give_up_latch_ticks": 5.0,
   }
   for key in expected:
     _assert(ship.has(key), "explore/inventory ship defaults include %s" % str(key))

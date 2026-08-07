@@ -2292,13 +2292,16 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 - **Blocked MOVE (§3.2):** same immediate **`apply_immediate_blocked_path_reevaluation`** as other modes — may **rewrite** **`flee_waypoint`** / **`step_goal`** (one tick cost acceptable); latch holds against **per-tick retarget only**, not wall escape. A second aligned **`MOVE_F`** should then progress away from the pin.
 - **Hub / incumbent during `ff=1`:** by design — hub returns empty eligible goals; in-progress step aborted on entry; **full goal re-evaluation** when danger ends (`ff=0` / safety met).
 - **Executor:** unchanged §7.3.0 cone — **`align_and_move`** only; no Flight-only turn picker, no looser MOVE tolerance in v1.
-- **v1 mint:** **`_flee_objective`** — away from **nearest** in-zone threat; co-located threat (`away ≈ 0`) falls back to spawn-facing (`HORIZONTAL_FORWARD`) — acceptable v1. **Future:** solids-weighted / terrain-aware mint; corner escape may briefly favor paths past the threat over staying wall-pinned (predator pursuit rework); multiple attackers (v2).
+- **v1 mint:** **`_flee_objective`** — away from **nearest** in-zone threat; co-located threat (`away ≈ 0`) falls back to spawn-facing (`HORIZONTAL_FORWARD`) — acceptable v1. **`_mint_flee_waypoint`** (CLEANUP C9) layers geometry-scored candidate selection on top: 6 bearings scored by navmesh-reachable distance, then — when even the best candidate is still badly reach-limited (**`flee_give_up_reach_frac`**) — a finer full-circle give-up scan that ignores backtrack history, so a cornered creature does favor paths past the threat over staying wall-pinned rather than continuing to weigh pure away-from-threat bearing math. Multiple attackers still deferred (v2).
 
 **Ship config (`creature_motor_v3`)** — add in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) same PR as P2:
 
 | Key | Ship default | Notes |
 |-----|--------------|-------|
 | **`flee_waypoint_latch_ticks`** | **16** | ≥ **8** (full 180° at **22.5°**/tick). Long enough that a cornered creature may run past a predator (combat-deferred — taking hits beats wall pin); tunable in playtest |
+| **`flee_give_up_reach_frac`** | **0.35** | CLEANUP C9 give-up escalation (2026-08-07). `_mint_flee_waypoint`'s best geometry-scored candidate (of 6, 60° apart) must reach at least this fraction of the requested flee distance, or the creature is treated as cornered |
+| **`flee_give_up_scan_directions`** | **16** | Full-circle candidate count for the give-up escalation scan; finer than the normal 6-bearing sweep and does not filter by recent-backtrack history |
+| **`flee_give_up_latch_ticks`** | **5** | Waypoint latch duration while give-up-escalated, shorter than **`flee_waypoint_latch_ticks`** — a cornered creature re-assesses far more often |
 
 **Deferred unless playtest fails:** looser MOVE cone during **`ff=1`**; turn-only deadlock breaker after K ticks; **generic `_maintain_world_waypoint_latch`** refactor (explore + flee share countdown/copy helper).
 

@@ -1787,6 +1787,7 @@ static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_waypoint_ticks_remaining"] = 0
   state["flee_backtrack_streak"] = 0
   state["flee_recent_dirs"] = []
+  state["flee_give_up_active"] = false
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -1858,6 +1859,7 @@ static func _mint_flee_waypoint(
   # `_remint_alternate_pursuit_detour` already uses for C1 — and pick the best-reaching candidate
   # that isn't a recent-history backtrack, falling back to the best-reaching candidate overall if
   # every one collides with history.
+  state["flee_give_up_active"] = false
   if to_wp.length_squared() > 1e-8:
     var avoid_dirs: Array = []
     var blocked_dir := _BlockedApproach.active_dir(
@@ -1893,6 +1895,32 @@ static func _mint_flee_waypoint(
         best_clear_dir = candidate_dir
         found_clear = true
     var final_dir := best_clear_dir if found_clear else best_dir
+    var final_reach := best_clear_reach if found_clear else best_reach
+
+    # CLEANUP C9 give-up escalation (2026-08-07): the 6-candidate sweep above only samples every
+    # 60° — in a genuine corner none of those 6 may reach anywhere close to `flee_dist`, but a
+    # real gap can still exist between them (a narrow opening the coarse spacing straddled). A
+    # cornered animal doesn't keep carefully weighing "away from the predator" once every careful
+    # option has come up bad — it takes the first real opening it finds, full stop. Escalate to a
+    # much finer full-circle sweep, and — unlike the sweep above — don't filter by recent-backtrack
+    # history at all: a direction that was blocked a moment ago and is now the only way out is
+    # still the only way out.
+    var give_up_reach_frac := float(motor_v3.get("flee_give_up_reach_frac", 0.35))
+    if final_reach < flee_dist * give_up_reach_frac:
+      var scan_n := maxi(1, int(motor_v3.get("flee_give_up_scan_directions", 16)))
+      var scan_best_dir := final_dir
+      var scan_best_reach := final_reach
+      for i in range(scan_n):
+        var ang := TAU * float(i) / float(scan_n)
+        var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
+        var reach := _flee_candidate_reach(map_rid, creature_pos, candidate_dir, flee_dist)
+        if reach > scan_best_reach:
+          scan_best_reach = reach
+          scan_best_dir = candidate_dir
+      if scan_best_reach > final_reach:
+        final_dir = scan_best_dir
+        state["flee_give_up_active"] = true
+
     wp = creature_pos + final_dir * flee_dist
 
   var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
@@ -1903,6 +1931,8 @@ static func _mint_flee_waypoint(
 
   state["flee_waypoint"] = wp
   var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+  if bool(state.get("flee_give_up_active", false)):
+    latch_ticks = maxi(1, int(motor_v3.get("flee_give_up_latch_ticks", 5)))
   state["flee_waypoint_ticks_remaining"] = latch_ticks
   state["flee_backtrack_streak"] = 0
   return wp
