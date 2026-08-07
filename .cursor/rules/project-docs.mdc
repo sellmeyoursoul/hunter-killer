@@ -21,6 +21,19 @@ alwaysApply: false
 
 When moving or adding docs, update **only** `PROJECT_DOC_INDEX.md` for path registry changes.
 
+## Status vocabulary (per-item tracking tables, e.g. bug/cleanup logs)
+
+Use for any doc that tracks discrete items (bugs, risks, follow-on slices) with a **Status** field:
+
+- `open` — logged, no work started.
+- `design` → `ready` → `in_progress` — normal implementation pipeline.
+- `done` — shipped; move acceptance criteria into the authoritative spec or archive note.
+- `wont_fix` — decided against; leave the reasoning in place, don't delete the item.
+- `watch` — an accepted trade-off, not itself a bug, monitored for a **specific named trigger condition** (e.g. a recurring regression class) that would justify escalating; not scheduled otherwise.
+- `pending_recurrence` — a repro was genuinely attempted (hypotheses tested, not just asserted) but nothing reproduced or root-caused. Neither provably fixed nor actionable — there is no next step until new evidence (a fresh repro, a new failure mode) shows up. When asked what's left to work on, treat `pending_recurrence` items as **not** investable time, same as `done`/`wont_fix` — unlike `open`, which always has a next step.
+
+`watch` vs `pending_recurrence`: `watch` is proactive (a known risk, waiting on a defined trigger); `pending_recurrence` is reactive (an already-observed problem that stopped reproducing before it was pinned down).
+
 ## Code ↔ doc sync playbook
 
 **Applies when:** Syncing active Project_Docs after a code or config change (see [core.mdc](./core.mdc) **Doc sync**).
