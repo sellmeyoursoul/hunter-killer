@@ -4980,6 +4980,11 @@ func _test_motor_planner_explore_overshoot_replans() -> void:
 
 func _test_motor_planner_explore_seek_seeds_waypoint() -> void:
   var motor_v3 := _motor_v3_test_params()
+  # Deterministic wedge pick: without this, per-wedge goal_consideration_chaos jitter (default
+  # 0.15) can occasionally beat the facing-aligned wedge's spawn_term margin, especially now that
+  # explore_w_spawn is smaller relative to explore_w_open (CLEANUP C8 rebalance) — same fix
+  # pattern already used by sibling explore-direction tests (e.g. `wall_bias_opens_away`).
+  motor_v3["goal_consideration_chaos"] = 0.0
   var main := Node3D.new()
   root.add_child(main)
   _motor_v3_test_floor(main)
