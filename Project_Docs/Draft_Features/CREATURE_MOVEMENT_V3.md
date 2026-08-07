@@ -1168,11 +1168,12 @@ unexplored_score  = unexplored(dir)   // repel explored; attract cold wedges
 |-----|--------------|------|
 | `explore_bearing_count` | **8** | Scored rays + coverage wedge count |
 | `explore_empty_map_unexplored_baseline` | **0.5** | Unexplored when all wedges empty |
-| `explore_w_spawn` | **0.35** | Spawn-facing prior |
-| `explore_w_open` | **0.30** | Nav / LoS clearance |
+| `explore_w_spawn` | **0.20** | Spawn-facing prior |
+| `explore_w_open` | **0.45** | Nav / LoS clearance (rebalanced above spawn — CLEANUP C8, 2026-08-07: open space should win over spawn-heading inertia unless other factors tip a genuinely comparable choice) |
 | `explore_w_unexp` | **0.25** | Memory + live unexplored |
 | `explore_w_forward` | **0.10** | Forward-unexplored swatch |
 | `explore_w_live_near` | **0.50** | Live §9 density in near band only |
+| `explore_open_safety_margin_wedges` | **3** | Neighbor wedges around a blocked bearing get a discounted `open_term`, fading to no discount at the edge (CLEANUP C8, 2026-08-07) |
 | `goal_inventory_min_find_food` | **3** | §1 |
 | `goal_inventory_min_find_mate` | **1** | §6.5 placeholder |
 | `goal_sated_patrol_urgency` | **0.15** | §1 |

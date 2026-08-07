@@ -66,9 +66,10 @@ static func line_of_sight_clear(
   if space_state == null:
     return {"line_of_sight_clear": true, "occluded": false, "occlusion_fraction": 0.0}
   var threshold := float(motor_v3.get("los_blocked_occlusion_fraction", 0.80))
+  var target_radius := float(motor_v3.get("los_target_radius", _LoS.DEFAULT_TARGET_RADIUS))
   var eye := _LoS.eye_world_position(creature_pos, eye_height)
   var target := Vector3(target_pos.x, eye.y, target_pos.z)
-  var frac := _LoS.occlusion_fraction(space_state, eye, target, exclude_rids)
+  var frac := _LoS.occlusion_fraction(space_state, eye, target, exclude_rids, target_radius)
   var blocked := frac > threshold
   return {
     "line_of_sight_clear": not blocked,

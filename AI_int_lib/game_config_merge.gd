@@ -280,11 +280,18 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
   return {
     "explore_bearing_count": 8,
     "explore_empty_map_unexplored_baseline": 0.5,
-    "explore_w_spawn": 0.35,
-    "explore_w_open": 0.30,
+    ## Open space (explore_w_open) outweighs spawn-heading inertia by default — a genuinely clear
+    ## bearing should win over "close to how I'm already facing" unless unexplored/forward factors
+    ## tip the balance among comparably-open options (CLEANUP C8 rebalance, 2026-08-07).
+    "explore_w_spawn": 0.20,
+    "explore_w_open": 0.45,
     "explore_w_unexp": 0.25,
     "explore_w_forward": 0.10,
     "explore_w_live_near": 0.50,
+    ## Wedges within this many neighbors of a blocked bearing get a discounted open_term (fading
+    ## linearly to no discount at the edge) instead of scoring identically to a fully-clear wedge
+    ## on the far side of the ring — gives explore_w_open real graduation to act on.
+    "explore_open_safety_margin_wedges": 3,
     "goal_inventory_min_find_food": 3,
     "goal_inventory_min_find_mate": 1,
     "goal_sated_patrol_urgency": 0.15,
@@ -317,6 +324,9 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "awareness_cone_half_angle_deg": 45.0,
     "awareness_requires_los": true,
     "los_blocked_occlusion_fraction": 0.80,
+    ## Silhouette radius (world meters) used to fan shadow-test rays across a LoS target instead
+    ## of just its center point — pack-overridable per species for better/worse peripheral vision.
+    "los_target_radius": 0.5,
     ## Consecutive same-direction raw LoS verdicts required before `_run_path_clearance_los_nav`
     ## flips its latched clear/blocked state (thrash-guard for tight obstacle pockets).
     "los_hysteresis_ticks": 3,

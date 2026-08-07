@@ -810,11 +810,12 @@ func _test_creature_motor_v3_explore_inventory_defaults() -> void:
   var expected := {
     "explore_bearing_count": 8.0,
     "explore_empty_map_unexplored_baseline": 0.5,
-    "explore_w_spawn": 0.35,
-    "explore_w_open": 0.30,
+    "explore_w_spawn": 0.20,
+    "explore_w_open": 0.45,
     "explore_w_unexp": 0.25,
     "explore_w_forward": 0.10,
     "explore_w_live_near": 0.50,
+    "explore_open_safety_margin_wedges": 3.0,
     "goal_inventory_min_find_food": 3.0,
     "goal_inventory_min_find_mate": 1.0,
     "goal_sated_patrol_urgency": 0.15,
@@ -2431,7 +2432,10 @@ func _test_creature_motor_stack_disposition_episodes() -> void:
 func _ghost_test_wall(main: Node3D, z_pos: float = -6.0) -> StaticBody3D:
   var wall := StaticBody3D.new()
   var box := BoxShape3D.new()
-  box.size = Vector3(4.0, 4.0, 0.5)
+  # Tall enough to occlude at a real creature's mesh-fitted eye height (CreatureKinematicBody3D
+  # .get_los_eye_height(), which can exceed the old 4-unit height depending on species mesh AABB —
+  # CLEANUP C8 fix, 2026-08-07), not just the 1.0 several sibling tests hardcode directly.
+  box.size = Vector3(4.0, 20.0, 0.5)
   var col := CollisionShape3D.new()
   col.shape = box
   wall.add_child(col)
@@ -5145,6 +5149,12 @@ func _test_locomotion_executor_stay_calorie_debit() -> void:
   main.queue_free()
 
 func _test_locomotion_executor_move_blocked() -> void:
+  # A synchronous test immediately prior can leave its `main.queue_free()` unflushed (no frame
+  # boundary crossed since) — its wall/floor/body colliders stay live in the physics world and
+  # corrupt this test's fresh spawn via real collision/depenetration against them. Two frames
+  # (matching the C7 replay-fixture fix's empirically-found headroom) reliably flushes it.
+  await process_frame
+  await process_frame
   var main := Node3D.new()
   root.add_child(main)
   _motor_v3_test_floor(main)

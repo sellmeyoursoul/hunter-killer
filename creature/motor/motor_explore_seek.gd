@@ -99,12 +99,19 @@ static func _pick_explore_dir(
     coverage, bearing_count, spawn_u, empty_map, baseline, max_cov
   )
 
+  var open_terms := PackedFloat32Array()
+  open_terms.resize(bearing_count)
+  for i in bearing_count:
+    open_terms[i] = _nav_clearance(creature_pos, _wedge_center_dir(i, bearing_count), motor_v3, ctx)
+  var margin_wedges := maxi(0, int(motor_v3.get("explore_open_safety_margin_wedges", 3)))
+  open_terms = _apply_open_safety_margin(open_terms, margin_wedges)
+
   var best_dir := spawn_u
   var best_score := -INF
   for i in bearing_count:
     var dir := _wedge_center_dir(i, bearing_count)
     var spawn_term := dir.dot(spawn_u)
-    var open_term := _nav_clearance(creature_pos, dir, motor_v3, ctx)
+    var open_term := open_terms[i]
     var unexp := _unexplored_for_wedge(i, coverage, empty_map, baseline, max_cov)
     var forward_term := forward_swatch[i] if i < forward_swatch.size() else 0.0
     var score := (
@@ -227,6 +234,33 @@ static func _nav_clearance(
     return 1.0
   var frac := float(los.get("occlusion_fraction", 1.0))
   return clampf(1.0 - frac, 0.0, 1.0)
+
+
+## Extends a blocked wedge's low [param raw] score outward by [param margin_wedges] neighboring
+## wedges on each side, fading linearly to no discount at the margin's edge. Per-wedge LoS
+## clearance ([method _nav_clearance]) is otherwise a hard 0/1 — every wedge that isn't itself
+## staring straight at an obstruction reads as equally, fully open, so a wedge grazing right past
+## a wall's edge scored identically to one genuinely clear across the whole ring, and only
+## `spawn_term`/`forward_term` (favoring the creature's current heading) ever broke that tie —
+## consistently pulling the pick back toward the obstruction's side instead of a truly open
+## bearing (CLEANUP C8 fix, 2026-08-07). A caution margin around each obstruction gives `open_term`
+## real graduation so `explore_w_open` can actually outweigh `explore_w_spawn` as intended, instead
+## of the two terms being tied on every open wedge regardless of their relative weights.
+static func _apply_open_safety_margin(raw: PackedFloat32Array, margin_wedges: int) -> PackedFloat32Array:
+  var n := raw.size()
+  var out := raw.duplicate()
+  if n == 0 or margin_wedges <= 0:
+    return out
+  for i in n:
+    if raw[i] >= 0.5:
+      continue
+    for step in range(1, margin_wedges + 1):
+      var frac := float(step) / float(margin_wedges)
+      var lo := posmod(i - step, n)
+      var hi := posmod(i + step, n)
+      out[lo] = minf(out[lo], frac)
+      out[hi] = minf(out[hi], frac)
+  return out
 
 
 static func _unexplored_for_wedge(
