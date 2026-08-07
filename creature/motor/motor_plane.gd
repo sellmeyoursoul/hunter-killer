@@ -220,9 +220,23 @@ static func scale_creature_motor_v3_for_playfield(motor_v3: Dictionary, body: No
   return scale_motor_distance_params(motor_v3, scale)
 
 
+## Motor distance keys that are tuned as fixed world-meter contracts (action ranges, arrival
+## gates) rather than perception/exploration distances — these must NOT scale with playfield
+## size, or they shrink below what's survivable against live, evasive targets on small
+## playfields. [code]eat_action_max_distance[/code] is the fixed 5m EAT capture range (bug:
+## previously scaled down to ~0.5m on small duel arenas, making prey capture nearly impossible);
+## [code]arrival_tolerance[/code] is the shared arrival-gate fallback for the same range family.
+const _UNSCALED_MOTOR_DISTANCE_KEYS := [
+  "eat_action_max_distance",
+  "arrival_tolerance",
+]
+
+
 ## True when [param key] is a motor distance tuned for playfield scale ([method scale_motor_distance_params]).
 static func _is_distance_motor_param_key(key: Variant) -> bool:
   var s := str(key)
+  if s in _UNSCALED_MOTOR_DISTANCE_KEYS:
+    return false
   if s in [
     "awareness_radius",
     "awareness_cone_extra",
@@ -230,8 +244,6 @@ static func _is_distance_motor_param_key(key: Variant) -> bool:
     "interior_env_near_mob",
     "calorie_cost_per_unit_moved",
     "motor_stuck_move_epsilon",
-    "eat_action_max_distance",
-    "arrival_tolerance",
   ]:
     return true
   for suffix in [

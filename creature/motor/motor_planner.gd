@@ -1259,19 +1259,6 @@ static func _apply_locale_food_objective(
 
 
 ## At locale ultimate within eat range: bind nearby live food or clear locale orbit.
-## Debug-only label for the ARR_DBG/SYNCFOOD_DBG instrumentation (CLEANUP C2 live-repro tracing).
-static func _dbg_label(ctx: Dictionary) -> String:
-  var body: Object = ctx.get("body")
-  if body == null:
-    return "?"
-  var def_v: Variant = body.get("definition")
-  if def_v is Resource:
-    var species := str((def_v as Resource).get("species_id")).strip_edges()
-    if not species.is_empty():
-      return species
-  return "?"
-
-
 static func _maybe_locale_arrival_bind_or_clear(
   ctx: Dictionary,
   state: Dictionary,
@@ -1281,24 +1268,16 @@ static func _maybe_locale_arrival_bind_or_clear(
   map_rid: RID,
   agent_r: float,
 ) -> void:
-  var dbg_tag := "ARR_DBG [%s t=%s]" % [_dbg_label(ctx), str(ctx.get("physics_tick", -1))]
   if state.get("step_source", &"") != &"locale":
-    print(dbg_tag, " skip: step_source=", state.get("step_source", &""))
     return
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
   if ultimate.length_squared() < 1e-8:
     ultimate = state.get("step_goal", Vector3.ZERO)
   if ultimate.length_squared() < 1e-8:
-    print(dbg_tag, " skip: ultimate zero")
     return
   var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
   var d := creature_pos.distance_to(ultimate)
   if d > eat_max:
-    print(
-      dbg_tag, " skip: dist=", d, " > eat_max=", eat_max,
-      " ultimate=", ultimate, " step_goal=", state.get("step_goal", Vector3.ZERO),
-      " creature_pos=", creature_pos,
-    )
     return
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
@@ -1307,7 +1286,6 @@ static func _maybe_locale_arrival_bind_or_clear(
       food_pos.distance_to(ultimate) <= eat_max
       or food_pos.distance_to(creature_pos) <= eat_max
     ):
-      print(dbg_tag, " bind live food at ", food_pos)
       var body: CharacterBody3D = ctx.get("body")
       var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
       _apply_live_food_objective(
@@ -1316,7 +1294,6 @@ static func _maybe_locale_arrival_bind_or_clear(
       _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
       _store_food_inventory_step_mode(ctx, state, motor_v3)
       return
-  print(dbg_tag, " clearing locale step fields, ultimate=", ultimate, " dist=", d)
   _clear_locale_step_fields(state, motor_v3)
 
 
@@ -1788,13 +1765,6 @@ static func _sync_food_memory_objective(
     return true
   var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, motor_ctx)
   var on_cd := _locale_anchor_on_arrival_cooldown(state, locale.get("anchor", Vector3.ZERO))
-  print(
-    "SYNCFOOD_DBG [", _dbg_label(ctx), " t=", ctx.get("physics_tick", -1),
-    "] locale.active=", locale.get("active", false),
-    " anchor=", locale.get("anchor", Vector3.ZERO), " on_cooldown=", on_cd,
-    " cd_ticks=", state.get("locale_arrival_clear_cooldown_ticks", 0),
-    " cleared_anchor=", state.get("locale_arrival_clear_anchor", Vector3.ZERO),
-  )
   if bool(locale.get("active", false)) and not on_cd:
     _apply_locale_food_objective(ctx, state, locale, creature_pos, motor_v3, map_rid, agent_r)
     return true

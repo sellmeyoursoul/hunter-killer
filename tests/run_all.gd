@@ -918,6 +918,17 @@ func _test_creature_motor_v3_playfield_distance_scale() -> void:
     is_equal_approx(float(from_body.get("awareness_radius", 0.0)), 150.0 * expected_scale),
     "scale_creature_motor_v3_for_playfield matches body screen_size",
   )
+  ## Action/arrival ranges are fixed world-meter contracts, not perception distances — must NOT
+  ## shrink with playfield size (CLEANUP fox-can't-close-on-prey: eat range scaled to ~0.5m on a
+  ## small duel arena, well below what's survivable against live, evasive prey).
+  _assert(
+    is_equal_approx(float(scaled.get("eat_action_max_distance", 0.0)), 5.0),
+    "v3 eat_action_max_distance does not scale with playfield factor",
+  )
+  _assert(
+    is_equal_approx(float(scaled.get("arrival_tolerance", 0.0)), 5.0),
+    "v3 arrival_tolerance does not scale with playfield factor",
+  )
 
 
 func _motor_v3_test_params() -> Dictionary:
@@ -4050,7 +4061,7 @@ func _test_motor_replay_fixture_drives_stack_from_capture() -> void:
   var path := "res://tests/fixtures/duel_replays/sample_synthetic_live_pursuit.jsonl"
   var records := _MotorReplayFixture.load_capture(path)
   _assert(not records.is_empty(), "replay fixture: capture loads before driving the stack")
-  var positions := _MotorReplayFixture.drive_stack(stack, body, records)
+  var positions := await _MotorReplayFixture.drive_stack(stack, body, records)
   _assert(
     positions.size() == records.size(),
     "replay fixture: one position sample per captured tick (got %d of %d)"

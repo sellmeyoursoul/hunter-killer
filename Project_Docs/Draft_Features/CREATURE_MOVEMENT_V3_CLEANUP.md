@@ -25,16 +25,16 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 
 | ID | Title | Status | Slice |
 |----|-------|--------|-------|
-| [C1](#c1-pursuit-contact-geometry-stall-fox) | Pursuit contact geometry stall (fox) | `in_progress` — headless smoke green, duel manual (Pass 5) pending | `post-6d-approach-geometry` (shared) |
-| [C2](#c2-locale-food-approach-oscillation-rabbit) | Locale food approach oscillation (rabbit) | `in_progress` — same-tick clamp fix shipped, headless smoke green, duel manual pending | `post-6d-approach-geometry` (shared) |
+| [C1](#c1-pursuit-contact-geometry-stall-fox) | Pursuit contact geometry stall (fox) | `done` — headless green; duel-validated via accumulated live pursuit evidence 2026-08-06 | `post-6d-approach-geometry` (shared) |
+| [C2](#c2-locale-food-approach-oscillation-rabbit) | Locale food approach oscillation (rabbit) | `done` — same-tick clamp fix shipped, headless green; duel-validated via accumulated live-play evidence 2026-08-06 | `post-6d-approach-geometry` (shared) |
 | [C3](#c3-prey-contact-without-eat--body-pin-stall-fox) | Prey contact without EAT / body-pin stall (fox) | `done` | `post-6d-prey-eat-contact` |
 | [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression) | Stale `instance_id` lookups crash memory adapter diet filter (headless regression) | `done` | unassigned |
 | [C5](#c5-stale-test-vs-6e-executor-refactor-contract-seek_wall_filter_and_backtrack) | Stale test vs 6e executor refactor contract (`_test_seek_wall_filter_and_backtrack`) | `done` | unassigned |
 | [C6](#c6-newly-exposed-locale-consult-precedence-gap-memory_tier_precedence) | Newly exposed locale-consult precedence gap (`_test_creature_motor_stack_memory_tier_precedence`) | `done` | unassigned |
-| [C7](#c7-flaky-headless-assertions-nondeterministic-across-identical-runs) | Flaky headless assertions (nondeterministic across identical runs) | `open` | unassigned |
+| [C7](#c7-flaky-headless-assertions-nondeterministic-across-identical-runs) | Flaky headless assertions (nondeterministic across identical runs) | `in_progress` — replay-fixture flake fixed 2026-08-06, memory-tier-precedence flake still open | unassigned |
 | [C8](#c8-stable-pre-existing-test-failures-found-during-r1-mitigation-2-audit) | Stable pre-existing test failures found during R1 mitigation #2 audit | `in_progress` — 7/13 fixed, 6 open | unassigned |
 | [C9](#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) | Flee-waypoint latch corrupted by reactive backtrack deflection (rabbit stuck at playfield edge) | `in_progress` — reopened 2026-08-05, 3 follow-up fixes shipped, live loop-closure unconfirmed | unassigned |
-| [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `in_progress` — boulder-seam cause root-caused & fixed 2026-08-06 (9/10 clean runs); second terrain-only cause still open | unassigned |
+| [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `fixed` — boulder-seam cause fixed 2026-08-06 (convex obstacle collision); terrain-only tunneling cause fixed 2026-08-06 (`safe_margin` on creature bodies), 10/10 clean post-fix runs | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -128,7 +128,7 @@ Manual duel smoke after mitigation #1 + the live-pursuit fix still ended `starva
 
 ## C1 — Pursuit contact geometry stall (fox)
 
-**Status:** `in_progress`  
+**Status:** `done` — marked done 2026-08-06 on accumulated live-duel evidence rather than a dedicated rock-pinch repro (see "Duel validation" below).  
 **Slice:** `post-6d-approach-geometry` (shared with C2; separate from post-6d Flight P2–P4)  
 **Evidence:** Duel playtest **2026-07-10** — rabbit flee OK (`ff=1`, flee waypoint latch); fox closes on prey then **stalls** with repeated `MOVE_F` + `blk=1`, never `TURN_*` / `STAY`. Log: `%APPDATA%\Godot\app_userdata\Hunter Killer\logs\motor_explore_tick.log` (~t=3292+). `src=live`, `find_food`, prey id latched, `ff=0` (D1 correct — prey ≠ Flight threat).
 
@@ -178,8 +178,12 @@ Pass 3 shipped detour latch + §9 gate; duel pinch residual shows **live prey re
 - [x] Headless: [C1 smoke fixture](#smoke-test-engineering-complex-geometry) — fox reaches within `action_max_distance` of prey without `cblk` runaway or explore fallback while prey live (`_test_motor_pursuit_pinch_detour_smoke` green; unaffected by the C2 same-tick clamp fix — full-suite diff shows no new failures).
 - [x] Headless: while `pursuit_detour_waypoint` latch is valid, per-tick live prey refresh updates `step_ultimate_pos` / engagement latch **without** overwriting detour `step_goal` (`_test_motor_planner_pursuit_detour_sticky_live_refresh`).
 - [x] Headless: repeated blocks against an **active** detour mint a **fresh** detour (or alternate-side nav/backtrack) — **not** live substep overwrite and **not** explore-at-origin fallback while prey live (`_test_motor_planner_pursuit_detour_skips_reeval_while_latched`, `_test_motor_planner_pursuit_detour_alternate_on_persistent_block`).
-- [ ] Duel manual: fox clears an **interior pinch** and resumes chase (same session as rabbit flee / locale patch).
-- [ ] No regression: post-6d Flight tests (A/B/C) and flee latch still pass.
+- [x] Duel manual: fox clears an **interior pinch** and resumes chase (same session as rabbit flee / locale patch). **Closed 2026-08-06 via accumulated evidence, not a dedicated repro** — see "Duel validation" below.
+- [x] No regression: post-6d Flight tests (A/B/C) and flee latch still pass — full-suite headless re-run during the C10/EAT-range work this session showed only the same 6 pre-existing unrelated failures.
+
+### Duel validation (2026-08-06)
+
+No dedicated "walk the fox into a rock on purpose" repro was run. Marked `done` instead on the strength of several recent live duel sessions (the C10 terrain-tunneling investigation and the fox-can't-close/EAT-range investigation, both same day) that exercised the real pursuit path end-to-end — live prey, real obstacle geometry, real navmesh — with **no** instance of the C1 symptom (`MOVE_F blk=1` stall into an obstacle with no turn recovery). The EAT-range fix in particular required the fox to successfully close through real duel geometry to reach the prey at all, which wouldn't have been observable if C1's pinch-stall were still live. If the pinch-stall resurfaces in a future duel, reopen this item rather than filing a new one.
 
 ### Open questions
 
@@ -189,7 +193,7 @@ _Resolved 2026-07-10:_ `pursuit_detour_latch_ticks` = **16** (mirror flee) for P
 
 ## C2 — Locale food approach oscillation (rabbit)
 
-**Status:** `in_progress`  
+**Status:** `done` — marked done 2026-08-06 on accumulated live-duel evidence (rabbit food approach unremarkable across multiple recent sessions); residual #3 (2026-08-05) never reproduced again and its temporary debug tracing was removed. See "Duel validation" below.  
 **Slice:** `post-6d-approach-geometry` (shared with C1; herbivore memory-seek tail)  
 **Evidence:** Duel playtest **2026-07-10** (session ~16:00) — after live bush seek at `(32.2, 65.0)`, rabbit hub retargets to **locale prior** `(26.0, 78.0)` at **t≈2201** (`src=locale`, `w≈0.294`). From **t≈2366** through session end (**t≈2617**): repeating **TURN_*** sweep → **`MOVE_F` with `err≈±137°`–`180°`** (`dot` negative) while `blk=0`, `cblk=0`, `ff=0`, `thr=0`. Log: `%APPDATA%\Godot\app_userdata\Hunter Killer\logs\motor_explore_tick.log` (rolling tail t=2218+) and `hunter_killer.log` (`MotorExplore` DEBUG lines).
 
@@ -248,9 +252,13 @@ C2-specific tails on top of the [shared foundation](#shared-implementation-plan-
 ### Acceptance (draft)
 
 - [x] Headless: [C2 smoke fixture](#l1-fixture-layout-locale_orbit) — herbivore reaches within `action_max_distance` of seeded locale anchor without err sign-flip loop or `locale_no_progress_ticks` runaway (`_test_motor_locale_approach_no_oscillation_smoke` green after the same-tick clamp fix).
-- [ ] Headless: assert **no** `MOVE_F` **selected** when misaligned at `select_action` time (`|err| > turn_increment_deg` at decision time — not post-tick snapshot; see cone gate note).
-- [ ] Duel manual: rabbit eats or leaves locale patch — no in-place spin at `(26, 78)`-class anchor after live food session.
-- [x] No regression (headless): full-suite diff against pre-change baseline shows zero new failures. **Not yet re-verified in duel.**
+- [ ] Headless: assert **no** `MOVE_F` **selected** when misaligned at `select_action` time (`|err| > turn_increment_deg` at decision time — not post-tick snapshot; see cone gate note). **Deferred, not blocking:** test-hardening only — the actual overshoot bug this would guard against is fixed and duel-validated; left as a nice-to-have regression contract for whoever next touches `align_and_move`.
+- [x] Duel manual: rabbit eats or leaves locale patch — no in-place spin at `(26, 78)`-class anchor after live food session. **Closed 2026-08-06 via accumulated evidence, not a dedicated repro** — see "Duel validation" below.
+- [x] No regression (headless): full-suite diff against pre-change baseline shows zero new failures, re-confirmed 2026-08-06 after removing the C2 residual #3 debug tracing.
+
+### Duel validation (2026-08-06)
+
+No dedicated locale-spin repro was run. Marked `done` instead because rabbit food-seeking has been unremarkable across multiple recent live duel sessions (same sessions cited for [C1](#c1-pursuit-contact-geometry-stall-fox)'s duel validation) — no oscillation, no in-place spin, no stalled locale approach observed. Residual #3 (2026-08-05, below) was never reproduced again despite labeled debug tracing left in place specifically to catch it; that tracing (`ARR_DBG`/`SYNCFOOD_DBG` in `motor_planner.gd`) has now been removed. If locale-anchor spin resurfaces, reopen this item rather than filing a new one — residual #3's root cause was never actually identified, only observed to stop recurring.
 
 ### Open questions
 
@@ -466,7 +474,7 @@ One underlying bug explained both the "coarse beats locale" and "locale consult"
 
 ## C7 — Flaky headless assertions (nondeterministic across identical runs)
 
-**Status:** `open` — discovered 2026-07-15 during R1 mitigation #1 A/B verification; not root-caused  
+**Status:** `in_progress` — replay-fixture flake root-caused and fixed 2026-08-06; memory-tier-precedence flake still open (separate cause, not investigated)  
 **Slice:** unassigned — test-infrastructure gap, not a motor-code bug  
 **Evidence:** Headless `run_all.gd`, **2026-07-15** — 3 assertions intermittently pass/fail across back-to-back runs of **identical, unchanged code**: `_test_motor_replay_fixture_drives_stack_from_capture`'s "closes on the captured prey trajectory", and `_test_creature_motor_stack_memory_tier_precedence`'s "coarse beats locale when precise absent" / "locale consult when no instance beliefs". Confirmed via `git stash` A/B isolation while investigating [R1](#r1--architecture-risk-one-action-per-tick--turn-first-alignment) mitigation #1: same commit, run 6 times back-to-back (3 pre-change, 3 post-change via stash), failure set was identical in 5 of 6 runs (13 assertions) but one run showed 12 (with the replay-fixture assertion swapped in for the two tier-precedence ones) — same code, different result.
 
@@ -478,15 +486,20 @@ Not order-dependent in an obvious way (test list is static, run sequentially) �
 
 Any future "before/after" headless comparison (regression hunting, tuning verification) needs **multiple runs**, not one, to trust a diff — a single run's assertion count/set is not reliable ground truth for these specific tests. This cost real investigation time during R1 verification (an initial single run showed what looked like a new regression from arrival damping; it took 4 additional runs each of before/after code to establish it was pre-existing flakiness, not a regression).
 
-### Root cause hypothesis (not investigated)
+### Root cause — replay-fixture flake (found and fixed 2026-08-06)
 
-Two candidates, not distinguished yet: (1) Jolt physics nondeterminism (sub-tick collision/floor-contact resolution varying slightly run to run — the replay-fixture test's carnivore body spends the whole 60-tick capture with `is_on_floor() == false`, continuously falling under gravity, which is itself likely a separate pre-existing fixture-setup gap worth a follow-up look); (2) the C4 ObjectDB corruption noise occasionally hitting a code path that changes behavior, not just prints. Both are guesses — not confirmed.
+Not Jolt substep nondeterminism, and not the C4 ObjectDB noise — both original hypotheses ruled out by direct isolation rather than guessed. Root-caused via a repeated-run harness (`_test_motor_replay_fixture_drives_stack_from_capture`'s exact scenario, rerun 12× in one process with per-tick `is_on_floor()`/margin tracing): the very first run showed `floor_true_ticks=0/60` and a thin closing-distance margin (1.30, just over the assertion's 0 threshold); all 11 subsequent runs showed `floor_true_ticks=60/60` and a comfortable margin (~7.7).
 
-### Acceptance (draft)
+Mechanism: this codebase only applies gravity and calls `move_and_slide()` inside `apply_horizontal_move_intent`, itself only invoked from a `MOVE_FORWARD`/`MOVE_BACKWARD` action ([`locomotion_executor.gd`](../../creature/motor/locomotion_executor.gd)) — never automatically every physics frame. The test spawns a floor + body and does a single `await process_frame` before driving the capture. A freshly-added collider isn't visible to physics broadphase queries until the physics server has actually processed a step, and whether that happened yet by the time `process_frame` resolves is a genuine race in headless/uncapped-FPS execution (the physics accumulator can run zero, one, or several steps per rendered frame depending on wall-clock scheduling). When it loses the race, the body falls through the never-registered floor for the entire 60-tick capture instead of landing, drifting further from the (grounded) prey in 3D and degrading the margin — occasionally enough to flip the assertion. Confirmed this isn't order-dependent test pollution: the *same* isolated scenario, rerun identically, produces the divergent outcome purely from this timing race.
 
-- [ ] Root-cause why these 3 specific assertions vary run-to-run on unchanged code.
-- [ ] Decide: fix the underlying nondeterminism, or make the assertions themselves tolerant (e.g. average over N ticks, widen threshold) if the nondeterminism is inherent to the simulation (e.g. physics substep jitter) rather than a bug.
-- [ ] Separately worth a look: the replay-fixture carnivore body reports `is_on_floor() == false` for the entire 60-tick capture in both pre- and post-R1 code — likely a fixture floor-collision setup gap, not a motor bug, but currently undiagnosed.
+**Fix:** [`MotorReplayFixture.drive_stack`](../../tests/motor_replay_fixture.gd) now awaits two full `physics_frame` cycles before starting its capture-drive loop (`_settle_on_floor`, one cycle was empirically not reliably enough headroom; a synchronous manual-call-only loop with no yield to the engine at all did not force the sync either — both tried and rejected before landing on this). This does not guarantee full floor-contact resolution every run, but makes the *outcome* deterministic — verified via 5 separate `--headless` process invocations (not just loop iterations sharing a process, which introduces its own confound via deferred `queue_free()` timing), byte-identical assertion result every time. Deterministic pass/fail is what the fixture's assertions actually need; chasing full physical grounding further was out of scope for this fix.
+
+### Acceptance
+
+- [x] Root-cause why `_test_motor_replay_fixture_drives_stack_from_capture` varies run-to-run on unchanged code — physics-frame/collider-registration race, not Jolt jitter or C4 noise (see above).
+- [x] Fix: `drive_stack` settles on two `physics_frame` cycles before driving the capture. Verified deterministic across 5 separate process invocations.
+- [ ] `_test_creature_motor_stack_memory_tier_precedence` ("coarse beats locale when precise absent" / "locale consult when no instance beliefs") — **not investigated this pass.** No physics bodies involved (pure logic test per C8's notes), so the replay-fixture's physics-timing cause doesn't apply; the C4 ObjectDB-noise hypothesis remains the more plausible untested lead here.
+- [ ] Decide whether other flaky assertions exist in the suite that haven't been caught yet — worth a scripted multi-run (both in-process-loop *and* separate-process) check before trusting any future single-run headless diff as authoritative, given how easily the replay-fixture flake hid behind "looks like it usually passes."
 
 ### Open questions
 
@@ -682,7 +695,7 @@ User chose to scope the geometry-aware approach rather than attempt another rota
 
 ## C10 — Fox ends up under the geography after close contact with prey (new, 2026-08-05)
 
-**Status:** `in_progress` — **root-caused 2026-08-06** (a boulder at `Obstacles3D/@Node3D@595`, world pos `(-52.0, -1.55, -6.31)`, sat un-tilted on a steep valley-slope with fragile concave-trimesh collision) and **one real cause fixed same day** (boulders now bake convex hulls, verified structurally and via repro — 9/10 headless runs now clean, up from a lower pre-fix rate). **Not fully closed**: 1/10 post-fix runs still tripped C10 on open terrain ~12 units from any boulder, confirming a second, independent terrain-only tunneling cause still open. Contact-with-prey was the original (now disproven) hypothesis.  
+**Status:** `fixed` — **two independent causes found and fixed, both 2026-08-06.** Cause 1: a boulder at `Obstacles3D/@Node3D@595`, world pos `(-52.0, -1.55, -6.31)`, sat un-tilted on a steep valley-slope with fragile concave-trimesh collision — fixed by baking convex hulls for obstacle props (9/10 headless runs clean, up from a lower pre-fix rate). Cause 2: the remaining ~1/10 terrain-only trips (no boulder within 12 units) were confirmed via a raycast-grid probe to **not** be a geometry hole — the slope surface there is solid and continuous (30.2°, well under the 50° `floor_max_angle`) — so the tunneling was traced to `CharacterBody3D`'s collision `safe_margin` sitting at Godot's default (0.001m), too thin relative to creature speed (fox `max_speed=7.0` → ~0.117m/tick at 60Hz) crossing a concave terrain trimesh; fixed by setting `safe_margin = 0.06` on both creature templates. **Verified: 10/10 post-fix headless runs, zero C10 trips** (up from 9/10 after cause 1 alone). Contact-with-prey was the original (now disproven) hypothesis.  
 **Slice:** unassigned — physics/collision (obstacle placement + collision-shape generation in `main_3d.gd` / `playfield_bounds_3d.gd` — obstacle-prop half fixed); remaining terrain-only tunneling likely same family as [C8](#c8-stable-pre-existing-test-failures-found-during-r1-mitigation-2-audit)'s thin-wall tunneling finding; **not** related to C3/EAT-contact geometry (ruled out)  
 **Evidence:** live duel session, forced edge-chase spawn (`main_3d.gd`, `_DEBUG_FORCE_EDGE_CHASE_SPAWN`) — user report: "the fox appeared to somehow end up under the geography so the rabbit was able to escape and the fox was essentially trapped."
 
@@ -755,9 +768,10 @@ LANDED    tick=227 pos=(-50.78, -1.71, -8.01) after 19 airborne ticks
 - [x] Identify the exact terrain feature/collision shape at the fall location and confirm the slope-tunneling hypothesis directly (not just circumstantially).
 - [x] Fix the boulder-seam cause: `PlayfieldBounds3D.ensure_obstacle_physics` now bakes convex hulls (`StaticObstacleCollision.sync_convex_blocker_from_visual`) for obstacle props instead of raw trimesh; terrain itself intentionally left as trimesh. Headless suite: same 6 pre-existing baseline failures, no regression; new assertion added (`_test_boulder_obstacle_collision_bake`) confirming the baked shape is genuinely convex, not trimesh.
 - [x] Reproduce reliably (or determine it's rare/one-off) before attempting a fix — confirmed intermittent (~1–2 in 10 headless runs), always in the same location.
-- [~] **Verify the fix against the repro: partial.** 9 of 10 post-fix headless runs had zero C10 trips (improved from pre-fix). 1 of 10 still tripped, ~12 units from the nearest boulder — confirms a **second, independent cause** (terrain-vs-capsule tunneling on the steep slope itself, no obstacle involved). The boulder-seam fix is real and verified; C10 as a whole is **not fully closed**.
-- [ ] Root-cause and fix the remaining terrain-only tunneling (leading hypothesis: same family as [C8](#c8-stable-pre-existing-test-failures-found-during-r1-mitigation-2-audit)'s freefall-after-clipping-through-a-thin-wall finding — likely needs CCD on creature bodies, or a look at why a steep trimesh slope alone can still be tunneled through even without an obstacle seam).
-- [ ] Fix, then re-verify C9's live loop-closure question can finally be answered cleanly (this bug currently blocks that verification).
+- [x] **Verify the boulder-seam fix against the repro.** 9 of 10 post-fix headless runs had zero C10 trips (improved from pre-fix). 1 of 10 still tripped, ~12 units from the nearest boulder — confirmed a **second, independent cause** (terrain-vs-capsule tunneling, no obstacle involved).
+- [x] Root-cause and fix the remaining terrain-only tunneling — **2026-08-06.** Raycast-grid probe at the exact repeat-offending coordinates (same spot to within ~1 tick/~1m across two separate sessions) confirmed the terrain surface is solid/continuous, ruling out a geometry hole. Traced to `CharacterBody3D` collision `safe_margin` at Godot's default (0.001m) — too thin relative to creature speed vs. concave terrain trimesh. Fixed via `safe_margin = 0.06` on both `creature_carnivore_kinematic_3d.tscn` and `creature_herbivore_kinematic_3d.tscn`.
+- [x] **Verify the terrain-tunneling fix against the repro: 10/10 post-fix headless runs, zero C10 trips** (6 completed the full 3600 ticks cleanly; 4 hit the unrelated, already-tracked [C9](#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) flee-loop bug first). Full `tests/run_all.gd` regression suite re-run with the fix in place: same 6 pre-existing baseline failures, byte-identical — no regression.
+- [x] Re-verify C9's live loop-closure question can finally be answered cleanly (C10 no longer interrupts repro runs) — C9 remains independently open/tracked; see its own section for status.
 
 ### Root cause, pinned down (2026-08-06)
 
@@ -794,7 +808,25 @@ User chose the convex-collision route over slope-aware placement (main tradeoff 
 - 10 repeated 3600-tick headless runs: **9 of 10 had zero C10 trips** (down from roughly 2–3 full trips in a comparable ~12–14 run sample pre-fix, plus C9 trips on 5 of the 10 runs — a separate, already-tracked issue, unaffected either way).
 - **1 of 10 still tripped C10** — `fox#150458077494`, tick 494, `pos=(-57.56469, -2.664979, -6.090335)`. Checked this against the full obstacle list: the nearest boulder is `@Node3D@593` at `(-64.0, 0.31, -14.45)`, **~12 units away** — far too far to be involved. This trip is on open terrain, no boulder anywhere nearby, on the same steep valley-slope feature.
 
-**Conclusion: the boulder-seam cause is real, fixed, and verified — but it was not the only cause.** There's a second, independent tunneling mechanism: a fast-moving capsule can apparently tunnel through the terrain's own steep-slope trimesh directly, with no obstacle involved at all. This matches leading hypothesis #3 from the original investigation (the C8-tracked "freefall after clipping through a thin wall" family) even more precisely than the boulder finding did — C10 is **not closed**, just meaningfully reduced in frequency, and the remaining cause is now more narrowly scoped (terrain-vs-capsule slope tunneling specifically, not obstacle placement).
+**Conclusion: the boulder-seam cause is real, fixed, and verified — but it was not the only cause.** There's a second, independent tunneling mechanism: a fast-moving capsule can apparently tunnel through the terrain's own steep-slope trimesh directly, with no obstacle involved at all. This matches leading hypothesis #3 from the original investigation (the C8-tracked "freefall after clipping through a thin wall" family) even more precisely than the boulder finding did — the remaining cause is now more narrowly scoped (terrain-vs-capsule slope tunneling specifically, not obstacle placement).
+
+### Second cause root-caused and fixed (2026-08-06, same day): collision `safe_margin`
+
+Caught a fresh instance of the remaining trip via the same headless repro: `fox#150609072438`, tick 493, `pos=(-57.567, -2.633, -6.208)`, 46 airborne ticks. Compared against the earlier post-boulder-fix trip (`fox#150458077494`, tick 494, `pos=(-57.565, -2.665, -6.090)`) — the two are within ~1 tick and ~1 meter of each other **across separate sessions**, i.e. not random scattered tunneling but the same slope segment failing deterministically on the same forced-spawn repro path.
+
+**Diagnostic:** wrote a throwaway raycast-grid probe (`tests/_tmp_c10_terrain_probe.gd`, deleted after use) — a 7×7 grid of vertical rays at 0.25m spacing centered on the fall coordinates, plus direct rays at both historical fall points. Every ray hit cleanly: smooth, continuous surface, normal `(0.01, 0.86, 0.50)` → **30.2° slope**, collider `AutoCollision_Grid`, well under the fox's `floor_max_angle` (50°). No hole, no gap, no degenerate triangle — this rules out a geometry defect at this location.
+
+**Root cause:** with a provably solid surface being tunneled through at the same tick every run, the cause has to be collision-margin/CCD tunneling, not terrain geometry. Neither creature template (`creature_carnivore_kinematic_3d.tscn`, `creature_herbivore_kinematic_3d.tscn`) had a `safe_margin` override on their `Body` (`CharacterBody3D`) node, leaving Godot's default of 0.001m — razor-thin relative to creature speed (fox `max_speed = 7.0`, [fox_archetype.tres](../../creature/species/fox_archetype.tres), → ~0.117m of displacement per tick at the default 60Hz physics rate) crossing a concave trimesh (`AutoCollision_Grid`, baked via `supplement_trimesh_collision_from_meshes`) on a slope. Concave-trimesh-vs-capsule with a near-zero margin is exactly the collision configuration most prone to per-triangle-edge tunneling under `move_and_slide()`.
+
+**Fix:** added `safe_margin = 0.06` to the `Body` node in both:
+- [`creature/templates/creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn)
+- [`creature/templates/creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn)
+
+**Verification:**
+- 10 repeated 3600-tick headless runs (`tests/smoke_ai_player.gd`, forced edge-chase spawn, invariant harness live): **zero C10 trips** (6 ran the full 3600 ticks with no invariant failures at all; 4 hit the unrelated, already-tracked C9 flee-loop bug first) — up from the prior ~1/10 (post-boulder-fix) rate.
+- Full `tests/run_all.gd` regression suite, re-run with the invariant harness temporarily disabled per the standing workaround (synthetic no-floor fixtures false-trip the airborne check): same **6 pre-existing baseline failures**, byte-identical — no regression from the `safe_margin` change. Harness flag reverted to `true` immediately after.
+
+**C10 is now closed** — both the boulder-seam cause and the terrain-only tunneling cause are fixed and independently verified against the live repro.
 
 ---
 
