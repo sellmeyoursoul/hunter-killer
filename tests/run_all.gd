@@ -25,6 +25,7 @@ const _PlayfieldBounds3D := preload("res://environment/playfield_bounds_3d.gd")
 const _TopDownCameraScr := preload("res://environment/top_down_camera_control.gd")
 const _PerimeterBoulders := preload("res://environment/playfield_perimeter_boulders.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
+const _SpawnRandomizer := preload("res://environment/playfield_spawn_randomizer.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
 const _RabbitArchetypeRes := preload("res://creature/species/rabbit_archetype.tres")
@@ -298,9 +299,13 @@ func _run_all() -> void:
   _test_playfield_bounds_3d_collision_only()
   _test_boulder_obstacle_collision_bake()
   _test_perimeter_boulder_density()
+  _test_spawn_randomizer_reproducible_with_seed()
+  _test_spawn_randomizer_respects_margin_and_separation()
+  _test_spawn_randomizer_layout_lock_round_trip()
   await _test_playfield_prop_grounding_on_thick_floor()
   await _test_ground_sampler_center_lower_than_rim()
   await _test_duel_spawn_picker_avoids_depression()
+  await _test_duel_spawn_picker_randomized_avoids_props()
   _test_creature_spawn_floor_settle()
   _test_human_prey_control_bootstrap()
   _test_human_move_intent_world_space()
@@ -5945,6 +5950,29 @@ func _test_duel_spawn_picker_avoids_depression() -> void:
     )
   (pack.get("root") as Node3D).queue_free()
 
+func _test_duel_spawn_picker_randomized_avoids_props() -> void:
+  var pack: Dictionary = await _grasslands_playfield_with_sampler()
+  var sampler: _GroundSampler = pack.get("sampler")
+  var bounds: Dictionary = pack.get("bounds")
+  var bmin: Vector2 = bounds.get("min", Vector2.ZERO)
+  var sz: Vector2 = bounds.get("size", Vector2.ZERO)
+  var baseline: Array = sampler.pick_duel_spawn_fractions()
+  _assert(baseline.size() >= 2, "baseline duel spawn picker returns two fractions")
+  var blocked_frac: Vector2 = baseline[0] as Vector2
+  var blocked_xz := bmin + Vector2(blocked_frac.x * sz.x, blocked_frac.y * sz.y)
+  var rng := RandomNumberGenerator.new()
+  rng.seed = 99
+  var existing: Array[Vector2] = [blocked_xz]
+  var picked: Array = sampler.pick_duel_spawn_fractions(
+    _GroundSampler.SPAWN_MIN_SEPARATION_FRAC, rng, existing
+  )
+  _assert(picked.size() >= 2, "randomized duel spawn picker still returns two fractions with existing_points set")
+  for frac_v in picked:
+    var frac := frac_v as Vector2
+    var xz := bmin + Vector2(frac.x * sz.x, frac.y * sz.y)
+    _assert(xz.distance_to(blocked_xz) >= 1.15, "randomized duel spawn picks clear an existing prop point")
+  (pack.get("root") as Node3D).queue_free()
+
 func _test_environment_baked_grid() -> void:
   var open := _EnvCell.new()
   open.passible = true
@@ -6483,12 +6511,18 @@ func _test_merge_defaults_and_override() -> void:
     "inference_client": {"INFERENCE_BASE_URL": "http://x"},
     "perception": {"SNAPSHOT_PHYSICS_STRIDE": 3},
     "creature_motor": {"mode": "llm"},
+    "playfield_spawn": {"seed": 777},
   }
   var merged: Dictionary = _Merge.merge_root(base, file_root)
   _assert(merged["logging_params"]["LOG_LEVEL"] == "Debug", "merge logging_params.LOG_LEVEL")
   _assert(merged["logging_params"]["MAX_LINES_PER_PROCESS"] == 128, "merge logging_params keeps default key")
   _assert(merged["inference_client"]["INFERENCE_BASE_URL"] == "http://x", "merge inference_client url")
   _assert(merged["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 3, "merge perception stride")
+  _assert(int(merged["playfield_spawn"].get("seed", 0)) == 777, "merge playfield_spawn.seed override")
+  _assert(
+    str(merged["playfield_spawn"].get("locked_layout_path", "x")) == "",
+    "merge playfield_spawn keeps default locked_layout_path when not overridden",
+  )
   _assert(str(merged["creature_motor"].get("mode", "")) == "llm", "merge creature_motor.mode override")
   _assert(
     is_equal_approx(float(merged["creature_motor"].get("weight_interior", 0.0)), 0.65),
@@ -6759,6 +6793,74 @@ func _test_perimeter_boulder_density() -> void:
       )
   tight_parent.queue_free()
   loose_parent.queue_free()
+
+func _spawn_randomizer_test_bounds() -> Dictionary:
+  return {
+    "valid": true,
+    "min": Vector2(0.0, 0.0),
+    "max": Vector2(40.0, 30.0),
+    "size": Vector2(40.0, 30.0),
+    "surface_y": 0.0,
+    "floor_y": 0.0,
+  }
+
+func _test_spawn_randomizer_reproducible_with_seed() -> void:
+  var bounds := _spawn_randomizer_test_bounds()
+  var rng_a := RandomNumberGenerator.new()
+  rng_a.seed = 42
+  var rng_b := RandomNumberGenerator.new()
+  rng_b.seed = 42
+  for _i in range(10):
+    var fa := _SpawnRandomizer.pick_uniform_fraction(rng_a, bounds)
+    var fb := _SpawnRandomizer.pick_uniform_fraction(rng_b, bounds)
+    _assert(fa.is_equal_approx(fb), "same seed produces identical uniform fraction sequence")
+
+func _test_spawn_randomizer_respects_margin_and_separation() -> void:
+  var bounds := _spawn_randomizer_test_bounds()
+  var rng := RandomNumberGenerator.new()
+  rng.seed = 7
+  var margin_m := 1.6
+  var margin_frac := Vector2(margin_m / 40.0, margin_m / 30.0)
+  for _i in range(50):
+    var f := _SpawnRandomizer.pick_uniform_fraction(rng, bounds, margin_m)
+    _assert(f.x >= margin_frac.x - 0.001, "uniform fraction stays in [0,1] and clears edge margin (x min)")
+    _assert(f.x <= 1.0 - margin_frac.x + 0.001, "uniform fraction stays in [0,1] and clears edge margin (x max)")
+    _assert(f.y >= margin_frac.y - 0.001, "uniform fraction stays in [0,1] and clears edge margin (y min)")
+    _assert(f.y <= 1.0 - margin_frac.y + 0.001, "uniform fraction stays in [0,1] and clears edge margin (y max)")
+  var existing: Array[Vector2] = []
+  var min_sep := 1.2
+  for _i in range(12):
+    var frac := _SpawnRandomizer.pick_clear_fraction(rng, bounds, null, existing, min_sep, margin_m)
+    var xz: Vector2 = bounds["min"] + Vector2(frac.x * bounds["size"].x, frac.y * bounds["size"].y)
+    for p in existing:
+      _assert(xz.distance_to(p) >= min_sep - 0.01, "clear fraction respects min separation from prior points")
+    existing.append(xz)
+
+func _test_spawn_randomizer_layout_lock_round_trip() -> void:
+  var layout := {
+    "interior_boulders": [Vector2(0.1, 0.2), Vector2(0.3, 0.4)],
+    "solid_shrubs": [Vector2(0.5, 0.5)],
+    "herbivore": Vector2(0.5, 0.5),
+    "carnivore": Vector2(0.2, 0.5),
+  }
+  var json_text := _SpawnRandomizer.serialize_layout(layout, 123456)
+  var parsed := _SpawnRandomizer.parse_layout(json_text)
+  _assert(int(parsed.get("seed", -1)) == 123456, "serialized layout round-trips seed")
+  var boulders := _SpawnRandomizer.locked_fraction_list(parsed, "interior_boulders", 2)
+  _assert(boulders.size() == 2, "locked_fraction_list round-trips expected count")
+  _assert(boulders[0].is_equal_approx(Vector2(0.1, 0.2)), "locked_fraction_list round-trips first fraction")
+  _assert(boulders[1].is_equal_approx(Vector2(0.3, 0.4)), "locked_fraction_list round-trips second fraction")
+  var mismatched := _SpawnRandomizer.locked_fraction_list(parsed, "interior_boulders", 5)
+  _assert(mismatched.is_empty(), "locked_fraction_list rejects wrong expected_count")
+  var herb: Variant = _SpawnRandomizer.locked_fraction(parsed, "herbivore")
+  _assert(
+    typeof(herb) == TYPE_VECTOR2 and (herb as Vector2).is_equal_approx(Vector2(0.5, 0.5)),
+    "locked_fraction round-trips herbivore",
+  )
+  var missing: Variant = _SpawnRandomizer.locked_fraction(parsed, "carnivore_typo")
+  _assert(missing == null, "locked_fraction returns null for missing key")
+  var bad := _SpawnRandomizer.parse_layout("not json")
+  _assert(bad.is_empty(), "parse_layout returns empty dict on malformed JSON")
 
 func _test_playfield_bounds_3d_collision_only() -> void:
   var playfield_root := Node3D.new()

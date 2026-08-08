@@ -1,6 +1,6 @@
 extends Node
 ## Autoload **GameConfig**: loads and merges [code]user://game_config.json[/code] before **OLog** initializes.
-## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], [code]creature_motor[/code], and [code]creature_motor_v3[/code] with safe defaults.
+## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], [code]creature_motor[/code], [code]creature_motor_v3[/code], and [code]playfield_spawn[/code] with safe defaults.
 
 const CONFIG_PATH := "user://game_config.json"
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -63,6 +63,14 @@ func get_creature_motor_v3_params() -> Dictionary:
   if typeof(cm) != TYPE_DICTIONARY:
     return _Merge.default_creature_motor_v3_params()
   return cm.duplicate(true)
+
+
+## Merged [code]playfield_spawn[/code] ([code]seed[/code], [code]locked_layout_path[/code]).
+func get_playfield_spawn_params() -> Dictionary:
+  var ps: Variant = _merged.get("playfield_spawn", {})
+  if typeof(ps) != TYPE_DICTIONARY:
+    return _Merge.default_playfield_spawn_params()
+  return ps.duplicate(true)
 
 
 ## Spine + profile + optional pack [code]creature_motor[/code] overlay for one creature instance.

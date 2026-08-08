@@ -2,6 +2,8 @@ Purpose: Working spec for ENGINE creature movement and goal refactor (V3). **Aut
 
 **Cleanup / gap work:** Bug fixes and implementation-gap **design** (post-ship playtest, CI smoke extensions) live in [CREATURE_MOVEMENT_V3_CLEANUP.md](CREATURE_MOVEMENT_V3_CLEANUP.md) — not §12 phasing. Promote closed items back into this spec or §12 when scheduled.
 
+**Randomized spawn stress-test log:** issues found specifically via the randomized interior boulder / food / duel-pair spawn ([ENVIRONMENT_MODEL_PLAN.md §6.4](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)) are tracked separately in [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](CREATURE_MOVEMENT_V3_RANDOMTESTS.md) — sibling to the cleanup log above, not a duplicate; move an item there into `CLEANUP.md` if it turns out to be a pre-existing bug unrelated to spawn randomization.
+
 **Step 1 (2026-06-20):** Promoted to [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); [CREATURE_MOVEMENT_V2.md](../Completed_Features/CREATURE_MOVEMENT_V2.md) + [POST_LOS_MOVEMENT.md](../Completed_Features/POST_LOS_MOVEMENT.md) archived with supersession banners; registered in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md).
 
 # Definitions

@@ -84,3 +84,7 @@ Testing/
 inference/windows/bin/
 modules/
 *.gguf
+
+# Randomized Playfield Spawn: overwritten every run, not meant to be committed itself — copy
+# aside to spawn_layout_locked_*.json (tracked) to freeze a specific repro layout.
+/spawn_layout_last_run.json

@@ -11,6 +11,7 @@ const _FoxArchetype := preload("res://creature/species/fox_archetype.tres")
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
+const _SpawnRandomizer := preload("res://environment/playfield_spawn_randomizer.gd")
 const _TopDownCamera := preload("res://environment/top_down_camera_control.gd")
 
 const _GRASSLANDS_SCENE := "res://assets/locations/grasslands/h-k-grasslands.blend"
@@ -22,6 +23,15 @@ const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 ## forces the duel spawn to the playfield edge so fox-chases-rabbit-into-a-corner reproduces on
 ## demand instead of by chance. Flip to false (or delete this block) once no longer needed.
 const _DEBUG_FORCE_EDGE_CHASE_SPAWN := true
+
+## Randomized Playfield Spawn ([ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)):
+## every-run snapshot of resolved interior boulder / food / duel-pair fractions, overwritten each
+## time a layout is resolved. Copy this file elsewhere and point `playfield_spawn.locked_layout_path`
+## (game_config.json) at the copy to freeze a specific buggy layout for repro.
+const _SPAWN_LAYOUT_LAST_RUN_PATH := "res://spawn_layout_last_run.json"
+const _INTERIOR_BOULDER_COUNT := 18
+const _SOLID_SHRUB_COUNT := 3
+const _OPEN_SHRUB_COUNT := 2
 
 const _FALLBACK_PLAYFIELD_SIZE := Vector2(40.0, 40.0)
 const _TOP_DOWN_MARGIN := 1.12
@@ -58,6 +68,11 @@ var _obstacles_root: Node3D
 var _food_root: Node3D
 var _using_fallback_floor: bool = false
 var _ground_sampler: PlayfieldGroundSampler
+var _spawn_rng: RandomNumberGenerator
+var _spawn_seed: int = 0
+var _spawn_existing_points: Array[Vector2] = []
+var _spawn_locked_layout: Dictionary = {}
+var _spawn_last_layout: Dictionary = {}
 var _nav_region: NavigationRegion3D
 ## `NavigationRegion3D.bake_navigation_mesh()` runs on a background thread — `get_navigation_map_rid()`
 ## returns a valid RID immediately, but `NavigationServer3D.map_get_path` on it returns empty until
@@ -294,13 +309,93 @@ func _build_playfield() -> void:
   _obstacles_root = Node3D.new()
   _obstacles_root.name = "Obstacles3D"
   _playfield_root.add_child(_obstacles_root)
+  _init_spawn_layout()
   _spawn_perimeter_boulders()
   _spawn_interior_boulders()
   _ensure_food_plants()
+  _write_spawn_layout_file()
   call_deferred("_snap_playfield_props_to_ground")
   call_deferred("_bake_ground_sampler")
   call_deferred("_bake_playfield_navmesh")
   _log_playfield_diagnostics()
+
+
+## Randomized Playfield Spawn setup — seeds the shared RNG and loads a locked layout (when
+## configured) before any object placement runs this build. Boulders/food are session-lifetime
+## fixed (this only runs from [method _build_playfield], called once from [method _ready]).
+func _init_spawn_layout() -> void:
+  var cfg := _playfield_spawn_config()
+  var seed_cfg := int(cfg.get("seed", 0))
+  _spawn_rng = RandomNumberGenerator.new()
+  if seed_cfg != 0:
+    _spawn_seed = seed_cfg
+  else:
+    _spawn_rng.randomize()
+    _spawn_seed = int(_spawn_rng.seed)
+  _spawn_rng.seed = _spawn_seed
+  _spawn_existing_points = []
+  _spawn_last_layout = {}
+  var lock_path := str(cfg.get("locked_layout_path", "")).strip_edges()
+  _spawn_locked_layout = _load_spawn_layout_file(lock_path) if not lock_path.is_empty() else {}
+  if not _spawn_locked_layout.is_empty():
+    ## Locked mode never draws from _spawn_rng for placement — record the locked file's own seed
+    ## (not a fresh one) so the rewritten snapshot doesn't imply positions came from RNG this run.
+    _spawn_seed = int(_spawn_locked_layout.get("seed", _spawn_seed))
+
+
+func _playfield_spawn_config() -> Dictionary:
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_playfield_spawn_params"):
+    return gc.call(&"get_playfield_spawn_params")
+  return {"seed": 0, "locked_layout_path": ""}
+
+
+## Loads a locations file written by [method _write_spawn_layout_file] (or a hand-copied lock
+## file). Returns an empty dict (falls back to randomization) when missing or malformed.
+func _load_spawn_layout_file(path: String) -> Dictionary:
+  if not FileAccess.file_exists(path):
+    OLog.info(
+      "Main3D: locked_layout_path %s not found — falling back to randomized spawn" % path,
+      true,
+      "Main3D",
+    )
+    return {}
+  var layout := _SpawnRandomizer.parse_layout(FileAccess.get_file_as_string(path))
+  if layout.is_empty():
+    OLog.error("Main3D: %s is not valid JSON — falling back to randomized spawn" % path, false, "Main3D")
+  return layout
+
+
+func _locked_fraction_list(key: String, expected_count: int) -> Array[Vector2]:
+  var out := _SpawnRandomizer.locked_fraction_list(_spawn_locked_layout, key, expected_count)
+  if out.is_empty() and _spawn_locked_layout.has(key):
+    OLog.info(
+      "Main3D: locked layout key %s doesn't have %d well-formed entries — falling back to randomized spawn for this set"
+      % [key, expected_count],
+      true,
+      "Main3D",
+    )
+  return out
+
+
+func _locked_fraction(key: String) -> Variant:
+  return _SpawnRandomizer.locked_fraction(_spawn_locked_layout, key)
+
+
+func _write_spawn_layout_file() -> void:
+  if not OS.is_debug_build():
+    return
+  var f := FileAccess.open(_SPAWN_LAYOUT_LAST_RUN_PATH, FileAccess.WRITE)
+  if f == null:
+    OLog.info(
+      "Main3D: could not write %s (err=%s) — locked-layout snapshot skipped"
+      % [_SPAWN_LAYOUT_LAST_RUN_PATH, FileAccess.get_open_error()],
+      true,
+      "Main3D",
+    )
+    return
+  f.store_string(_SpawnRandomizer.serialize_layout(_spawn_last_layout, _spawn_seed))
+  f.close()
 
 
 func get_navigation_map_rid() -> RID:
@@ -491,27 +586,13 @@ func _spawn_interior_boulders() -> void:
     _boulder_scene = load(_BOULDER_SCENE) as PackedScene
   if _boulder_scene == null:
     return
-  # Pass 5 / C1 interior obstacles — denser field for chase detour smoke.
-  var fracs: Array[Vector2] = [
-    Vector2(0.12, 0.18),
-    Vector2(0.28, 0.72),
-    Vector2(0.52, 0.22),
-    Vector2(0.74, 0.58),
-    Vector2(0.42, 0.48),
-    Vector2(0.86, 0.34),
-    Vector2(0.18, 0.42),
-    Vector2(0.24, 0.46),
-    Vector2(0.48, 0.66),
-    Vector2(0.54, 0.70),
-    Vector2(0.72, 0.28),
-    Vector2(0.78, 0.32),
-    Vector2(0.20, 0.26),
-    Vector2(0.26, 0.20),
-    Vector2(0.66, 0.76),
-    Vector2(0.72, 0.80),
-    Vector2(0.38, 0.34),
-    Vector2(0.58, 0.44),
-  ]
+  ## Randomized Playfield Spawn: interior boulders may overlap each other/other props on purpose
+  ## (deliberate clutter stress test) — only creature spawns get overlap-avoidance. See
+  ## [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
+  var fracs := _locked_fraction_list("interior_boulders", _INTERIOR_BOULDER_COUNT)
+  if fracs.is_empty():
+    for _i in range(_INTERIOR_BOULDER_COUNT):
+      fracs.append(_SpawnRandomizer.pick_uniform_fraction(_spawn_rng, _playfield_bounds))
   for frac in fracs:
     var pos := _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
     var rock := _boulder_scene.instantiate() as Node3D
@@ -521,6 +602,8 @@ func _spawn_interior_boulders() -> void:
     rock.global_position = pos
     rock.add_to_group(&"obstacles")
     PlayfieldBounds3D.ensure_obstacle_physics(rock)
+    _spawn_existing_points.append(Vector2(pos.x, pos.z))
+  _spawn_last_layout["interior_boulders"] = fracs
 
 
 func _ensure_world_static_collision(root: Node) -> void:
@@ -640,15 +723,16 @@ func _ensure_food_plants() -> void:
   _food_root = Node3D.new()
   _food_root.name = "FoodPlants"
   add_child(_food_root)
-  var solid_fracs: Array[Vector2] = [
-    Vector2(0.328, 0.495),
-    Vector2(0.677, 0.171),
-    Vector2(0.370, 0.743),
-  ]
-  var open_fracs: Array[Vector2] = [
-    Vector2(0.238, 0.648),
-    Vector2(0.661, 0.810),
-  ]
+  ## Randomized Playfield Spawn: food/shrubs may overlap boulders/other food on purpose — see
+  ## [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
+  var solid_fracs := _locked_fraction_list("solid_shrubs", _SOLID_SHRUB_COUNT)
+  if solid_fracs.is_empty():
+    for _i in range(_SOLID_SHRUB_COUNT):
+      solid_fracs.append(_SpawnRandomizer.pick_uniform_fraction(_spawn_rng, _playfield_bounds))
+  var open_fracs := _locked_fraction_list("open_shrubs", _OPEN_SHRUB_COUNT)
+  if open_fracs.is_empty():
+    for _i in range(_OPEN_SHRUB_COUNT):
+      open_fracs.append(_SpawnRandomizer.pick_uniform_fraction(_spawn_rng, _playfield_bounds))
   for frac in solid_fracs:
     if _solid_shrub_scene == null:
       break
@@ -657,7 +741,9 @@ func _ensure_food_plants() -> void:
       s.queue_free()
       continue
     _food_root.add_child(s)
-    s.global_position = _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
+    var spos := _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
+    s.global_position = spos
+    _spawn_existing_points.append(Vector2(spos.x, spos.z))
   for frac in open_fracs:
     if _open_shrub_scene == null:
       break
@@ -666,7 +752,11 @@ func _ensure_food_plants() -> void:
       o.queue_free()
       continue
     _food_root.add_child(o)
-    o.global_position = _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
+    var opos := _Bounds3D.world_position_from_fraction(_playfield_bounds, frac, 0.0)
+    o.global_position = opos
+    _spawn_existing_points.append(Vector2(opos.x, opos.z))
+  _spawn_last_layout["solid_shrubs"] = solid_fracs
+  _spawn_last_layout["open_shrubs"] = open_fracs
 
 
 func _validate_food_plant_kind_id(plant: Node) -> bool:
@@ -694,8 +784,18 @@ func _spawn_duel_pair() -> void:
   _ensure_ground_sampler_ready()
   var herb_frac := Vector2(0.50, 0.50)
   var carn_frac := Vector2(0.18, 0.50)
-  if _ground_sampler != null and _ground_sampler.is_valid():
-    var spawn_fracs: Array = _ground_sampler.pick_duel_spawn_fractions()
+  ## Randomized Playfield Spawn: creature spawns are the one object type that must avoid overlap
+  ## with everything else already placed (boulders/food) — see
+  ## [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
+  var locked_herb: Variant = _locked_fraction("herbivore")
+  var locked_carn: Variant = _locked_fraction("carnivore")
+  if locked_herb != null and locked_carn != null:
+    herb_frac = locked_herb
+    carn_frac = locked_carn
+  elif _ground_sampler != null and _ground_sampler.is_valid():
+    var spawn_fracs: Array = _ground_sampler.pick_duel_spawn_fractions(
+      PlayfieldGroundSampler.SPAWN_MIN_SEPARATION_FRAC, _spawn_rng, _spawn_existing_points
+    )
     if spawn_fracs.size() >= 2:
       herb_frac = spawn_fracs[0] as Vector2
       carn_frac = spawn_fracs[1] as Vector2
@@ -705,6 +805,9 @@ func _spawn_duel_pair() -> void:
     # ping-pong on demand (awareness_radius default 1500 means separation distance doesn't matter).
     herb_frac = Vector2(0.05, 0.5)
     carn_frac = Vector2(0.20, 0.5)
+  _spawn_last_layout["herbivore"] = herb_frac
+  _spawn_last_layout["carnivore"] = carn_frac
+  _write_spawn_layout_file()
   var hpos := _spawn_position("HerbivoreSpawn", herb_frac)
   var cpos := _spawn_position("CarnivoreSpawn", carn_frac)
   var hint_y := float(_playfield_bounds.get("floor_y", 0.0))

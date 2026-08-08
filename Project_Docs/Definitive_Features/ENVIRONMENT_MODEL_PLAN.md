@@ -22,6 +22,7 @@
 | **Footprint: polygon–cell overlap vs center-only** | **Shipped (M4):** ≥25% overlap via [environment_footprint_sampler.gd](../../environment/environment_footprint_sampler.gd) | OBJECT §9 — §11 |
 | **`env_detour_patience_ticks`** vs shared **`awareness_memory_ticks`** | **FUTURE** if coupling hurts | OBJECT §8.2.5 — §11; [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) |
 | **Silhouette vs unexplored** second motor bucket + LOS on snapshot | **FUTURE** (perception / FOV) | OBJECT §8.2.5 comments; OBJECT §10 — §11 |
+| **Randomized interior boulder / food / duel-pair spawn** (perimeter boulders stay fixed) + lockable repro layout file | **Done (3D)** | **§6.4**; [`playfield_spawn_randomizer.gd`](../../environment/playfield_spawn_randomizer.gd) |
 
 ---
 
@@ -157,6 +158,34 @@
 
 **Helper module:** [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd) — convex blocker sync + pickup sphere fit. **Boulders** use **trimesh** (accurate static rock); **shrubs** use **convex hull** (cheaper, fewer snags).
 
+### 6.4 Randomized playfield spawn layout (interior boulders / food / duel pair)
+
+**Purpose:** a deliberate clutter stress test, **not** gameplay balancing — every run randomizes the 18 interior boulders, the 5 food shrubs (3 solid + 2 open), and the herbivore/carnivore duel pair, so the movement / memory / goals engines have to cope with realistic (sometimes overlapping) prop layouts instead of the hand-tuned fractions **`main_3d.gd`** shipped with previously. **Perimeter boulders are unaffected** — still procedurally placed along the edge by [`playfield_perimeter_boulders.gd`](../../environment/playfield_perimeter_boulders.gd) exactly as before.
+
+**Overlap policy (intentional asymmetry):**
+- **Interior boulders and food** (`_SpawnRandomizer.pick_uniform_fraction`) are pure uniform-random within the edge margin — **no** mutual-separation or terrain-depression check. They may overlap each other or land in awkward terrain on purpose.
+- **Creature spawns only** (`_SpawnRandomizer.pick_clear_fraction`, and the `rng`/`existing_points` overload of [`PlayfieldGroundSampler.pick_duel_spawn_fractions()`](../../environment/playfield_ground_sampler.gd)) reject candidates too close to already-placed boulders/food or below the existing depression-safety threshold, so a creature never spawns embedded in a prop or on terrain that risks the C9/C10 tunneling class of bug.
+
+**Config** (`game_config.json` → `playfield_spawn`, merged via [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `seed` | `0` | `0` draws a fresh OS-random seed each run; nonzero is accepted but not the primary lock mechanism (see below). |
+| `locked_layout_path` | `""` (empty) | Non-empty `res://`/`user://` path → skip randomization entirely and load fractions verbatim from that JSON file. |
+
+**Locations file:** every resolved layout is written (debug builds only, `res://` is otherwise read-only) to **`res://spawn_layout_last_run.json`** — overwritten on every `_build_playfield()` (world objects) and every `new_game()` (duel pair re-roll). Format: `{"seed": int, "interior_boulders": [[fx,fy], ...], "solid_shrubs": [...], "open_shrubs": [...], "herbivore": [fx,fy], "carnivore": [fx,fy]}`.
+
+**Lock workflow (freeze a buggy layout until it's root-caused):**
+1. Reproduce the bug.
+2. Copy `spawn_layout_last_run.json` to a descriptive name, e.g. `spawn_layout_locked_<bug>.json`.
+3. Set `playfield_spawn.locked_layout_path` in `game_config.json` (or a `user://game_config.json` override, to avoid dirtying the committed default) to that path.
+4. Commit the locked file if the repro should be shareable across machines.
+5. Every run now loads that exact layout — boulders, food, and the duel pair — until the path is cleared.
+
+**Key files:** [`playfield_spawn_randomizer.gd`](../../environment/playfield_spawn_randomizer.gd) (pick + serialize/parse helpers, no scene/physics dependency — independently unit-tested), [`playfield_ground_sampler.gd`](../../environment/playfield_ground_sampler.gd) `pick_duel_spawn_fractions()` (optional `rng`/`existing_points` params layered on the existing elevation-rim/no-depression filtering), `main_3d.gd` `_init_spawn_layout()` / `_spawn_interior_boulders()` / `_ensure_food_plants()` / `_spawn_duel_pair()` / `_write_spawn_layout_file()` / `_load_spawn_layout_file()`.
+
+**Testing:** this is a deliberate clutter stress test of the movement/memory/goals engines (§6.4 above) — issues found while running with randomized spawn are tracked in [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](../Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md), not in this file.
+
 ---
 
 ## 7. Acceptance criteria
@@ -242,6 +271,7 @@
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | **§6.4 (new):** Randomized interior boulder / food / duel-pair spawn (perimeter boulders unaffected) with a lockable `spawn_layout_last_run.json` repro file; `game_config.json` gained `playfield_spawn` (`seed`, `locked_layout_path`). Deliberate stress test — boulders/food may overlap, only creature spawns get overlap-avoidance. |
 | 2026-06-08 | **§6:** Promoted to **3D** layer/mask table (`3d_physics`, kinematic duel templates, `*_shrub_3d.tscn`); §2 context + §7 acceptance updated (M3). |
 | 2026-05-14 | **§6:** Godot **2D layer/mask split (Option A)** for **`solid_shrub`** / **`open_shrub`**; mob mask **`9`**; renumbered §6→§12. Tracking: physics table **Specified**. |
 | 2026-05-12 | §10: Mode A / float policy; silhouette vs unexplored. |

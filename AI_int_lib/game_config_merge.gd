@@ -19,6 +19,18 @@ static func default_perception_params() -> Dictionary:
   }
 
 
+## Defaults for [code]playfield_spawn[/code] (randomized interior boulder/food/duel-pair placement,
+## [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)).
+## [code]seed == 0[/code] draws a fresh OS-random seed each run. A non-empty [code]locked_layout_path[/code]
+## bypasses randomization entirely and loads fractions verbatim from that JSON file — the "lock this
+## layout until the bug is resolved" escape hatch.
+static func default_playfield_spawn_params() -> Dictionary:
+  return {
+    "seed": 0,
+    "locked_layout_path": "",
+  }
+
+
 const _PackRes := preload("res://pack_resource_resolver.gd")
 
 ## Species-agnostic motor spine ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
@@ -460,6 +472,7 @@ static func default_root() -> Dictionary:
     "perception": default_perception_params(),
     "creature_motor": default_creature_motor_params(),
     "creature_motor_v3": default_creature_motor_v3_params(),
+    "playfield_spawn": default_playfield_spawn_params(),
   }
 
 
@@ -487,6 +500,8 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
     r["creature_motor"] = _merge_dict_shallow(r["creature_motor"], file_root["creature_motor"])
   if file_root.has("creature_motor_v3"):
     r["creature_motor_v3"] = _merge_dict_shallow(r["creature_motor_v3"], file_root["creature_motor_v3"])
+  if file_root.has("playfield_spawn"):
+    r["playfield_spawn"] = _merge_dict_shallow(r["playfield_spawn"], file_root["playfield_spawn"])
   return r
 
 

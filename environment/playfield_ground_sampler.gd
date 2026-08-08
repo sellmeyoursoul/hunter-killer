@@ -101,9 +101,22 @@ func elevation_at_cardinal_probe(pos: Vector3, dir: Vector3, step: float) -> flo
 
 
 ## Normalized playfield fractions for herbivore and carnivore duel spawns on elevated rim.
+## Params:
+## - separation_min_frac: Minimum normalized-fraction separation between the two picks.
+## - rng: When non-null, randomly selects among the top-elevation qualifying candidates instead of
+##   deterministically taking the single highest cell (Randomized Playfield Spawn,
+##   [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)).
+##   [code]null[/code] preserves the original deterministic (max-elevation-first) behavior.
+## - existing_points: World XZ points (already-placed boulders/food) a candidate must clear by
+##   [param prop_clearance_m] — so a creature never spawns inside a prop.
 ## Returns:
 ## - [code][herb_frac, carn_frac][/code] as [code]Vector2[/code] entries.
-func pick_duel_spawn_fractions(separation_min_frac: float = SPAWN_MIN_SEPARATION_FRAC) -> Array:
+func pick_duel_spawn_fractions(
+  separation_min_frac: float = SPAWN_MIN_SEPARATION_FRAC,
+  rng: RandomNumberGenerator = null,
+  existing_points: Array[Vector2] = [],
+  prop_clearance_m: float = 1.2,
+) -> Array:
   if not is_valid():
     return [FALLBACK_HERB_FRAC, FALLBACK_CARN_FRAC]
   var candidates: Array = []
@@ -124,13 +137,21 @@ func pick_duel_spawn_fractions(separation_min_frac: float = SPAWN_MIN_SEPARATION
       var xz := _world_xz_from_fraction(frac)
       if local_depression_score(xz) > SPAWN_DEPRESSION_THRESHOLD_M:
         continue
+      if _too_close_to_existing(xz, existing_points, prop_clearance_m):
+        continue
       candidates.append({"frac": frac, "elev": elev, "xz": xz})
   if candidates.is_empty():
     return [FALLBACK_HERB_FRAC, FALLBACK_CARN_FRAC]
   candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
     return float(a.get("elev", 0.0)) > float(b.get("elev", 0.0))
   )
-  var first: Dictionary = candidates[0]
+  var first: Dictionary
+  if rng != null:
+    var top_k := mini(candidates.size(), maxi(1, int(ceil(float(candidates.size()) * 0.3))))
+    first = candidates[rng.randi_range(0, top_k - 1)]
+  else:
+    first = candidates[0]
+  var qualifying: Array = []
   var best_second: Dictionary = {}
   var best_sep := -1.0
   for i in range(candidates.size()):
@@ -138,9 +159,13 @@ func pick_duel_spawn_fractions(separation_min_frac: float = SPAWN_MIN_SEPARATION
     var sep := (c.get("frac", Vector2.ZERO) as Vector2).distance_to(
       first.get("frac", Vector2.ZERO) as Vector2
     )
-    if sep >= separation_min_frac and sep > best_sep:
-      best_sep = sep
-      best_second = c
+    if sep >= separation_min_frac:
+      qualifying.append(c)
+      if sep > best_sep:
+        best_sep = sep
+        best_second = c
+  if rng != null and not qualifying.is_empty():
+    best_second = qualifying[rng.randi_range(0, qualifying.size() - 1)]
   if best_second.is_empty():
     for i in range(candidates.size() - 1, -1, -1):
       var c2: Dictionary = candidates[i]
@@ -153,6 +178,13 @@ func pick_duel_spawn_fractions(separation_min_frac: float = SPAWN_MIN_SEPARATION
   if best_second.is_empty():
     return [first.get("frac", FALLBACK_HERB_FRAC), FALLBACK_CARN_FRAC]
   return [first.get("frac", FALLBACK_HERB_FRAC), best_second.get("frac", FALLBACK_CARN_FRAC)]
+
+
+static func _too_close_to_existing(xz: Vector2, existing_points: Array[Vector2], clearance_m: float) -> bool:
+  for p in existing_points:
+    if xz.distance_to(p) < clearance_m:
+      return true
+  return false
 
 
 func _bake(bounds: Dictionary, space: PhysicsDirectSpaceState3D, grid_cells: int) -> void:

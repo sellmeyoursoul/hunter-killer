@@ -27,6 +27,10 @@
   "perception": {
   "SNAPSHOT_PHYSICS_STRIDE": 1
   },
+  "playfield_spawn": {
+  "seed": 0,
+  "locked_layout_path": ""
+  },
   "creature_motor": {
   "mode": "scripted",
   "lookahead_sec": 0.15,
