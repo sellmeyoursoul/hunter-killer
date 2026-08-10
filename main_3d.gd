@@ -21,8 +21,11 @@ const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 
 ## TEMP-REPRO (CLEANUP C9/C8 boundary-ping-pong live investigation, remove after root-caused):
 ## forces the duel spawn to the playfield edge so fox-chases-rabbit-into-a-corner reproduces on
-## demand instead of by chance. Flip to false (or delete this block) once no longer needed.
-const _DEBUG_FORCE_EDGE_CHASE_SPAWN := true
+## demand instead of by chance. Flip to true to re-enable the forced repro spawn.
+## RANDOMTESTS (2026-08-10): flipped off so the duel pair uses the randomized/terrain-aware
+## picker in [method _spawn_duel_pair] like every other object — C9/C10/C11 are closed enough
+## that pinning the spawn is no longer worth masking real random-layout coverage.
+const _DEBUG_FORCE_EDGE_CHASE_SPAWN := false
 
 ## Randomized Playfield Spawn ([ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)):
 ## every-run snapshot of resolved interior boulder / food / duel-pair fractions, overwritten each
