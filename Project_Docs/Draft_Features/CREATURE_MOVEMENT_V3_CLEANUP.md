@@ -39,6 +39,8 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `fixed` — boulder-seam cause fixed 2026-08-06 (convex obstacle collision); terrain-only tunneling cause fixed 2026-08-06 (`safe_margin` on creature bodies); recurred 2026-08-07 (same family, margin insufficient at speed), re-fixed by bumping `safe_margin` 0.06→0.15, 10/10 clean post-re-fix runs | unassigned |
 | [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) | Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling | `done` | unassigned |
 | [C12](#c12-run_allgd-full-suite-run-aborts-test_motor_locale_approach_no_oscillation_smoke-trips-the-c10-airborne-invariant) | `tests/run_all.gd` full-suite run aborts: `_test_motor_locale_approach_no_oscillation_smoke` deterministically trips the C10 airborne/off-floor invariant (rabbit, tick 91) | `done` | unassigned |
+| [C13](#c13-rabbit-freezes-permanently-after-first-bite-of-a-shrub-find_food-live-target-never-goes-stale--legacy-player-pickup-latch-never-releases) | Rabbit freezes permanently after eating a shrub once — `find_food` never retargets a depleted live target, and a legacy proximity-pickup latch keeps it permanently unready | `done` | unassigned |
+| C14 | `tests/run_all.gd`: `_test_motor_pursuit_pinch_detour_smoke` (fox) trips the same C10 airborne invariant as C12, same family (test floor too small) | `open` — found 2026-08-10 alongside C13 verification; not yet fixed | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -948,6 +950,38 @@ Confirmed no other consumer of `_motor_v3_test_floor()` is affected: no test ass
 - Full `tests/run_all.gd` suite now runs to completion (previously aborted at tick 91): 0 `ASSERT:` failures, no `MOTOR_INVARIANT` trips.
 - Confirmed pre-fix behavior reproduces identically on committed HEAD (`5cbd7bc`) with the working tree stashed clean — same tick (91), same rounded position, ruling out the C11/spawn-randomize changes as the cause.
 - Noted but out of scope: the suite's shell exit code is `1` even with 0 assertion failures, and ~400 `Condition "slot >= slot_max"` engine errors fire from `_test_motor_planner_precise_backtrack_ignored`'s intentional stale-`instance_id` probing (see [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression), closed). Both reproduce identically before and after this fix and predate this session's work — confirmed via a minimal isolated probe script that `push_error`/leaked-RID/leaked-`Resource` alone do not force a nonzero exit with `quit(0)`, so the exit-code-1 cause is still unidentified; not investigated further since it doesn't correspond to any real assertion failure.
+
+---
+
+## C13 — Rabbit freezes permanently after first bite of a shrub (`find_food` live target never goes stale + legacy player-pickup latch never releases)
+
+**Status:** `done`
+**Slice:** unassigned — user playtest report 2026-08-10: "I ran a test and about a minute in, the rabbit froze between two shrubs."
+**Evidence:** `hunter_killer.log` for the reported run (duel spawn `16:40:46`, `herb_frac=(0.39,0.33) carn_frac=(0.92,0.77)` — genuinely randomized, confirming the [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling)-adjacent `_DEBUG_FORCE_EDGE_CHASE_SPAWN` disable is working). Rabbit approaches a shrub cleanly (`t=4093`→`t=4112`, `dist` closing 6.83→4.97, `dot=1.000`), gets one calorie grant at `t=4113` (cal 52%→61%), then holds the exact same position/facing/`step_instance_id` for 800+ consecutive ticks (13.7+ real seconds, until the user stopped the game via "End AI") re-issuing `act=EAT` every tick with **no further calorie gain** (cal only drains: 61%→46%).
+
+### Symptom
+
+Once a creature takes one bite of a live (non-memory) food target, if that target isn't immediately ready again, the creature stands completely still forever — no turning, no exploring, no retargeting to another known food source — continuing to command a no-op `EAT` action indefinitely.
+
+### Root cause (found and fixed 2026-08-10) — two independent, compounding bugs
+
+**Bug A — a legacy human-player pickup latch never releases for an AI creature that stops moving:**
+`assets/plants/bush_food_3d.gd` had two parallel calorie-grant paths: the intended AI path (`try_grant_engine_creature`, called from the motor's `EAT` action via `creature_motor_stack.gd:_try_complete_eat`) and a second, older proximity-`Area3D` path (`_try_grant_pickup`, gated on `body.is_in_group(&"player")`) left over from an earlier, human-walks-around-and-picks-up-food design. The herbivore body is added to the `"player"` group in `main_3d.gd` for unrelated reasons (`hud.gd` uses it purely as a fallback lookup to find "the herbivore" for the vitals HUD — there is no actual manual-control player mode in this build). So the rabbit also tripped the legacy path: on first proximity overlap it granted calories and set `_player_visit_locked = true`, which is only meant to clear on `body_exited` from the pickup `Area3D` (i.e., when a human player walks away). An AI creature that settles at its EAT range and stops moving never leaves that area, so the lock never clears — and `is_pickup_ready_for_motor()` (which gates `_player_visit_locked` first) is also exactly what feeds the motor's own live-food-readiness perception (`awareness_zone_scan.gd:88-89`). Net effect: the specific shrub the rabbit ate becomes **permanently** unready to it, regardless of `growth_rate` regrowth.
+
+**Bug B — the planner never notices a live target went stale:**
+`motor_planner.gd:_sync_step_objective`'s `GK_FIND_FOOD` arm only re-derives a step objective for `precise`/`coarse`/`locale` step sources going stale (`_find_food_memory_tier_stale`). A `live`-sourced target (exactly what a just-reached shrub is) had **no staleness check at all** — once locked on, `step_goal`/`step_instance_id` were held forever regardless of whether the target could still be eaten, so the creature never fell back to memory search or exploration even once Bug A is fixed and the shrub legitimately finishes its `growth_rate`-timed regrow.
+
+Bug B alone would only cause a temporary freeze (until regrowth completes); Bug A made it permanent.
+
+**Fix:**
+- `assets/plants/bush_food_3d.gd`: removed the entire legacy proximity-pickup path (`_player_visit_locked`, `_try_grant_pickup`, `_on_calorie_body_entered`/`_exited`, `_try_proximity_pickup_for_players`, and their now-unused helpers `_pickup_radius_world`/`_creature_half_extents`/`_footprint_point_clearance`). `is_pickup_ready_for_motor()` now only checks the calorie pool. `try_grant_engine_creature` (the AI path) is untouched and is now the sole grant mechanism.
+- `motor_planner.gd:_find_food_memory_tier_stale`: added a `step_source == &"live"` branch. To avoid over-triggering (see Verification), it only reports stale when the scan **positively confirms** the tracked `step_instance_id` is still visible but not consumable (present in `scan.food_split.unready`) — not merely whenever the live "ready" search comes up empty, which also happens for synthetic/unit-test scans and for a pinned-prey EAT target that never appears in the plant-only ready/unready lists.
+
+### Verification
+
+- First attempt at the Bug B fix (`step_source == &"live"` → unconditionally stale whenever the caller's `live_food.is_empty()` gate was already true) broke `_test_motor_planner_eat_uses_ultimate_not_step_goal` (C3) and its orbit-break sibling — those tests deliberately construct a `live` step target against an **empty** synthetic scan (`{"ready": [], "unready": []}`) to isolate `_can_eat_now`'s geometric gate from full scan-based re-derivation; the coarse "ready is empty" signal doesn't distinguish that from a genuinely-depleted target. Narrowed to the `food_split.unready`-membership check above, which fixes C13 without regressing C3.
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures (same pre-existing, unrelated `_test_motor_pursuit_pinch_detour_smoke` C10-airborne trip noted as C14 in the inventory above — same family as C12, reproduces identically before and after this fix, not yet fixed).
+- Live repro (`tests/smoke_ai_player.gd`, 3600 ticks): the one `src=live` `EAT` tick in the run (`t=3257`, cal 60%→68%) is immediately followed by `t=3258` transitioning to `src=explore` and resuming movement — matching the intended behavior, vs. the reported 800+-tick freeze.
 
 ---
 

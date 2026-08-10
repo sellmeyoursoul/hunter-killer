@@ -1146,6 +1146,21 @@ static func _find_food_memory_tier_stale(
   scan: Dictionary,
 ) -> bool:
   var step_source: StringName = state.get("step_source", &"")
+  ## CLEANUP C13 (2026-08-10): a `live` step target (e.g. a just-eaten shrub now on regrow
+  ## cooldown) had no staleness check of its own. Only treat it stale when the scan positively
+  ## confirms our tracked instance is still visible but not consumable (`food_split.unready`) —
+  ## not merely whenever the "ready" search comes up empty, which also happens for synthetic/
+  ## unit-test scans (see `_test_motor_planner_eat_uses_ultimate_not_step_goal`) and for a
+  ## pinned-prey EAT target that never appears in the plant-only ready/unready lists at all.
+  if step_source == &"live":
+    var tracked_id := int(state.get("step_instance_id", 0))
+    if tracked_id == 0:
+      return false
+    var unready: Array = scan.get("food_split", {}).get("unready", [])
+    for entry_v in unready:
+      if int((entry_v as Dictionary).get("instance_id", 0)) == tracked_id:
+        return true
+    return false
   if step_source != &"precise" and step_source != &"coarse" and step_source != &"locale":
     return false
   var adapter: RefCounted = ctx.get("memory_adapter")
