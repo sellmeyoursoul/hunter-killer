@@ -2715,11 +2715,11 @@ func _test_food_plant_missing_stimulus_kind_id() -> void:
     plant.queue_free()
 
 
-func _motor_v3_test_floor(parent: Node3D) -> StaticBody3D:
+func _motor_v3_test_floor(parent: Node3D, footprint: float = 40.0) -> StaticBody3D:
   var floor_body := StaticBody3D.new()
   var floor_col := CollisionShape3D.new()
   var floor_box := BoxShape3D.new()
-  floor_box.size = Vector3(40.0, 0.2, 40.0)
+  floor_box.size = Vector3(footprint, 0.2, footprint)
   floor_col.shape = floor_box
   floor_col.position = Vector3(0.0, -0.1, 0.0)
   floor_body.add_child(floor_col)
@@ -2994,7 +2994,14 @@ func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
 func _test_motor_locale_approach_no_oscillation_smoke() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  _motor_v3_test_floor(main)
+  var motor_v3 := _motor_v3_test_params()
+  var coverage_cell := _GoalMem.coverage_cell_from_motor(motor_v3)
+  var hotspot := Vector3((7.0 + 0.5) * coverage_cell, 0.0, (7.0 + 0.5) * coverage_cell)
+  ## CLEANUP C12 (2026-08-10): the locale anchor this test steers toward sits far outside the
+  ## shared helper's default 40x40 footprint — the body was walking off the tiny platform's edge
+  ## and free-falling for the rest of the run, tripping the C10 airborne/off-floor invariant on a
+  ## test-fixture artifact rather than a real motor bug. Size the floor to actually cover the anchor.
+  _motor_v3_test_floor(main, 2.0 * (hotspot.x + coverage_cell))
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.current_calories = 2.0
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
@@ -3002,9 +3009,6 @@ func _test_motor_locale_approach_no_oscillation_smoke() -> void:
   var stack := _motor_stack_test_configure(body)
   stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
   stack.seed_locale_prior_for_test(7, 7, 1.0)
-  var motor_v3 := _motor_v3_test_params()
-  var coverage_cell := _GoalMem.coverage_cell_from_motor(motor_v3)
-  var hotspot := Vector3((7.0 + 0.5) * coverage_cell, 0.0, (7.0 + 0.5) * coverage_cell)
   var start_dist := body.global_position.distance_to(hotspot)
   var min_dist := start_dist
   var rear_hemisphere_moves := 0

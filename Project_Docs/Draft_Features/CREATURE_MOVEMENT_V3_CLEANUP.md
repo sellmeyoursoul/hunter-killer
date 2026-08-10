@@ -38,6 +38,7 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C9](#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) | Flee-waypoint latch corrupted by reactive backtrack deflection (rabbit stuck at playfield edge) | `in_progress` — 7th fix (flee-to-origin sentinel bug) shipped 2026-08-07, 6/6 clean headless runs on the C9 check specifically; not formally closed pending more repro budget | unassigned |
 | [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `fixed` — boulder-seam cause fixed 2026-08-06 (convex obstacle collision); terrain-only tunneling cause fixed 2026-08-06 (`safe_margin` on creature bodies); recurred 2026-08-07 (same family, margin insufficient at speed), re-fixed by bumping `safe_margin` 0.06→0.15, 10/10 clean post-re-fix runs | unassigned |
 | [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) | Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling | `done` | unassigned |
+| [C12](#c12-run_allgd-full-suite-run-aborts-test_motor_locale_approach_no_oscillation_smoke-trips-the-c10-airborne-invariant) | `tests/run_all.gd` full-suite run aborts: `_test_motor_locale_approach_no_oscillation_smoke` deterministically trips the C10 airborne/off-floor invariant (rabbit, tick 91) | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -919,6 +920,34 @@ In both cases a genuinely-nearby predator (confirmed live: `_DEBUG_FORCE_EDGE_CH
 ### Open questions
 
 - `_DEBUG_FORCE_EDGE_CHASE_SPAWN` (`main_3d.gd`) is still `true` and has silently overridden every duel-pair spawn all session, including this one — genuinely-random duel-pair distance hasn't been exercised by this test round at all yet. Revisit turning it off once C9 is fully closed.
+
+---
+
+## C12 — `run_all.gd` full-suite run aborts: `_test_motor_locale_approach_no_oscillation_smoke` trips the C10 airborne invariant
+
+**Status:** `done`
+**Slice:** unassigned — discovered 2026-08-10 while verifying [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) and the duel-pair spawn-randomize change (`_DEBUG_FORCE_EDGE_CHASE_SPAWN` disabled); confirmed pre-existing and unrelated to either change (reproduces identically against committed HEAD with a clean working tree).
+**Evidence:** `godot --headless -s res://tests/run_all.gd` aborted mid-run every time, `push_error("MOTOR_INVARIANT [rabbit#...] airborne/off-floor for 45+ ticks (stuck-under-geometry, C10)")` from `creature_motor_stack.gd:_trip_invariant`, deterministically at physics tick 91, same position each run.
+
+### Symptom
+
+The full headless suite never reached its end — `_trip_invariant` calls `get_tree().quit(1)` the instant the invariant trips, silently truncating every test declared after `_test_motor_locale_approach_no_oscillation_smoke` in `_run_all()`'s call order. No prior session verification since the C10 airborne check was added had actually run the suite to completion; "0 assertion failures" checks were only ever seeing however much of the list ran before this abort.
+
+### Root cause (found and fixed 2026-08-10)
+
+`_test_motor_locale_approach_no_oscillation_smoke` (`tests/run_all.gd:2994`) drives the body toward a locale-prior `hotspot` computed as `((7.5) * coverage_cell, 0, (7.5) * coverage_cell)` — with the default `explore_coverage_cell = 52.0`, that's `(390, 0, 390)`. The shared test fixture `_motor_v3_test_floor()` only builds a `40x40` collision floor centered at the origin (±20 extents in X/Z). The locale-goal steering correctly walks the body toward the far-off hotspot, off the tiny platform's edge at roughly tick 46, and the body free-falls with nothing underneath for the rest of the run — legitimately tripping the C10 "airborne 45+ ticks" invariant on a test-fixture gap, not a real motor/gameplay bug.
+
+Confirmed no other consumer of `_motor_v3_test_floor()` is affected: no test asserts on off-floor/edge-fall behavior (`grep` for `airborne`/`is_on_floor` in `run_all.gd` only matches this fix's own comment), and the only other two tests computing the same coverage-cell-derived hotspot (`_test_creature_motor_stack_seek_locale_prior`, `_test_motor_planner_live_locale_handoff_same_kind_prefers_live`) never run a multi-tick physics loop, so the body never actually travels there.
+
+**Fix (`tests/run_all.gd`):**
+- `_motor_v3_test_floor(parent, footprint: float = 40.0)` — added an optional footprint override, default unchanged so every other caller is unaffected.
+- `_test_motor_locale_approach_no_oscillation_smoke` now sizes its floor to `2.0 * (hotspot.x + coverage_cell)`, comfortably covering the anchor it actually steers toward.
+
+### Verification
+
+- Full `tests/run_all.gd` suite now runs to completion (previously aborted at tick 91): 0 `ASSERT:` failures, no `MOTOR_INVARIANT` trips.
+- Confirmed pre-fix behavior reproduces identically on committed HEAD (`5cbd7bc`) with the working tree stashed clean — same tick (91), same rounded position, ruling out the C11/spawn-randomize changes as the cause.
+- Noted but out of scope: the suite's shell exit code is `1` even with 0 assertion failures, and ~400 `Condition "slot >= slot_max"` engine errors fire from `_test_motor_planner_precise_backtrack_ignored`'s intentional stale-`instance_id` probing (see [C4](#c4-stale-instance_id-lookups-crash-memory-adapter-diet-filter-headless-regression), closed). Both reproduce identically before and after this fix and predate this session's work — confirmed via a minimal isolated probe script that `push_error`/leaked-RID/leaked-`Resource` alone do not force a nonzero exit with `quit(0)`, so the exit-code-1 cause is still unidentified; not investigated further since it doesn't correspond to any real assertion failure.
 
 ---
 
