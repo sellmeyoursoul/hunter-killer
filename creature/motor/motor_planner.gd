@@ -1958,6 +1958,24 @@ static func _mint_flee_waypoint(
       if scan_best_reach > final_reach:
         final_dir = scan_best_dir
         state["flee_give_up_active"] = true
+        final_reach = scan_best_reach
+
+    # CLEANUP RANDOMTESTS RT1 (2026-08-10): both scans above score every candidate purely by
+    # navmesh reach — when the creature is near/past the edge of the baked navmesh (confirmed via
+    # instrumented repro: near the playfield boundary, not a steep-terrain bake gap), reach comes
+    # back `0.0` in literally every direction, including the 16-way escalation. With no usable
+    # signal, `best_dir`/`best_clear_dir` silently default to whichever candidate's loop iteration
+    # happened to run first — a fixed 60°-rotation order, not a real choice — which swung the
+    # picked bearing nearly 180° between consecutive re-mints in the live repro (a valley-facing
+    # rabbit "fled" back toward its own dead end just as often as toward the real exit). When every
+    # candidate is equally uninformative, prefer holding the previous flee heading (at least
+    # consistent, not thrashing) over re-rolling an arbitrary new one; fall back to the raw
+    # straight-away-from-threat `base_dir` only when there's no prior waypoint yet to hold.
+    if final_reach <= 0.0:
+      var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+      var prior_dir := prior_wp - creature_pos
+      prior_dir.y = 0.0
+      final_dir = prior_dir.normalized() if prior_dir.length_squared() > 1e-8 else base_dir
 
     wp = creature_pos + final_dir * flee_dist
 
