@@ -39,6 +39,13 @@ var _stat_observation: int = 10
 var _planner_state: Dictionary = {}
 var _threat_samples_test_override: bool = false
 var _safety_cycles: int = 0
+## RANDOMTESTS RT2: OR'd true every physics tick a threat sample is nonempty, consumed and reset
+## by [method _update_safety_on_consideration] — see that method's doc comment.
+var _threat_seen_since_safety_check: bool = false
+## RANDOMTESTS RT2: most recent nonempty [member _threat_samples] seen since the last consideration
+## cycle — same windowing purpose as [member _threat_seen_since_safety_check], but for the hub
+## eligibility/scoring path ([method _run_consideration]) rather than the safety-cycle counter.
+var _threat_samples_window: Array = []
 var _flight_fast_path_latched: bool = false
 var _scan_test_override: Dictionary = {}
 var _use_scan_test_override: bool = false
@@ -94,6 +101,8 @@ func configure(
   _flight_fast_path_latched = false
   _safety_cycles = 0
   _safety_met = false
+  _threat_seen_since_safety_check = false
+  _threat_samples_window = []
   _benign_episode_pending = false
   _was_flight_fast_path = false
   _planner_state = _MotorPlanner.new_state()
@@ -117,6 +126,9 @@ func tick(delta: float) -> _ActionOutcome:
   _maintain_memory_beliefs()
   var area_only := _rest_area_only_perception()
   _refresh_danger_samples(area_only)
+  if not _threat_samples.is_empty():
+    _threat_seen_since_safety_check = true
+    _threat_samples_window = _threat_samples.duplicate(true)
   var ctx := _build_context()
 
   var ran_consideration := false
@@ -659,12 +671,25 @@ func _rest_area_only_perception() -> bool:
   return false
 
 
+## RANDOMTESTS RT2 (2026-08-10): consumes [member _threat_seen_since_safety_check] — a flag OR'd
+## every physics tick since the last consideration cycle — instead of the instantaneous
+## [member _threat_samples] snapshot at just this one tick. This only ran on the single physics
+## tick consideration happened to fire (every [member _consideration_interval] ticks), so a
+## predator that was genuinely nearby for most of that window but happened to step out of the
+## awareness cone/radius on the exact sampled tick read as "safe" — and conversely a predator that
+## only grazed awareness for one tick out of the whole window still reset the counter to zero, the
+## same discontinuity either way: a REST-vs-find_food incumbent readable from a single aliased
+## sample instead of the window it's meant to represent. Confirmed live (forced-close duel spawn):
+## `REST` (weight ~0.89, gated fully off/on by [member _safety_met]) vs `find_food` (~0.245) swapped
+## the incumbent goal every single reconsideration cycle while a nearby fox drifted in and out of
+## awareness range — not a scoring near-tie, an eligibility cliff toggling on a single-tick sample.
 func _update_safety_on_consideration() -> void:
   var required := maxi(1, int(_motor_v3.get("safety_time", 5)))
-  if _threat_samples.is_empty():
-    _safety_cycles += 1
-  else:
+  if _threat_seen_since_safety_check:
     _safety_cycles = 0
+  else:
+    _safety_cycles += 1
+  _threat_seen_since_safety_check = false
   _safety_met = _safety_cycles >= required
 
 
@@ -835,7 +860,20 @@ func _objective_completed_this_tick(action: int) -> bool:
   )
 
 
+## RANDOMTESTS RT2 (2026-08-10): [method build_eligible_goals]/[method score_goals]/
+## [method _feasibility_for_goal] all read `ctx["threat_samples"]` — normally just the current
+## tick's instantaneous snapshot, but this only runs once every [member _consideration_interval]
+## ticks. A predator drifting in and out of awareness between reconsiderations made
+## `avoid_hostiles` eligibility flip on whichever single tick happened to land on the cadence
+## boundary, alternating the incumbent with `find_food`/explore every cycle even though the
+## predator was genuinely nearby for most of the window (confirmed live, forced-close duel spawn).
+## Widen the window here specifically: use the most recent nonempty sample seen since the last
+## consideration instead of this one instant. Scoped to consideration only — the acute Flight
+## fast path (`_update_flight_fast_path`) already reacts every tick off its own fresh read.
 func _run_consideration(ctx: Dictionary) -> void:
+  if not _threat_samples_window.is_empty():
+    ctx["threat_samples"] = _threat_samples_window
+  _threat_samples_window = []
   ctx["now_ms"] = Time.get_ticks_msec()
   var eligible := _MotorGoalHub.build_eligible_goals(ctx)
   var enriched: Array = []

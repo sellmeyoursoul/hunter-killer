@@ -27,6 +27,8 @@ When an item is **done**, note the fix (commit / test) here and, if the underlyi
 | ID | Title | Status | Evidence |
 |----|-------|--------|----------|
 | [RT1](#rt1-rabbit-flees-into-a-terrain-dead-end-instead-of-the-real-exit) | Rabbit flees into a terrain dead-end (valley) instead of the real exit | `done` | `spawn_layout_locked_rt1.json`, seed `900425302035824835` |
+| RT2 | Rabbit oscillates near spawn with no threat present — **moved to [CLEANUP.md C11](CREATURE_MOVEMENT_V3_CLEANUP.md#c11-goal-hub-incumbent-flip-flops-find_foodrestavoid_hostiles-on-single-tick-threat-sampling)**, confirmed unrelated to spawn randomization (reproduces under the fixed forced-close debug spawn) | `done` (see C11) | — |
+| [RT3](#rt3-boulders--shrubs-reported-spawning-outside-the-playfield) | Boulders/shrubs reported spawning outside the playfield | `open` | user playtest report; not yet reproduced headlessly |
 
 ---
 
@@ -79,3 +81,19 @@ run 2: t=700  pos=(-50.4,-1.7,-5.5) ... nav_closest=(0.0,0.0,0.0) nav_snap_dist=
 **Verified:** confirmed via the same live instrumentation (temporarily restored, then removed) that `final_dir` now stays stable/converges across consecutive re-mints in the zero-signal case instead of swinging ~180° each time (e.g. `(0.98,0.21)` → `(0.99,0.16)` → `(1.00,0.05)` → `(1.00,-0.03)` → `(1.00,-0.04)` → `(1.00,-0.04)`, vs. the wild pre-fix swings quoted above). Full `tests/run_all.gd` suite green (0 assertion failures) both before and after; 5 additional `tests/smoke_ai_player.gd` headless runs post-fix with no compile/runtime errors. **Not claimed:** this doesn't solve escaping a genuine corner near the map edge when the threat itself is also converging on the held heading — that's the already-documented R1 architecture-risk trade-off (greedy per-tick decisions near boundary geometry), not something this fix set out to or could fully close.
 
 **Diagnostic cleanup:** the temporary `_DEBUG_LOG_FLEE_CANDIDATES`-gated logging (candidate reaches, `nav_closest`/`nav_owner_valid`, elevation cross-probe) used to gather all evidence above was removed from `motor_planner.gd` after use, per the existing "throwaway probe, written and deleted" convention (see C10 history) — this doc retains the full evidence trail instead.
+
+---
+
+### RT3 — Boulders / shrubs reported spawning outside the playfield
+
+**Status:** `open` — reported by the user during manual playtesting; not yet reproduced in headless testing, so not yet root-caused.
+
+**Report:** "some boulders and shrubs appeared to spawn outside the playfield and I wasn't getting random object placement."
+
+**Investigated so far:**
+- **Random object placement:** confirmed working — `game_config.json`'s `playfield_spawn.locked_layout_path` is empty (no leftover lock from RT1/C11 diagnostic sessions), and 4 separate fresh headless `tests/smoke_ai_player.gd` runs produced 4 distinct seeds and distinct interior-boulder/food layouts. Clarified with the user: they were clicking "New Game" within the same running session, not relaunching the app — boulders/food are session-lifetime-fixed by current design (only re-rolled in `_build_playfield()`, called once from `_ready()`; only the duel pair re-rolls per `new_game()`), so "no new layout on New Game click" is working as designed, not this bug. **Separately:** `_DEBUG_FORCE_EDGE_CHASE_SPAWN` has silently pinned the duel pair to a fixed, non-random spawn on every run all session (see [CLEANUP.md C11](CREATURE_MOVEMENT_V3_CLEANUP.md#c11-goal-hub-incumbent-flip-flops-find_foodrestavoid_hostiles-on-single-tick-threat-sampling) open question) — if that's what looked "not random," that's the real cause, tracked there.
+- **Out-of-bounds props:** across 4 fresh headless runs, every single `"no ground hit for prop"` warning (172, 171, 171, 171 respectively) traced back to **perimeter boulders only** — a fixed, un-randomized grid pattern along the AABB edges (`PlayfieldPerimeterBoulders.place_along_perimeter`, unrelated to this session's randomizer work) landing on stretches of the playfield's rectangular collision AABB where the actual (evidently non-rectangular) grasslands terrain has no floor. **Zero** warnings traced to randomized interior boulders/food in any of the 4 runs — `pick_uniform_fraction`'s edge margin appears to be keeping randomized objects clear of this specific gap, at least for the seeds tried.
+
+**Open questions:**
+- Is the user's report actually about the (pre-existing, unrelated-to-randomization) perimeter-edge gap above, mis-attributed to the new feature since it's the first time spawn positions were watched closely? Or does the randomizer genuinely produce an out-of-bounds placement at some seed not yet hit in 4 headless samples — `edge_margin_m` (default 1.6, `playfield_spawn_randomizer.gd`) is a flat buffer from the *rectangular* AABB edge and has no awareness of the terrain's actual (apparently irregular) shape, so a bad-luck seed landing near a real cutout is plausible even though not yet observed.
+- Not yet run: a larger headless batch (10+) specifically watching for `"no ground hit for prop"` warnings at non-grid-pattern (i.e. genuinely random) coordinates, and/or a wider `edge_margin_m` or a ground-verification rejection check in `pick_uniform_fraction` (currently it only respects the rectangular bounds, never verifies real ground exists at the candidate point — unlike `_snap_playfield_props_to_ground`'s after-the-fact raycast, which only warns, never rejects/retries).

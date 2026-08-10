@@ -37,6 +37,7 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C8](#c8-stable-pre-existing-test-failures-found-during-r1-mitigation-2-audit) | Stable pre-existing test failures found during R1 mitigation #2 audit | `done` — 13/13 fixed | unassigned |
 | [C9](#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) | Flee-waypoint latch corrupted by reactive backtrack deflection (rabbit stuck at playfield edge) | `in_progress` — 7th fix (flee-to-origin sentinel bug) shipped 2026-08-07, 6/6 clean headless runs on the C9 check specifically; not formally closed pending more repro budget | unassigned |
 | [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `fixed` — boulder-seam cause fixed 2026-08-06 (convex obstacle collision); terrain-only tunneling cause fixed 2026-08-06 (`safe_margin` on creature bodies); recurred 2026-08-07 (same family, margin insufficient at speed), re-fixed by bumping `safe_margin` 0.06→0.15, 10/10 clean post-re-fix runs | unassigned |
+| [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) | Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -884,6 +885,40 @@ While verifying C9's give-up escalation (unrelated change), one of 4 repeated he
 **Fix:** bumped `safe_margin` **0.06 → 0.15** on both `creature_carnivore_kinematic_3d.tscn` and `creature_herbivore_kinematic_3d.tscn` — same mechanism as the original fix, larger buffer. Chose the direct, minimal escalation of the already-diagnosed fix over a new mechanism (a floor-recovery backstop) or slope-aware placement, both discussed but not needed unless this recurs again.
 
 **Verification:** full `run_all.gd` suite — 0 assertion failures, no regression. 10 repeated 3600-tick `smoke_ai_player.gd` runs (forced edge-chase spawn, invariant harness live): **10/10 fully clean — zero trips of any kind** (neither C9 nor C10). No visible floating/penetration artifacts observed in the headless logs at the larger margin. Real improvement over the pre-bump rate (1 trip in the last 10 combined C9/C10 verification runs), though — consistent with the lesson just learned — a 10-run clean sample here should be read as *strong evidence*, not provable elimination; the same class of bug could still recur at a lower rate. Leaving C10 `fixed` rather than reopening formally, but flagging this pattern (margin tuning narrows probability, doesn't guarantee zero) for whoever next investigates a similar tunneling report.
+
+---
+
+## C11 — Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling
+
+**Status:** `done`
+**Slice:** unassigned — found during randomized-spawn playtesting ([CREATURE_MOVEMENT_V3_RANDOMTESTS.md](CREATURE_MOVEMENT_V3_RANDOMTESTS.md)), confirmed unrelated to spawn randomization itself (reproduces under the debug-forced fixed duel spawn, `_DEBUG_FORCE_EDGE_CHASE_SPAWN`), so logged here instead of there per that doc's own promotion rule.
+**Evidence:** User report during manual playtest: "even without threat from the fox, the rabbit seems to go back and forth in the valley near its spawn point." Headless `tests/smoke_ai_player.gd` repro + `tests/motor_explore_tick.log` inspection confirmed the incumbent goal alternating every single 8-tick consideration cycle for dozens of cycles straight (`find_food` ↔ `rest`, later also `avoid_hostiles` ↔ `find_food`), not a one-off.
+
+### Symptom
+
+Rabbit's incumbent `goal_kind` (and thus its step target / facing) flips every reconsideration cycle (`_consideration_interval`, default 8 ticks) between two different goals, each time re-deriving a fresh step objective and re-orienting — reads as "wandering back and forth" even though within each 8-tick block the creature makes real, monotonic progress toward that block's target.
+
+### Root cause (found and fixed 2026-08-10)
+
+`motor_goal_hub.gd`'s eligibility/scoring and `_feasibility_for_goal`'s `GOAL_REST`/`GK_AVOID_HOSTILES` branches all read `ctx["threat_samples"]` — populated fresh every physics tick by `_refresh_danger_samples`, but only *consumed* by the goal hub once per `_consideration_interval` (8 ticks), inside `_run_consideration`. Two separate consumers of this same instantaneous, single-tick snapshot produced the same symptom:
+
+1. `_update_safety_on_consideration` reset `_safety_cycles` to `0` whenever `_threat_samples` was nonempty **on the one physics tick consideration happened to fire** — a predator that drifted out of awareness range for exactly that one sampled tick (out of the 8 in the window) read as "fully safe," instantly making `GOAL_REST` eligible at weight ≈0.89 (vs. `find_food`'s ≈0.25, not a scoring near-tie) and winning outright; the very next single-tick threat blip reset it just as abruptly.
+2. `MotorGoalHub.build_eligible_goals` only includes `GOAL_AVOID_HOSTILES` when `ctx["threat_samples"]` is nonempty **at that same single sampled instant** — same aliasing, same abrupt on/off eligibility flip, this time alternating `avoid_hostiles` against `find_food`/explore.
+
+In both cases a genuinely-nearby predator (confirmed live: `_DEBUG_FORCE_EDGE_CHASE_SPAWN` pins the duel pair unusually close together) drifting in and out of the awareness radius between reconsiderations was enough to flip the incumbent every single cycle, because the hub was deciding based on one aliased instant rather than the window it was meant to represent.
+
+**Fix (`creature/motor/creature_motor_stack.gd`):** widened both consumers from an instantaneous sample to a windowed one, without touching the acute Flight fast path (`_update_flight_fast_path`), which already re-evaluates every tick off its own fresh read and was never part of this bug:
+- `_threat_seen_since_safety_check: bool` — OR'd true every physics tick a threat sample is nonempty, consumed and reset by `_update_safety_on_consideration` in place of the raw instantaneous check.
+- `_threat_samples_window: Array` — holds the most recent nonempty `_threat_samples` seen since the last consideration; `_run_consideration` substitutes this into its local `ctx["threat_samples"]` (only for the hub eligibility/scoring/feasibility path) before calling `build_eligible_goals`, then resets it.
+
+### Verification
+
+- Full `tests/run_all.gd` suite: 0 assertion failures, no regression (same pattern as C9/C10: `_DEBUG_ASSERT_MOTOR_INVARIANTS` temporarily flipped `false` for the run, reverted immediately after — confirmed via `git diff` clean).
+- Live repro (`tests/smoke_ai_player.gd`, forced-close duel spawn): pre-fix, incumbent `gk` alternated every exactly 8 ticks for dozens of consecutive cycles. Post-fix, blocks range 8–72 ticks with no persistent every-cycle metronome — remaining switches read as genuine reactions to the still-abnormally-close forced spawn, not sampling-artifact flicker.
+
+### Open questions
+
+- `_DEBUG_FORCE_EDGE_CHASE_SPAWN` (`main_3d.gd`) is still `true` and has silently overridden every duel-pair spawn all session, including this one — genuinely-random duel-pair distance hasn't been exercised by this test round at all yet. Revisit turning it off once C9 is fully closed.
 
 ---
 
