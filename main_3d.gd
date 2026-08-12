@@ -25,7 +25,29 @@ const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 ## RANDOMTESTS (2026-08-10): flipped off so the duel pair uses the randomized/terrain-aware
 ## picker in [method _spawn_duel_pair] like every other object — C9/C10/C11 are closed enough
 ## that pinning the spawn is no longer worth masking real random-layout coverage.
-const _DEBUG_FORCE_EDGE_CHASE_SPAWN := false
+const _DEBUG_FORCE_EDGE_CHASE_SPAWN := true
+
+## TEMP-REPRO (rabbit-refuge manual playtest, 2026-08-12): force-spawns an extra ring of
+## `open_shrub_3d` instances (see [method _spawn_open_shrub_refuge_cluster]) around a fixed point
+## at the playfield center, on top of the normal randomized food layout. `open_shrub_3d`'s
+## `MobBlocker` sits on the `plant_mob_block` physics layer (8), which only the carnivore's
+## collision mask includes ([method CreatureKinematicBody3D._apply_physics_layers]) — the
+## herbivore's mask doesn't include it at all, so the rabbit walks straight through every shrub in
+## the ring with zero collision while the fox is physically stopped by whichever shrub it
+## approaches. The ring is deliberately packed (see `_REFUGE_CLUSTER_*` below) rather than
+## gap-tuned, since the shrubs' baked convex-hull footprint comes from unmeasured mesh art, not an
+## authored collision shape — if the fox visibly slips through during a playtest, tighten
+## `_REFUGE_CLUSTER_RADIUS` down or raise `_REFUGE_CLUSTER_SHRUB_COUNT`. Cluster shrubs use a
+## deliberately crippled `growth_rate`/`max_calories` so the rabbit can dip in to eat but can't
+## just camp there and live off the refuge forever. Flip to true to enable; remove once the
+## flee-to-refuge behavior has actually been observed and evaluated.
+const _DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER := true
+
+const _REFUGE_CLUSTER_CENTER_FRAC := Vector2(0.5, 0.5)
+const _REFUGE_CLUSTER_SHRUB_COUNT := 10
+const _REFUGE_CLUSTER_RADIUS := 3.0
+const _REFUGE_CLUSTER_GROWTH_RATE := 0.02
+const _REFUGE_CLUSTER_MAX_CALORIES := 2
 
 ## Randomized Playfield Spawn ([ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)):
 ## every-run snapshot of resolved interior boulder / food / duel-pair fractions, overwritten each
@@ -633,12 +655,20 @@ func _snap_playfield_props_to_ground() -> void:
             skip.append(rid)
         var ground := _raycast_prop_ground_surface(space, xz, hint_y, skip)
         if not bool(ground.get("hit", false)):
+          # RT3 (2026-08-12): props with no ground beneath them are near-exclusively perimeter
+          # boulders — `PlayfieldPerimeterBoulders.place_along_perimeter` traces the playfield's
+          # rectangular XZ AABB, which doesn't match the actual (irregular) grasslands terrain edge,
+          # so a stretch of the fixed boulder grid can land past where the real floor stops. Leaving
+          # such a prop at the `floor_y` fallback made it visibly float/clip outside the play area.
+          # There's nothing useful a groundless prop can do here (it isn't blocking real terrain),
+          # so remove it instead of just warning.
           OLog.info(
-            "Main3D: no ground hit for prop %s at (%.1f, %.1f) — left at Y estimate"
+            "Main3D: no ground hit for prop %s at (%.1f, %.1f) — removing"
             % [prop.name, xz.x, xz.y],
             true,
             "Main3D",
           )
+          prop.queue_free()
           continue
         var surface_y := float(ground.get("surface_y", hint_y))
         var bottom_y := _prop_mesh_local_bottom_y(prop)
@@ -760,6 +790,42 @@ func _ensure_food_plants() -> void:
     _spawn_existing_points.append(Vector2(opos.x, opos.z))
   _spawn_last_layout["solid_shrubs"] = solid_fracs
   _spawn_last_layout["open_shrubs"] = open_fracs
+  if _DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER:
+    _spawn_open_shrub_refuge_cluster()
+
+
+## TEMP-REPRO (rabbit-refuge manual playtest, 2026-08-12) — see [const _DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER].
+## Rings [const _REFUGE_CLUSTER_SHRUB_COUNT] extra `open_shrub_3d` instances around a fixed
+## playfield-center point, each with a crippled regrow rate so the spot can't sustain a rabbit
+## indefinitely. Additive to the normal randomized food layout, not a replacement for it.
+func _spawn_open_shrub_refuge_cluster() -> void:
+  if _open_shrub_scene == null:
+    _open_shrub_scene = load(_OPEN_SHRUB_3D) as PackedScene
+  if _open_shrub_scene == null:
+    return
+  var center := _Bounds3D.world_position_from_fraction(_playfield_bounds, _REFUGE_CLUSTER_CENTER_FRAC, 0.0)
+  for i in _REFUGE_CLUSTER_SHRUB_COUNT:
+    var angle := TAU * float(i) / float(_REFUGE_CLUSTER_SHRUB_COUNT)
+    var offset := Vector3(cos(angle), 0.0, sin(angle)) * _REFUGE_CLUSTER_RADIUS
+    var pos := center + offset
+    var o: Node3D = _open_shrub_scene.instantiate() as Node3D
+    if o == null:
+      continue
+    if not _validate_food_plant_kind_id(o):
+      o.queue_free()
+      continue
+    o.set("growth_rate", _REFUGE_CLUSTER_GROWTH_RATE)
+    o.set("max_calories", _REFUGE_CLUSTER_MAX_CALORIES)
+    _food_root.add_child(o)
+    o.global_position = pos
+    _spawn_existing_points.append(Vector2(pos.x, pos.z))
+  _spawn_last_layout["open_shrub_refuge_cluster_center"] = _REFUGE_CLUSTER_CENTER_FRAC
+  OLog.info(
+    "Main3D: open shrub refuge cluster forced at world %s (radius=%.1f, count=%d)"
+    % [center, _REFUGE_CLUSTER_RADIUS, _REFUGE_CLUSTER_SHRUB_COUNT],
+    true,
+    "Main3D",
+  )
 
 
 func _validate_food_plant_kind_id(plant: Node) -> bool:

@@ -59,8 +59,11 @@ var _was_flight_fast_path: bool = false
 ## TEMP-DEBUG (CLEANUP C9/C10 fail-fast harness): live invariant checks at the end of every
 ## [method tick] — flags known bug signatures (stuck-under-geometry, flee-waypoint loop, silent
 ## stall) the instant they happen instead of reconstructing them from logs afterward. No-op cost
-## when disabled; flip to false once C9/C10 are closed out.
-const _DEBUG_ASSERT_MOTOR_INVARIANTS := true
+## when enabled and nothing trips; flip the default to false once C9/C10 are closed out.
+## Per-instance (not a hardcoded const) so isolated headless fixtures that don't need the C10
+## airborne check — see [method set_debug_assert_motor_invariants_enabled_for_test] — can disable
+## just their own stack instance instead of a source-level edit-run-revert cycle.
+var _debug_assert_motor_invariants: bool = true
 const _INVARIANT_POS_HISTORY_LEN := 30
 const _INVARIANT_FLEE_WP_HISTORY_LEN := 20
 const _INVARIANT_STALL_MIN_DISP := 0.02
@@ -226,7 +229,7 @@ func tick(delta: float) -> _ActionOutcome:
   _advance_consideration_timer()
   _apply_gravity_if_stationary(action, delta)
   _maybe_log_motor_tick()
-  if _DEBUG_ASSERT_MOTOR_INVARIANTS:
+  if _debug_assert_motor_invariants:
     _assert_motor_invariants(action, outcome)
   return outcome
 
@@ -582,6 +585,16 @@ func set_live_scan_for_test(scan: Dictionary) -> void:
   _use_scan_test_override = true
 
 
+## Disables the [const C9/C10] fail-fast invariant harness for this stack instance (CLEANUP C14):
+## some headless fixtures drive [method tick] from outside the body's own [code]_physics_process[/code]
+## against a freshly baked [NavigationRegion3D] navmesh, which leaves [method CharacterBody3D.is_on_floor]
+## permanently false in this Godot/Jolt build regardless of real position — a fixture/headless
+## artifact, not a real stuck-under-geometry bug. Default stays enabled; call this only for a
+## fixture already confirmed to hit that specific artifact, not as a general escape hatch.
+func set_debug_assert_motor_invariants_enabled_for_test(enabled: bool) -> void:
+  _debug_assert_motor_invariants = enabled
+
+
 func _run_live_scan() -> void:
   if _use_scan_test_override:
     _apply_scan_dict(_scan_test_override)
@@ -654,6 +667,7 @@ func _build_zone_ctx(area_only: bool) -> Dictionary:
     "space_state": space,
     "motor_v3": _motor_v3,
     "area_only": area_only,
+    "now_ms": Time.get_ticks_msec(),
   }
 
 

@@ -1243,7 +1243,7 @@ static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = 
   if cleared_anchor.length_squared() > 1e-8:
     state["locale_arrival_clear_anchor"] = cleared_anchor
     state["locale_arrival_clear_cooldown_ticks"] = int(
-      motor_v3.get("locale_revisit_cooldown_ticks", 90)
+      motor_v3.get("locale_revisit_cooldown_ticks", 300)
     )
 
 
@@ -1309,6 +1309,12 @@ static func _maybe_locale_arrival_bind_or_clear(
       _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
       _store_food_inventory_step_mode(ctx, state, motor_v3)
       return
+  ## CLEANUP C15: record the empty arrival against this anchor's memory row (not just the
+  ## short cooldown below) so a locale cell that keeps producing nothing here erodes its own
+  ## rank over repeated visits — see `notify_locale_food_arrival_empty`.
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter != null and adapter.has_method(&"notify_locale_food_arrival_empty"):
+    adapter.notify_locale_food_arrival_empty(ultimate, motor_v3, ctx.get("environment_grid", null))
   _clear_locale_step_fields(state, motor_v3)
 
 
@@ -1875,7 +1881,18 @@ static func _mint_flee_waypoint(
     # No prior waypoint to hold (Flight entry with no live threat this exact tick — shouldn't
     # normally happen since entry requires an acute threat, but stay defensive): fall back to
     # spawn-facing, matching `_flee_objective`'s own co-located-threat fallback below.
-    var fallback_dist := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+    # CLEANUP C16 (2026-08-12): unlike the main candidate-scored mint path below, this branch has no
+    # threat position to compute an "away" bearing from at all — `HORIZONTAL_FORWARD` is a fixed
+    # compass direction with zero awareness of nearby geometry, so it can (and did, live: a rabbit
+    # spawned 10 units off the map edge) point straight at a wall. Clamp to the direction's own
+    # measured reach same as the main path, so this bootstrapping-only fallback can't overshoot past
+    # the map edge either; a reach of 0 just holds position for this one tick until the next
+    # reconsideration has real threat data to steer by.
+    var fallback_dist := float(motor_v3.get("awareness_radius", 150.0))
+    var fallback_reach := _flee_candidate_reach(
+      ctx.get("map_rid", RID()), creature_pos, _MotorPlane.HORIZONTAL_FORWARD, fallback_dist,
+    )
+    fallback_dist = clampf(fallback_reach, 0.0, fallback_dist)
     var fallback_wp := creature_pos + _MotorPlane.HORIZONTAL_FORWARD * fallback_dist
     state["flee_waypoint"] = fallback_wp
     state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
@@ -1986,13 +2003,41 @@ static func _mint_flee_waypoint(
     # candidate is equally uninformative, prefer holding the previous flee heading (at least
     # consistent, not thrashing) over re-rolling an arbitrary new one; fall back to the raw
     # straight-away-from-threat `base_dir` only when there's no prior waypoint yet to hold.
+    var reach_known := true
     if final_reach <= 0.0:
+      # No usable reach signal in any of the 22 tested directions — genuinely boxed in, not just
+      # limited. Hold a stable heading (as before), but explicitly don't trust a reach value for it
+      # (see the travel-distance note below): re-measuring here would legitimately come back ~0 too,
+      # and projecting the waypoint that close collapses the bearing math to noise.
+      reach_known = false
       var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
       var prior_dir := prior_wp - creature_pos
       prior_dir.y = 0.0
       final_dir = prior_dir.normalized() if prior_dir.length_squared() > 1e-8 else base_dir
 
-    wp = creature_pos + final_dir * flee_dist
+    # CLEANUP C16 (2026-08-12): every branch above already scores candidate bearings by how far the
+    # navmesh actually lets the creature travel (`_flee_candidate_reach`) — including preferring a
+    # roughly wall-parallel bearing over "straight away" once straight-away scores near-zero reach,
+    # since a wall-hugging direction travels much farther before hitting anything. But the waypoint
+    # itself used to always land the full requested `flee_dist` out regardless of that measured
+    # reach, so a correctly-chosen direction could still project a target past where the creature
+    # could actually go — confirmed live: a rabbit spawned 10 units off the map edge minted a flee
+    # waypoint ~6 units past the boundary, then spent several real seconds fighting the wall
+    # (repeated boundary-scan/backtrack) before it found the real opening, while the predator closed
+    # distance uncontested. Cap the travel distance to the chosen direction's own measured reach so
+    # the waypoint never asks for more room than actually exists — but only when a real (positive)
+    # reach was actually measured for it (`reach_known`). Applying the same clamp to the "nothing
+    # reachable anywhere" fallback above collapsed the waypoint to ~0 distance from the creature's
+    # own position, which is functionally "flee to here I already am" — the bearing to a
+    # near-zero-distance target is dominated by floating-point noise tick to tick, which is exactly
+    # the spinning/thrashing this fix is supposed to prevent (confirmed live: tripped the C9
+    # ping-pong invariant with `err` swinging ~180° across consecutive ticks while genuinely
+    # cornered). A fully-boxed-in creature is better served holding a stable, well-defined heading
+    # at full `flee_dist` and pushing against it than degenerating into a self-referential point.
+    var travel_dist := flee_dist
+    if reach_known:
+      travel_dist = clampf(final_reach, 0.0, flee_dist)
+    wp = creature_pos + final_dir * travel_dist
 
   var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
   history.append({"dir": (wp - creature_pos).normalized(), "until_tick": physics_tick + ttl})
@@ -2071,7 +2116,14 @@ static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Di
   away.y = 0.0
   if away.length_squared() < 1e-8:
     away = _MotorPlane.HORIZONTAL_FORWARD
-  var flee_dist := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+  # CLEANUP RT1 follow-up (2026-08-12): was `awareness_radius * 0.5` — on a small (playfield-
+  # scaled-down) arena that put the flee waypoint only halfway to the edge of the creature's own
+  # (already-shrunk) awareness disc, well inside the fox's fixed, unscaled `eat_action_max_distance`
+  # bite range — the rabbit took a token hop and was immediately back in striking range. Flee to the
+  # full edge of the awareness disc instead; `awareness_radius` itself already scales down with
+  # playfield size (`scale_creature_motor_v3_for_playfield`), so this stays proportionate as arenas
+  # grow.
+  var flee_dist := float(motor_v3.get("awareness_radius", 150.0))
   return creature_pos + away.normalized() * flee_dist
 
 

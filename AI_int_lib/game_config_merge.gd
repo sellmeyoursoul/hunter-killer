@@ -391,8 +391,13 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## Ticks a locale food anchor stays skipped after an empty arrival (no consumable found) before
     ## it can be re-picked — prevents immediately re-targeting a point the creature is already
     ## standing on, which produces degenerate bearing math and an in-place turn-storm
-    ## (CLEANUP C2 duel-manual finding, 2026-07-17).
-    "locale_revisit_cooldown_ticks": 90,
+    ## (CLEANUP C2 duel-manual finding, 2026-07-17). Bumped 90 -> 300 (CLEANUP C15, 2026-08-11):
+    ## 90 ticks (1.5s) was far shorter than the ~500-700 tick eat/wander/return cycle observed
+    ## live, so the same empty anchor was always off cooldown again well before the creature came
+    ## back around to reconsult locale memory — see `notify_locale_food_arrival_empty` in
+    ## memory_adapter.gd for the companion fix (repeated empty arrivals now also erode that cell's
+    ## stored_strength, so it loses out over time even once back off cooldown).
+    "locale_revisit_cooldown_ticks": 300,
     "approach_overshoot_guard_move_steps": 2,
     ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
     ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of

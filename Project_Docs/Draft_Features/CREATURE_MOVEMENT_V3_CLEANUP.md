@@ -37,10 +37,12 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C8](#c8-stable-pre-existing-test-failures-found-during-r1-mitigation-2-audit) | Stable pre-existing test failures found during R1 mitigation #2 audit | `done` — 13/13 fixed | unassigned |
 | [C9](#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) | Flee-waypoint latch corrupted by reactive backtrack deflection (rabbit stuck at playfield edge) | `in_progress` — 7th fix (flee-to-origin sentinel bug) shipped 2026-08-07, 6/6 clean headless runs on the C9 check specifically; not formally closed pending more repro budget | unassigned |
 | [C10](#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) | Fox ends up under the geography after close contact with prey | `fixed` — boulder-seam cause fixed 2026-08-06 (convex obstacle collision); terrain-only tunneling cause fixed 2026-08-06 (`safe_margin` on creature bodies); recurred 2026-08-07 (same family, margin insufficient at speed), re-fixed by bumping `safe_margin` 0.06→0.15, 10/10 clean post-re-fix runs | unassigned |
-| [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) | Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling | `done` | unassigned |
+| [C11](#c11-goal-hub-incumbent-flip-flops-find_foodresetavoid_hostiles-on-single-tick-threat-sampling) | Goal hub incumbent flip-flops (`find_food`/`rest`/`avoid_hostiles`) on single-tick threat sampling | `done` — recurred 2026-08-12 under randomized spawn via a distinct facing-cone mechanism, re-fixed (vigilance ghost) | unassigned |
 | [C12](#c12-run_allgd-full-suite-run-aborts-test_motor_locale_approach_no_oscillation_smoke-trips-the-c10-airborne-invariant) | `tests/run_all.gd` full-suite run aborts: `_test_motor_locale_approach_no_oscillation_smoke` deterministically trips the C10 airborne/off-floor invariant (rabbit, tick 91) | `done` | unassigned |
 | [C13](#c13-rabbit-freezes-permanently-after-first-bite-of-a-shrub-find_food-live-target-never-goes-stale--legacy-player-pickup-latch-never-releases) | Rabbit freezes permanently after eating a shrub once — `find_food` never retargets a depleted live target, and a legacy proximity-pickup latch keeps it permanently unready | `done` | unassigned |
-| C14 | `tests/run_all.gd`: `_test_motor_pursuit_pinch_detour_smoke` (fox) trips the same C10 airborne invariant as C12, same family (test floor too small) | `open` — found 2026-08-10 alongside C13 verification; not yet fixed | unassigned |
+| [C14](#c14-test_motor_pursuit_pinch_detour_smoke-fox-trips-the-c10-airborne-invariant---not-the-c12-family) | `tests/run_all.gd`: `_test_motor_pursuit_pinch_detour_smoke` (fox) trips the same C10 airborne invariant as C12 | `done` | unassigned |
+| [C15](#c15-rabbit-slowly-starves-in-an-eatwander-to-a-phantom-locale-anchorreturn-loop-rabbit) | Rabbit slowly starves cycling eat → wander to a phantom locale-memory anchor → return, forever | `done` | unassigned |
+| [C16](#c16-flee-waypoint-overshoots-the-playfield-boundary-instead-of-clamping-to-the-reachable-distance) | Flee waypoint overshoots the playfield boundary instead of clamping to the reachable distance | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -921,7 +923,21 @@ In both cases a genuinely-nearby predator (confirmed live: `_DEBUG_FORCE_EDGE_CH
 
 ### Open questions
 
-- `_DEBUG_FORCE_EDGE_CHASE_SPAWN` (`main_3d.gd`) is still `true` and has silently overridden every duel-pair spawn all session, including this one — genuinely-random duel-pair distance hasn't been exercised by this test round at all yet. Revisit turning it off once C9 is fully closed.
+- `_DEBUG_FORCE_EDGE_CHASE_SPAWN` (`main_3d.gd`) is still `true` and has silently overridden every duel-pair spawn all session, including this one — genuinely-random duel-pair distance hasn't been exercised by this test round at all yet. Revisit turning it off once C9 is fully closed. **Resolved as predicted below** — it was disabled in a later commit, and randomized spawns are exactly what surfaced the recurrence.
+
+### Recurrence (2026-08-12) — facing-cone flicker, distinct mechanism from the original fix
+
+**Status:** `done` — separate root cause, separate fix, same symptom family.
+
+Live playtest report: rabbit oscillating between fleeing and foraging for an extended stretch before the fox closed enough to force a stable flee. `hunter_killer.log` for the reported session showed `rabbit#7`'s incumbent `gk` alternating `avoid_hostiles` ↔ `find_food` on an exact, persistent **16-tick period (8+8) for 24 consecutive cycles** (`t=1667`→`t=2167`, ~500 ticks) — the same *symptom* the original C11 fix addressed, but this time under genuinely randomized spawn (the original fix's own open question, above), not the forced-close debug spawn.
+
+**Root cause:** a different aliasing mechanism than the original fix, not a regression of it. `AwarenessZone.effective_reach_toward` (`awareness_zone.gd:16`) grants two very different reach values depending on facing: an omnidirectional sphere of `awareness_radius` (playfield-scaled down to `≈15.9` world units on this session's arena — see the `RANDOMTESTS.md` RT1 trace for the same scaling mechanism), and — only inside the forward cone (`half_angle≈45–50°`) — an extended reach of `awareness_radius + awareness_cone_extra` (`≈58.2`). With the fox sitting in that gap band, whether it counts as a threat at all depends entirely on the rabbit's instantaneous facing: `avoid_hostiles`'s own flee turn rotates the cone off the fox (threat sample drops the very next tick), `find_food`'s return turn toward the fixed food target happens to sweep the cone back across the fox's bearing (threat reappears), and the hub flips again next reconsideration — a stable limit cycle, not random flicker, which is why it read as an exact metronome rather than "genuine reactions."
+
+**Fix (`creature/motor/occluded_in_zone_ghost.gd`, `memory_adapter.gd`, `creature_motor_stack.gd`):** the existing occluded-in-zone ghost system (`project_ghosts`) already projects remembered hostiles into the danger-sample pipeline the goal hub reads, and `GK_AVOID_HOSTILES` was already wired as an eligible belief kind — but its gate requires the target still be *inside* the geometric zone with LoS *blocked* by real geometry (the wall/corner case), the opposite of "outside the cone, LoS otherwise clear." Added a sibling projector, `OccludedInZoneGhost.project_facing_lost_threat_ghosts`: for a recently-observed `avoid_hostiles` belief that has fallen outside the current geometric zone (but is still within `awareness_radius + awareness_cone_extra` — i.e., would be visible if facing were correct), keep emitting it as a danger sample from last-known-position (+ velocity extrapolation) for `goal_memory_ghost_horizon_sec` (**0.4s**, reused rather than a new constant, per direction) since the belief's last live observation. Wired into `MemoryAdapter.consult_danger_samples` alongside the existing wall-occlusion ghosts; `CreatureMotorStack._build_zone_ctx` now carries `now_ms` so the new projector can age the belief out.
+
+**Verification:**
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures, no regression.
+- `tests/smoke_ai_player.gd` (3600 ticks, randomized spawn, post-fix): incumbent-`gk` oscillation still occurs but in irregular blocks (32/56/32/8/32 ticks) rather than a persistent exact-period metronome — matches the qualitative bar the original C11 fix used to call itself resolved. Not a byte-for-byte replay of the reported session (no locked seed captured for it), so this is a strong structural indicator, not a guaranteed identical-scenario repro; a live playtest is the real confirmation.
 
 ---
 
@@ -980,8 +996,105 @@ Bug B alone would only cause a temporary freeze (until regrowth completes); Bug 
 ### Verification
 
 - First attempt at the Bug B fix (`step_source == &"live"` → unconditionally stale whenever the caller's `live_food.is_empty()` gate was already true) broke `_test_motor_planner_eat_uses_ultimate_not_step_goal` (C3) and its orbit-break sibling — those tests deliberately construct a `live` step target against an **empty** synthetic scan (`{"ready": [], "unready": []}`) to isolate `_can_eat_now`'s geometric gate from full scan-based re-derivation; the coarse "ready is empty" signal doesn't distinguish that from a genuinely-depleted target. Narrowed to the `food_split.unready`-membership check above, which fixes C13 without regressing C3.
-- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures (same pre-existing, unrelated `_test_motor_pursuit_pinch_detour_smoke` C10-airborne trip noted as C14 in the inventory above — same family as C12, reproduces identically before and after this fix, not yet fixed).
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures (same pre-existing, unrelated `_test_motor_pursuit_pinch_detour_smoke` C10-airborne trip noted as C14 in the inventory above at the time — reproduces identically before and after this fix; **C14 fixed separately, see below**).
 - Live repro (`tests/smoke_ai_player.gd`, 3600 ticks): the one `src=live` `EAT` tick in the run (`t=3257`, cal 60%→68%) is immediately followed by `t=3258` transitioning to `src=explore` and resuming movement — matching the intended behavior, vs. the reported 800+-tick freeze.
+
+---
+
+## C14 — `_test_motor_pursuit_pinch_detour_smoke` (fox) trips the C10 airborne invariant — not the C12 family
+
+**Status:** `done`
+**Slice:** unassigned — found 2026-08-10 alongside C13 verification (`tests/run_all.gd` full-suite abort at the same `MOTOR_INVARIANT` harness C12 had just fixed for a different test); the inventory's original one-line guess ("same family, test floor too small") turned out to be wrong once actually investigated.
+**Evidence:** `godot --headless -s res://tests/run_all.gd` aborted mid-run: `push_error("MOTOR_INVARIANT [fox#...] airborne/off-floor for 45+ ticks (stuck-under-geometry, C10)")`, deterministically at physics tick 91, `pos≈(15.25, -9.93, 21.61)` — well **inside** the fixture's 40×40 floor footprint in X/Z, ruling out C12's "walked off a too-small platform" mechanism on inspection alone.
+
+### Root cause (found 2026-08-10) — headless-only artifact, not a real motor bug
+
+Root-caused with a throwaway diagnostic script (`tests/_tmp_c14_probe.gd`, deleted after use) that mirrored `_test_motor_pursuit_pinch_detour_smoke` exactly, with per-tick Y/velocity/`is_on_floor()` tracing and a series of controlled variants:
+
+- **Not a tunneling-speed/margin issue**: reproduces identically at `safe_margin` 0.15 (current default) and 0.001 (Godot's default); reproduces with the floor collider bumped from 0.2 to 4.0 units thick. The body doesn't clip through in one fast step — `is_on_floor()` is simply **false from the very first tick** and never recovers; Y descends smoothly under plain gravity with zero collision response at all, straight through a floor a raycast at the same coordinates confirms is genuinely present and hit-testable.
+- **Not species-, layer/mask-, or fixture-structure-specific**: reproduces identically for a rabbit body in the same fixture (ruling out the fox's hostile collision layer/mask); reproduces after reparenting the floor out from under the `NavigationRegion3D`, after replacing the `StaticBody3D`/`CollisionShape3D` with entirely fresh nodes post-bake, and after toggling `CollisionShape3D.disabled` to force a re-register — none of it helps.
+- **The actual trigger, isolated by bisection**: `NavigationRegion3D.bake_navigation_mesh()` on this fixture. A build of the identical floor with **no bake at all** (either no `NavigationRegion3D`, or one present but never baked) lands the body correctly from tick 0, every time. Baking from `MeshInstance3D` visual geometry instead of `PARSED_GEOMETRY_STATIC_COLLIDERS` reproduces the failure identically — so it isn't specific to the collider-geometry parser either, just to calling `bake_navigation_mesh()` at all in this context.
+- **The one config that recovers post-bake**: calling `apply_horizontal_move_intent()`/`move_and_slide()` from the creature body's **own native** `_physics_process()` (i.e., disabling `set_motor_stack_drives_physics()` so the body's built-in per-frame movement runs) lands correctly even after a bake, and *stays* landed across dozens of real physics frames. The **instant** anything else calls the identical function on the identical body — this test's manual `stack.tick()` loop, or a stand-in driver `Node` calling `stack.tick()` from its *own* `_physics_process()` (deliberately built to mirror how `AI_int_lib/ai_driver.gd`'s `AiDriver._physics_process` drives the real game, tree position and all) — `is_on_floor()` goes false and never recovers, even with zero horizontal intent and 200 real physics frames of prior settle time.
+- Attempted to wait out the async bake properly via `NavigationRegion3D.bake_finished` (baking is threaded by default — confirmed via `main_3d.gd`'s own comment on the same API) instead of the fixture's `map_get_path`-polling proxy for "done": the `await nav_region.bake_finished` **hangs indefinitely in headless mode** rather than ever resolving, even though path queries against the map already succeed well before that. This suggests the bake's true "finished" state may never actually surface in `--headless` runs at all — consistent with (though not a complete explanation of) the collision-detection artifact above.
+
+**Conclusion:** this is a genuine Godot/Jolt headless-mode quirk — baking a `NavigationRegion3D` navmesh desyncs `CharacterBody3D.is_on_floor()` for any body subsequently driven by anything other than its own `_physics_process()` callback — not a bug in the V3 motor/planner code, and not reproducible in real (non-headless) duels, which explains why extensive live C1/C9/C10 duel testing never surfaced it. Root cause not pinned down past this point (verges on engine internals); not investigated further since a full engine-level fix is out of scope for a test-fixture artifact.
+
+### Fix (2026-08-10) — test-only workaround, no production code path changed
+
+Since `_test_motor_pursuit_pinch_detour_smoke`'s actual assertions (turn/move counts, distance-to-prey closing, no §9 seek while live, no `cblk` runaway) are entirely XZ-plane and don't depend on real vertical physics:
+
+- `tests/run_all.gd`: added `_motor_pursuit_pinch_ypin(body, resting_y)`, called after every `stack.tick()` in the test — pins `global_position.y` back to spawn height and zeroes `velocity.y` whenever `is_on_floor()` is false, so the fixture's gravity artifact can't corrupt `distance_to(prey_pos)` math or send the body off into freefall.
+- `creature/motor/creature_motor_stack.gd`: the C9/C10 invariant harness flag (`_DEBUG_ASSERT_MOTOR_INVARIANTS`) was a hardcoded `const`, requiring a source-level edit/run/revert cycle to disable for a single run (the pattern already used ad hoc during C10's own verification passes). Converted to a per-instance `var _debug_assert_motor_invariants` (default `true`, unchanged behavior everywhere else) with a new `set_debug_assert_motor_invariants_enabled_for_test(enabled: bool)` setter, matching the existing `_for_test` setter convention. The pursuit-pinch test calls this with `false` — Y-pinning alone stops the *fall* but can't make the genuinely-broken `is_on_floor()` return `true`, so the C10 airborne check would otherwise still trip on this specific fixture's known artifact rather than a real stuck-under-geometry bug. Every other test/production path keeps the invariant harness on by default.
+
+### Verification
+
+- Full `tests/run_all.gd` suite: exit code 0, 0 `ASSERT:` failures, no `MOTOR_INVARIANT` trips — confirmed the suite now runs past `_test_motor_pursuit_pinch_detour_smoke` to completion (previously the C10 trip's `quit(1)` truncated everything after it, same failure shape as C12).
+- Confirmed the fix doesn't just suppress the symptom: with Y-pinning alone (invariant harness still on), the suite still aborted at the same tick/signature, since `is_on_floor()` itself — not body Y — is what the invariant checks. Both halves of the fix (Y-pin + per-instance invariant disable) are required together; documented here so neither gets deleted independently by a future pass without re-deriving why.
+- Confirmed the fixed fox in this test now genuinely chases and reaches the moving prey across the full 300-tick window (position trace shows real, monotonic XZ progress from the spawn point to near the prey, settling into repeated `EAT` actions), not just "stopped erroring."
+
+---
+
+## C15 — Rabbit slowly starves in an eat→wander-to-a-phantom-locale-anchor→return loop (rabbit)
+
+**Status:** `done`
+**Slice:** unassigned — user playtest report 2026-08-11: "the rabbit seemed to get stuck eating a shrub, walking away to the northeast, returning to the shrub, and repeating the pattern while slowly starving to death... at a certain point, a net loss of calories should result in another direction being tried."
+**Evidence:** `hunter_killer.log` for the reported duel (`herb_frac=(0.83,0.48) carn_frac=(0.39,0.17)`, spawn `15:52:24`, round ended `winner=none cause=end_ai herb_cal=3`). Full rabbit tick trace extracted for the session (5507 ticks): calories `100%→5%`, 7 total `EAT` actions (6 at the same shrub `id=116702318938` at world `(69.6, 50.4)`), spaced 590–720 ticks apart.
+
+### Symptom
+
+Not a retargeting failure (C13's fix is working correctly — the just-eaten shrub is properly noticed as stale/unready and dropped). Instead, a specific repeating cycle:
+
+1. `EAT` at the shrub → shrub immediately drops out of the scan as ready (its own ~300-tick regrow cooldown).
+2. With no live food visible, planner falls back to `src=locale`, beelining for a **fixed memory anchor at `(78.0, 26.0)`** — the coverage-grid cell **centroid** for the 52×52-unit cell the shrub happens to live in, not the shrub's actual position (offset ~26 units from it).
+3. Arrival finds nothing there (correctly — the anchor is a cell-average point, not a real food location); the objective clears and falls to `src=explore`, drifting progressively farther away (`(78.4,22.6)` → `(81.6,14.0)` → `(84.2,8.4)` across successive cycles).
+4. Once the shrub re-enters the scan as ready again, the planner snaps straight back to it — but from wherever the explore drift left the rabbit, sometimes 30–40 units away.
+5. Net calorie cost per cycle (travel to phantom anchor + explore drift + travel home + baseline drain over 600+ ticks) exceeds one bite's calorie yield. Repeats until starvation.
+
+### Root cause (found 2026-08-11)
+
+Two independent, compounding gaps in the existing (correctly-designed) locale-memory system:
+
+1. **Cooldown far shorter than the cycle it needed to cover.** `_locale_anchor_on_arrival_cooldown` ([motor_planner.gd](../../creature/motor/motor_planner.gd)) exists specifically to stop an empty locale anchor from being immediately re-picked (CLEANUP C2, 2026-07-17) — but its default, `locale_revisit_cooldown_ticks = 90` (1.5s), was tuned for the in-place-orbit case C2 targeted, not for a full eat→detour→return cycle, which this session showed running 590–720 ticks. The cooldown always expired well before the rabbit came back around to reconsult locale memory, so the same anchor was eligible again every single time.
+2. **No lasting penalty for a confirmed-empty visit.** The locale anchor's rank comes from `GoalSourceMemoryStore`'s learned `stored_strength`/`replay_rank_score` per coverage cell ([goal_source_memory.gd](../../creature/motor/goal_source_memory.gd)) — reinforced positively on every successful `EAT` via `notify_food_consumption_outcome` (`creature_motor_stack.gd` → `memory_adapter.gd`). But nothing on the *arrival-finds-nothing* path ever wrote the mirror-image negative signal, so a cell's rank only ever went up from real eats, never down from real misses at its own centroid — the cooldown timer was the *only* thing standing between this cell and being picked again, and per (1) that timer was too short to matter.
+
+Not a "wrong location" bug at the data level — the memory is correctly identifying "food has been found in this general neighborhood," it's the coarse 52-unit cell-centroid granularity that doesn't coincide with where the shrub actually sits, and nothing was learning from that mismatch.
+
+### Fix (2026-08-11)
+
+Both angles requested together, since either alone only partially closes the loop (a longer cooldown delays the same anchor without ever discounting it; decay alone still lets it win on every single visit before evidence accumulates):
+
+- **`AI_int_lib/game_config_merge.gd`**: `locale_revisit_cooldown_ticks` default bumped **90 → 300** (5s) — comfortably covers the shrub's own ~300-tick regrow window without being so long it stalls a genuinely-stuck creature indefinitely. Not derived from a formal model, a starting point sized to the observed cycle; retune if duel evidence shows it still too short (or now too conservative) once real regrowth timing is confirmed.
+- **`creature/motor/memory_adapter.gd`**: new `notify_locale_food_arrival_empty(anchor, motor_v3, env_grid)` — the mirror of the existing `notify_food_consumption_outcome`, writing a `TIER_FAILURE` salient write via the same `GoalSourceMemoryStore.try_salient_write` learning path (same row key as the success writes for that cell, so `attempt_count` accrues from both real eats *and* empty locale visits — a cell's `stored_strength`/rank now reflects its true mixed track record).
+- **`creature/motor/motor_planner.gd`**: `_maybe_locale_arrival_bind_or_clear` now calls the new adapter method right before `_clear_locale_step_fields`, using the same `ultimate` anchor position and `ctx["environment_grid"]` already available at that call site.
+
+**Verified (isolated, `MemoryAdapter` direct)**: 3 simulated successful eats at the shrub position then repeated `notify_locale_food_arrival_empty` calls at the cell centroid — `replay_rank_score` for that cell dropped from `11.32` (post-eats, pre-failure) to `3.33` after the very first failure write, settling to a steady `~2.2–2.4` after 10 repeated failures (the EWMA/evidence model correctly converges to the cell's true long-run success rate rather than crashing to zero, which is the intended behavior — a cell that's genuinely produced 3 real eats shouldn't be discounted to nothing by one bad centroid, but should no longer dominate every cycle either).
+**Verified (headless)**: full `tests/run_all.gd` suite — exit 0, 0 `ASSERT:` failures, no regressions.
+**Not yet duel-validated** — this session's specific repro (which took an entire real duel to surface) hasn't been re-run live post-fix; next manual playtest should confirm the rabbit stops burning full round-trips on the same empty anchor.
+
+---
+
+## C16 — Flee waypoint overshoots the playfield boundary instead of clamping to the reachable distance
+
+**Status:** `done`
+**Slice:** unassigned — found 2026-08-12 during targeted `_DEBUG_FORCE_EDGE_CHASE_SPAWN` repro sessions for C9.
+**Evidence:** User playtest report: "rabbit hit the edge and then turned 180 toward the fox and was eaten." `hunter_killer.log` for the reported session (spawn `herb_frac=(0.05,0.50) carn_frac=(0.20,0.50)` on a `200×203.7` playfield — rabbit spawns `X=-90`, only 10 units from the `min_x=-100` wall) showed the very first flee mint at `t=1` targeting `(-105.9, 2.4)` — 5.9 units past the map boundary.
+
+### Root cause
+
+`_mint_flee_waypoint` / `_flee_objective` (`motor_planner.gd`) already score candidate bearings by real navmesh-reachable distance (`_flee_candidate_reach`, the C9 5th/6th-fix machinery) — including preferring a roughly wall-parallel bearing over "straight away" once straight-away scores near-zero reach, since a wall-hugging direction travels much farther before hitting anything. But the *final waypoint* always projected the full requested `flee_dist` (`≈15.87` after the RT1 flee-distance fix) along whichever direction won, regardless of that direction's own measured reach. Near a boundary, the best-scoring direction is still correct but its reach can be much shorter than `flee_dist`, so the waypoint routinely landed past where the creature could actually go. The rabbit then spent several real seconds physically fighting the wall (repeated boundary-scan/backtrack-detour cycles) before finding a real opening, while the fox — never handicapped by any wall — closed distance uncontested. By the time the rabbit found real room to move, the fox was already close enough to force a losing chase. A second, separate overshoot source existed in `_mint_flee_waypoint`'s own "no visible threat this exact tick" bootstrap fallback (Flight entry before a live threat sample exists yet): it projects along a fixed `HORIZONTAL_FORWARD` compass direction with zero geometry awareness at all, which can point straight at a wall.
+
+### Fix
+
+`creature/motor/motor_planner.gd`:
+- Main candidate-scored mint path: cap the final waypoint's travel distance to the chosen direction's own measured reach (`clampf(final_reach, 0.0, flee_dist)`) instead of always using the full `flee_dist`.
+- **Caveat found during verification:** applying that same clamp to the pre-existing "zero signal in all 22 tested directions" fallback (a creature genuinely boxed in on every side) collapsed the waypoint to ~0 distance from the creature's own position — a "flee to here I already am" target whose bearing is dominated by floating-point noise tick to tick, which tripped the C9 boundary-ping-pong invariant via a *different* mechanism than the one C9 originally fixed (exact-repeat remints instead of directional thrashing). Fixed by only applying the reach clamp when a real (positive) reach was actually measured; the fully-boxed-in fallback keeps projecting a stable heading at full `flee_dist` (unclamped) rather than degenerating to a self-referential point — matches the user's own framing (moving parallel to a wall beats spinning; a fully-cornered creature holding one stable heading and pushing against it beats thrashing too).
+- `HORIZONTAL_FORWARD` bootstrap fallback: same reach-based clamp, using `_flee_candidate_reach` against the fixed forward direction; a reach of `0` just holds position for that one tick until the next reconsideration has real threat data to steer by.
+
+### Verification
+
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures, no regression (three iterations of this fix, each re-verified clean).
+- `tests/smoke_ai_player.gd` with `_DEBUG_FORCE_EDGE_CHASE_SPAWN` on (the exact stress spawn from the report): 7 repeated runs post-fix, 0 `MOTOR_INVARIANT` trips (the first fix attempt — clamping the fully-boxed-in fallback too — reintroduced a C9 trip within the first 3 runs; the refined fix above has run clean across 7).
+- Residual, accepted gap: the fully-boxed-in fallback (deliberately unclamped, per above) can still overshoot the boundary in the rare case where every tested direction scores zero reach — confirmed live at `≈4.7` units past the boundary in one of the 7 verification runs. Unlike the pre-fix behavior this doesn't cause thrashing or an invariant trip (the creature holds a stable heading, gets blocked, and the existing boundary-scan/backtrack-detour system — not flee-remint timing — finds the real opening on the next cycle), so left as-is rather than adding further complexity for a case that no longer produces pathological behavior.
 
 ---
 

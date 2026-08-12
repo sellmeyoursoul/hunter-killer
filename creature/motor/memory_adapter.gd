@@ -115,6 +115,35 @@ func notify_food_consumption_outcome(
     )
 
 
+## Records a `find_food` FAILURE at [param anchor] (CLEANUP C15): a locale-memory anchor was
+## reached and had no consumable food after all — the mirror-image write to
+## [method notify_food_consumption_outcome]'s SUCCESS/PARTIAL, so a cell that keeps producing
+## empty arrivals erodes its own `stored_strength` over repeated visits (same `try_salient_write`
+## learning path, same row key — attempts accumulate from both outcomes) instead of relying solely
+## on the short-lived per-visit `locale_revisit_cooldown_ticks` timer to avoid it.
+func notify_locale_food_arrival_empty(
+  anchor: Vector3,
+  motor_v3: Dictionary,
+  env_grid: Variant = null,
+) -> void:
+  if _locale_store == null:
+    return
+  _locale_store.try_salient_write(
+    _GkReg.GK_FIND_FOOD,
+    &"find_food",
+    anchor,
+    motor_v3,
+    env_grid,
+    {},
+    {"tier": _GoalSource.TIER_FAILURE},
+    _effective_goal_kinds,
+    _modality_allowlist,
+    _traits,
+    _goal_catalog,
+  )
+  _locale_store.clear_salient_continuation()
+
+
 ## Returns the internal locale-prior store (salient writes land in 6d.2).
 func get_locale_store() -> RefCounted:
   return _locale_store
@@ -139,6 +168,13 @@ func consult_danger_samples(zone_ctx: Dictionary, live_threat_samples: Array) ->
     var ghost: Dictionary = ghost_v as Dictionary
     if _OccludedGhost.danger_filter(ghost):
       out.append(ghost)
+  var now_ms := int(zone_ctx.get("now_ms", 0))
+  for vghost_v in _OccludedGhost.project_facing_lost_threat_ghosts(zone_ctx, _beliefs, live_ids, now_ms):
+    if typeof(vghost_v) != TYPE_DICTIONARY:
+      continue
+    var vghost: Dictionary = vghost_v as Dictionary
+    if _OccludedGhost.danger_filter(vghost):
+      out.append(vghost)
   return out
 
 
