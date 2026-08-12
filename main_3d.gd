@@ -25,7 +25,7 @@ const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 ## RANDOMTESTS (2026-08-10): flipped off so the duel pair uses the randomized/terrain-aware
 ## picker in [method _spawn_duel_pair] like every other object — C9/C10/C11 are closed enough
 ## that pinning the spawn is no longer worth masking real random-layout coverage.
-const _DEBUG_FORCE_EDGE_CHASE_SPAWN := true
+const _DEBUG_FORCE_EDGE_CHASE_SPAWN := false
 
 ## TEMP-REPRO (rabbit-refuge manual playtest, 2026-08-12): force-spawns an extra ring of
 ## `open_shrub_3d` instances (see [method _spawn_open_shrub_refuge_cluster]) around a fixed point
