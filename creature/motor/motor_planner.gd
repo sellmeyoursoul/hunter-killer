@@ -1823,24 +1823,38 @@ static func _reset_flight_entry_telemetry(state: Dictionary) -> void:
   state["boundary_scan_sign"] = 0
 
 
-## Real reachable distance toward [code]creature_pos + dir * dist[/code], per the navmesh —
-## clamped short of the requested distance when geometry blocks the way (CLEANUP C9, 2026-08-06:
-## a candidate-scoring signal for [method _mint_flee_waypoint] so bearing selection can tell "open"
-## from "corner" instead of reasoning about direction alone). Falls back to the full requested
-## distance when no navmesh map is available (e.g. synthetic headless fixtures with no baked nav).
-static func _flee_candidate_reach(
+## Real reachable distance and endpoint toward [code]creature_pos + dir * dist[/code], per the
+## navmesh — clamped short of the requested distance when geometry blocks the way (CLEANUP C9,
+## 2026-08-06: a candidate-scoring signal for [method _mint_flee_waypoint] so bearing selection can
+## tell "open" from "corner" instead of reasoning about direction alone). Falls back to the full
+## requested distance when no navmesh map is available (e.g. synthetic headless fixtures with no
+## baked nav).
+## CLEANUP C17 (2026-08-12): previously returned only the straight-line distance to the navmesh
+## path's last point (`reach`) while discarding the endpoint itself — callers then re-derived a
+## waypoint by walking straight in `dir` for that many units. Near a boundary corner, the queried
+## `NavigationServer3D.map_get_path` snaps an off-navmesh candidate to the nearest *reachable* point,
+## which the path may only reach by bending around the corner — the straight-line distance to that
+## snapped point can read close to the full requested `dist` even though a straight cast in `dir`
+## walks off the navmesh partway there. That mismatch let flee-waypoint scoring rate a direction as
+## "clear" while the resulting straight-line waypoint still hit the boundary, cycling through the
+## same handful of equally-miscalibrated candidates (confirmed live: rabbit fleeing near the west
+## wall spun/re-minted between 3 fixed waypoints for ~2s before finding a real opening). Returning
+## the actual path endpoint alongside `reach` lets callers target where the navmesh really goes
+## instead of re-deriving a straight-line point that ignores the bend.
+static func _flee_candidate_probe(
   map_rid: RID,
   creature_pos: Vector3,
   dir: Vector3,
   dist: float,
-) -> float:
+) -> Dictionary:
   if not map_rid.is_valid() or dist <= 0.0:
-    return dist
+    return {"reach": dist, "endpoint": creature_pos + dir * dist}
   var candidate := creature_pos + dir * dist
   var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, candidate, true)
   if path.size() < 2:
-    return 0.0
-  return creature_pos.distance_to(path[path.size() - 1])
+    return {"reach": 0.0, "endpoint": creature_pos}
+  var endpoint: Vector3 = path[path.size() - 1]
+  return {"reach": creature_pos.distance_to(endpoint), "endpoint": endpoint}
 
 
 ## True when at least one [code]threat_samples[/code] entry is currently [code]in_awareness[/code].
@@ -1889,11 +1903,10 @@ static func _mint_flee_waypoint(
     # the map edge either; a reach of 0 just holds position for this one tick until the next
     # reconsideration has real threat data to steer by.
     var fallback_dist := float(motor_v3.get("awareness_radius", 150.0))
-    var fallback_reach := _flee_candidate_reach(
+    var fallback_probe := _flee_candidate_probe(
       ctx.get("map_rid", RID()), creature_pos, _MotorPlane.HORIZONTAL_FORWARD, fallback_dist,
     )
-    fallback_dist = clampf(fallback_reach, 0.0, fallback_dist)
-    var fallback_wp := creature_pos + _MotorPlane.HORIZONTAL_FORWARD * fallback_dist
+    var fallback_wp: Vector3 = fallback_probe.get("endpoint", creature_pos)
     state["flee_waypoint"] = fallback_wp
     state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
     state["flee_backtrack_streak"] = 0
@@ -1946,15 +1959,20 @@ static func _mint_flee_waypoint(
     var flee_dist := to_wp.length()
     var best_dir := base_dir
     var best_reach := -1.0
+    var best_endpoint := creature_pos
     var best_clear_dir := Vector3.ZERO
     var best_clear_reach := -1.0
+    var best_clear_endpoint := creature_pos
     var found_clear := false
     for i in range(6):
       var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i))
-      var reach := _flee_candidate_reach(map_rid, creature_pos, candidate_dir, flee_dist)
+      var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
+      var reach := float(probe.get("reach", 0.0))
+      var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       if reach > best_reach:
         best_reach = reach
         best_dir = candidate_dir
+        best_endpoint = endpoint
       var avoided := false
       for avoid_v in avoid_dirs:
         if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
@@ -1963,9 +1981,11 @@ static func _mint_flee_waypoint(
       if not avoided and reach > best_clear_reach:
         best_clear_reach = reach
         best_clear_dir = candidate_dir
+        best_clear_endpoint = endpoint
         found_clear = true
     var final_dir := best_clear_dir if found_clear else best_dir
     var final_reach := best_clear_reach if found_clear else best_reach
+    var final_endpoint := best_clear_endpoint if found_clear else best_endpoint
 
     # CLEANUP C9 give-up escalation (2026-08-07): the 6-candidate sweep above only samples every
     # 60° — in a genuine corner none of those 6 may reach anywhere close to `flee_dist`, but a
@@ -1980,17 +2000,21 @@ static func _mint_flee_waypoint(
       var scan_n := maxi(1, int(motor_v3.get("flee_give_up_scan_directions", 16)))
       var scan_best_dir := final_dir
       var scan_best_reach := final_reach
+      var scan_best_endpoint := final_endpoint
       for i in range(scan_n):
         var ang := TAU * float(i) / float(scan_n)
         var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
-        var reach := _flee_candidate_reach(map_rid, creature_pos, candidate_dir, flee_dist)
+        var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
+        var reach := float(probe.get("reach", 0.0))
         if reach > scan_best_reach:
           scan_best_reach = reach
           scan_best_dir = candidate_dir
+          scan_best_endpoint = probe.get("endpoint", creature_pos)
       if scan_best_reach > final_reach:
         final_dir = scan_best_dir
         state["flee_give_up_active"] = true
         final_reach = scan_best_reach
+        final_endpoint = scan_best_endpoint
 
     # CLEANUP RANDOMTESTS RT1 (2026-08-10): both scans above score every candidate purely by
     # navmesh reach — when the creature is near/past the edge of the baked navmesh (confirmed via
@@ -2016,7 +2040,7 @@ static func _mint_flee_waypoint(
       final_dir = prior_dir.normalized() if prior_dir.length_squared() > 1e-8 else base_dir
 
     # CLEANUP C16 (2026-08-12): every branch above already scores candidate bearings by how far the
-    # navmesh actually lets the creature travel (`_flee_candidate_reach`) — including preferring a
+    # navmesh actually lets the creature travel (`_flee_candidate_probe`) — including preferring a
     # roughly wall-parallel bearing over "straight away" once straight-away scores near-zero reach,
     # since a wall-hugging direction travels much farther before hitting anything. But the waypoint
     # itself used to always land the full requested `flee_dist` out regardless of that measured
@@ -2024,20 +2048,22 @@ static func _mint_flee_waypoint(
     # could actually go — confirmed live: a rabbit spawned 10 units off the map edge minted a flee
     # waypoint ~6 units past the boundary, then spent several real seconds fighting the wall
     # (repeated boundary-scan/backtrack) before it found the real opening, while the predator closed
-    # distance uncontested. Cap the travel distance to the chosen direction's own measured reach so
-    # the waypoint never asks for more room than actually exists — but only when a real (positive)
-    # reach was actually measured for it (`reach_known`). Applying the same clamp to the "nothing
-    # reachable anywhere" fallback above collapsed the waypoint to ~0 distance from the creature's
-    # own position, which is functionally "flee to here I already am" — the bearing to a
-    # near-zero-distance target is dominated by floating-point noise tick to tick, which is exactly
-    # the spinning/thrashing this fix is supposed to prevent (confirmed live: tripped the C9
+    # distance uncontested. Use the winning candidate's own measured navmesh endpoint (`final_endpoint`)
+    # as the waypoint directly rather than re-deriving a straight-line point from direction × distance
+    # — but only when a real (positive) reach was actually measured for it (`reach_known`); see CLEANUP
+    # C17 above for why a straight-line re-derivation from a bent-path reach was still wrong. Applying
+    # this to the "nothing reachable anywhere" fallback below instead collapsed the waypoint to ~0
+    # distance from the creature's own position, which is functionally "flee to here I already am" —
+    # the bearing to a near-zero-distance target is dominated by floating-point noise tick to tick,
+    # which is exactly the spinning/thrashing this fix is supposed to prevent (confirmed live: tripped
+    # the C9
     # ping-pong invariant with `err` swinging ~180° across consecutive ticks while genuinely
     # cornered). A fully-boxed-in creature is better served holding a stable, well-defined heading
     # at full `flee_dist` and pushing against it than degenerating into a self-referential point.
-    var travel_dist := flee_dist
     if reach_known:
-      travel_dist = clampf(final_reach, 0.0, flee_dist)
-    wp = creature_pos + final_dir * travel_dist
+      wp = final_endpoint
+    else:
+      wp = creature_pos + final_dir * flee_dist
 
   var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
   history.append({"dir": (wp - creature_pos).normalized(), "until_tick": physics_tick + ttl})

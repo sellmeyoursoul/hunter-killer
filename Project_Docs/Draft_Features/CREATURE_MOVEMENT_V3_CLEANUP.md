@@ -1098,6 +1098,30 @@ Both angles requested together, since either alone only partially closes the loo
 
 ---
 
+## C17 — Flee-waypoint reach scoring mismatched its own straight-line projection near a boundary corner (rabbit spins then fails to strafe past)
+
+**Status:** `done`
+**Slice:** unassigned — found 2026-08-12, same `_DEBUG_FORCE_EDGE_CHASE_SPAWN` west-wall repro area as C9/C16.
+**Evidence:** User playtest report: rabbit fleeing the fox hit the edge and spun for a couple of seconds before trying and failing to strafe past. `motor_explore_tick.log` for the session showed the flee mint cycling between three fixed waypoints — `(-113.9, -6.2)` (≈14 units past the `min_x=-100` wall), `(-108.1, 8.6)`, and `(-92.4, 10.9)` — for ~120 ticks (~2s): each mint reported a candidate "reach" of `≈15.87`, essentially the full `flee_dist` (so C16's clamp never engaged), then `MOVE_F` immediately reported `blk=1`, forcing a re-mint into one of the other two points, repeating.
+
+### Root cause
+
+`_flee_candidate_reach` (renamed `_flee_candidate_probe` by this fix) scored a candidate bearing by asking `NavigationServer3D.map_get_path()` for a path to `creature_pos + dir * dist`, then returned only the **straight-line distance** from the creature to that path's *last point* — discarding the endpoint itself. Near the boundary corner, an off-navmesh candidate point gets snapped by the nav query to the nearest reachable point, which the path may only reach by **bending around the corner**; the straight-line distance to that bent-path endpoint can read close to the full requested `dist` even though a straight cast in `dir` walks off the navmesh partway there. `_mint_flee_waypoint` then re-derived the waypoint as `creature_pos + final_dir * travel_dist` — a straight-line cast using only the scored *distance*, not the actual reachable *point* — so a direction that scored "clear" on paper still produced a waypoint the creature couldn't walk straight to. Several 60°-rotated candidates near the corner suffered the same mismatch, so the mint kept hopping between them.
+
+### Fix
+
+`creature/motor/motor_planner.gd`:
+- `_flee_candidate_reach` → `_flee_candidate_probe`: now returns `{"reach": float, "endpoint": Vector3}` — the actual navmesh path endpoint alongside the distance to it, instead of distance alone.
+- `_mint_flee_waypoint`'s main candidate loop, give-up escalation scan, and the "no live threat yet" `HORIZONTAL_FORWARD` bootstrap fallback all now track and use the winning candidate's own probed `endpoint` directly as the waypoint (when `reach_known`), instead of re-deriving a straight-line point from direction × clamped distance. The C16 "genuinely boxed in" fallback (all candidates score ~0 reach) is unchanged — still holds a stable heading at full `flee_dist`, since there's no reliable endpoint to target in that case.
+
+### Verification
+
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures.
+- `tests/smoke_ai_player.gd` with `_DEBUG_FORCE_EDGE_CHASE_SPAWN` on: 4 repeated runs post-fix, all completed 3600 ticks clean, 0 `MOTOR_INVARIANT` trips.
+- Live re-check via `motor_explore_tick.log`: flee mints near the west wall now hold a single stable, actually-reachable target (e.g. repeatedly `(-95.3, 5.9)`) with `blk=0` throughout, instead of cycling between three unreachable points with `blk=1` re-mints.
+
+---
+
 ## Shared implementation plan (C1 + C2)
 
 **Thesis:** C1 (fox live-prey pursuit) and C2 (rabbit locale seek) are the **same failure family** — a **fixed `step_goal`** with **bad approach geometry** (blocked corridor / overshoot) and **no progress-stall escalation**. They differ only in **trigger** (`blk=1` collision vs `blk=0` orbit) and **step source** (`live` vs `locale`). Ship the common foundation **once**; keep the small goal-specific tails behind it.
