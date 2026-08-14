@@ -383,6 +383,22 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "goal_memory_precise_radius": 1000.0,
     "goal_memory_forget_radius": 2400.0,
     "goal_memory_max_entries": 25,
+    ## GK_SHELTER candidate detection (CREATURE_MOVEMENT_V3.md §6.4) — ring-probe nomination +
+    ## STAY-evaluate confirm, plus shelter-specific belief-memory retention (confirmed shelters
+    ## must outlive food's short TTL/precise-radius since Flight needs them around later).
+    "shelter_probe_lookahead_dist": 3.0,
+    "shelter_enclosure_probe_radius": 2.5,
+    "shelter_enclosure_blocker_mask": 8,
+    "shelter_enclosure_detect_threshold": 0.5,
+    "shelter_enclosure_confirm_threshold": 0.65,
+    "shelter_eval_confirm_cycles": 5,
+    "shelter_eval_max_cycles": 15,
+    "shelter_probe_retry_cooldown_cycles": 2,
+    "goal_inventory_min_shelter": 1.0,
+    "goal_shelter_explore_floor": 0.25,
+    "goal_memory_ttl_sec_shelter": 300.0,
+    "goal_memory_precise_radius_shelter": 2400.0,
+    "goal_memory_forget_radius_shelter": 2400.0,
     "dead_end_memory_ttl_sec": 15.0,
     "dead_end_memory_max_entries": 12,
     "dead_end_match_radius": 52.0,

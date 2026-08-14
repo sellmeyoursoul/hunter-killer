@@ -43,6 +43,8 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C14](#c14-test_motor_pursuit_pinch_detour_smoke-fox-trips-the-c10-airborne-invariant---not-the-c12-family) | `tests/run_all.gd`: `_test_motor_pursuit_pinch_detour_smoke` (fox) trips the same C10 airborne invariant as C12 | `done` | unassigned |
 | [C15](#c15-rabbit-slowly-starves-in-an-eatwander-to-a-phantom-locale-anchorreturn-loop-rabbit) | Rabbit slowly starves cycling eat → wander to a phantom locale-memory anchor → return, forever | `done` | unassigned |
 | [C16](#c16-flee-waypoint-overshoots-the-playfield-boundary-instead-of-clamping-to-the-reachable-distance) | Flee waypoint overshoots the playfield boundary instead of clamping to the reachable distance | `done` | unassigned |
+| [C17](#c17-flee-waypoint-reach-scoring-mismatched-its-own-straight-line-projection-near-a-boundary-corner-rabbit-spins-then-fails-to-strafe-past) | Flee-waypoint reach scoring mismatched its own straight-line projection near a boundary corner | `done` | unassigned |
+| [C18](#c18-eat-completes-through-a-solid-the-eater-physically-cant-pass-straight-line-range-only-no-reachabilityocclusion-check) | EAT completes through a solid the eater physically can't pass (straight-line range only, no reachability/occlusion check) | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -1119,6 +1121,29 @@ Both angles requested together, since either alone only partially closes the loo
 - Full `tests/run_all.gd` suite: 0 `ASSERT:` failures.
 - `tests/smoke_ai_player.gd` with `_DEBUG_FORCE_EDGE_CHASE_SPAWN` on: 4 repeated runs post-fix, all completed 3600 ticks clean, 0 `MOTOR_INVARIANT` trips.
 - Live re-check via `motor_explore_tick.log`: flee mints near the west wall now hold a single stable, actually-reachable target (e.g. repeatedly `(-95.3, 5.9)`) with `blk=0` throughout, instead of cycling between three unreachable points with `blk=1` re-mints.
+
+---
+
+## C18 — EAT completes through a solid the eater physically can't pass (straight-line range only, no reachability/occlusion check)
+
+**Status:** `done`
+**Slice:** unassigned — found 2026-08-14 while investigating [RANDOMTESTS.md RT4](CREATURE_MOVEMENT_V3_RANDOMTESTS.md#rt4-rabbit-never-shelters-inside-the-forced-shrub-refuge-cluster) (rabbit sheltering inside the forced shrub-refuge ring, fox parked outside).
+**Evidence:** User playtest observation: rabbit sitting inside the shrub-refuge ring (`main_3d.gd:_spawn_open_shrub_refuge_cluster`, radius 3.0) with a fox stopped just outside it — asked whether anything invalidates `EAT` when the target is "essentially behind a solid." Code inspection (no repro run needed — the gap is structural): `_can_eat_now` / `_is_within_eat_range` (`motor_planner.gd:2179-2207`, pre-fix) gated `EAT` on straight-line Euclidean distance (`eat_action_max_distance`, default `5.0`) plus a facing arc — nothing else. The ring's shrubs use `MobBlocker` (`assets/plants/open_shrub/open_shrub_3d.tscn`, `collision_layer=8`) which only the carnivore's `collision_mask` (`9` = world_static + that layer, `creature_kinematic_body_3d.gd:_apply_physics_layers`) includes — herbivores walk straight through, carnivores are physically stopped. Ring diameter (6.0) is smaller than `2 × eat_action_max_distance`, so a fox stopped at the ring's edge can sit well within straight-line bite range of a rabbit on the near side of the ring interior with nothing checking whether a shrub wall stands between them.
+
+### Root cause
+
+`_is_within_eat_range` was a pure `distance_to() <= max_dist` check with no occlusion or reachability term. The existing LoS system (`LineOfSight3D.occlusion_fraction`, `line_of_sight.gd`) only ever queries `WORLD_STATIC_MASK` (layer 1) — it wouldn't have caught this either, since `MobBlocker` sits on layer 8, not layer 1, and LoS is a *visual* shadow-coverage heuristic (percentage of a sample fan blocked), not a *physical* pass/fail on the specific layers that stop the acting body's own movement. Separately, the existing per-tick LoS/nav deflection (`_run_path_clearance_los_nav`) only runs from inside `_locomote_toward_step_goal` — `select_action` (`motor_planner.gd:114-120`) checks `_can_eat_now` *before* ever reaching that code path, so it couldn't have gated `EAT` even if it had used the right mask.
+
+### Fix
+
+- `creature/motor/motor_path_clear.gd`: new `has_clear_contact_path(space_state, from, to, collision_mask, exclude_rids)` — a single-ray solid-intercept check parameterized on a caller-supplied `collision_mask`, deliberately generic (not EAT-specific) so it's ready to reuse for other contact-gated actions once combat lands, per the caller's ask.
+- `creature/motor/motor_planner.gd`: `_can_eat_now` gained an optional `ctx: Dictionary = {}` parameter (defaults to permissive — no `space_state` means no check, so any call site that doesn't pass `ctx` is unaffected) and now calls `_has_clear_contact_path_for_action`, a thin adapter that rays from the eater's eye position to the eat target using **the eater's own `collision_mask`** (not a fixed vision mask) — so the gate matches whatever layers actually stop that specific body's movement, herbivore vs. carnivore included. `select_action`'s only call site now passes `ctx` through.
+
+### Verification
+
+- New test `_test_motor_planner_eat_blocked_by_solid_between` (`tests/run_all.gd`): spawns a carnivore body in range/facing-aligned with a live food target, asserts `_can_eat_now`/`select_action` succeed with no obstruction present (positive control), then adds a `collision_layer = 8` `StaticBody3D` directly on the path (mirroring the refuge ring's `MobBlocker`) and asserts both now correctly refuse `EAT`.
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures, 2/2 clean runs.
+- **Diagnostic note (test-harness-only, not a game bug):** the first version of the new test's leftover `StaticBody3D` wasn't flushed from the shared physics world before later tests ran (`queue_free()` alone, no yielded frame afterward) — it lingered near world origin and physically interfered with `_test_motor_locale_approach_no_oscillation_smoke`'s rabbit a few tests later, tripping the C10 airborne invariant. Fixed by adding `await process_frame` after `main.queue_free()` at the end of the new test, matching frame-flush hygiene the C12/C14 fixes already established for this failure family. Confirmed via bisection (disabling the new test made the failure disappear; re-enabling it with the extra `await` made the full suite pass cleanly twice in a row) that this was purely a test-cleanup-timing artifact of the new test itself, not a behavior change from the `_can_eat_now` fix.
 
 ---
 

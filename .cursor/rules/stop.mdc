@@ -22,4 +22,6 @@ When I type `/stop`, immediately execute this sequence:
 **Last Known Trajectory:** [What we were working on right before this handoff]
 ```
 
+3. Stage all changes (including the updated `chat_sum.md`), commit with a descriptive message summarizing the session (ending with the standard Co-Authored-By trailer), and push the current branch to its remote tracking branch (create the upstream if none exists yet). Do not force-push. If there is nothing to commit, skip the commit/push step.
+
 Keep it concise, current, and useful for a fresh `/go` chat.

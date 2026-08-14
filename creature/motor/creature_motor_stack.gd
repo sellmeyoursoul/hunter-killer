@@ -35,6 +35,7 @@ var _threat_samples: Array = []
 var _live_threat_samples: Array = []
 var _food_split: Dictionary = {"ready": [], "unready": []}
 var _food_map_confidence: float = 0.0
+var _shelter_map_confidence: float = 0.0
 var _stat_observation: int = 10
 var _planner_state: Dictionary = {}
 var _threat_samples_test_override: bool = false
@@ -211,6 +212,8 @@ func tick(delta: float) -> _ActionOutcome:
     )
   if int(outcome.action) == _MotorAction.EAT:
     _try_complete_eat()
+  if int(outcome.action) == _MotorAction.STAY and _incumbent.get("goal_kind", &"") == _GkReg.GK_SHELTER:
+    _try_complete_shelter_evaluation()
   if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
     if _memory_adapter != null:
       _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
@@ -620,6 +623,7 @@ func _apply_scan_dict(scan: Dictionary) -> void:
   if _memory_adapter != null:
     _memory_adapter.sync_after_scan(_food_split, _live_threat_samples, Time.get_ticks_msec())
   _refresh_food_inventory()
+  _refresh_shelter_map_confidence()
 
 
 func _refresh_food_inventory() -> void:
@@ -641,6 +645,19 @@ func _refresh_food_inventory() -> void:
     known,
     _motor_v3,
   )
+
+
+## Confirmed-shelter-belief signal for `GOAL_SHELTER`'s `effective_base` (§1) — parallel to
+## [method _refresh_food_inventory], but counting confirmed shelter beliefs instead of known food.
+func _refresh_shelter_map_confidence() -> void:
+  if _memory_adapter == null or _body == null:
+    _shelter_map_confidence = 0.0
+    return
+  var confirmed := _memory_adapter.count_confirmed_shelter_beliefs(
+    _body.global_position, _motor_v3, Time.get_ticks_msec(),
+  )
+  var min_req := maxf(1.0, float(_motor_v3.get("goal_inventory_min_shelter", 1.0)))
+  _shelter_map_confidence = clampf(float(confirmed) / min_req, 0.0, 1.0)
 
 
 func _refresh_danger_samples(area_only: bool) -> void:
@@ -717,6 +734,7 @@ func _build_context() -> Dictionary:
     "safety_met": _safety_met,
     "food_map_confidence": _food_map_confidence,
     "inventory_ratio": _food_map_confidence,
+    "shelter_map_confidence": _shelter_map_confidence,
     "pack_root": _pack_root,
     "goal_catalog": _goal_catalog,
     "food_split": _food_split,
@@ -936,7 +954,14 @@ static func _feasibility_for_goal(row: Dictionary, ctx: Dictionary) -> float:
       var threats: Array = ctx.get("threat_samples", [])
       return 1.0 if not threats.is_empty() else 0.0
     _GkReg.GK_SHELTER:
-      return 0.0
+      var adapter: RefCounted = ctx.get("memory_adapter")
+      if adapter == null:
+        return 0.0
+      return adapter.best_shelter_feasibility(
+        _creature_pos_from_ctx(ctx),
+        ctx.get("motor_v3", {}),
+        int(ctx.get("now_ms", Time.get_ticks_msec())),
+      )
     _MotorGoalHub.GOAL_REST:
       return 1.0 if bool(ctx.get("safety_met", false)) else 0.0
     _:
@@ -963,6 +988,34 @@ func _try_complete_eat() -> void:
       return
   if target.has_method(&"try_grant_engine_creature"):
     target.call(&"try_grant_engine_creature", _body)
+
+
+## Fires once a GK_SHELTER STAY-evaluate resolves (confirmed or failed) — writes the outcome as an
+## instance belief and clears the planner's eval bookkeeping so the next consideration cycle either
+## holds the confirmed candidate or re-nominates elsewhere (§6.4).
+func _try_complete_shelter_evaluation() -> void:
+  var result: StringName = _planner_state.get("shelter_eval_result", &"")
+  if result == &"":
+    return
+  var iid := int(_planner_state.get("shelter_candidate_instance_id", 0))
+  if _memory_adapter != null and iid != 0:
+    _memory_adapter.record_shelter_evaluation(
+      iid,
+      _planner_state.get("shelter_candidate_anchor", Vector3.ZERO),
+      result == &"confirmed",
+      float(_planner_state.get("shelter_eval_last_fraction", 0.0)),
+      Time.get_ticks_msec(),
+    )
+  _planner_state["shelter_eval_active"] = false
+  _planner_state["shelter_eval_cycles"] = 0
+  _planner_state["shelter_eval_total_ticks"] = 0
+  _planner_state["shelter_eval_result"] = &""
+  _planner_state["shelter_candidate_anchor"] = Vector3.ZERO
+  _planner_state["shelter_candidate_instance_id"] = 0
+  _planner_state["step_instance_id"] = 0
+  _planner_state["step_goal"] = Vector3.ZERO
+  _planner_state["step_source"] = &"live"
+  _planner_state["shelter_probe_cooldown_cycles"] = int(_motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
 
 
 func _clear_prey_engagement_planner_state() -> void:

@@ -267,6 +267,86 @@ func increment_passibility_fail(instance_id: int, now_ms: int) -> void:
   _beliefs = _GoalBelief.increment_passibility_fail(_beliefs, instance_id, now_ms)
 
 
+## Records a GK_SHELTER STAY-evaluate outcome — outcome-hook counterpart to
+## [method notify_food_consumption_outcome], per CREATURE_MOVEMENT_V3.md §6.4.
+func record_shelter_evaluation(
+  instance_id: int,
+  anchor: Vector3,
+  fit_confirmed: bool,
+  enclosure_fraction: float,
+  now_ms: int,
+) -> void:
+  _GoalBelief.upsert_shelter_row(_beliefs, instance_id, anchor, now_ms, fit_confirmed, enclosure_fraction)
+
+
+## True when [param instance_id] failed its last shelter evaluation — used to skip immediately
+## re-nominating a candidate that already failed the squeeze-fit check.
+func shelter_candidate_recently_failed(instance_id: int) -> bool:
+  if not _beliefs.has(instance_id):
+    return false
+  var row: Dictionary = _beliefs[instance_id]
+  return (
+    row.get("goal_kind", &"") == _GkReg.GK_SHELTER
+    and not bool(row.get("fit_confirmed", false))
+    and int(row.get("shelter_fail_count", 0)) >= 1
+  )
+
+
+## Nearest confirmed [code]shelter[/code] belief (§6.4 v1 scope — PRECISE-confirmed tier only; no
+## COARSE/locale cascade — shelter has no "ready right now" top tier the way food does, and
+## confirmed shelters don't tier-demote the way food beliefs do, see [method GoalBeliefMemory.maintain]).
+func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> Dictionary:
+  var inactive := {"active": false, "pos": Vector3.ZERO, "instance_id": 0, "source": &"shelter_precise"}
+  var precise_r := float(motor_v3.get("goal_memory_precise_radius_shelter", motor_v3.get("goal_memory_precise_radius", 1000.0)))
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
+  var ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec_shelter", motor_v3.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
+  var best_iid := 0
+  var best_pos := Vector3.ZERO
+  var best_d_sq := INF
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or not bool(row.get("fit_confirmed", false)):
+      continue
+    var pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    var dist := creature_pos.distance_to(pos)
+    if dist > precise_r or dist > forget_r:
+      continue
+    if now_ms - int(row.get("last_observed_ms", 0)) > ttl_ms:
+      continue
+    var d_sq := creature_pos.distance_squared_to(pos)
+    if d_sq < best_d_sq:
+      best_d_sq = d_sq
+      best_iid = int(iid)
+      best_pos = pos
+  if best_iid == 0:
+    return inactive
+  return {"active": true, "pos": best_pos, "instance_id": best_iid, "source": &"shelter_precise"}
+
+
+## Shelter feasibility — confirmed belief present or [code]0.0[/code] (replaces the
+## [code]creature_motor_stack.gd[/code] hardcoded stub, §6.4).
+func best_shelter_feasibility(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> float:
+  return FEASIBILITY_PRECISE if consult_shelter_beliefs(creature_pos, motor_v3, now_ms).get("active", false) else 0.0
+
+
+## Confirmed-shelter count in range — feeds [code]shelter_map_confidence[/code]
+## (mirrors [method count_known_objectives] for [code]find_food[/code]).
+func count_confirmed_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> int:
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
+  var ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec_shelter", motor_v3.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
+  var total := 0
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or not bool(row.get("fit_confirmed", false)):
+      continue
+    if creature_pos.distance_to(_read_pos(row.get("last_world_pos", Vector3.ZERO))) > forget_r:
+      continue
+    if now_ms - int(row.get("last_observed_ms", 0)) > ttl_ms:
+      continue
+    total += 1
+  return total
+
+
 ## Injects [code]kind_yield[/code] on live food entries from kind profile consult.
 func enrich_food_split_with_kind_yield(food_split: Dictionary, motor_v3: Dictionary) -> Dictionary:
   var out := food_split.duplicate(true)

@@ -14,6 +14,8 @@ const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
+const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
+const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -85,6 +87,15 @@ static func new_state() -> Dictionary:
     ## can't alternate the step goal every tick.
     "los_blocked_latched": false,
     "los_verdict_streak": 0,
+    ## GK_SHELTER candidate-nomination / STAY-evaluate bookkeeping (CREATURE_MOVEMENT_V3.md §6.4).
+    "shelter_candidate_anchor": Vector3.ZERO,
+    "shelter_candidate_instance_id": 0,
+    "shelter_eval_active": false,
+    "shelter_eval_cycles": 0,
+    "shelter_eval_total_ticks": 0,
+    "shelter_eval_result": &"",
+    "shelter_eval_last_fraction": 0.0,
+    "shelter_probe_cooldown_cycles": 0,
   }
 
 
@@ -112,7 +123,7 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   if step_goal.length_squared() < 1e-8:
     return _MotorAction.STAY
   if goal_kind == _GkReg.GK_FIND_FOOD:
-    if _can_eat_now(body, step_goal, state, motor_v3, delta):
+    if _can_eat_now(body, step_goal, state, motor_v3, delta, ctx):
       state["eat_orbit_turn_deg_accumulated"] = 0.0
       return _MotorAction.EAT
     var orbit_act := _select_eat_orbit_or_align(body, step_goal, state, motor_v3, delta)
@@ -1008,7 +1019,12 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3)
         state["step_instance_id"] = 0
         state["step_source"] = &"live"
-    _GkReg.GK_SHELTER, _MotorGoalHub.GOAL_REST:
+    _GkReg.GK_SHELTER:
+      if refresh_targets or not has_step_goal:
+        _sync_shelter_objective(ctx, state, creature_pos, motor_v3)
+      elif state.get("step_source", &"") == &"explore":
+        _maintain_explore_latch(ctx, state, motor_v3)
+    _MotorGoalHub.GOAL_REST:
       if refresh_targets or not has_step_goal:
         if not _sync_shelter_or_rest_objective(ctx, state, creature_pos, motor_v3, goal_kind):
           _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, goal_kind)
@@ -1353,7 +1369,116 @@ static func _mint_explore_objective_for_goal(
   state["step_instance_id"] = 0
 
 
-## Placeholder until shelter / rest belief consult ships — returns false so explore seek runs.
+## GK_SHELTER step-objective sync (CREATURE_MOVEMENT_V3.md §6.4): while not holding a bound
+## candidate, opportunistically ring-probe a point ahead of facing once per consideration cycle
+## (cheap — cooldown-gated on a miss); once bound and arrived, run STAY-evaluate. Falls through to
+## generic explore when nothing is bound yet, matching the doc's own "candidate known? no → seek/
+## explore" branch.
+static func _sync_shelter_objective(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+) -> void:
+  var body: CharacterBody3D = ctx.get("body")
+  if state.get("step_source", &"") == &"precise" and int(state.get("shelter_candidate_instance_id", 0)) != 0:
+    var anchor: Vector3 = state.get("shelter_candidate_anchor", Vector3.ZERO)
+    if body != null and _at_arrival(body, anchor, motor_v3):
+      _begin_or_continue_shelter_eval(ctx, state, motor_v3, anchor)
+    else:
+      state["shelter_eval_active"] = false
+      state["shelter_eval_cycles"] = 0
+    return
+  if int(state.get("shelter_probe_cooldown_cycles", 0)) > 0:
+    state["shelter_probe_cooldown_cycles"] = int(state["shelter_probe_cooldown_cycles"]) - 1
+  elif body != null and _try_nominate_shelter_candidate(ctx, state, creature_pos, motor_v3, body):
+    return
+  _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_SHELTER)
+
+
+## Ring-probes a point [code]shelter_probe_lookahead_dist[/code] ahead of [param body]'s facing;
+## binds it as a `"precise"` step objective (with a synthetic grid-cell instance id, so the
+## generic blocked-approach/dead-end plumbing works for free) when enclosure clears the detect
+## threshold. Returns false (and arms a retry cooldown) when nothing qualifies.
+static func _try_nominate_shelter_candidate(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  body: CharacterBody3D,
+) -> bool:
+  var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  if space == null:
+    return false
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_FORWARD).normalized()
+  var probe_center := creature_pos + facing * float(motor_v3.get("shelter_probe_lookahead_dist", 3.0))
+  var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
+  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", 8))
+  var frac := _ShelterProbe.enclosure_fraction(space, probe_center, probe_radius, blocker_mask)
+  if frac < float(motor_v3.get("shelter_enclosure_detect_threshold", 0.5)):
+    state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
+    return false
+  var iid := _shelter_candidate_instance_id(probe_center, motor_v3)
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter != null and adapter.has_method(&"shelter_candidate_recently_failed") and adapter.shelter_candidate_recently_failed(iid):
+    state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
+    return false
+  state["shelter_candidate_anchor"] = probe_center
+  state["shelter_candidate_instance_id"] = iid
+  state["step_instance_id"] = iid
+  state["step_goal"] = probe_center
+  state["step_ultimate_pos"] = probe_center
+  state["step_source"] = &"precise"
+  state["shelter_eval_active"] = false
+  state["shelter_eval_cycles"] = 0
+  state["shelter_eval_total_ticks"] = 0
+  return true
+
+
+## Synthetic per-cell instance id for a shelter candidate anchor — reuses the same grid-cell hash
+## the locale-write system dedups on, so repeated probes near the same spot collapse onto one
+## belief row instead of minting a new synthetic id per centimeter of drift.
+static func _shelter_candidate_instance_id(anchor: Vector3, motor_v3: Dictionary) -> int:
+  var idx := _GoalSource.grid_indices_for_anchor(anchor, motor_v3)
+  return hash([&"shelter_candidate", idx.x, idx.y])
+
+
+## STAY-evaluate: re-probes the bound candidate every consideration cycle, accumulating consecutive
+## passing cycles (mirrors `_update_safety_on_consideration`'s consecutive-cycle idiom) toward
+## confirm; a run of non-passing cycles resets the streak. Gives up (fails) after
+## `shelter_eval_max_cycles` total ticks without confirming.
+static func _begin_or_continue_shelter_eval(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+  anchor: Vector3,
+) -> void:
+  state["step_goal"] = anchor
+  var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
+  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", 8))
+  var frac := _ShelterProbe.enclosure_fraction(space, anchor, probe_radius, blocker_mask)
+  state["shelter_eval_last_fraction"] = frac
+  var confirm_thresh := float(motor_v3.get("shelter_enclosure_confirm_threshold", 0.65))
+  state["shelter_eval_cycles"] = (
+    int(state.get("shelter_eval_cycles", 0)) + 1 if frac >= confirm_thresh else 0
+  )
+  state["shelter_eval_active"] = true
+  state["shelter_eval_total_ticks"] = int(state.get("shelter_eval_total_ticks", 0)) + 1
+  var required := maxi(1, int(motor_v3.get("shelter_eval_confirm_cycles", 5)))
+  var max_cycles := maxi(required, int(motor_v3.get("shelter_eval_max_cycles", 15)))
+  if int(state["shelter_eval_cycles"]) >= required:
+    state["shelter_eval_result"] = &"confirmed"
+  elif int(state["shelter_eval_total_ticks"]) >= max_cycles:
+    state["shelter_eval_result"] = &"failed"
+  else:
+    state["shelter_eval_result"] = &""
+
+
+## Placeholder until rest belief consult ships — returns false so explore seek runs. (Shelter has
+## its own real implementation — `_sync_shelter_objective` — above; `GOAL_REST` is unchanged
+## because `MotorAction.REST` is not reachable from `select_action` at all today, a separate
+## pre-existing gap unrelated to shelter.)
 static func _sync_shelter_or_rest_objective(
   _ctx: Dictionary,
   _state: Dictionary,
@@ -2188,7 +2313,10 @@ static func _is_within_eat_range(
   return body.global_position.distance_to(target) <= max_dist
 
 
-## Find-food EAT gate: ultimate within [code]eat_action_max_distance[/code] + facing arc + non-zero [code]step_instance_id[/code].
+## Find-food EAT gate: ultimate within [code]eat_action_max_distance[/code] + facing arc + non-zero
+## [code]step_instance_id[/code] + no solid on the eater's own [code]collision_mask[/code] standing
+## between it and the target (C18 — straight-line range alone let a predator "bite" through an
+## impassable barrier like a species-only `MobBlocker` refuge wall).
 ## [param delta] retained for API/orbit callers; range uses world meters (not move-steps).
 static func _can_eat_now(
   body: CharacterBody3D,
@@ -2196,6 +2324,7 @@ static func _can_eat_now(
   state: Dictionary,
   motor_v3: Dictionary,
   delta: float = 1.0 / 60.0,
+  ctx: Dictionary = {},
 ) -> bool:
   if int(state.get("step_instance_id", 0)) == 0:
     return false
@@ -2204,7 +2333,31 @@ static func _can_eat_now(
     return false
   if not _is_within_eat_range(body, eat_tgt, motor_v3, delta):
     return false
-  return _is_facing_aligned_for_eat(body, eat_tgt, motor_v3)
+  if not _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
+    return false
+  return _has_clear_contact_path_for_action(body, eat_tgt, ctx)
+
+
+## Shared solid-blocker gate for contact actions (EAT today; reuse for combat once it lands) —
+## true when nothing on [param body]'s own [code]collision_mask[/code] separates it from
+## [param target_pos]. Permissive (returns [code]true[/code]) when [param ctx] carries no
+## [code]space_state[/code] so callers without a live physics world (most unit tests) are
+## unaffected.
+static func _has_clear_contact_path_for_action(
+  body: CharacterBody3D,
+  target_pos: Vector3,
+  ctx: Dictionary,
+) -> bool:
+  var space_state: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  if space_state == null:
+    return true
+  var eye_h := float(ctx.get("eye_height", 1.0))
+  var creature_pos := body.global_position
+  var from := Vector3(creature_pos.x, creature_pos.y + eye_h, creature_pos.z)
+  var to := Vector3(target_pos.x, from.y, target_pos.z)
+  return _PathClear.has_clear_contact_path(
+    space_state, from, to, body.collision_mask, [body.get_rid()],
+  )
 
 
 ## While in eat range but not facing for EAT: turn toward ultimate; after N revolutions, one MOVE_BACKWARD.
@@ -2401,6 +2554,9 @@ static func completed_step_objective(
   if action == _MotorAction.EAT:
     return true
   if action == _MotorAction.STAY:
+    if state.get("goal_kind", &"") == _GkReg.GK_SHELTER and bool(state.get("shelter_eval_active", false)):
+      var result: StringName = state.get("shelter_eval_result", &"")
+      return result == &"confirmed" or result == &"failed"
     var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
     if step_goal.length_squared() > 1e-8 and _at_arrival(body, step_goal, motor_v3):
       return true

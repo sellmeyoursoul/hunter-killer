@@ -40,6 +40,7 @@ const _MotorAction := preload("res://creature/motor/motor_action.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
+const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
 const _CreatureMotorStack := preload("res://creature/motor/creature_motor_stack.gd")
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
@@ -144,6 +145,7 @@ func _run_all() -> void:
   _test_motor_planner_fixed_objective_overshoot_remints()
   _test_motor_planner_overshoot_retains_locale_no_progress()
   _test_motor_planner_eat_uses_ultimate_not_step_goal()
+  await _test_motor_planner_eat_blocked_by_solid_between()
   _test_motor_planner_eat_orbit_break_after_revolutions()
   await _test_motor_locale_approach_no_oscillation_smoke()
   await _test_motor_live_pursuit_no_turn_storm_smoke()
@@ -191,7 +193,7 @@ func _run_all() -> void:
   _test_motor_goal_hub_effective_urgency_sated_mapping()
   _test_motor_goal_hub_effective_urgency_sated_patrol()
   _test_motor_goal_hub_effective_urgency_hungry_unchanged()
-  _test_motor_goal_hub_shelter_gated_by_food_inventory()
+  _test_motor_goal_hub_shelter_effective_base_bootstrap_floor()
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
@@ -224,6 +226,13 @@ func _run_all() -> void:
   _test_motor_planner_find_food_understocked_sated_explore_first()
   _test_motor_planner_find_food_stocked_sated_memory_first()
   _test_motor_planner_shelter_no_candidate_explore()
+  await _test_shelter_enclosure_probe_ring_detects_blockers()
+  await _test_motor_planner_shelter_candidate_nomination_binds_precise()
+  await _test_motor_planner_shelter_eval_confirm_cycle_progression()
+  await _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient()
+  _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief()
+  _test_memory_adapter_shelter_belief_ttl_uses_shelter_specific_keys()
+  _test_memory_adapter_shelter_belief_survives_lru_cap()
   _test_blocked_objective_resolver_goal_consideration_chaos_only()
   # §12.2 post-6d-explore E7 — headless matrix (explore seek + planner gates)
   _test_motor_explore_seek_zero_belief_baseline()
@@ -1375,6 +1384,235 @@ func _test_motor_planner_shelter_no_candidate_explore() -> void:
     "shelter explore fallback latches a waypoint",
   )
   main.queue_free()
+
+
+## Builds a ring of collision_layer=8 (plant_mob_block) StaticBody3D boxes around [param center] —
+## same construction as the C18 EAT-blocker regression test, standing in for `open_shrub_3d`'s
+## `MobBlocker` refuge ring without needing the full scene.
+func _shelter_test_blocker_ring(
+  main: Node3D, center: Vector3, radius: float, count: int = 12,
+) -> void:
+  ## Box half-width must exceed the ring's angular half-spacing at [param radius] (unrotated
+  ## axis-aligned boxes, so angular coverage isn't uniform) or a probe ray landing between two
+  ## box centers slips through the gap — 1.2 gives >15 deg of coverage per box at radius 2.0
+  ## against 12 boxes' 30 deg spacing, comfortably more than the 8-sample probe's 45 deg step.
+  for i in count:
+    var ang := TAU * float(i) / float(count)
+    var wall := StaticBody3D.new()
+    var box := BoxShape3D.new()
+    box.size = Vector3(1.2, 2.0, 1.2)
+    var col := CollisionShape3D.new()
+    col.shape = box
+    wall.add_child(col)
+    wall.collision_layer = 8
+    main.add_child(wall)
+    wall.global_position = center + Vector3(cos(ang), 1.0, sin(ang)) * radius
+
+
+func _test_shelter_enclosure_probe_ring_detects_blockers() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var center := Vector3(20.0, 1.0, 20.0)
+  _shelter_test_blocker_ring(main, center, 2.0)
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var frac_inside := _ShelterProbe.enclosure_fraction(space, center, 1.8, 8)
+  _assert(frac_inside >= 0.75, "ring of layer-8 blockers reads as highly enclosed (got %.2f)" % frac_inside)
+  var open_point := Vector3(-50.0, 1.0, -50.0)
+  var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, 8)
+  _assert(is_equal_approx(frac_open, 0.0), "open point with no nearby geometry reads as unenclosed")
+  main.queue_free()
+  await process_frame
+
+
+## Ring present ahead of facing + real space_state → nomination binds a "precise" step objective
+## (the "candidate known? yes" branch of CREATURE_MOVEMENT_V3.md §6.4's flowchart; the "no" branch
+## is already covered by `_test_motor_planner_shelter_no_candidate_explore`).
+func _test_motor_planner_shelter_candidate_nomination_binds_precise() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  var lookahead := float(motor_v3.get("shelter_probe_lookahead_dist", 3.0))
+  var probe_center := Vector3(lookahead, 1.0, 0.0)
+  _shelter_test_blocker_ring(main, probe_center, 2.0)
+  await physics_frame
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+    "space_state": main.get_world_3d().direct_space_state,
+    "map_rid": RID(),
+    "refresh_step_objective": true,
+  }
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_SHELTER)
+  _assert(state.get("step_source", &"") == &"precise", "candidate ring nomination binds precise step_source")
+  _assert(int(state.get("step_instance_id", 0)) != 0, "candidate nomination assigns a synthetic instance id")
+  var anchor: Vector3 = state.get("shelter_candidate_anchor", Vector3.ZERO)
+  _assert(anchor.distance_to(probe_center) < 0.5, "candidate anchor lands near the probed ring center")
+  main.queue_free()
+  await process_frame
+
+
+## STAY-evaluate: consecutive passing cycles accumulate to `shelter_eval_confirm_cycles`, then the
+## result flips to confirmed — `completed_step_objective` (the re-consideration trigger guard)
+## must stay false on every intermediate cycle and only flip true on the confirming one.
+func _test_motor_planner_shelter_eval_confirm_cycle_progression() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var anchor := Vector3(20.0, 1.0, 20.0)
+  var body := _spawn_herbivore_body(main, anchor)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["shelter_eval_confirm_cycles"] = 3
+  _shelter_test_blocker_ring(main, anchor, 2.0)
+  await physics_frame
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"precise"
+  state["shelter_candidate_instance_id"] = 424242
+  state["shelter_candidate_anchor"] = anchor
+  state["goal_kind"] = _GkReg.GK_SHELTER
+  var ctx := {
+    "body": body,
+    "space_state": main.get_world_3d().direct_space_state,
+    "memory_adapter": null,
+  }
+  var required := int(motor_v3["shelter_eval_confirm_cycles"])
+  for i in required:
+    (_MotorPlanner as GDScript).call("_sync_shelter_objective", ctx, state, anchor, motor_v3)
+    var result: StringName = state.get("shelter_eval_result", &"")
+    var done_now: Variant = (_MotorPlanner as GDScript).call(
+      "completed_step_objective", body, state, motor_v3, _MotorAction.STAY
+    )
+    if i < required - 1:
+      _assert(result == &"", "eval result stays unresolved before the confirm-cycle threshold (i=%d)" % i)
+      _assert(not bool(done_now), "completed_step_objective stays false on intermediate eval ticks (i=%d)" % i)
+    else:
+      _assert(result == &"confirmed", "eval result flips to confirmed on the threshold cycle")
+      _assert(bool(done_now), "completed_step_objective flips true on the confirming tick")
+  main.queue_free()
+  await process_frame
+
+
+## Insufficient enclosure never accumulates a passing streak — eval gives up (fails) once
+## `shelter_eval_max_cycles` total ticks elapse without confirming.
+func _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var anchor := Vector3(20.0, 1.0, 20.0)
+  var body := _spawn_herbivore_body(main, anchor)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["shelter_eval_confirm_cycles"] = 3
+  motor_v3["shelter_eval_max_cycles"] = 4
+  ## Single blocker, not a ring — well under `shelter_enclosure_confirm_threshold`.
+  var col := CollisionShape3D.new()
+  col.shape = BoxShape3D.new()
+  (col.shape as BoxShape3D).size = Vector3(0.6, 2.0, 0.6)
+  var wall := StaticBody3D.new()
+  wall.add_child(col)
+  wall.collision_layer = 8
+  main.add_child(wall)
+  wall.global_position = anchor + Vector3(2.0, 0.0, 0.0)
+  await physics_frame
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"precise"
+  state["shelter_candidate_instance_id"] = 424243
+  state["shelter_candidate_anchor"] = anchor
+  state["goal_kind"] = _GkReg.GK_SHELTER
+  var ctx := {
+    "body": body,
+    "space_state": main.get_world_3d().direct_space_state,
+    "memory_adapter": null,
+  }
+  var max_cycles := int(motor_v3["shelter_eval_max_cycles"])
+  var result: StringName = &""
+  for i in max_cycles:
+    (_MotorPlanner as GDScript).call("_sync_shelter_objective", ctx, state, anchor, motor_v3)
+    result = state.get("shelter_eval_result", &"")
+    if result != &"":
+      break
+  _assert(result == &"failed", "insufficient enclosure gives up as failed, not confirmed")
+  main.queue_free()
+  await process_frame
+
+
+## Replaces the hardcoded `GK_SHELTER: return 0.0` stub — a confirmed shelter belief makes
+## `_feasibility_for_goal`/`MemoryAdapter.best_shelter_feasibility` return the PRECISE tier.
+func _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var motor_v3 := _motor_v3_test_params()
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  var anchor := Vector3(10.0, 1.0, 10.0)
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "memory_adapter": adapter,
+    "food_split": {"ready": [], "unready": []},
+    "now_ms": now_ms,
+  }
+  var row := {"goal_kind": _GkReg.GK_SHELTER}
+  var feas_before := float((_CreatureMotorStack as GDScript).call("_feasibility_for_goal", row, ctx))
+  _assert(is_equal_approx(feas_before, 0.0), "no confirmed shelter belief yet -> zero feasibility")
+  adapter.record_shelter_evaluation(909090, anchor, true, 0.9, now_ms)
+  var feas_after := float((_CreatureMotorStack as GDScript).call("_feasibility_for_goal", row, ctx))
+  _assert(
+    is_equal_approx(feas_after, _MemoryAdapter.FEASIBILITY_PRECISE),
+    "confirmed shelter belief -> PRECISE-tier feasibility",
+  )
+  _assert(
+    adapter.count_confirmed_shelter_beliefs(body.global_position, motor_v3, now_ms) == 1,
+    "confirmed shelter belief counted for shelter_map_confidence",
+  )
+  main.queue_free()
+
+
+func _test_memory_adapter_shelter_belief_ttl_uses_shelter_specific_keys() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["goal_memory_ttl_sec"] = 10.0
+  motor_v3["goal_memory_coarse_ttl_sec"] = 5.0
+  motor_v3["goal_memory_precise_radius"] = 1000.0
+  motor_v3["goal_memory_ttl_sec_shelter"] = 300.0
+  var start_ms := 1_000_000
+  var anchor := Vector3(5.0, 1.0, 5.0)
+  adapter.record_shelter_evaluation(1234, anchor, true, 0.9, start_ms)
+  ## Past the generic 10s TTL but within the shelter-specific 300s TTL — must survive.
+  adapter.maintain_beliefs(anchor, start_ms + 20_000, motor_v3)
+  _assert(
+    adapter.consult_shelter_beliefs(anchor, motor_v3, start_ms + 20_000).get("active", false),
+    "confirmed shelter belief survives past the generic TTL (uses shelter-specific TTL)",
+  )
+  ## Past the shelter-specific TTL too — must be evicted.
+  adapter.maintain_beliefs(anchor, start_ms + 301_000, motor_v3)
+  _assert(
+    not adapter.consult_shelter_beliefs(anchor, motor_v3, start_ms + 301_000).get("active", false),
+    "confirmed shelter belief evicted once the shelter-specific TTL elapses",
+  )
+
+
+func _test_memory_adapter_shelter_belief_survives_lru_cap() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var max_entries := int(motor_v3.get("goal_memory_max_entries", 25))
+  var now_ms := 2_000_000
+  var shelter_anchor := Vector3(1.0, 1.0, 1.0)
+  adapter.record_shelter_evaluation(555, shelter_anchor, true, 0.9, now_ms)
+  for i in max_entries + 5:
+    adapter.seed_precise_food_belief(1000 + i, Vector3(float(i), 1.0, 0.0), now_ms + 1000 + i)
+  adapter.maintain_beliefs(shelter_anchor, now_ms + 1000 + max_entries + 5, motor_v3)
+  _assert(
+    adapter.consult_shelter_beliefs(shelter_anchor, motor_v3, now_ms + 1000 + max_entries + 5).get("active", false),
+    "confirmed shelter belief survives LRU cap eviction despite stale last_observed_ms",
+  )
 
 
 func _blocked_objective_tied_scores_ctx() -> Dictionary:
@@ -2926,6 +3164,71 @@ func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
     "C3: misaligned facing does not select EAT (blocked MOVE alone is not eat)",
   )
   main.queue_free()
+
+
+## C18 — a solid on the eater's own collision_mask between it and the target (e.g. a species-only
+## `MobBlocker` refuge wall the eater physically can't pass) must block EAT even when the target is
+## within straight-line eat_action_max_distance and facing is aligned.
+func _test_motor_planner_eat_blocked_by_solid_between() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = ultimate
+  state["step_ultimate_pos"] = ultimate
+  state["step_instance_id"] = 636363
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "delta": delta,
+  }
+  var can_eat_clear: bool = (_MotorPlanner as GDScript).call(
+    "_can_eat_now", body, ultimate, state, motor_v3, delta, ctx
+  )
+  _assert(can_eat_clear, "C18: _can_eat_now true in range/facing with no blocker present")
+  var act_clear := _MotorPlanner.select_action(ctx, state)
+  _assert(act_clear == _MotorAction.EAT, "C18: select_action returns EAT with no blocker present")
+  ## Species-only blocker layer (8, in the carnivore's collision_mask=9 per
+  ## CreatureKinematicBody3D._apply_physics_layers) standing directly on the path to the target —
+  ## mirrors main_3d.gd's shrub-refuge `MobBlocker` (RT4).
+  var wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(0.3, 2.0, 2.0)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  wall.add_child(col)
+  wall.collision_layer = 8
+  main.add_child(wall)
+  wall.global_position = Vector3(eat_max * 0.25, 2.0, 0.0)
+  await physics_frame
+  state["eat_orbit_turn_deg_accumulated"] = 0.0
+  var can_eat_blocked: bool = (_MotorPlanner as GDScript).call(
+    "_can_eat_now", body, ultimate, state, motor_v3, delta, ctx
+  )
+  _assert(not can_eat_blocked, "C18: _can_eat_now false when a solid blocks the eater's own mask")
+  var act_blocked := _MotorPlanner.select_action(ctx, state)
+  _assert(act_blocked != _MotorAction.EAT, "C18: select_action does not return EAT through a solid blocker")
+  main.queue_free()
+  await process_frame
 
 
 ## C3 — three full facing revolutions in eat range without EAT → one MOVE_BACKWARD, then resume turns.
@@ -5297,7 +5600,12 @@ func _test_motor_goal_hub_effective_urgency_hungry_unchanged() -> void:
   )
 
 
-func _test_motor_goal_hub_shelter_gated_by_food_inventory() -> void:
+## C18-family shelter fix: GOAL_SHELTER's effective_base now reads `shelter_map_confidence` (not
+## the unrelated `food_map_confidence` it was accidentally coupled to before), with a bootstrap
+## floor so shelter can still compete ("go look") before any candidate has ever been confirmed —
+## without the floor, confidence starting at 0 and only ever becoming nonzero as a side effect of
+## shelter already winning would permanently lock it out of arbitration.
+func _test_motor_goal_hub_shelter_effective_base_bootstrap_floor() -> void:
   var motor_v3 := _motor_v3_test_params()
   var row := {"goal_kind": _MotorGoalHub.GOAL_SHELTER, "feasibility": 0.0}
   var base_ctx := {
@@ -5307,15 +5615,26 @@ func _test_motor_goal_hub_shelter_gated_by_food_inventory() -> void:
     "flight_fast_path_active": false,
     "safety_met": false,
   }
-  var low_ctx := base_ctx.duplicate(true)
-  low_ctx["food_map_confidence"] = 0.0
-  low_ctx["inventory_ratio"] = 0.0
-  var high_ctx := base_ctx.duplicate(true)
-  high_ctx["food_map_confidence"] = 1.0
-  high_ctx["inventory_ratio"] = 1.0
-  var w_low := float(_MotorGoalHub.score_goals([row], low_ctx)[0].get("weight", 0.0))
-  var w_high := float(_MotorGoalHub.score_goals([row], high_ctx)[0].get("weight", 0.0))
-  _assert(w_high > w_low, "high food inventory unlocks shelter effective_base")
+  var zero_ctx := base_ctx.duplicate(true)
+  zero_ctx["shelter_map_confidence"] = 0.0
+  var full_ctx := base_ctx.duplicate(true)
+  full_ctx["shelter_map_confidence"] = 1.0
+  var w_zero := float(_MotorGoalHub.score_goals([row], zero_ctx)[0].get("weight", 0.0))
+  var w_full := float(_MotorGoalHub.score_goals([row], full_ctx)[0].get("weight", 0.0))
+  _assert(w_zero > 0.0, "shelter still scores nonzero with zero confirmed shelters (bootstrap floor)")
+  _assert(w_full > w_zero, "confirmed shelters raise shelter effective_base above the bootstrap floor")
+  var goal_base := float(motor_v3.get("goal_base_shelter", 0.5))
+  var explore_floor := float(motor_v3.get("goal_shelter_explore_floor", 0.25))
+  var base_zero: Variant = (_MotorGoalHub as GDScript).call("_effective_base", _MotorGoalHub.GOAL_SHELTER, motor_v3, zero_ctx)
+  var base_full: Variant = (_MotorGoalHub as GDScript).call("_effective_base", _MotorGoalHub.GOAL_SHELTER, motor_v3, full_ctx)
+  _assert(
+    is_equal_approx(float(base_zero), goal_base * explore_floor),
+    "effective_base at zero confidence equals goal_base * explore_floor",
+  )
+  _assert(
+    is_equal_approx(float(base_full), goal_base),
+    "effective_base at full confidence equals goal_base",
+  )
 
 
 func _test_motor_goal_hub_subacute_flight_weight() -> void:

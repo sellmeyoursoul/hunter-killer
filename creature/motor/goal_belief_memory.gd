@@ -178,6 +178,42 @@ static func increment_passibility_fail(
   return beliefs
 
 
+## Upsert one GK_SHELTER STAY-evaluate outcome (§6.4). Dedicated constructor rather than
+## `_upsert_row` — the generic one unconditionally resets tier/fail-counters on every call, which
+## would wipe a prior confirm/fail verdict on the next re-observation; shelter's confirm/fail
+## semantics must survive re-observation instead. `shelter_fail_count` resets to 0 on confirm,
+## increments on each consecutive failed evaluation.
+static func upsert_shelter_row(
+  beliefs: Dictionary,
+  instance_id: int,
+  anchor: Vector3,
+  now_ms: int,
+  fit_confirmed: bool,
+  enclosure_fraction: float,
+) -> void:
+  if instance_id == 0:
+    return
+  var prior: Dictionary = beliefs.get(instance_id, {}) as Dictionary
+  var fail_count := 0 if fit_confirmed else int(prior.get("shelter_fail_count", 0)) + 1
+  beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_SHELTER,
+    "tier": TIER_PRECISE,
+    "last_world_pos": anchor,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": true,
+    "is_moving": false,
+    "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": int(prior.get("passibility_fail_count", 0)),
+    "last_passibility_fail_ms": int(prior.get("last_passibility_fail_ms", 0)),
+    "fit_confirmed": fit_confirmed,
+    "enclosure_fraction": enclosure_fraction,
+    "shelter_fail_count": fail_count,
+    "shelter_last_eval_ms": now_ms,
+  }
+
+
 ## Upsert beliefs for bushes seen this tick; returns updated belief table.
 static func sync_from_scene(
   beliefs: Dictionary,
@@ -376,21 +412,28 @@ static func maintain(
   var global_ttl_ms := int(float(motor_p.get("goal_memory_ttl_sec", 45.0)) * 1000.0)
   var mover_ttl_ms := _moving_ttl_ms(motor_p)
   var max_entries := maxi(1, int(motor_p.get("goal_memory_max_entries", 25)))
+  ## Confirmed shelters must outlive food's short TTL/precise-radius — Flight (Slice 2) needs them
+  ## around later, not just while freshly observed. Shelter-specific keys fall back to the generic
+  ## ones when unset.
+  var shelter_precise_r := float(motor_p.get("goal_memory_precise_radius_shelter", precise_r))
+  var shelter_forget_r := float(motor_p.get("goal_memory_forget_radius_shelter", forget_r))
+  var shelter_ttl_ms := int(float(motor_p.get("goal_memory_ttl_sec_shelter", motor_p.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
   var to_erase: Array = []
   for iid in beliefs.keys():
     var row: Dictionary = beliefs[iid]
+    var is_shelter: bool = row.get("goal_kind", &"") == _GkReg.GK_SHELTER
     var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
     var dist := creature_pos.distance_to(last_pos)
-    if dist > forget_r:
+    if dist > (shelter_forget_r if is_shelter else forget_r):
       to_erase.append(iid)
       continue
     var last_obs := int(row.get("last_observed_ms", 0))
-    var ttl_ms := mover_ttl_ms if bool(row.get("is_moving", false)) else global_ttl_ms
+    var ttl_ms := shelter_ttl_ms if is_shelter else (mover_ttl_ms if bool(row.get("is_moving", false)) else global_ttl_ms)
     if now_ms - last_obs > ttl_ms:
       to_erase.append(iid)
       continue
     var tier: StringName = row.get("tier", TIER_PRECISE)
-    if tier == TIER_PRECISE and dist > precise_r:
+    if tier == TIER_PRECISE and dist > (shelter_precise_r if is_shelter else precise_r):
       row["tier"] = TIER_COARSE
       row["coarse_entered_ms"] = now_ms
       beliefs[iid] = row
@@ -406,6 +449,12 @@ static func maintain(
     var worst_observed := 2147483647
     for iid2 in beliefs.keys():
       var row2: Dictionary = beliefs[iid2]
+      ## Confirmed shelter beliefs are hard-won (a multi-cycle STAY-evaluate) and rarely refresh
+      ## `last_observed_ms` post-confirmation, unlike food beliefs refreshed every live scan — that
+      ## would make a confirmed shelter the de facto first LRU-eviction candidate. Exempt (still
+      ## subject to TTL/forget-radius eviction above).
+      if row2.get("goal_kind", &"") == _GkReg.GK_SHELTER and bool(row2.get("fit_confirmed", false)):
+        continue
       var observed := int(row2.get("last_observed_ms", 0))
       var iid_int := int(iid2)
       if observed < worst_observed:

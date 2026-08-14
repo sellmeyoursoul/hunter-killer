@@ -20,6 +20,31 @@ static func has_clear_los(
   return bool(los.get("line_of_sight_clear", false))
 
 
+## True when nothing on [param collision_mask] intercepts the straight segment [param from]→
+## [param to] — gates contact actions (EAT, future combat) so a target separated by a solid the
+## acting body can't physically pass (e.g. a species-only `MobBlocker`) can't be interacted with
+## just because it's within straight-line range. Pass the *acting* body's own `collision_mask` so
+## the check matches whatever layers actually stop that body's movement — a herbivore and a
+## carnivore standing at the same spot can get different answers for the same solid.
+static func has_clear_contact_path(
+  space_state: PhysicsDirectSpaceState3D,
+  from: Vector3,
+  to: Vector3,
+  collision_mask: int,
+  exclude_rids: Array = [],
+) -> bool:
+  if space_state == null:
+    return true
+  if from.distance_squared_to(to) < 1e-6:
+    return true
+  var query := PhysicsRayQueryParameters3D.create(from, to)
+  query.collision_mask = collision_mask
+  for rid in exclude_rids:
+    if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
+      query.exclude.append(rid as RID)
+  return space_state.intersect_ray(query).is_empty()
+
+
 ## Resolves step objective — navmesh first waypoint when path exists, else direct objective.
 static func resolve_step_objective(
   map_rid: RID,

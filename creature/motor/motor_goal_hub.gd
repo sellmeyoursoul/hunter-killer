@@ -237,8 +237,14 @@ static func _effective_base(goal_kind: StringName, motor_v3: Dictionary, ctx: Di
       return float(motor_v3.get("goal_base_avoid_hostiles", 1.0))
     GOAL_SHELTER:
       var base := float(motor_v3.get("goal_base_shelter", 0.5))
-      var confidence := float(ctx.get("food_map_confidence", motor_v3.get("food_map_confidence", 0.0)))
-      return base * clampf(confidence, 0.0, 1.0)
+      var confidence := float(ctx.get("shelter_map_confidence", 0.0))
+      ## `confidence` can only turn nonzero after Find shelter has already won once and completed
+      ## a full approach+eval cycle (unlike food's inventory_ratio, which climbs independently of
+      ## whether find_food has won). Without a floor, `effective_base` would multiply by 0 forever
+      ## and permanently lock shelter out of arbitration — this floor is the "go look" level,
+      ## scaling up toward full `goal_base_shelter` as confirmed shelters accumulate.
+      var explore_floor := float(motor_v3.get("goal_shelter_explore_floor", 0.25))
+      return base * clampf(maxf(confidence, explore_floor), 0.0, 1.0)
     GOAL_REST:
       return float(motor_v3.get("goal_base_rest", 0.85))
     _:
