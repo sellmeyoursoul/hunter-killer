@@ -203,6 +203,8 @@ func _run_all() -> void:
   # §12.2 post-6d P4 — Flight flee waypoint latch + entry telemetry
   _test_motor_planner_flight_close_range_forward_egress()
   _test_motor_planner_flight_flee_waypoint_orbit_stable()
+  _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter()
+  _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief()
   _test_motor_planner_flight_entry_telemetry_reset()
   _test_motor_planner_blocked_move_immediate_path_reevaluation()
   _test_motor_planner_blocked_move_reeval_preserves_flee_latch()
@@ -225,6 +227,7 @@ func _run_all() -> void:
   _test_motor_explore_seek_mint_sets_explore_source()
   _test_motor_planner_find_food_understocked_sated_explore_first()
   _test_motor_planner_find_food_stocked_sated_memory_first()
+  _test_motor_planner_select_action_returns_rest_for_goal_rest()
   _test_motor_planner_shelter_no_candidate_explore()
   await _test_shelter_enclosure_probe_ring_detects_blockers()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
@@ -1352,6 +1355,42 @@ func _test_motor_planner_find_food_stocked_sated_memory_first() -> void:
     int(state.get("step_instance_id", 0)) == 8211,
     "stocked memory binds nearest precise bush",
   )
+  main.queue_free()
+
+
+## CLEANUP (2026-08-26): `select_action` previously had no branch for `GOAL_REST` at all — a
+## winning REST cycle fell through to the generic `_at_arrival` -> `STAY` case, so `MotorAction.REST`
+## (enum, action-name string, `rest_baseline_multiplier` calorie handling) was unreachable despite
+## existing end-to-end. `_sync_shelter_or_rest_objective` now holds the creature's own position as
+## the step goal, so `_at_arrival` is immediately true and `select_action` should return REST the
+## same tick, not STAY.
+func _test_motor_planner_select_action_returns_rest_for_goal_rest() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _MotorGoalHub.GOAL_REST},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": true,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": _MemoryAdapter.new(),
+    "now_ms": Time.get_ticks_msec(),
+    "delta": 1.0 / 60.0,
+  }
+  var act := _MotorPlanner.select_action(ctx, state)
+  _assert(act == _MotorAction.REST, "select_action returns REST once GOAL_REST's step goal is reached")
+  _assert(state.get("goal_kind", &"") == _MotorGoalHub.GOAL_REST, "REST sync sets goal_kind")
   main.queue_free()
 
 
@@ -5984,6 +6023,60 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
       )
       _assert(not is_flip, "orbit flight: no adjacent opposite turn pair in 16-tick window")
   _assert(saw_aligned_move, "orbit flight: at least one aligned MOVE_F")
+  main.queue_free()
+
+
+## RANDOMTESTS RT4 Slice 2 (2026-08-26): a confirmed, nearby shelter belief roughly perpendicular
+## to the pure away-from-threat bearing should win the candidate sweep over an equally-open
+## non-shelter direction (with no navmesh in this fixture, `_flee_candidate_probe` returns the
+## same `flee_dist` reach for every bearing, so the shelter's bias bonus is the only thing that can
+## break the tie).
+func _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(-8.0, 1.0, 0.0), 8.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  var adapter := _MemoryAdapter.new()
+  var now_ms := int(ctx["now_ms"])
+  ## Well within the default `flee_dist` (away-from-threat bearing is +X; shelter sits at +Z,
+  ## 90° off that bearing) and close enough (well under `goal_memory_forget_radius_shelter`) to
+  ## get most of the bias bonus.
+  var shelter_pos := Vector3(0.0, 1.0, 6.0)
+  adapter.record_shelter_evaluation(555, shelter_pos, true, 0.9, now_ms)
+  ctx["memory_adapter"] = adapter
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var to_wp := Vector3(wp.x - body.global_position.x, 0.0, wp.z - body.global_position.z)
+  var to_shelter := Vector3(shelter_pos.x - body.global_position.x, 0.0, shelter_pos.z - body.global_position.z)
+  _assert(
+    to_wp.normalized().dot(to_shelter.normalized()) > 0.99,
+    "flee waypoint biases toward a confirmed nearby shelter belief",
+  )
+  main.queue_free()
+
+
+## RANDOMTESTS RT4 Slice 2 regression guard: with no confirmed shelter belief in range, flee
+## waypoint minting is unaffected by the Slice 2 addition — same behavior as pre-Slice-2.
+func _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(-8.0, 1.0, 0.0), 8.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  ctx["memory_adapter"] = _MemoryAdapter.new()
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var to_wp := Vector3(wp.x - body.global_position.x, 0.0, wp.z - body.global_position.z)
+  var away_from_threat := Vector3(1.0, 0.0, 0.0)
+  _assert(
+    to_wp.normalized().dot(away_from_threat) > 0.99,
+    "flee waypoint stays straight away from threat with no confirmed shelter belief",
+  )
   main.queue_free()
 
 

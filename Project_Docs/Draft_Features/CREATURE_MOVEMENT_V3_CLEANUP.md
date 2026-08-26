@@ -45,6 +45,7 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C16](#c16-flee-waypoint-overshoots-the-playfield-boundary-instead-of-clamping-to-the-reachable-distance) | Flee waypoint overshoots the playfield boundary instead of clamping to the reachable distance | `done` | unassigned |
 | [C17](#c17-flee-waypoint-reach-scoring-mismatched-its-own-straight-line-projection-near-a-boundary-corner-rabbit-spins-then-fails-to-strafe-past) | Flee-waypoint reach scoring mismatched its own straight-line projection near a boundary corner | `done` | unassigned |
 | [C18](#c18-eat-completes-through-a-solid-the-eater-physically-cant-pass-straight-line-range-only-no-reachabilityocclusion-check) | EAT completes through a solid the eater physically can't pass (straight-line range only, no reachability/occlusion check) | `done` | unassigned |
+| [C19](#c19-motoractionrest-unreachable-from-select_action-a-winning-rest-cycle-reads-as-stay) | `MotorAction.REST` unreachable from `select_action` — a winning REST cycle read as `STAY` | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -1144,6 +1145,32 @@ Both angles requested together, since either alone only partially closes the loo
 - New test `_test_motor_planner_eat_blocked_by_solid_between` (`tests/run_all.gd`): spawns a carnivore body in range/facing-aligned with a live food target, asserts `_can_eat_now`/`select_action` succeed with no obstruction present (positive control), then adds a `collision_layer = 8` `StaticBody3D` directly on the path (mirroring the refuge ring's `MobBlocker`) and asserts both now correctly refuse `EAT`.
 - Full `tests/run_all.gd` suite: 0 `ASSERT:` failures, 2/2 clean runs.
 - **Diagnostic note (test-harness-only, not a game bug):** the first version of the new test's leftover `StaticBody3D` wasn't flushed from the shared physics world before later tests ran (`queue_free()` alone, no yielded frame afterward) — it lingered near world origin and physically interfered with `_test_motor_locale_approach_no_oscillation_smoke`'s rabbit a few tests later, tripping the C10 airborne invariant. Fixed by adding `await process_frame` after `main.queue_free()` at the end of the new test, matching frame-flush hygiene the C12/C14 fixes already established for this failure family. Confirmed via bisection (disabling the new test made the failure disappear; re-enabling it with the extra `await` made the full suite pass cleanly twice in a row) that this was purely a test-cleanup-timing artifact of the new test itself, not a behavior change from the `_can_eat_now` fix.
+
+---
+
+## C19 — `MotorAction.REST` unreachable from `select_action` — a winning REST cycle read as `STAY`
+
+**Status:** `done`
+**Slice:** unassigned — found and fixed 2026-08-14/2026-08-26 while investigating [RANDOMTESTS.md RT4](CREATURE_MOVEMENT_V3_RANDOMTESTS.md#rt4-rabbit-never-shelters-inside-the-forced-shrub-refuge-cluster) (flagged as a separate, pre-existing gap unrelated to shelter both at Slice 1 and Slice 2; closed out on its own here).
+**Evidence:** No live repro needed — structural, found by code inspection while tracing why a fed, safe rabbit's REST behavior is never visually distinguishable from ordinary idling. `MotorAction.REST` has real, working scaffolding throughout the motor stack: the enum value and action-name string (`creature_motor_stack.gd:502-503`), a lower calorie-drain multiplier via `rest_baseline_multiplier` (`motor_action.gd:62-63`), a locomotion no-op handler (`locomotion_executor.gd:55`), and `_rest_area_only_perception()` (`creature_motor_stack.gd:697-702`), which specifically checks `_last_outcome.action == MotorAction.REST` to narrow perception while resting. None of it could ever fire: `select_action` (`motor_planner.gd`) had no branch for `goal_kind == GOAL_REST` at all — every non-`find_food` goal that reached its step goal fell through the single generic `_at_arrival` → `STAY` case, so a winning REST cycle (already correctly gated by `motor_goal_hub.gd`'s `calorie_ratio >= 0.95` + `safety_met` floor, confirmed sound in a prior session's synthetic probe) always produced the action `STAY`, never `REST`.
+
+### Root cause
+
+Two compounding gaps, both structural (no mistuned weight or threshold):
+
+1. **`select_action` had no `GOAL_REST` branch.** The only special-cased terminal actions were `EAT` (for `GK_FIND_FOOD`) and the generic `_at_arrival` → `STAY` fallback that every other goal kind — including `GOAL_REST` — fell into.
+2. **`_sync_shelter_or_rest_objective`'s `GOAL_REST` arm was a stub.** It unconditionally returned `false`, so `_sync_step_objective`'s `GOAL_REST` match arm (`motor_planner.gd`) always fell through to `_mint_explore_objective_for_goal` — an undirected explore step, not "arrived, hold position." Even if `select_action` had had a REST branch, there was never a step goal that counted as "reached" for REST specifically. (Shelter's sibling stub got a real implementation in RT4 Slice 1; REST's was explicitly left alone at the time as an unrelated gap.)
+
+### Fix
+
+- `creature/motor/motor_planner.gd`: `_sync_shelter_or_rest_objective` now holds the creature's own current position as the step goal and returns `true`. Unlike shelter, REST has no *site* to seek — its eligibility is calorie/safety gated, not location gated — so "hold here" is a complete implementation, not a placeholder; `_at_arrival` is true the same tick.
+- `select_action`: added a `goal_kind == _MotorGoalHub.GOAL_REST and _at_arrival(...)` branch returning `_MotorAction.REST`, ahead of the generic `_at_arrival` → `STAY` fallback that was silently absorbing it.
+
+### Verification
+
+- New test `_test_motor_planner_select_action_returns_rest_for_goal_rest` (`tests/run_all.gd`): builds a `GOAL_REST` incumbent ctx and asserts `select_action` returns `REST` (not `STAY`) the same call the step goal is synced.
+- Full `tests/run_all.gd` suite: 0 `ASSERT:` failures.
+- **Not done:** no distinct REST animation yet — the action still routes through `locomotion_executor.gd`'s no-op handler shared with `STAY`/`EAT` (correct physical behavior and calorie drain, just no visual distinction). Deliberately deferred until animated actions land; `locomotion_executor.gd:55`'s shared `STAY, REST, EAT` no-op branch is the hook point to split out then. Also still open: the second half of RT4 item 2 (whether real playfield food density sustains `calorie_ratio >= 0.95` long enough to reach REST at all in practice) — this fix makes REST *observable* once reached, it doesn't re-verify how often it's reached.
 
 ---
 

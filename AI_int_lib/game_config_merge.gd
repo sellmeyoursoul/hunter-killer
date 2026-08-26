@@ -330,6 +330,13 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     ## cornered animal re-assesses far more often than one calmly fleeing, because the situation
     ## (and the predator's position) changes fast at this range.
     "flee_give_up_latch_ticks": 5,
+    ## RANDOMTESTS RT4 Slice 2 (2026-08-26): fractional-reach bonus applied to a flee candidate
+    ## bearing that points at a confirmed shelter belief, scaled down linearly to 0 as the shelter's
+    ## distance approaches `goal_memory_forget_radius_shelter` — a shelter right next to the creature
+    ## gets close to the full bonus, one near the forget-radius edge gets almost none. Lets "known
+    ## safe and reachable" narrowly beat "merely open ground" without overriding the give-up
+    ## escalation's own boxed-in handling.
+    "flee_shelter_bias_bonus": 0.15,
   }
 
 

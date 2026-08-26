@@ -129,6 +129,15 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
     var orbit_act := _select_eat_orbit_or_align(body, step_goal, state, motor_v3, delta)
     if orbit_act >= 0:
       return orbit_act
+  # CLEANUP (2026-08-26): `GOAL_REST` previously fell through to the generic `_at_arrival` ->
+  # `STAY` branch below like every other non-find_food goal — `MotorAction.REST` existed (enum,
+  # action-name string, `rest_baseline_multiplier` calorie handling, `_rest_area_only_perception`'s
+  # own `_last_outcome.action == REST` check) but `select_action` never actually returned it, so a
+  # winning REST cycle was indistinguishable from ordinary idling both to the player and to that
+  # perception gate. `_sync_shelter_or_rest_objective` now holds the creature's own position as the
+  # step goal, so this is `true` the same tick REST is reached.
+  if goal_kind == _MotorGoalHub.GOAL_REST and _at_arrival(body, step_goal, motor_v3):
+    return _MotorAction.REST
   ## Bound food instance: do not STAY at arrival_tolerance before EAT step-range is reached.
   if _at_arrival(body, step_goal, motor_v3):
     if goal_kind != _GkReg.GK_FIND_FOOD or int(state.get("step_instance_id", 0)) == 0:
@@ -1475,18 +1484,25 @@ static func _begin_or_continue_shelter_eval(
     state["shelter_eval_result"] = &""
 
 
-## Placeholder until rest belief consult ships — returns false so explore seek runs. (Shelter has
-## its own real implementation — `_sync_shelter_objective` — above; `GOAL_REST` is unchanged
-## because `MotorAction.REST` is not reachable from `select_action` at all today, a separate
-## pre-existing gap unrelated to shelter.)
+## CLEANUP (2026-08-26): `GOAL_REST` only ever wins arbitration once `_MotorGoalHub`'s own
+## `_REST_CALORIE_FLOOR`/`safety_met` gate has already confirmed the creature is fed and safe
+## (`motor_goal_hub.gd:46-47`) — unlike shelter, REST has no *site* to seek, so it never needed a
+## belief consult of its own. Its only real gap was that `select_action` had nowhere to route a
+## reached REST goal to the actual `MotorAction.REST` (see the new branch there) — this just holds
+## the current position as the step goal so `_at_arrival` is immediately true and `select_action`
+## has something to act on. (Shelter has its own real implementation — `_sync_shelter_objective` —
+## above; unaffected by this.)
 static func _sync_shelter_or_rest_objective(
   _ctx: Dictionary,
-  _state: Dictionary,
-  _creature_pos: Vector3,
+  state: Dictionary,
+  creature_pos: Vector3,
   _motor_v3: Dictionary,
   _goal_kind: StringName,
 ) -> bool:
-  return false
+  state["step_goal"] = creature_pos
+  state["step_instance_id"] = 0
+  state["step_source"] = &"live"
+  return true
 
 
 static func _live_ready_food_present(scan: Dictionary, creature_pos: Vector3) -> bool:
@@ -2082,19 +2098,61 @@ static func _mint_flee_waypoint(
     var map_rid: RID = ctx.get("map_rid", RID())
     var base_dir := to_wp.normalized()
     var flee_dist := to_wp.length()
+
+    # RANDOMTESTS RT4 Slice 2 (2026-08-26): bias candidate selection toward a confirmed shelter
+    # belief, when one is known and roughly in range, on top of the pure reach-scoring below.
+    # `consult_shelter_beliefs` already picks the *nearest* confirmed shelter across all belief
+    # rows, so multi-shelter selection is handled upstream — this only ever sees a single
+    # candidate. The bonus is added as a 7th candidate direction, scaled down linearly with
+    # distance (near-full bonus close by, near-zero approaching `goal_memory_forget_radius_shelter`)
+    # so a known-but-distant shelter can't out-compete much-closer open ground. Deliberately doesn't
+    # touch `best_reach`/`final_reach` themselves (tracked separately as the true, unbiased reach)
+    # so the give-up escalation and `reach_known` boxed-in handling below stay exactly as tuned by
+    # RT1/C9/C16/C17 — the bonus only ever influences *which* direction wins, never whether the
+    # creature is treated as cornered.
+    var shelter_dir := Vector3.ZERO
+    var shelter_bias_reach := 0.0
+    var shelter_active := false
+    var adapter: RefCounted = ctx.get("memory_adapter")
+    if adapter != null and adapter.has_method(&"consult_shelter_beliefs"):
+      var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+      var shelter: Dictionary = adapter.consult_shelter_beliefs(creature_pos, motor_v3, now_ms)
+      if bool(shelter.get("active", false)):
+        var shelter_pos: Vector3 = shelter.get("pos", Vector3.ZERO)
+        var to_shelter := Vector3(shelter_pos.x - creature_pos.x, 0.0, shelter_pos.z - creature_pos.z)
+        var shelter_dist := to_shelter.length()
+        if shelter_dist > 1e-6:
+          shelter_dir = to_shelter / shelter_dist
+          var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
+          var proximity := 1.0 - clampf(shelter_dist / maxf(forget_r, 1.0), 0.0, 1.0)
+          var bonus_frac := float(motor_v3.get("flee_shelter_bias_bonus", 0.15)) * proximity
+          shelter_bias_reach = flee_dist * bonus_frac
+          shelter_active = true
+
+    var candidate_dirs: Array = []
+    for i in range(6):
+      candidate_dirs.append(base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i)))
+    if shelter_active:
+      candidate_dirs.append(shelter_dir)
+
     var best_dir := base_dir
     var best_reach := -1.0
+    var best_effective := -1.0
     var best_endpoint := creature_pos
     var best_clear_dir := Vector3.ZERO
     var best_clear_reach := -1.0
+    var best_clear_effective := -1.0
     var best_clear_endpoint := creature_pos
     var found_clear := false
-    for i in range(6):
-      var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i))
+    for i in range(candidate_dirs.size()):
+      var candidate_dir: Vector3 = candidate_dirs[i]
       var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
       var reach := float(probe.get("reach", 0.0))
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
-      if reach > best_reach:
+      var is_shelter_candidate := shelter_active and i == candidate_dirs.size() - 1
+      var effective := reach + (shelter_bias_reach if is_shelter_candidate else 0.0)
+      if effective > best_effective:
+        best_effective = effective
         best_reach = reach
         best_dir = candidate_dir
         best_endpoint = endpoint
@@ -2103,7 +2161,8 @@ static func _mint_flee_waypoint(
         if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
           avoided = true
           break
-      if not avoided and reach > best_clear_reach:
+      if not avoided and effective > best_clear_effective:
+        best_clear_effective = effective
         best_clear_reach = reach
         best_clear_dir = candidate_dir
         best_clear_endpoint = endpoint
