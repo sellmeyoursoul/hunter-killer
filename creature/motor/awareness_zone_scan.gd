@@ -10,11 +10,16 @@ const _NEUTRAL_KIND_YIELD := 0.5
 
 
 ## Scans the scene tree for live food and hostile threats visible to [param body].
+## [param threat_los_cache] is the caller-owned per-creature awareness-hysteresis cache (see
+## [method AwarenessZone.latch_awareness_verdict]) — pass the same [Dictionary] instance across
+## ticks (e.g. planner [code]state["threat_los_hysteresis"][/code]) so threat in/out-of-awareness
+## flips debounce across calls; omit (default empty, discarded) to scan without hysteresis.
 static func scan_live(
   body: CharacterBody3D,
   motor_v3: Dictionary,
   tree: SceneTree,
   area_only: bool = false,
+  threat_los_cache: Dictionary = {},
 ) -> Dictionary:
   var out := {
     "food_split": {"ready": [], "unready": []},
@@ -33,7 +38,8 @@ static func scan_live(
   _scan_food_plants(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
   _scan_prey_food(body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, policy, out)
   _scan_hostile_threats(
-    body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, subject_hostile, policy, out
+    body, creature_pos, facing, eye_h, space, motor_v3, tree, area_only, subject_hostile, policy, out,
+    threat_los_cache,
   )
   ## [code]food_map_confidence[/code] is owned by stack [code]inventory_ratio[/code] consult (§1) — not live-scan split.
   return out
@@ -195,10 +201,12 @@ static func _scan_hostile_threats(
   subject_hostile: bool,
   policy: Resource,
   out: Dictionary,
+  threat_los_cache: Dictionary,
 ) -> void:
   var samples: Array = []
   var groups: Array[StringName] = [&"mobs", &"creatures"]
   var seen: Dictionary = {}
+  var hysteresis_ticks := int(motor_v3.get("threat_awareness_hysteresis_ticks", 3))
   for group_name in groups:
     for node in tree.get_nodes_in_group(group_name):
       if node == body or not (node is CharacterBody3D):
@@ -214,7 +222,11 @@ static func _scan_hostile_threats(
       var mem := _AwarenessZone.membership_with_los(
         space, creature_pos, facing, eye_h, other_pos, motor_v3, area_only,
       )
-      if not bool(mem.get("in_awareness", false)):
+      var raw_aware := bool(mem.get("in_awareness", false))
+      var aware := _AwarenessZone.latch_awareness_verdict(
+        threat_los_cache, oid, raw_aware, hysteresis_ticks,
+      )
+      if not aware:
         continue
       var wp := _MotorPlane.from_vec3(other_pos)
       samples.append(
@@ -237,6 +249,13 @@ static func _scan_hostile_threats(
       last["eff_reach"] = float(mem.get("eff_reach", 0.0))
       last["world_pos_3d"] = other_pos
   out["threat_samples"] = samples
+  ## Drop hysteresis-cache entries for ids not seen this scan (despawned/left-group nodes) so the
+  ## cache doesn't grow unbounded over a session — `seen` covers every candidate node examined this
+  ## tick, not just confirmed threats, so a node that's still present but no longer a threat keeps
+  ## its (inert, unconsulted) entry rather than being pruned and re-latched from a cold start.
+  for cached_id in threat_los_cache.keys():
+    if not seen.has(cached_id):
+      threat_los_cache.erase(cached_id)
 
 
 static func _is_threat_to_subject(

@@ -78,6 +78,34 @@ static func line_of_sight_clear(
   }
 
 
+## Debounces a per-target raw awareness verdict (in/out) so a flip only lands after
+## [param hysteresis_ticks] consecutive same-direction raw reads — generalizes
+## [code]motor_planner._latch_los_blocked[/code]'s single-target streak-counter pattern to a scan
+## that evaluates many targets per tick (CLEANUP C11: a threat sitting near the awareness-cone edge
+## blinked in/out of [code]threat_samples[/code] purely on facing, flip-flopping goal-hub
+## arbitration between [code]avoid_hostiles[/code]/[code]find_food[/code] every reconsideration
+## window). [param cache] is a per-creature [code]{target_id: {"latched": bool, "streak": int}}[/code]
+## dict the caller owns and persists across ticks (e.g. planner [code]state["threat_los_hysteresis"][/code]);
+## entries for targets no longer scanned are the caller's responsibility to prune.
+static func latch_awareness_verdict(
+  cache: Dictionary,
+  target_id: int,
+  raw_aware: bool,
+  hysteresis_ticks: int,
+) -> bool:
+  var entry: Dictionary = cache.get(target_id, {})
+  var latched := bool(entry.get("latched", raw_aware))
+  if raw_aware == latched:
+    cache[target_id] = {"latched": latched, "streak": 0}
+    return latched
+  var streak := int(entry.get("streak", 0)) + 1
+  if streak >= maxi(1, hysteresis_ticks):
+    cache[target_id] = {"latched": raw_aware, "streak": 0}
+    return raw_aware
+  cache[target_id] = {"latched": latched, "streak": streak}
+  return latched
+
+
 ## Geometric zone + optional LoS — returns [code]in_zone[/code] and LoS fields.
 static func membership_with_los(
   space_state: PhysicsDirectSpaceState3D,

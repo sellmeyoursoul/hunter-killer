@@ -95,10 +95,10 @@ static func _nearest_distance(xz: Vector2, existing_points: Array[Vector2]) -> f
 
 
 ## Serializes a resolved layout (fraction arrays/Vector2 values keyed by object type, plus
-## [param seed]) to pretty-printed JSON — the "locations file" a developer can copy aside and
+## [param rng_seed]) to pretty-printed JSON — the "locations file" a developer can copy aside and
 ## point [code]playfield_spawn.locked_layout_path[/code] at to freeze a repro.
-static func serialize_layout(layout: Dictionary, seed: int) -> String:
-  var out := {"seed": seed}
+static func serialize_layout(layout: Dictionary, rng_seed: int) -> String:
+  var out := {"seed": rng_seed}
   for key in layout:
     var value: Variant = layout[key]
     if typeof(value) == TYPE_VECTOR2:

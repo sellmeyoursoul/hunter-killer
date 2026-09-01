@@ -22,27 +22,30 @@ static func mint_explore_step(
   var reach := float(motor_v3.get("awareness_radius", 1500.0)) * 0.5
   var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
   var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
+  var latched_valid := bool(state.get("explore_waypoint_set", false))
   var body: CharacterBody3D = ctx.get("body")
   var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
 
-  if latched.length_squared() > 1e-8:
+  if latched_valid:
     if creature_pos.distance_to(latched) <= arrival_tol:
       state["explore_waypoint"] = Vector3.ZERO
-      latched = Vector3.ZERO
+      state["explore_waypoint_set"] = false
+      latched_valid = false
     elif body != null and _planner_call("_passed_explore_waypoint", [body, latched, state]):
       _planner_call("_apply_explore_waypoint_passed", [state, body, motor_v3])
-      latched = Vector3.ZERO
+      latched_valid = false
     elif body != null and _planner_call("_explore_latch_needs_rim_realign", [body, motor_v3, state]):
       _planner_call("_apply_explore_rim_escape_replan", [state, body, motor_v3])
-      latched = Vector3.ZERO
+      latched_valid = false
     else:
       var adapter_hold: RefCounted = ctx.get("memory_adapter")
       if adapter_hold != null and adapter_hold.has_method(&"is_waypoint_dead_end"):
         if adapter_hold.is_waypoint_dead_end(creature_pos, latched, goal_kind, motor_v3):
           _remint_explore_dir(goal_kind, creature_pos, state, motor_v3, ctx, body)
-          latched = Vector3.ZERO
-      if latched.length_squared() > 1e-8:
+          latched_valid = false
+      if latched_valid:
         state["step_goal"] = latched
+        state["step_goal_set"] = true
         return latched
 
   if explore.length_squared() < 1e-8:
@@ -64,7 +67,9 @@ static func mint_explore_step(
       explore = (state["explore_dir"] as Vector3).normalized()
       waypoint = creature_pos + explore * reach
   state["explore_waypoint"] = waypoint
+  state["explore_waypoint_set"] = true
   state["step_goal"] = waypoint
+  state["step_goal_set"] = true
   return waypoint
 
 
@@ -145,6 +150,7 @@ static func _remint_explore_dir(
       goal_kind, creature_pos, _spawn_facing(ctx), motor_v3, ctx
     )
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
 
 
 static func _spawn_facing(ctx: Dictionary) -> Vector3:

@@ -564,6 +564,7 @@ func _test_creature_3d_predation_contact() -> void:
   var stack := _motor_stack_test_configure(pred_body)
   stack._planner_state["step_instance_id"] = prey_body.get_instance_id()
   stack._planner_state["step_goal"] = prey_body.global_position
+  stack._planner_state["step_goal_set"] = true
   stack._planner_state["step_stimulus_kind_id"] = &"rabbit"
   stack._planner_state["step_source"] = &"live"
   stack.call("_try_complete_eat")
@@ -1516,6 +1517,7 @@ func _test_motor_planner_shelter_eval_confirm_cycle_progression() -> void:
   state["step_source"] = &"precise"
   state["shelter_candidate_instance_id"] = 424242
   state["shelter_candidate_anchor"] = anchor
+  state["shelter_candidate_anchor_set"] = true
   state["goal_kind"] = _GkReg.GK_SHELTER
   var ctx := {
     "body": body,
@@ -1563,6 +1565,7 @@ func _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient() -> voi
   state["step_source"] = &"precise"
   state["shelter_candidate_instance_id"] = 424243
   state["shelter_candidate_anchor"] = anchor
+  state["shelter_candidate_anchor_set"] = true
   state["goal_kind"] = _GkReg.GK_SHELTER
   var ctx := {
     "body": body,
@@ -2074,6 +2077,7 @@ func _test_creature_motor_stack_prey_eat_capture_and_memory() -> void:
   var before := float(pred.current_calories)
   stack._planner_state["step_instance_id"] = prey.get_instance_id()
   stack._planner_state["step_goal"] = prey.global_position
+  stack._planner_state["step_goal_set"] = true
   stack._planner_state["step_stimulus_kind_id"] = &"rabbit"
   stack.call("_try_complete_eat")
   _assert(not prey.visible, "prey EAT grant defeats prey body")
@@ -3063,6 +3067,7 @@ func _test_motor_align_cone_contract() -> void:
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["step_goal"] = Vector3(0.0, 1.0, 20.0)
+  state["step_goal_set"] = true
   var act := _MotorPlanner.align_and_move(body, motor_v3, state)
   _assert(act != _MotorAction.MOVE_FORWARD, "cone contract: misaligned goal must not select MOVE_F")
   _assert(
@@ -3085,7 +3090,9 @@ func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"locale"
   state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos_set"] = true
   var pos_before := Vector3(0.0, 1.0, 9.95)
   var ctx := {"map_rid": RID(), "delta": 1.0 / 60.0}
   var outcome := _ActionOutcome.new(
@@ -3113,7 +3120,9 @@ func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"locale"
   state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos_set"] = true
   state["locale_no_progress_ticks"] = 2
   var pos_before := Vector3(0.0, 1.0, 9.95)
   var ctx := {"map_rid": RID(), "delta": 1.0 / 60.0}
@@ -3137,7 +3146,9 @@ func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
   state["locale_last_bearing_err_deg"] = INF
   state["locale_last_dist_sq"] = INF
   state["step_goal"] = Vector3(0.0, 1.0, 10.0)
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  state["step_ultimate_pos_set"] = true
   body.global_position = Vector3(0.0, 1.0, 10.12)
   var outcome2 := _ActionOutcome.new(
     body.global_position - pos_before, false, 0.0, _MotorAction.MOVE_FORWARD
@@ -3169,7 +3180,9 @@ func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_goal"] = distant_substep
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 424242
   state["step_source"] = &"live"
   var ctx := {
@@ -3221,7 +3234,9 @@ func _test_motor_planner_eat_blocked_by_solid_between() -> void:
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_goal"] = ultimate
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 636363
   state["step_source"] = &"live"
   var ctx := {
@@ -3285,7 +3300,9 @@ func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_goal"] = ultimate
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 911911
   state["step_source"] = &"live"
   var ctx := {
@@ -3576,7 +3593,9 @@ func _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"live"
   state["step_goal"] = Vector3(0.0, 1.0, 8.0)
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
   state["prey_engagement_instance_id"] = 88051
   state["prey_engagement_ticks_remaining"] = 40
   state["prey_engagement_latch_total"] = 40
@@ -3619,9 +3638,12 @@ func _test_motor_planner_pursuit_detour_sticky_live_refresh() -> void:
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
   state["step_source"] = &"live"
   state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
   state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
   state["pursuit_detour_ticks_remaining"] = 20
   state["step_ultimate_pos"] = prey_a
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 88060
   state["prey_engagement_instance_id"] = 88060
   state["prey_engagement_ticks_remaining"] = 40
@@ -3674,9 +3696,12 @@ func _test_motor_planner_pursuit_detour_skips_reeval_while_latched() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"live"
   state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
   state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
   state["pursuit_detour_ticks_remaining"] = 24
   state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
   state["prey_engagement_instance_id"] = 88061
   state["prey_engagement_ticks_remaining"] = 40
   state["prey_engagement_latch_total"] = 40
@@ -3724,9 +3749,12 @@ func _test_motor_planner_pursuit_detour_alternate_on_persistent_block() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"live"
   state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
   state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
   state["pursuit_detour_ticks_remaining"] = 24
   state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
   state["prey_engagement_instance_id"] = 88062
   state["prey_engagement_ticks_remaining"] = 40
   state["prey_engagement_latch_total"] = 40
@@ -3929,7 +3957,9 @@ func _test_motor_planner_locale_arrival_binds_live_or_clears() -> void:
   state_live["goal_kind"] = _GkReg.GK_FIND_FOOD
   state_live["step_source"] = &"locale"
   state_live["step_goal"] = anchor
+  state_live["step_goal_set"] = true
   state_live["step_ultimate_pos"] = anchor
+  state_live["step_ultimate_pos_set"] = true
   var bush_entry := {
     "pos": anchor + Vector3(1.0, 0.0, 0.0),
     "instance_id": 88103,
@@ -3969,7 +3999,9 @@ func _test_motor_planner_locale_arrival_binds_live_or_clears() -> void:
   state_clear["goal_kind"] = _GkReg.GK_FIND_FOOD
   state_clear["step_source"] = &"locale"
   state_clear["step_goal"] = anchor
+  state_clear["step_goal_set"] = true
   state_clear["step_ultimate_pos"] = anchor
+  state_clear["step_ultimate_pos_set"] = true
   state_clear["locale_no_progress_ticks"] = 2
   var ctx_clear := _planner_find_food_gate_ctx(body, adapter, 0.05)
   ctx_clear["scan"] = _motor_stack_empty_food_scan()
@@ -4300,7 +4332,9 @@ func _test_motor_planner_explore_align_no_premature_replan() -> void:
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var pos_before := body.global_position
   for tick_i in 4:
     var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
@@ -4502,7 +4536,9 @@ func _test_motor_planner_explore_move_not_falsely_blocked() -> void:
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var delta := 1.0 / 60.0
   ## Movement is acceleration-ramped (`apply_horizontal_move_intent`), so a single tick from a cold
   ## stop (velocity 0) doesn't cover enough ground to clear the no-progress epsilon on its own —
@@ -4538,7 +4574,9 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   explore_state["step_source"] = &"explore"
   explore_state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   explore_state["explore_waypoint"] = Vector3(50.0, 1.0, 0.0)
+  explore_state["explore_waypoint_set"] = true
   explore_state["step_goal"] = explore_state["explore_waypoint"]
+  explore_state["step_goal_set"] = true
   var start_dir: Vector3 = explore_state["explore_dir"]
   var pos_before := body.global_position
   for tick_i in 4:
@@ -4574,6 +4612,7 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   var precise_state := _MotorPlanner.new_state()
   precise_state["step_source"] = &"precise"
   precise_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  precise_state["step_goal_set"] = true
   precise_state["step_instance_id"] = 99001
   for tick_i in 4:
     var turn_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
@@ -4597,7 +4636,9 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   var locale_state := _MotorPlanner.new_state()
   locale_state["step_source"] = &"locale"
   locale_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  locale_state["step_goal_set"] = true
   locale_state["step_ultimate_pos"] = Vector3(-20.0, 1.0, 0.0)
+  locale_state["step_ultimate_pos_set"] = true
   for tick_i in 4:
     var locale_turn := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.TURN_LEFT)
     var run_locale_s9: bool = _motor_planner_note_outcome(
@@ -4620,6 +4661,7 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   var move_stuck_state := _MotorPlanner.new_state()
   move_stuck_state["step_source"] = &"precise"
   move_stuck_state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
+  move_stuck_state["step_goal_set"] = true
   move_stuck_state["step_instance_id"] = 99002
   for tick_i in 3:
     var blocked_move := _ActionOutcome.new(Vector3.ZERO, true, 0.0, _MotorAction.MOVE_FORWARD)
@@ -4771,7 +4813,9 @@ func _test_motor_planner_explore_boundary_scan_inward_escape() -> void:
 
   state["blocked_objective_action"] = &"boundary_scan_done"
   state["explore_waypoint"] = Vector3(101.0, 1.0, 50.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var edge_pos := body.global_position
   for tick_i in 3:
     var clamp_outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
@@ -4839,7 +4883,9 @@ func _test_motor_planner_explore_post_scan_egress_no_rescan() -> void:
   # displacement, not clamping. This must NOT re-arm the scan while egress is active.
   state["blocked_objective_action"] = &"boundary_scan_done"
   state["explore_waypoint"] = Vector3(0.0, 1.0, 50.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var stall_pos := body.global_position
   var rescanned := false
   for tick_i in 6:
@@ -4897,7 +4943,9 @@ func _test_motor_planner_explore_post_scan_rim_move_keeps_egress() -> void:
 
   state["blocked_objective_action"] = &"boundary_scan_done"
   state["explore_waypoint"] = Vector3(50.0, 1.0, 50.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var pos_before := body.global_position
   body.global_position = pos_before + Vector3(0.0, 0.0, -0.8)
   _assert(
@@ -5104,7 +5152,9 @@ func _test_motor_planner_explore_rim_stale_tangent_latch_realigns() -> void:
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = tangent_wp
+  state["explore_waypoint_set"] = true
   state["step_goal"] = tangent_wp
+  state["step_goal_set"] = true
   var ctx := {
     "body": body,
     "motor_v3": motor_v3,
@@ -5157,7 +5207,9 @@ func _test_motor_planner_explore_post_scan_egress_survives_blocked_align_turns()
   _assert(egress_start > 0, "blocked-align egress test starts with egress armed")
   state["blocked_objective_action"] = &"boundary_scan_done"
   state["explore_waypoint"] = Vector3(50.0, 1.0, 50.0)
+  state["explore_waypoint_set"] = true
   state["step_goal"] = state["explore_waypoint"]
+  state["step_goal_set"] = true
   var stall_pos := body.global_position
   var rescanned := false
   for tick_i in 25:
@@ -5242,7 +5294,9 @@ func _test_motor_planner_explore_rim_overshoot_replans_inward() -> void:
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(0.0, 0.0, -1.0)
   state["explore_waypoint"] = latched
+  state["explore_waypoint_set"] = true
   state["step_goal"] = latched
+  state["step_goal_set"] = true
   var ctx := {
     "body": body,
     "motor_v3": motor_v3,
@@ -5324,7 +5378,9 @@ func _test_motor_planner_explore_overshoot_replans() -> void:
   state["step_source"] = &"explore"
   state["explore_dir"] = Vector3(1.0, 0.0, 0.0)
   state["explore_waypoint"] = latched
+  state["explore_waypoint_set"] = true
   state["step_goal"] = latched
+  state["step_goal_set"] = true
   var ctx := {
     "body": body,
     "motor_v3": motor_v3,
@@ -5379,6 +5435,7 @@ func _test_motor_planner_explore_seek_seeds_waypoint() -> void:
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"precise"
   state["step_goal"] = Vector3(20.0, 1.0, 0.0)
+  state["step_goal_set"] = true
   state["step_instance_id"] = 99001
   state["consecutive_blocked"] = 3
   var ctx := {
@@ -5765,6 +5822,7 @@ func _test_motor_planner_path_clearance_gated_by_cadence() -> void:
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["step_goal"] = Vector3(40.0, 1.0, 0.0)
+  state["step_goal_set"] = true
   state["step_source"] = &"live"
   var ctx := {
     "run_path_clearance": false,
@@ -5800,6 +5858,7 @@ func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_AVOID_HOSTILES
   state["step_goal"] = Vector3(-65.0, 1.0, 0.0)
+  state["step_goal_set"] = true
   state["step_source"] = &"live"
   var ctx := {
     "body": body,
@@ -6124,6 +6183,7 @@ func _test_motor_planner_blocked_move_immediate_path_reevaluation() -> void:
   body.last_move_direction = Vector3(0.0, 0.0, -1.0)
   var state := _MotorPlanner.new_state()
   state["step_goal"] = Vector3(0.0, 1.0, 40.0)
+  state["step_goal_set"] = true
   state["step_source"] = &"live"
   var approach := Vector3(0.0, 0.0, 1.0)
   _BlockedApproachScr.record(state["blocked_approach"], approach, 1, 45)
@@ -6163,7 +6223,9 @@ func _test_motor_planner_blocked_move_reeval_preserves_flee_latch() -> void:
   var state := _MotorPlanner.new_state()
   var flee_goal := Vector3(0.0, 1.0, 40.0)
   state["step_goal"] = flee_goal
+  state["step_goal_set"] = true
   state["flee_waypoint"] = flee_goal
+  state["flee_waypoint_set"] = true
   state["flee_waypoint_ticks_remaining"] = 10
   state["step_source"] = &"live"
   var approach := Vector3(0.0, 0.0, 1.0)

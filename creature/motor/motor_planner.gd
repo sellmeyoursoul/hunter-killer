@@ -16,6 +16,7 @@ const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
+const _LatchHold := preload("res://creature/motor/latch_hold.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -30,12 +31,19 @@ static func new_state() -> Dictionary:
   return {
     "goal_kind": &"",
     "step_goal": Vector3.ZERO,
+    ## Sole source of truth for whether `step_goal` holds a real target — `Vector3.ZERO` is also a
+    ## legitimate world position (playfield centered near origin), so the vector's magnitude can't
+    ## be used to tell "unset" from "target is near the origin" (CLEANUP C9 sentinel-collision bug,
+    ## design review §5).
+    "step_goal_set": false,
     "step_instance_id": 0,
     "step_source": &"live",
     "blocked_approach": {},
     "consecutive_blocked": 0,
     "explore_dir": Vector3.ZERO,
     "explore_waypoint": Vector3.ZERO,
+    ## See `step_goal_set` — same sentinel-collision hazard for a minted explore waypoint.
+    "explore_waypoint_set": false,
     "last_outcome_blocked": false,
     "step_stimulus_kind_id": &"",
     "blocked_objective_action": &"",
@@ -54,6 +62,8 @@ static func new_state() -> Dictionary:
     ## re-approaching a point the creature is already standing on makes bearing math degenerate
     ## and produces an in-place turn-storm (CLEANUP C2 duel-manual finding, 2026-07-17).
     "locale_arrival_clear_anchor": Vector3.ZERO,
+    ## See `step_goal_set` — same sentinel-collision hazard for the cleared-anchor bookkeeping.
+    "locale_arrival_clear_anchor_set": false,
     "locale_arrival_clear_cooldown_ticks": 0,
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
@@ -66,14 +76,20 @@ static func new_state() -> Dictionary:
     "prey_engagement_ticks_remaining": 0,
     "prey_engagement_latch_total": 0,
     "flee_waypoint": Vector3.ZERO,
+    ## See `step_goal_set` — this is the field whose sentinel collision caused C9's 7th-fix bug.
+    "flee_waypoint_set": false,
     "flee_waypoint_ticks_remaining": 0,
     "flee_backtrack_streak": 0,
     "flee_recent_dirs": [],
     "pursuit_detour_waypoint": Vector3.ZERO,
+    ## See `step_goal_set` — same sentinel-collision hazard for the pursuit-detour latch.
+    "pursuit_detour_waypoint_set": false,
     "pursuit_detour_ticks_remaining": 0,
     "pursuit_detour_alt_flip": false,
-    "pursuit_detour_escalation_count": 0,
+    "pursuit_detour_escalation_tier": 0,
     "step_ultimate_pos": Vector3.ZERO,
+    ## See `step_goal_set` — same sentinel-collision hazard for the "ultimate" (pre-step-clamp) target.
+    "step_ultimate_pos_set": false,
     "force_align_turn_before_move": false,
     ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
     "eat_orbit_turn_deg_accumulated": 0.0,
@@ -87,8 +103,15 @@ static func new_state() -> Dictionary:
     ## can't alternate the step goal every tick.
     "los_blocked_latched": false,
     "los_verdict_streak": 0,
+    ## Per-target awareness-hysteresis cache for the live threat scan (design review §7,
+    ## CLEANUP C11) — `{instance_id: {"latched": bool, "streak": int}}`, owned and pruned by
+    ## `AwarenessZoneScan._scan_hostile_threats` via `AwarenessZone.latch_awareness_verdict`.
+    ## Generalizes `los_blocked_latched`'s single-target pattern above to a multi-target scan.
+    "threat_los_hysteresis": {},
     ## GK_SHELTER candidate-nomination / STAY-evaluate bookkeeping (CREATURE_MOVEMENT_V3.md §6.4).
     "shelter_candidate_anchor": Vector3.ZERO,
+    ## See `step_goal_set` — same sentinel-collision hazard for the shelter candidate anchor.
+    "shelter_candidate_anchor_set": false,
     "shelter_candidate_instance_id": 0,
     "shelter_eval_active": false,
     "shelter_eval_cycles": 0,
@@ -120,7 +143,7 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
     return _boundary_scan_action(body, motor_v3, state)
   var delta := float(ctx.get("delta", 1.0 / 60.0))
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return _MotorAction.STAY
   if goal_kind == _GkReg.GK_FIND_FOOD:
     if _can_eat_now(body, step_goal, state, motor_v3, delta, ctx):
@@ -196,7 +219,9 @@ static func _apply_explore_stuck_replan(state: Dictionary) -> void:
     explore = _MotorPlane.HORIZONTAL_FORWARD
   state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
   state["step_goal"] = Vector3.ZERO
+  state["step_goal_set"] = false
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
@@ -307,8 +332,10 @@ static func _assign_resolved_step_goal(
   if flag_material_change:
     _maybe_flag_material_step_goal_change(state, body, old_goal, resolved_goal, motor_v3, delta)
   state["step_goal"] = resolved_goal
+  state["step_goal_set"] = true
   if ultimate.length_squared() > 1e-8:
     state["step_ultimate_pos"] = ultimate
+    state["step_ultimate_pos_set"] = true
 
 
 ## Post-[code]MOVE_F[/code] overshoot recovery for fixed objectives (post-6d-approach-geometry Layer 1).
@@ -326,9 +353,11 @@ static func _maybe_apply_fixed_objective_overshoot(
   if not _is_fixed_objective_overshoot_source(step_source):
     return
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
-  if ultimate.length_squared() < 1e-8:
+  var ultimate_valid := bool(state.get("step_ultimate_pos_set", false))
+  if not ultimate_valid:
     ultimate = state.get("step_goal", Vector3.ZERO)
-  if ultimate.length_squared() < 1e-8:
+    ultimate_valid = bool(state.get("step_goal_set", false))
+  if not ultimate_valid:
     return
   var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
   if body.global_position.distance_to(ultimate) <= arrival_tol:
@@ -338,7 +367,7 @@ static func _maybe_apply_fixed_objective_overshoot(
   if body.global_position.distance_to(ultimate) >= close_band:
     return
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return
   var pos_after := body.global_position
   var to_goal_before := Vector3(
@@ -376,7 +405,9 @@ static func _apply_explore_waypoint_passed(
 static func _seed_explore_after_seek(state: Dictionary, _ctx: Dictionary) -> void:
   state["explore_dir"] = Vector3.ZERO
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
   state["step_goal"] = Vector3.ZERO
+  state["step_goal_set"] = false
   state["step_instance_id"] = 0
   state["step_source"] = &"explore"
   state["consecutive_blocked"] = 0
@@ -501,7 +532,9 @@ static func _apply_explore_rim_escape_replan(
 ) -> void:
   state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
   state["step_goal"] = Vector3.ZERO
+  state["step_goal_set"] = false
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
@@ -607,7 +640,9 @@ static func _end_boundary_scan(
   state["boundary_scan_turns"] = 0
   state["explore_dir"] = _rim_escape_explore_dir(body, motor_v3)
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
   state["step_goal"] = Vector3.ZERO
+  state["step_goal_set"] = false
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
@@ -648,7 +683,7 @@ static func _note_fixed_objective_position_progress(
   last_dist_key: String,
 ) -> void:
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return
   var err_deg := absf(_signed_bearing_error_deg(body, step_goal))
   var dist_sq := body.global_position.distance_squared_to(step_goal)
@@ -850,6 +885,7 @@ static func note_outcome(
       _record_blocked_approach(state, body, outcome, motor_v3, physics_tick)
       if step_source == &"explore":
         state["explore_waypoint"] = Vector3.ZERO
+        state["explore_waypoint_set"] = false
   elif is_latched:
     var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
     if _tick_had_meaningful_progress(body, step_goal, tick_disp, act, motor_v3, stuck_eps):
@@ -946,9 +982,11 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
   if state.get("goal_kind", &"") != goal_kind:
     state["goal_kind"] = goal_kind
     state["step_goal"] = Vector3.ZERO
+    state["step_goal_set"] = false
     state["step_instance_id"] = 0
     state["explore_dir"] = Vector3.ZERO
     state["explore_waypoint"] = Vector3.ZERO
+    state["explore_waypoint_set"] = false
     state["boundary_scan_active"] = false
     state["boundary_scan_sign"] = 0
     state["boundary_scan_turns"] = 0
@@ -957,16 +995,17 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     _reset_precise_progress_state(state)
     _reset_locale_progress_state(state)
     state["locale_arrival_clear_anchor"] = Vector3.ZERO
+    state["locale_arrival_clear_anchor_set"] = false
     state["locale_arrival_clear_cooldown_ticks"] = 0
     _reset_explore_align_progress_state(state)
     _clear_prey_engagement(state)
     _clear_pursuit_detour_latch(state)
     state["step_ultimate_pos"] = Vector3.ZERO
+    state["step_ultimate_pos_set"] = false
     state["force_align_turn_before_move"] = false
     state["eat_orbit_turn_deg_accumulated"] = 0.0
   var refresh_targets := bool(ctx.get("refresh_step_objective", false))
-  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  var has_step_goal := step_goal.length_squared() > 1e-8
+  var has_step_goal := bool(state.get("step_goal_set", false))
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   var scan: Dictionary = ctx.get("scan", {})
@@ -979,8 +1018,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
       _maybe_locale_arrival_bind_or_clear(
         ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
       )
-      step_goal = state.get("step_goal", Vector3.ZERO)
-      has_step_goal = step_goal.length_squared() > 1e-8
+      has_step_goal = bool(state.get("step_goal_set", false))
       var live_food := _AwarenessScan.best_ready_food_target(
         scan.get("food_split", {}), creature_pos
       )
@@ -1012,6 +1050,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         # Non-moving live remint while already bound (not holding a locale approach).
         if _pursuit_detour_latch_valid(state) and _prey_engagement_latch_valid(state):
           state["step_goal"] = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+          state["step_goal_set"] = true
           state["step_source"] = &"live"
           _refresh_live_prey_meta_only(ctx, state, live_food, motor_v3)
         else:
@@ -1025,7 +1064,14 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         _maintain_explore_latch(ctx, state, motor_v3)
     _GkReg.GK_AVOID_HOSTILES:
       if refresh_targets or not has_step_goal:
-        state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3)
+        ## `_flee_objective` returns `Vector3.ZERO` as an ambiguous "no threat" sentinel (see its
+        ## doc comment) — this call site previously stored that return value unconditionally, so a
+        ## no-threat tick could latch `step_goal` onto the world origin as if it were a real flee
+        ## target (the same bug class as CLEANUP C9's 7th fix, left unguarded here). Gate on
+        ## `_flee_has_visible_threat` the same way `_mint_flee_waypoint` already does.
+        var flee_valid := _flee_has_visible_threat(ctx)
+        state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3) if flee_valid else Vector3.ZERO
+        state["step_goal_set"] = flee_valid
         state["step_instance_id"] = 0
         state["step_source"] = &"live"
     _GkReg.GK_SHELTER:
@@ -1097,7 +1143,7 @@ static func _derive_find_food_step_objective(
   )
   if explore_first:
     _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
-    if (state.get("step_goal", Vector3.ZERO) as Vector3).length_squared() < 1e-8:
+    if not bool(state.get("step_goal_set", false)):
       _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
   elif not _sync_food_memory_objective(ctx, state, creature_pos, motor_v3, map_rid, agent_r):
     _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
@@ -1257,16 +1303,21 @@ static func _peek_locale_memory_tier_winner(
 ## `locale_arrival_clear_anchor` in `new_state()`.
 static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = {}) -> void:
   var cleared_anchor: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
-  if cleared_anchor.length_squared() < 1e-8:
+  var cleared_anchor_valid := bool(state.get("step_ultimate_pos_set", false))
+  if not cleared_anchor_valid:
     cleared_anchor = state.get("step_goal", Vector3.ZERO)
+    cleared_anchor_valid = bool(state.get("step_goal_set", false))
   state["step_goal"] = Vector3.ZERO
+  state["step_goal_set"] = false
   state["step_ultimate_pos"] = Vector3.ZERO
+  state["step_ultimate_pos_set"] = false
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = &""
   state["step_source"] = &""
   _reset_locale_progress_state(state)
-  if cleared_anchor.length_squared() > 1e-8:
+  if cleared_anchor_valid:
     state["locale_arrival_clear_anchor"] = cleared_anchor
+    state["locale_arrival_clear_anchor_set"] = true
     state["locale_arrival_clear_cooldown_ticks"] = int(
       motor_v3.get("locale_revisit_cooldown_ticks", 300)
     )
@@ -1292,7 +1343,9 @@ static func _apply_locale_food_objective(
     _assign_resolved_step_goal(state, body, anchor, resolved, motor_v3, tick_delta)
   else:
     state["step_goal"] = resolved
+    state["step_goal_set"] = true
     state["step_ultimate_pos"] = anchor
+    state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = locale.get("stimulus_kind_id", &"")
   state["step_source"] = &"locale"
@@ -1311,9 +1364,11 @@ static func _maybe_locale_arrival_bind_or_clear(
   if state.get("step_source", &"") != &"locale":
     return
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
-  if ultimate.length_squared() < 1e-8:
+  var ultimate_valid := bool(state.get("step_ultimate_pos_set", false))
+  if not ultimate_valid:
     ultimate = state.get("step_goal", Vector3.ZERO)
-  if ultimate.length_squared() < 1e-8:
+    ultimate_valid = bool(state.get("step_goal_set", false))
+  if not ultimate_valid:
     return
   var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
   var d := creature_pos.distance_to(ultimate)
@@ -1361,7 +1416,9 @@ static func _apply_live_food_objective(
     _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, delta, flag_material)
   else:
     state["step_goal"] = resolved
+    state["step_goal_set"] = true
     state["step_ultimate_pos"] = ultimate
+    state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = int(food.get("instance_id", 0))
   state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
   state["step_source"] = &"live"
@@ -1375,6 +1432,7 @@ static func _mint_explore_objective_for_goal(
   goal_kind: StringName,
 ) -> void:
   state["step_goal"] = _ExploreSeek.mint_explore_step(goal_kind, creature_pos, state, motor_v3, ctx)
+  state["step_goal_set"] = true
   state["step_instance_id"] = 0
 
 
@@ -1433,10 +1491,13 @@ static func _try_nominate_shelter_candidate(
     state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
     return false
   state["shelter_candidate_anchor"] = probe_center
+  state["shelter_candidate_anchor_set"] = true
   state["shelter_candidate_instance_id"] = iid
   state["step_instance_id"] = iid
   state["step_goal"] = probe_center
+  state["step_goal_set"] = true
   state["step_ultimate_pos"] = probe_center
+  state["step_ultimate_pos_set"] = true
   state["step_source"] = &"precise"
   state["shelter_eval_active"] = false
   state["shelter_eval_cycles"] = 0
@@ -1463,6 +1524,7 @@ static func _begin_or_continue_shelter_eval(
   anchor: Vector3,
 ) -> void:
   state["step_goal"] = anchor
+  state["step_goal_set"] = true
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
   var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
   var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", 8))
@@ -1500,6 +1562,7 @@ static func _sync_shelter_or_rest_objective(
   _goal_kind: StringName,
 ) -> bool:
   state["step_goal"] = creature_pos
+  state["step_goal_set"] = true
   state["step_instance_id"] = 0
   state["step_source"] = &"live"
   return true
@@ -1561,6 +1624,7 @@ static func _food_inventory_mode_changed(ctx: Dictionary, state: Dictionary, mot
 static func _clear_explore_latch_for_remint(state: Dictionary) -> void:
   state["explore_dir"] = Vector3.ZERO
   state["explore_waypoint"] = Vector3.ZERO
+  state["explore_waypoint_set"] = false
   _reset_explore_align_progress_state(state)
 
 
@@ -1573,16 +1637,16 @@ static func _prey_engagement_latch_valid(state: Dictionary) -> bool:
 
 static func _pursuit_detour_latch_valid(state: Dictionary) -> bool:
   return (
-    int(state.get("pursuit_detour_ticks_remaining", 0)) > 0
-    and state.get("pursuit_detour_waypoint", Vector3.ZERO).length_squared() > 1e-8
+    _LatchHold.is_active(state, "pursuit_detour")
+    and bool(state.get("pursuit_detour_waypoint_set", false))
   )
 
 
 static func _clear_pursuit_detour_latch(state: Dictionary) -> void:
   state["pursuit_detour_waypoint"] = Vector3.ZERO
-  state["pursuit_detour_ticks_remaining"] = 0
+  state["pursuit_detour_waypoint_set"] = false
   state["pursuit_detour_alt_flip"] = false
-  state["pursuit_detour_escalation_count"] = 0
+  _LatchHold.clear(state, "pursuit_detour")
 
 
 ## Live prey refresh without overwriting an active pursuit detour substep (C1 residual).
@@ -1593,6 +1657,7 @@ static func _refresh_live_prey_meta_only(
   motor_v3: Dictionary,
 ) -> void:
   state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = int(food.get("instance_id", 0))
   state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
   _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
@@ -1627,11 +1692,13 @@ static func _try_maintain_pursuit_detour_latch(
     return false
   var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
   state["step_goal"] = latched
+  state["step_goal_set"] = true
   state["step_source"] = &"live"
-  state["pursuit_detour_ticks_remaining"] = int(state.get("pursuit_detour_ticks_remaining", 0)) - 1
+  _LatchHold.decrement(state, "pursuit_detour")
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+    state["step_ultimate_pos_set"] = true
     state["step_instance_id"] = int(food.get("instance_id", 0))
     state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
     _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
@@ -1653,20 +1720,22 @@ static func _maybe_mint_pursuit_detour_latch(
   var scan: Dictionary = ctx.get("scan", {})
   if not _live_ready_food_present(scan, body.global_position):
     return
-  var wp: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if wp.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return
+  var wp: Vector3 = state.get("step_goal", Vector3.ZERO)
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["pursuit_detour_waypoint"] = wp
+  state["pursuit_detour_waypoint_set"] = true
   state["step_goal"] = wp
-  state["pursuit_detour_ticks_remaining"] = latch_ticks
+  state["step_goal_set"] = true
+  _LatchHold.start(state, "pursuit_detour", latch_ticks)
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
-  state["pursuit_detour_escalation_count"] = 0
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), body.global_position)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+    state["step_ultimate_pos_set"] = true
 
 
 ## Mint a fresh pursuit detour on the opposite side after persistent block (C1 residual).
@@ -1685,16 +1754,16 @@ static func _remint_alternate_pursuit_detour(
   # clear the latch so `_derive_find_food_step_objective` falls through to a full fresh
   # `_apply_live_food_objective` recompute next tick, using the prey's actual current position
   # instead of another blind bearing rotation.
-  var escalation := int(state.get("pursuit_detour_escalation_count", 0)) + 1
-  if escalation > 2:
+  var max_escalations := int(motor_v3.get("pursuit_detour_max_escalations", 2))
+  var escalation_result := _LatchHold.escalate(state, "pursuit_detour", max_escalations)
+  if bool(escalation_result.get("gave_up", false)):
     _clear_pursuit_detour_latch(state)
     state["consecutive_blocked"] = 0
     return
-  state["pursuit_detour_escalation_count"] = escalation
   var creature_pos := body.global_position
-  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
-  if ultimate.length_squared() < 1e-8:
+  if not bool(state.get("step_ultimate_pos_set", false)):
     return
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
   var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
   var to_latched := Vector3(latched.x - creature_pos.x, 0.0, latched.z - creature_pos.z)
   var dist := to_latched.length()
@@ -1713,7 +1782,9 @@ static func _remint_alternate_pursuit_detour(
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["pursuit_detour_waypoint"] = wp
+  state["pursuit_detour_waypoint_set"] = true
   state["step_goal"] = wp
+  state["step_goal_set"] = true
   state["pursuit_detour_ticks_remaining"] = latch_ticks
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
@@ -1723,6 +1794,7 @@ static func _remint_alternate_pursuit_detour(
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
     state["step_ultimate_pos"] = food.get("pos", Vector3.ZERO)
+    state["step_ultimate_pos_set"] = true
 
 
 static func _clear_prey_engagement(state: Dictionary) -> void:
@@ -1833,7 +1905,9 @@ static func _sync_moving_prey_memory_objective(
     _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, tick_delta, flag_material)
   else:
     state["step_goal"] = resolved
+    state["step_goal_set"] = true
     state["step_ultimate_pos"] = ultimate
+    state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = new_iid
   state["step_stimulus_kind_id"] = moving.get("stimulus_kind_id", &"")
   state["step_source"] = &"memory_moving"
@@ -1850,13 +1924,15 @@ static func _maintain_explore_latch(
   if body == null:
     return
   var creature_pos := body.global_position
-  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
-  if latched.length_squared() < 1e-8:
+  if not bool(state.get("explore_waypoint_set", false)):
     return
+  var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
   var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
   if creature_pos.distance_to(latched) <= arrival_tol:
     state["explore_waypoint"] = Vector3.ZERO
+    state["explore_waypoint_set"] = false
     state["step_goal"] = Vector3.ZERO
+    state["step_goal_set"] = false
     return
   if _passed_explore_waypoint(body, latched, state):
     _apply_explore_waypoint_passed(state, body, motor_v3)
@@ -1876,9 +1952,12 @@ static func _maintain_explore_latch(
           explore = _MotorPlane.HORIZONTAL_FORWARD
         state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
       state["explore_waypoint"] = Vector3.ZERO
+      state["explore_waypoint_set"] = false
       state["step_goal"] = Vector3.ZERO
+      state["step_goal_set"] = false
       return
   state["step_goal"] = latched
+  state["step_goal_set"] = true
 
 
 static func _sync_food_memory_objective(
@@ -1909,7 +1988,9 @@ static func _sync_food_memory_objective(
       _assign_resolved_step_goal(state, body, precise_pos, precise_pos, motor_v3, tick_delta)
     else:
       state["step_goal"] = precise_pos
+      state["step_goal_set"] = true
       state["step_ultimate_pos"] = precise_pos
+      state["step_ultimate_pos_set"] = true
     state["step_instance_id"] = new_iid
     state["step_stimulus_kind_id"] = precise.get("stimulus_kind_id", &"")
     state["step_source"] = &"precise"
@@ -1922,6 +2003,7 @@ static func _sync_food_memory_objective(
     var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
     var bearing: Vector3 = coarse.get("bearing", Vector3.ZERO)
     state["step_goal"] = creature_pos + bearing.normalized() * reach
+    state["step_goal_set"] = true
     state["step_instance_id"] = int(coarse.get("instance_id", 0))
     state["step_source"] = &"coarse"
     return true
@@ -1946,7 +2028,8 @@ static func _locale_anchor_on_arrival_cooldown(state: Dictionary, anchor: Vector
 ## Clears acute Flight flee latch (stack calls on [code]ff=0[/code] episode exit).
 static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_waypoint"] = Vector3.ZERO
-  state["flee_waypoint_ticks_remaining"] = 0
+  state["flee_waypoint_set"] = false
+  _LatchHold.clear(state, "flee_waypoint")
   state["flee_backtrack_streak"] = 0
   state["flee_recent_dirs"] = []
   state["flee_give_up_active"] = false
@@ -2030,8 +2113,8 @@ static func _mint_flee_waypoint(
     # it). A real animal that loses sight of a predator for a moment keeps running the way it was
     # already going, it doesn't reroute toward a fixed point — hold the existing latched waypoint.
     var prior: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
-    if prior.length_squared() > 1e-8:
-      state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+    if bool(state.get("flee_waypoint_set", false)):
+      _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
       return prior
     # No prior waypoint to hold (Flight entry with no live threat this exact tick — shouldn't
     # normally happen since entry requires an acute threat, but stay defensive): fall back to
@@ -2049,7 +2132,8 @@ static func _mint_flee_waypoint(
     )
     var fallback_wp: Vector3 = fallback_probe.get("endpoint", creature_pos)
     state["flee_waypoint"] = fallback_wp
-    state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+    state["flee_waypoint_set"] = true
+    _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
     state["flee_backtrack_streak"] = 0
     return fallback_wp
 
@@ -2218,10 +2302,13 @@ static func _mint_flee_waypoint(
       # (see the travel-distance note below): re-measuring here would legitimately come back ~0 too,
       # and projecting the waypoint that close collapses the bearing math to noise.
       reach_known = false
-      var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
-      var prior_dir := prior_wp - creature_pos
-      prior_dir.y = 0.0
-      final_dir = prior_dir.normalized() if prior_dir.length_squared() > 1e-8 else base_dir
+      final_dir = base_dir
+      if bool(state.get("flee_waypoint_set", false)):
+        var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+        var prior_dir := prior_wp - creature_pos
+        prior_dir.y = 0.0
+        if prior_dir.length_squared() > 1e-8:
+          final_dir = prior_dir.normalized()
 
     # CLEANUP C16 (2026-08-12): every branch above already scores candidate bearings by how far the
     # navmesh actually lets the creature travel (`_flee_candidate_probe`) — including preferring a
@@ -2256,10 +2343,11 @@ static func _mint_flee_waypoint(
   state["flee_recent_dirs"] = history
 
   state["flee_waypoint"] = wp
+  state["flee_waypoint_set"] = true
   var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
   if bool(state.get("flee_give_up_active", false)):
     latch_ticks = maxi(1, int(motor_v3.get("flee_give_up_latch_ticks", 5)))
-  state["flee_waypoint_ticks_remaining"] = latch_ticks
+  _LatchHold.start(state, "flee_waypoint", latch_ticks)
   state["flee_backtrack_streak"] = 0
   return wp
 
@@ -2276,14 +2364,16 @@ static func _maintain_flee_latch(
   if bool(ctx.get("flight_just_entered", false)):
     _reset_flight_entry_telemetry(state)
     state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    state["step_goal_set"] = true
     return
-  var remaining := int(state.get("flee_waypoint_ticks_remaining", 0))
   var latched: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
-  if remaining <= 0 or latched.length_squared() < 1e-8:
+  if not _LatchHold.is_active(state, "flee_waypoint") or not bool(state.get("flee_waypoint_set", false)):
     state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    state["step_goal_set"] = true
     return
   state["step_goal"] = latched
-  state["flee_waypoint_ticks_remaining"] = remaining - 1
+  state["step_goal_set"] = true
+  _LatchHold.decrement(state, "flee_waypoint")
 
 
 static func _select_flight_action(ctx: Dictionary, state: Dictionary) -> int:
@@ -2292,8 +2382,7 @@ static func _select_flight_action(ctx: Dictionary, state: Dictionary) -> int:
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   _maintain_flee_latch(ctx, state, motor_v3)
   state["step_source"] = &"live"
-  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return _MotorAction.STAY
   return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
@@ -2354,9 +2443,8 @@ static func _initial_explore_dir(ctx: Dictionary) -> Vector3:
 
 ## World point used for EAT distance/facing — prefers [code]step_ultimate_pos[/code], else [param step_goal].
 static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Vector3:
-  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
-  if ultimate.length_squared() > 1e-8:
-    return ultimate
+  if bool(state.get("step_ultimate_pos_set", false)):
+    return state.get("step_ultimate_pos", Vector3.ZERO)
   return step_goal
 
 
@@ -2492,7 +2580,7 @@ static func apply_immediate_blocked_path_reevaluation(
       _remint_alternate_pursuit_detour(ctx, state, body, motor_v3)
     return
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return
   var old_goal := step_goal
   var creature_pos := body.global_position
@@ -2512,6 +2600,7 @@ static func apply_immediate_blocked_path_reevaluation(
     move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(60.0))
     var deflected := creature_pos + move_dir * to_goal.length()
     state["step_goal"] = deflected
+    state["step_goal_set"] = true
     # CLEANUP C9 follow-up (2026-08-05, boundary-ping-pong root cause): when the goal being
     # deflected *is* the latched `flee_waypoint`, this per-tick rotation never sticks —
     # `_maintain_flee_latch` restores the original (still-blocked) waypoint next tick, so a
@@ -2532,12 +2621,13 @@ static func apply_immediate_blocked_path_reevaluation(
     # and each escalation re-reads the then-current `flee_waypoint` as its rotation base, so
     # repeated escalations walk incrementally around rather than compounding into unbounded drift.
     var flee_latched: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
-    if flee_latched.length_squared() > 1e-8 and old_goal.is_equal_approx(flee_latched):
+    if bool(state.get("flee_waypoint_set", false)) and old_goal.is_equal_approx(flee_latched):
       var streak := int(state.get("flee_backtrack_streak", 0)) + 1
       state["flee_backtrack_streak"] = streak
       if streak >= int(motor_v3.get("dead_end_record_min_blocked_ticks", 3)):
         state["flee_waypoint"] = deflected
-        state["flee_waypoint_ticks_remaining"] = maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
+        state["flee_waypoint_set"] = true
+        _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
         state["flee_backtrack_streak"] = 0
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
   var new_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
@@ -2561,7 +2651,7 @@ static func _run_path_clearance_los_nav(
   ctx: Dictionary,
 ) -> void:
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return
   if not _is_facing_aligned_for_move(body, step_goal, motor_v3):
     return
@@ -2577,6 +2667,7 @@ static func _run_path_clearance_los_nav(
       map_rid, creature_pos, step_goal, agent_r,
     )
     state["step_goal"] = resolved
+    state["step_goal_set"] = true
 
 
 ## Debounces the raw per-tick LoS verdict so a flip only lands after
@@ -2617,7 +2708,7 @@ static func completed_step_objective(
       var result: StringName = state.get("shelter_eval_result", &"")
       return result == &"confirmed" or result == &"failed"
     var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-    if step_goal.length_squared() > 1e-8 and _at_arrival(body, step_goal, motor_v3):
+    if bool(state.get("step_goal_set", false)) and _at_arrival(body, step_goal, motor_v3):
       return true
   return false
 
@@ -2625,7 +2716,7 @@ static func completed_step_objective(
 ## §7.3.0 facing-relative one-action pick toward current [code]step_goal[/code].
 static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: Dictionary) -> int:
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if step_goal.length_squared() < 1e-8:
+  if not bool(state.get("step_goal_set", false)):
     return _MotorAction.STAY
   ## Sole source of MOVE_FORWARD (CLEANUP R1) — computed here so it's fresh on any tick the
   ## executor sees that action, and available to any future consumer that needs "how far to the
@@ -2775,7 +2866,9 @@ static func apply_blocked_objective_resolution(
     _BlockedObjective.ACTION_SWITCH:
       state["explore_dir"] = Vector3.ZERO
       state["explore_waypoint"] = Vector3.ZERO
+      state["explore_waypoint_set"] = false
       state["step_goal"] = Vector3.ZERO
+      state["step_goal_set"] = false
     _BlockedObjective.ACTION_SEEK:
       _seed_explore_after_seek(state, ctx)
     _:

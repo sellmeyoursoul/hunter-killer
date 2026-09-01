@@ -317,6 +317,13 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_ticks_max": 120,
     "flee_waypoint_latch_ticks": 16,
     "pursuit_detour_latch_ticks": 32,
+    ## Max escalation tries (`LatchHold.escalate`, [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §4]
+    ## (../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)) before
+    ## `_remint_alternate_pursuit_detour` gives up and clears the latch — the only safety valve
+    ## against retrying forever on a visible-but-physically-unreachable live pursuit target.
+    ## Promoted from a hardcoded `> 2` literal so a future consumer of the shared latch can pick
+    ## its own cap without touching `motor_planner.gd`.
+    "pursuit_detour_max_escalations": 2,
     ## CLEANUP C9 give-up escalation (2026-08-07): once even the best of `_mint_flee_waypoint`'s
     ## 6 geometry-scored candidate bearings reaches less than this fraction of the requested flee
     ## distance, the creature is treated as genuinely cornered (not just locally obstructed).
@@ -362,6 +369,11 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## Consecutive same-direction raw LoS verdicts required before `_run_path_clearance_los_nav`
     ## flips its latched clear/blocked state (thrash-guard for tight obstacle pockets).
     "los_hysteresis_ticks": 3,
+    ## Consecutive same-direction raw awareness verdicts required before a scanned threat's
+    ## in/out-of-awareness state flips (per-target latch in `AwarenessZone.latch_awareness_verdict`,
+    ## CLEANUP C11 flip-flop fix — separate tunable from `los_hysteresis_ticks` since threat
+    ## awareness and path-clearance LoS have no evidence they need the same debounce timing).
+    "threat_awareness_hysteresis_ticks": 3,
     ## EAT contact range in world meters to ultimate (not nav [code]step_goal[/code]).
     "eat_action_max_distance": 5.0,
     ## Full front arc for EAT facing (half-angle = arc/2; default 90° → ±45°).

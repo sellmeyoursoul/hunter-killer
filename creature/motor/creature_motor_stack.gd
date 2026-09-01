@@ -608,7 +608,8 @@ func _run_live_scan() -> void:
   if tree == null:
     return
   var area_only := _rest_area_only_perception()
-  var scan := _AwarenessScan.scan_live(_body, _motor_v3, tree, area_only)
+  var threat_los_cache: Dictionary = _planner_state.get("threat_los_hysteresis", {})
+  var scan := _AwarenessScan.scan_live(_body, _motor_v3, tree, area_only, threat_los_cache)
   _apply_scan_dict(scan)
 
 
@@ -1011,9 +1012,11 @@ func _try_complete_shelter_evaluation() -> void:
   _planner_state["shelter_eval_total_ticks"] = 0
   _planner_state["shelter_eval_result"] = &""
   _planner_state["shelter_candidate_anchor"] = Vector3.ZERO
+  _planner_state["shelter_candidate_anchor_set"] = false
   _planner_state["shelter_candidate_instance_id"] = 0
   _planner_state["step_instance_id"] = 0
   _planner_state["step_goal"] = Vector3.ZERO
+  _planner_state["step_goal_set"] = false
   _planner_state["step_source"] = &"live"
   _planner_state["shelter_probe_cooldown_cycles"] = int(_motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
 
