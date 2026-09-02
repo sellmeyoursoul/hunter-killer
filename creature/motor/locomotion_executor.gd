@@ -48,8 +48,8 @@ static func apply_action(
     _MotorAction.Action.TURN_RIGHT:
       _rotate_facing(body, motor_v3, -1.0)
     _MotorAction.Action.MOVE_FORWARD:
-      _blend_turn_toward(body, motor_v3, move_turn_target)
-      blocked = _displace_along_facing(body, 1.0, delta, pos_before, dist_to_goal, motor_v3)
+      var align_frac := _blend_turn_toward(body, motor_v3, delta, move_turn_target)
+      blocked = _displace_along_facing(body, 1.0, delta, pos_before, dist_to_goal, motor_v3, align_frac)
     _MotorAction.Action.MOVE_BACKWARD:
       blocked = _displace_along_facing(body, -1.0, delta, pos_before, null, motor_v3)
     _MotorAction.Action.STAY, _MotorAction.Action.REST, _MotorAction.Action.EAT:
@@ -86,33 +86,51 @@ static func _turn_increment_rad(motor_v3: Dictionary) -> float:
   return deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
 
 
-## Rotates [member CharacterBody3D.last_move_direction] toward [param target] by up to one turn
-## increment (CLEANUP R1 mitigation #2 — blend turn+move in one tick). No-op when [param target]
-## is unset (plain move, e.g. non-goal-directed callers) or the body is already on top of it
-## (direction undefined at zero distance). Signed angle derived the same way as
-## `motor_planner.gd`'s `_pick_align_turn_sign`/bearing-error math, but solved for the exact
-## rotation [method Vector3.rotated] needs rather than just a left/right pick, so the turn can be
-## clamped to whatever fraction of a full increment closes the remaining error.
-static func _blend_turn_toward(body: CharacterBody3D, motor_v3: Dictionary, target: Variant) -> void:
+## Max angular rate (rad/sec) for the continuous blended turn+move law (§1 R1 —
+## CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1), distinct from [method _turn_increment_rad]'s fixed
+## per-tick step, which stays reserved for pure-orientation actions ([code]TURN_LEFT[/code]/
+## [code]TURN_RIGHT[/code] — boundary scan, EAT-orbit) that this law doesn't touch.
+static func _move_turn_rate_rad(motor_v3: Dictionary) -> float:
+  return deg_to_rad(float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0)))
+
+
+## Rotates [member CharacterBody3D.last_move_direction] toward [param target] at up to
+## [method _move_turn_rate_rad] (CLEANUP R1 mitigation #2 — blend turn+move in one tick; §1
+## continuous controller — proportional rate instead of a fixed per-tick step). No-op when
+## [param target] is unset (plain move, e.g. non-goal-directed callers) or the body is already on
+## top of it (direction undefined at zero distance) — both return [code]1.0[/code] so callers that
+## don't pass a target keep moving at full speed, unaffected by heading alignment. Signed angle
+## derived the same way as `motor_planner.gd`'s `_pick_align_turn_sign`/bearing-error math, but
+## solved for the exact rotation [method Vector3.rotated] needs rather than just a left/right pick,
+## so the turn is clamped to whatever fraction of this tick's rate cap closes the remaining error.
+## Returns the post-turn heading-alignment fraction ([code]max(0, cos(heading_error))[/code]) for
+## the caller to scale forward speed by — floors at zero rather than going negative, so a target
+## behind the creature yields zero forward speed (turn-in-place), never backward creep (§1's
+## explicit forward/backward-must-not-be-interchangeable constraint).
+static func _blend_turn_toward(
+  body: CharacterBody3D, motor_v3: Dictionary, delta: float, target: Variant
+) -> float:
   if typeof(target) != TYPE_VECTOR3:
-    return
+    return 1.0
   var creature_pos := body.global_position
   var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
   if to_target.length_squared() < 1e-8:
-    return
+    return 1.0
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
   var to_n := to_target.normalized()
   var cross := facing.x * to_n.z - facing.z * to_n.x
   var dot := clampf(facing.dot(to_n), -1.0, 1.0)
-  var max_turn := _turn_increment_rad(motor_v3)
+  var max_turn := _move_turn_rate_rad(motor_v3) * maxf(0.0, delta)
   var turn := clampf(atan2(-cross, dot), -max_turn, max_turn)
-  if absf(turn) < 1e-6:
-    return
-  body.set("last_move_direction", facing.rotated(Vector3.UP, turn).normalized())
-  if body.has_method(&"_sync_visual_facing"):
-    body.call(&"_sync_visual_facing")
+  var new_facing := facing
+  if absf(turn) >= 1e-6:
+    new_facing = facing.rotated(Vector3.UP, turn).normalized()
+    body.set("last_move_direction", new_facing)
+    if body.has_method(&"_sync_visual_facing"):
+      body.call(&"_sync_visual_facing")
+  return maxf(0.0, new_facing.dot(to_n))
 
 
 static func _rotate_facing(body: CharacterBody3D, motor_v3: Dictionary, direction_sign: float) -> void:
@@ -139,12 +157,13 @@ static func _displace_along_facing(
   pos_before: Vector3,
   dist_to_goal: Variant = null,
   motor_v3: Dictionary = {},
+  align_frac: float = 1.0,
 ) -> bool:
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
   var dir := (facing * direction_sign).normalized()
-  var damp_frac := _arrival_damping_frac(dist_to_goal, motor_v3)
+  var damp_frac := _arrival_damping_frac(dist_to_goal, motor_v3) * align_frac
   # Sub-unit magnitude reads as partial thrust to `apply_horizontal_move_intent` (only normalizes
   # when length exceeds 1) — reuses that existing seam instead of adding a speed-scale parameter.
   var intent := dir * damp_frac

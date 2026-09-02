@@ -351,6 +351,15 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
 static func default_creature_motor_v3_params() -> Dictionary:
   var core := {
     "turn_increment_deg": 22.5,
+    ## §1 R1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1) — max angular rate for
+    ## the executor's blended turn+move law (substep 1: scaffolding only, not yet wired to any
+    ## consumer). Distinct from `turn_increment_deg`, which stays a fixed per-tick step for the
+    ## pure-orientation behaviors (boundary_scan, eat-orbit) that remain outside this slice's scope.
+    ## Default derived to match `turn_increment_deg`'s existing worst-case per-tick cap at the
+    ## default 60Hz physics rate (22.5 / (1/60) = 1350), so the continuous law's max turn speed
+    ## isn't a step change from today's — the win instead comes from proportional (not fixed-step)
+    ## turning at smaller errors, and forward speed no longer freezing to zero above a hard gate.
+    "move_turn_rate_deg_per_sec": 1350.0,
     "calorie_baseline_drain_per_sec": 1.0,
     "move_calorie_per_sec": 1.0,
     "rest_baseline_multiplier": 0.5,

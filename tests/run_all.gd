@@ -187,6 +187,8 @@ func _run_all() -> void:
   await _test_locomotion_executor_move_forward()
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
+  _test_locomotion_executor_continuous_turn_rate_cap()
+  _test_locomotion_executor_continuous_forward_speed_scales_with_alignment()
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
   _test_motor_goal_hub_urgency_eat_preserve_band()
@@ -254,6 +256,7 @@ func _run_all() -> void:
   await _test_creature_motor_stack_explore_no_live_food()
   await _test_creature_motor_stack_seek_precise_memory()
   await _test_creature_motor_stack_seek_coarse_memory()
+  await _test_motor_planner_coarse_clears_stale_ultimate_pos()
   await _test_creature_motor_stack_seek_locale_prior()
   _test_creature_motor_stack_memory_live_beats_precise()
   _test_creature_motor_stack_memory_tier_precedence()
@@ -758,6 +761,10 @@ func _test_creature_motor_v3_merge_defaults() -> void:
   _assert(base.has("creature_motor_v3"), "default_root includes creature_motor_v3")
   var v3: Dictionary = base["creature_motor_v3"]
   _assert(is_equal_approx(float(v3.get("turn_increment_deg", 0.0)), 22.5), "v3 turn_increment_deg default")
+  _assert(
+    is_equal_approx(float(v3.get("move_turn_rate_deg_per_sec", 0.0)), 1350.0),
+    "v3 move_turn_rate_deg_per_sec default",
+  )
   _assert(
     is_equal_approx(float(v3.get("calorie_baseline_drain_per_sec", 0.0)), 1.0),
     "v3 calorie_baseline_drain_per_sec default",
@@ -2258,6 +2265,57 @@ func _test_creature_motor_stack_seek_coarse_memory() -> void:
   main.queue_free()
 
 
+## Regression for a live bug found 2026-09-02: a rabbit froze motionless for 321 consecutive
+## ticks (~5.3s) in a playfield corner, `act=EAT` selected every tick with identical facing/
+## position/target, calories draining with no bite ever completing. Root cause: the coarse tier
+## of `_sync_food_memory_objective` set `step_goal` but never cleared `step_ultimate_pos`/
+## `step_ultimate_pos_set` (unlike the precise/locale branches, which route through
+## `_assign_resolved_step_goal` and set it explicitly) — a stale ultimate position from a prior
+## objective made `_can_eat_now` (via `_resolve_eat_target_pos`, which prefers `step_ultimate_pos`
+## when set) evaluate EAT's facing/range gates against garbage instead of the current coarse
+## bearing probe, passing incorrectly and freezing the creature in a self-sustaining loop.
+func _test_motor_planner_coarse_clears_stale_ultimate_pos() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  var now_ms := Time.get_ticks_msec()
+  stack.seed_coarse_food_belief_for_test(88900, Vector3(0.0, 1.0, -80.0), now_ms)
+  var motor_v3 := _motor_v3_test_params()
+  var state := _MotorPlanner.new_state()
+  ## Poison with a stale ultimate position, simulating leftover from a prior precise/live
+  ## objective at the creature's own position (the exact degenerate case that let `_can_eat_now`'s
+  ## near-zero-distance facing check trivially pass). `state["goal_kind"]` must already match the
+  ## incoming goal (as it would for a creature that's been on find_food for a while) — otherwise
+  ## `_sync_step_objective`'s goal-switch reset (motor_planner.gd:966) clears this poisoned field
+  ## itself before the coarse branch is even reached, masking the bug this test guards against.
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_ultimate_pos"] = body.global_position
+  state["step_ultimate_pos_set"] = true
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": now_ms,
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  _assert(state.get("step_source", &"") == &"coarse", "planner uses coarse memory tier")
+  _assert(
+    not bool(state.get("step_ultimate_pos_set", true)),
+    "coarse tier clears stale step_ultimate_pos_set rather than leaving it set",
+  )
+  main.queue_free()
+
+
 func _test_creature_motor_stack_seek_locale_prior() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -3058,6 +3116,12 @@ func _test_locomotion_executor_turn_facing() -> void:
   main.queue_free()
 
 
+## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): replaces the old discrete
+## TURN-vs-MOVE_FORWARD cone gate this test used to assert. `align_and_move` now always selects
+## MOVE_FORWARD once step_goal_set; the "misaligned goal doesn't lurch forward" contract is instead
+## enforced by the executor's cos(heading_error) forward-speed law flooring at zero. A target
+## directly behind (180 deg) still has >90 deg heading error after one turn-rate-capped step, so
+## this exercises the zero-floor invariant directly.
 func _test_motor_align_cone_contract() -> void:
   var motor_v3 := _motor_v3_test_params()
   var main := Node3D.new()
@@ -3066,20 +3130,35 @@ func _test_motor_align_cone_contract() -> void:
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var state := _MotorPlanner.new_state()
-  state["step_goal"] = Vector3(0.0, 1.0, 20.0)
+  state["step_goal"] = Vector3(-20.0, 1.0, 0.0)
   state["step_goal_set"] = true
   var act := _MotorPlanner.align_and_move(body, motor_v3, state)
-  _assert(act != _MotorAction.MOVE_FORWARD, "cone contract: misaligned goal must not select MOVE_F")
   _assert(
-    act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT,
-    "cone contract: misaligned goal selects TURN",
+    act == _MotorAction.MOVE_FORWARD,
+    "continuous controller always selects MOVE_FORWARD once step_goal_set",
+  )
+  var facing_before: Vector3 = body.last_move_direction
+  var pos_before := body.global_position
+  _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, state.get("step_goal"))
+  var disp := body.global_position - pos_before
+  disp.y = 0.0
+  _assert(
+    disp.length() < 0.01,
+    "180 deg misaligned goal floors forward speed at zero (turn-in-place, not a forward lurch)",
+  )
+  _assert(
+    not body.last_move_direction.is_equal_approx(facing_before),
+    "turn-in-place tick still rotates facing toward the goal",
   )
   main.queue_free()
 
 
 func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   var motor_v3 := _motor_v3_test_params()
-  motor_v3["approach_overshoot_guard_move_steps"] = 4
+  ## Large enough that ultimate's small offset from step_goal below still falls inside the
+  ## close-band gate (`close_band = approach_overshoot_guard_move_steps * expected_forward_step`)
+  ## regardless of the fixture's exact speed default.
+  motor_v3["approach_overshoot_guard_move_steps"] = 100
   ## Below close-band dist so overshoot fires; default arrival_tol (5) would skip this fixture.
   motor_v3["arrival_tolerance"] = 0.05
   var main := Node3D.new()
@@ -3091,7 +3170,12 @@ func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   state["step_source"] = &"locale"
   state["step_goal"] = Vector3(0.0, 1.0, 10.0)
   state["step_goal_set"] = true
-  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  ## §1 continuous controller removed the `force_align_turn_before_move` flag this test used to
+  ## assert (the old model's "turn first" signal is now automatic via the executor's
+  ## cos(heading_error) forward-speed flooring, not a separate discrete state field) — ultimate
+  ## differs from step_goal (small offset, still within the close-band gate above) here so the
+  ## remint is observable via step_goal actually re-targeting.
+  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.5)
   state["step_ultimate_pos_set"] = true
   var pos_before := Vector3(0.0, 1.0, 9.95)
   var ctx := {"map_rid": RID(), "delta": 1.0 / 60.0}
@@ -3100,8 +3184,8 @@ func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
   )
   _motor_planner_note_outcome(state, body, outcome, motor_v3, 1, pos_before, false, 1.0 / 60.0, ctx)
   _assert(
-    bool(state.get("force_align_turn_before_move", false)),
-    "overshoot remint arms turn-first flag",
+    state.get("step_goal", Vector3.ZERO).is_equal_approx(Vector3(0.0, 1.0, 10.5)),
+    "overshoot remint re-targets step_goal at the ultimate objective",
   )
   main.queue_free()
 
@@ -3109,7 +3193,9 @@ func _test_motor_planner_fixed_objective_overshoot_remints() -> void:
 ## CLEANUP 2026-07-14 — overshoot remint retains locale_no_progress_ticks for Layer 2 §9.
 func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
   var motor_v3 := _motor_v3_test_params()
-  motor_v3["approach_overshoot_guard_move_steps"] = 4
+  ## Large enough that ultimate's small offset from step_goal below still falls inside the
+  ## close-band gate regardless of the fixture's exact speed default (see sibling test above).
+  motor_v3["approach_overshoot_guard_move_steps"] = 100
   motor_v3["arrival_tolerance"] = 0.05
   motor_v3["dead_end_record_min_blocked_ticks"] = 3
   var main := Node3D.new()
@@ -3121,7 +3207,10 @@ func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
   state["step_source"] = &"locale"
   state["step_goal"] = Vector3(0.0, 1.0, 10.0)
   state["step_goal_set"] = true
-  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.0)
+  ## §1 continuous controller removed `force_align_turn_before_move` (see sibling test above) —
+  ## ultimate differs from step_goal (small offset, still within the close-band gate) so the
+  ## remint is observable via step_goal re-targeting.
+  state["step_ultimate_pos"] = Vector3(0.0, 1.0, 10.5)
   state["step_ultimate_pos_set"] = true
   state["locale_no_progress_ticks"] = 2
   var pos_before := Vector3(0.0, 1.0, 9.95)
@@ -3133,15 +3222,14 @@ func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
     state, body, outcome, motor_v3, 1, pos_before, false, 1.0 / 60.0, ctx
   )
   _assert(
-    bool(state.get("force_align_turn_before_move", false)),
-    "overshoot retain: remint still arms turn-first",
+    state.get("step_goal", Vector3.ZERO).is_equal_approx(Vector3(0.0, 1.0, 10.5)),
+    "overshoot remint re-targets step_goal at the ultimate objective",
   )
   _assert(
     int(state.get("locale_no_progress_ticks", -1)) >= 2,
     "overshoot remint retains locale_no_progress_ticks (not zeroed)",
   )
   ## Counters already at threshold: retain must still allow Layer 2 §9 on this tick.
-  state["force_align_turn_before_move"] = false
   state["locale_no_progress_ticks"] = 3
   state["locale_last_bearing_err_deg"] = INF
   state["locale_last_dist_sq"] = INF
@@ -3790,10 +3878,6 @@ func _test_motor_planner_pursuit_detour_alternate_on_persistent_block() -> void:
     "alternate remint refreshes latch TTL",
   )
   _assert(
-    bool(state.get("force_align_turn_before_move", false)),
-    "alternate remint arms turn-first after detour jump",
-  )
-  _assert(
     state.get("step_ultimate_pos", Vector3.ZERO).distance_to(prey_pos) < 0.05,
     "alternate remint retains live prey ultimate",
   )
@@ -4058,36 +4142,31 @@ func _test_motor_planner_turn_alignment_no_flip_flop() -> void:
   }
   _MotorPlanner.select_action(ctx, state)
   _assert(state.get("step_source", &"") == &"precise", "planner uses precise step source for fixed goal")
-  var actions: Array[int] = []
-  var saw_move := false
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): `select_action` now
+  ## always emits MOVE_FORWARD once step_goal_set — the old "spin via discrete TURN ticks, then
+  ## MOVE_FORWARD, with no L/R flip-flop" sequence this test drove no longer exists. The equivalent
+  ## contract under the continuous law: heading alignment toward the fixed goal improves (or holds)
+  ## every tick, never regresses — flip-flop is structurally impossible since `_blend_turn_toward`
+  ## clamps to the exact signed correction angle needed, not a fixed step that could overshoot.
+  var start_pos := body.global_position
+  var prev_dot := -INF
   for _i in 8:
     var act := _MotorPlanner.select_action(ctx, state)
-    actions.append(act)
-    if act == _MotorAction.MOVE_FORWARD:
-      saw_move = true
-      break
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-  _assert(saw_move, "planner emits MOVE_FORWARD within 8 ticks for 180 deg misalignment")
-  var turn_actions: Array[int] = []
-  for act in actions:
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      turn_actions.append(act)
-  _assert(turn_actions.size() >= 1, "planner turns before moving toward fixed precise goal")
-  var first_turn: int = turn_actions[0]
-  for act in turn_actions:
-    _assert(
-      act == first_turn,
-      "all pre-move turns share one direction (no TURN_L/TURN_R flip-flop)",
-    )
-  for i in range(actions.size() - 1):
-    var a: int = actions[i]
-    var b: int = actions[i + 1]
-    var is_flip := (
-      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
-      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
-    )
-    _assert(not is_flip, "no adjacent opposite turn pair while step goal is fixed")
+    _assert(act == _MotorAction.MOVE_FORWARD, "continuous controller always selects MOVE_FORWARD once step_goal_set")
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
+    var facing: Vector3 = body.last_move_direction.normalized()
+    var to_goal := Vector3(step_goal.x - body.global_position.x, 0.0, step_goal.z - body.global_position.z)
+    var dot: float = facing.dot(to_goal.normalized())
+    _assert(dot >= prev_dot - 0.001, "heading alignment to fixed goal never regresses tick to tick (no flip-flop)")
+    prev_dot = dot
+  _assert(prev_dot > 0.99, "planner converges to face the fixed precise goal within 8 ticks")
+  var disp := body.global_position - start_pos
+  disp.y = 0.0
+  _assert(
+    disp.dot((remembered - start_pos).normalized()) > 0.0,
+    "net displacement progresses toward the remembered belief",
+  )
   main.queue_free()
 
 func _test_motor_planner_precise_backtrack_ignored() -> void:
@@ -4258,64 +4337,36 @@ func _test_motor_planner_explore_rear_hemisphere_no_flip_flop() -> void:
   _assert(latched.length_squared() > 1e-4, "explore rear test latches waypoint")
   body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
   body.global_position = Vector3(10.0, 1.0, 0.0)
-  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate from `turn_increment_deg` to
-  ## `move_blend_max_error_deg` — the executor now blends a bounded turn into the move instead of
-  ## requiring full alignment first.
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
-  var actions: Array[int] = []
-  var saw_move := false
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): `select_action` now
+  ## always emits MOVE_FORWARD once step_goal_set — the old "turn via discrete ticks, then
+  ## converge to MOVE_FORWARD within the blend arc, no L/R flip-flop" sequence no longer exists.
+  ## Equivalent contract: facing-to-latched-waypoint alignment improves (or holds) every tick, and
+  ## no interior explore replan fires while it's still improving.
   var prev_dot := -2.0
+  var converged := false
   for tick_i in 16:
     ctx["physics_tick"] = tick_i
     var act := _MotorPlanner.select_action(ctx, state)
-    actions.append(act)
+    _assert(act == _MotorAction.MOVE_FORWARD, "continuous controller always selects MOVE_FORWARD once step_goal_set")
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    var pos_before := body.global_position
+    var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
+    _motor_planner_note_outcome(state, body, outcome, motor_v3, tick_i, pos_before, false)
+    _assert(
+      state.get("blocked_objective_action", &"") != &"explore_replan",
+      "rear explore: no interior replan while bearing improves",
+    )
     var facing: Vector3 = body.last_move_direction.normalized()
     var to_n := (latched - body.global_position).normalized()
     to_n.y = 0.0
-    var dot := facing.dot(to_n)
+    var dot: float = facing.dot(to_n)
     if prev_dot > -1.5:
       _assert(dot >= prev_dot - 0.05, "rear explore: facing dot to latched waypoint non-decreasing")
     prev_dot = dot
-    if act == _MotorAction.MOVE_FORWARD:
-      saw_move = true
-      _assert(dot >= move_min_dot - 0.01, "rear explore MOVE when within move blend arc")
+    if dot > 0.99:
+      converged = true
       break
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      var pos_before := body.global_position
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      _motor_planner_note_outcome(
-        state,
-        body,
-        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
-        motor_v3,
-        tick_i,
-        pos_before,
-        false,
-      )
-      _assert(
-        state.get("blocked_objective_action", &"") != &"explore_replan",
-        "rear explore: no interior replan while bearing improves",
-      )
-  _assert(saw_move, "explore rear hemisphere converges to MOVE within 16 ticks")
-  var turn_actions: Array[int] = []
-  for act in actions:
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      turn_actions.append(act)
-  _assert(turn_actions.size() >= 1, "explore rear hemisphere turns before MOVE")
-  var first_turn: int = turn_actions[0]
-  for act in turn_actions:
-    _assert(
-      act == first_turn,
-      "explore rear hemisphere: all pre-move turns share one direction",
-    )
-  for i in range(actions.size() - 1):
-    var a: int = actions[i]
-    var b: int = actions[i + 1]
-    var is_flip := (
-      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
-      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
-    )
-    _assert(not is_flip, "explore rear hemisphere: no adjacent opposite turn pair")
+  _assert(converged, "explore rear hemisphere converges to facing the latched waypoint within 16 ticks")
   main.queue_free()
 
 
@@ -5033,57 +5084,27 @@ func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
     "now_ms": Time.get_ticks_msec(),
     "environment_grid": null,
   }
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5))))
-  var actions: Array[int] = []
-  var saw_move := false
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): `select_action` now
+  ## always emits MOVE_FORWARD once step_goal_set — the old "turn via discrete ticks, then
+  ## converge to MOVE_FORWARD, no L/R flip-flop" sequence no longer exists. Equivalent contract:
+  ## facing-to-inward-direction alignment improves (or holds) every tick and converges.
+  var prev_dot := -2.0
+  var converged := false
   for tick_i in 16:
     ctx["physics_tick"] = tick_i
     var act := _MotorPlanner.select_action(ctx, state)
-    actions.append(act)
-    if act == _MotorAction.MOVE_FORWARD:
-      saw_move = true
-      ## Mirror the real caller (creature_motor_stack.gd tick()): MOVE_FORWARD's heading is only
-      ## finalized once the executor applies the turn+move blend (CLEANUP R1 mitigation #2) with
-      ## `move_turn_target` set to the current step_goal — `select_action` alone commits to MOVE
-      ## within a wider `move_blend_max_error_deg` cone and relies on that same-tick blend to correct
-      ## the rest of the way, so checking `last_move_direction` before applying it is premature.
-      var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
-      var inward: Vector3 = state.get("explore_dir", Vector3.ZERO).normalized()
-      _assert(body.last_move_direction.normalized().dot(inward) >= move_min_dot - 0.01, "post-scan MOVE faces inward")
+    _assert(act == _MotorAction.MOVE_FORWARD, "continuous controller always selects MOVE_FORWARD once step_goal_set")
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
+    var inward: Vector3 = state.get("explore_dir", Vector3.ZERO).normalized()
+    var dot: float = body.last_move_direction.normalized().dot(inward)
+    if prev_dot > -1.5:
+      _assert(dot >= prev_dot - 0.05, "post-scan inward align: facing dot to inward direction non-decreasing")
+    prev_dot = dot
+    if dot > 0.99:
+      converged = true
       break
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      var pos_before := body.global_position
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      _motor_planner_note_outcome(
-        state,
-        body,
-        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
-        motor_v3,
-        tick_i,
-        pos_before,
-        false,
-      )
-  _assert(saw_move, "post-scan inward align converges to MOVE within 16 ticks")
-  var turn_actions: Array[int] = []
-  for act in actions:
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      turn_actions.append(act)
-  _assert(turn_actions.size() >= 1, "post-scan inward align turns before MOVE")
-  var first_turn: int = turn_actions[0]
-  for act in turn_actions:
-    _assert(
-      act == first_turn,
-      "post-scan inward align: all pre-move turns share one direction",
-    )
-  for i in range(actions.size() - 1):
-    var a: int = actions[i]
-    var b: int = actions[i + 1]
-    var is_flip := (
-      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
-      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
-    )
-    _assert(not is_flip, "post-scan inward align: no adjacent opposite turn pair")
+  _assert(converged, "post-scan inward align converges to facing inward within 16 ticks")
   main.queue_free()
 
 
@@ -5487,12 +5508,17 @@ func _test_creature_motor_stack_precise_turn_no_flip_flop() -> void:
   var remembered := Vector3(-20.0, 1.0, 0.0)
   stack.seed_precise_food_belief_for_test(88101, remembered, Time.get_ticks_msec())
   var start_pos := body.global_position
-  var actions: Array[int] = []
-  var saw_move := false
-  for _i in 32:
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): the stack now always
+  ## emits MOVE_FORWARD toward step_goal — the old "turn via discrete ticks, then MOVE, no
+  ## L/R flip-flop" sequence no longer exists. Equivalent contract: facing-to-remembered-belief
+  ## alignment improves (or holds) every tick.
+  var prev_dot := -2.0
+  for _i in 8:
     var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
-    var act := int(outcome.action)
-    actions.append(act)
+    _assert(
+      int(outcome.action) == _MotorAction.MOVE_FORWARD,
+      "continuous controller always emits MOVE_FORWARD toward the fixed precise goal",
+    )
     _assert(
       stack.get_planner_step_source() == &"precise",
       "stack precise seek keeps step_source=precise",
@@ -5501,30 +5527,13 @@ func _test_creature_motor_stack_precise_turn_no_flip_flop() -> void:
       stack.get_planner_step_goal().distance_to(remembered) < 0.01,
       "stack precise step_goal stays at remembered GPS",
     )
-    if act == _MotorAction.MOVE_FORWARD:
-      saw_move = true
-      break
-  _assert(saw_move, "stack emits MOVE_FORWARD toward precise belief within 32 ticks")
-  var turn_actions: Array[int] = []
-  for act in actions:
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      turn_actions.append(act)
-  _assert(turn_actions.size() >= 1, "stack turns before moving toward precise goal")
-  if turn_actions.size() > 0:
-    var first_turn: int = turn_actions[0]
-    for act in turn_actions:
-      _assert(
-        act == first_turn,
-        "stack pre-move turns share one direction (no TURN_L/TURN_R flip-flop)",
-      )
-  for i in range(actions.size() - 1):
-    var a: int = actions[i]
-    var b: int = actions[i + 1]
-    var is_flip := (
-      (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
-      or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
-    )
-    _assert(not is_flip, "stack: no adjacent opposite turn pair on fixed precise tgt")
+    var facing: Vector3 = body.last_move_direction.normalized()
+    var to_n := (remembered - body.global_position).normalized()
+    to_n.y = 0.0
+    var dot: float = facing.dot(to_n)
+    if prev_dot > -1.5:
+      _assert(dot >= prev_dot - 0.05, "stack: facing alignment to precise goal non-decreasing (no flip-flop)")
+    prev_dot = dot
   var disp := body.global_position - start_pos
   disp.y = 0.0
   _assert(disp.length_squared() > 1e-6, "stack precise seek produces net displacement after MOVE")
@@ -5640,6 +5649,69 @@ func _test_locomotion_executor_move_blocked() -> void:
       blocked = true
       break
   _assert(blocked, "MOVE_FORWARD against wall sets blocked")
+  main.queue_free()
+
+## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1) — new coverage per the
+## design review's test plan: nothing before this exercised the turn-rate cap or the
+## cos(heading_error) forward-speed law directly (only via higher-level planner/stack tests).
+func _test_locomotion_executor_continuous_turn_rate_cap() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  var rate_deg := float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0))
+  var delta := 1.0 / 60.0
+  var max_turn_deg := rate_deg * delta
+  ## Target 180 deg away — heading error exceeds the per-tick cap, so this tick's turn should be
+  ## clamped to exactly max_turn_deg, not the full 180.
+  var target := Vector3(-20.0, 1.0, 0.0)
+  _LocomotionExecutor.apply_action(body, _MotorAction.MOVE_FORWARD, delta, motor_v3, null, target)
+  var facing: Vector3 = body.last_move_direction.normalized()
+  var turned_deg := rad_to_deg(acos(clampf(Vector3(1.0, 0.0, 0.0).dot(facing), -1.0, 1.0)))
+  _assert(
+    turned_deg <= max_turn_deg + 0.5,
+    "single MOVE_FORWARD tick's turn is capped at move_turn_rate_deg_per_sec * delta",
+  )
+  _assert(turned_deg > max_turn_deg * 0.5, "turn actually advances toward the target within the cap")
+  main.queue_free()
+
+## Forward speed is `cos(post-turn heading error)`, floored at zero — this test measures the
+## post-turn heading alignment itself (the direct input to that speed law), not raw physical
+## displacement: displacement is confounded by `apply_horizontal_move_intent`'s per-axis
+## `move_toward` acceleration ramp (which, from a standing start, can transiently favor a two-axis
+## intent over a single-axis one before velocity converges), so it's not a clean signal for
+## isolating the turn law's behavior on its own. Samples are axis-aligned (0/90/180 deg) rather
+## than diagonal 45/135 deg offsets to keep the geometry unambiguous.
+func _test_locomotion_executor_continuous_forward_speed_scales_with_alignment() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var motor_v3 := _motor_v3_test_params()
+  var delta := 1.0 / 60.0
+
+  var body_0 := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body_0.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  _LocomotionExecutor.apply_action(body_0, _MotorAction.MOVE_FORWARD, delta, motor_v3, null, body_0.global_position + Vector3(20.0, 0.0, 0.0))
+  var align_0: float = body_0.last_move_direction.normalized().dot(Vector3(1.0, 0.0, 0.0))
+
+  var body_90 := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 20.0))
+  body_90.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  _LocomotionExecutor.apply_action(body_90, _MotorAction.MOVE_FORWARD, delta, motor_v3, null, body_90.global_position + Vector3(0.0, 0.0, 20.0))
+  var align_90: float = body_90.last_move_direction.normalized().dot(Vector3(0.0, 0.0, 1.0))
+
+  var body_180 := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -20.0))
+  body_180.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  _LocomotionExecutor.apply_action(body_180, _MotorAction.MOVE_FORWARD, delta, motor_v3, null, body_180.global_position + Vector3(-20.0, 0.0, 0.0))
+  var align_180: float = body_180.last_move_direction.normalized().dot(Vector3(-1.0, 0.0, 0.0))
+
+  _assert(align_0 > align_90, "0 deg heading error retains more alignment after one tick than 90 deg")
+  _assert(align_90 > align_180, "90 deg heading error retains more alignment after one tick than 180 deg")
+  _assert(
+    align_180 < 0.0,
+    "180 deg heading error still has negative (>90 deg) residual alignment after one rate-capped turn — the speed law floors this at zero",
+  )
   main.queue_free()
 
 func _test_motor_goal_hub_starvation_eat_only() -> void:
@@ -5945,47 +6017,32 @@ func _test_motor_planner_flight_close_range_forward_egress() -> void:
   var threat_bearing := (threat["world_pos_3d"] as Vector3) - start_pos
   threat_bearing.y = 0.0
   threat_bearing = threat_bearing.normalized()
-  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate to `move_blend_max_error_deg` (the
-  ## executor blends a bounded turn into the move instead of requiring full alignment first).
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
   var stuck_eps: float = (_MotorPlanner as GDScript).call(
     "_latched_stuck_move_epsilon", motor_v3, body, 1.0 / 60.0
   )
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): select_action always
+  ## emits MOVE_FORWARD once step_goal_set — feed the tick's step_goal as move_turn_target so the
+  ## executor's turn+move blend actually turns (the old model's TURN_LEFT/TURN_RIGHT actions
+  ## turned unconditionally; MOVE_FORWARD only turns when given a target). 0.5 below is just a
+  ## reasonable "aligned enough" bar, not tied to any tunable — the old model's hard
+  ## `move_blend_max_error_deg` gate no longer exists.
+  var aligned_threshold := 0.5
   var saw_aligned_move := false
   for tick_i in 12:
     ctx["physics_tick"] = tick_i + 1
     ctx["flight_just_entered"] = tick_i == 0
     var act := _MotorPlanner.select_action(ctx, state)
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      var pos_before := body.global_position
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      _motor_planner_note_outcome(
-        state,
-        body,
-        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
-        motor_v3,
-        tick_i + 1,
-        pos_before,
-        false,
-      )
-    elif act == _MotorAction.MOVE_FORWARD:
-      var facing: Vector3 = body.last_move_direction.normalized()
-      var to_goal: Vector3 = (state.get("step_goal", Vector3.ZERO) - body.global_position)
-      to_goal.y = 0.0
-      var dot := facing.dot(to_goal.normalized())
-      var pos_before := body.global_position
-      var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      _motor_planner_note_outcome(
-        state,
-        body,
-        outcome,
-        motor_v3,
-        tick_i + 1,
-        pos_before,
-        false,
-      )
-      if dot >= move_min_dot - 0.01:
-        saw_aligned_move = true
+    _assert(act == _MotorAction.MOVE_FORWARD, "continuous controller always selects MOVE_FORWARD once step_goal_set")
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    var pos_before := body.global_position
+    var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
+    _motor_planner_note_outcome(state, body, outcome, motor_v3, tick_i + 1, pos_before, false)
+    var facing: Vector3 = body.last_move_direction.normalized()
+    var to_goal: Vector3 = (step_goal - body.global_position)
+    to_goal.y = 0.0
+    var dot: float = facing.dot(to_goal.normalized())
+    if dot >= aligned_threshold:
+      saw_aligned_move = true
   _assert(saw_aligned_move, "flight close range: aligned MOVE_F within 12 ticks")
   var away := body.global_position - start_pos
   away.y = 0.0
@@ -6007,10 +6064,12 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
   var threat := _flight_test_threat_at(Vector3(8.0, 1.0, 0.0), 8.0)
   var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
   var state := _MotorPlanner.new_state()
-  ## CLEANUP R1 mitigation #2 widened the MOVE_FORWARD gate to `move_blend_max_error_deg` (the
-  ## executor blends a bounded turn into the move instead of requiring full alignment first).
-  var move_min_dot := cos(deg_to_rad(float(motor_v3.get("move_blend_max_error_deg", 60.0))))
-  var actions: Array[int] = []
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1): select_action always
+  ## emits MOVE_FORWARD once step_goal_set (no more discrete TURN_LEFT/TURN_RIGHT actions to
+  ## flip-flop between — the old windowed no-adjacent-opposite-turn check is therefore moot and
+  ## removed) — feed the tick's step_goal as move_turn_target so the turn+move blend actually
+  ## turns. 0.5 below is just a reasonable "aligned enough" bar, not tied to any tunable.
+  var aligned_threshold := 0.5
   var saw_aligned_move := false
   for tick_i in 24:
     var angle := float(tick_i) * 0.35
@@ -6024,8 +6083,7 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
     var remaining_before := int(state.get("flee_waypoint_ticks_remaining", 0))
     var wp_before: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
     var act := _MotorPlanner.select_action(ctx, state)
-    actions.append(act)
-    var blocked_move := false
+    _assert(act == _MotorAction.MOVE_FORWARD, "continuous controller always selects MOVE_FORWARD once step_goal_set")
     if tick_i == 0:
       _assert(
         wp_before.length_squared() < 1e-8 and (state.get("flee_waypoint", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
@@ -6040,47 +6098,16 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
         (state.get("step_goal", Vector3.ZERO) as Vector3).distance_to(wp_before) < 0.01,
         "orbit flight: step_goal matches latched flee_waypoint",
       )
-    if act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT:
-      var pos_before := body.global_position
-      _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      _motor_planner_note_outcome(
-        state,
-        body,
-        _ActionOutcome.new(Vector3.ZERO, false, 0.0, act),
-        motor_v3,
-        tick_i + 1,
-        pos_before,
-        false,
-      )
-    elif act == _MotorAction.MOVE_FORWARD:
-      var pos_before := body.global_position
-      var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3)
-      blocked_move = outcome.blocked
-      _motor_planner_note_outcome(
-        state,
-        body,
-        outcome,
-        motor_v3,
-        tick_i + 1,
-        pos_before,
-        false,
-      )
-      if not blocked_move:
-        var facing: Vector3 = body.last_move_direction.normalized()
-        var to_goal: Vector3 = (state.get("step_goal", Vector3.ZERO) - body.global_position)
-        to_goal.y = 0.0
-        if to_goal.length_squared() > 1e-8 and facing.dot(to_goal.normalized()) >= move_min_dot - 0.01:
-          saw_aligned_move = true
-  for start_i in range(max(0, actions.size() - 15)):
-    var window: Array[int] = actions.slice(start_i, start_i + 16)
-    for j in range(window.size() - 1):
-      var a: int = window[j]
-      var b: int = window[j + 1]
-      var is_flip := (
-        (a == _MotorAction.TURN_LEFT and b == _MotorAction.TURN_RIGHT)
-        or (a == _MotorAction.TURN_RIGHT and b == _MotorAction.TURN_LEFT)
-      )
-      _assert(not is_flip, "orbit flight: no adjacent opposite turn pair in 16-tick window")
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    var pos_before := body.global_position
+    var outcome := _LocomotionExecutor.apply_action(body, act, 1.0 / 60.0, motor_v3, null, step_goal)
+    _motor_planner_note_outcome(state, body, outcome, motor_v3, tick_i + 1, pos_before, false)
+    if not outcome.blocked:
+      var facing: Vector3 = body.last_move_direction.normalized()
+      var to_goal: Vector3 = (step_goal - body.global_position)
+      to_goal.y = 0.0
+      if to_goal.length_squared() > 1e-8 and facing.dot(to_goal.normalized()) >= aligned_threshold:
+        saw_aligned_move = true
   _assert(saw_aligned_move, "orbit flight: at least one aligned MOVE_F")
   main.queue_free()
 

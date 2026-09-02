@@ -90,7 +90,6 @@ static func new_state() -> Dictionary:
     "step_ultimate_pos": Vector3.ZERO,
     ## See `step_goal_set` — same sentinel-collision hazard for the "ultimate" (pre-step-clamp) target.
     "step_ultimate_pos_set": false,
-    "force_align_turn_before_move": false,
     ## Accumulated turn degrees while in eat range without EAT (C3 orbit break).
     "eat_orbit_turn_deg_accumulated": 0.0,
     ## Horizontal distance to `step_goal` as of the last `align_and_move` tick; -1.0 = not yet
@@ -273,20 +272,6 @@ static func _is_fixed_objective_overshoot_source(step_source: StringName) -> boo
   )
 
 
-## Same [code]step_source[/code] + instance refresh (e.g. per-tick live prey pos) — not a discrete jump.
-static func _is_continuous_objective_retarget(
-  state: Dictionary,
-  step_source: StringName,
-  instance_id: int,
-) -> bool:
-  if instance_id == 0:
-    return false
-  return (
-    state.get("step_source", &"") == step_source
-    and int(state.get("step_instance_id", 0)) == instance_id
-  )
-
-
 ## True when [param pos_after] lies past [param goal] along [param approach_dir] (horizontal).
 static func _passed_goal_along_approach(
   pos_after: Vector3,
@@ -302,35 +287,15 @@ static func _passed_goal_along_approach(
   return travel.dot(approach_dir.normalized()) > 0.0
 
 
-static func _maybe_flag_material_step_goal_change(
-  state: Dictionary,
-  body: CharacterBody3D,
-  old_goal: Vector3,
-  new_goal: Vector3,
-  motor_v3: Dictionary,
-  delta: float,
-) -> void:
-  if old_goal.length_squared() < 1e-8 or new_goal.length_squared() < 1e-8:
-    return
-  var stuck_eps := _latched_stuck_move_epsilon(motor_v3, body, delta)
-  var flat_old := Vector3(old_goal.x, 0.0, old_goal.z)
-  var flat_new := Vector3(new_goal.x, 0.0, new_goal.z)
-  if flat_old.distance_to(flat_new) > stuck_eps:
-    state["force_align_turn_before_move"] = true
-
-
+## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1, substep 4): no longer flags
+## material step_goal changes for a forced pure-turn tick — the executor's continuous law already
+## recomputes heading error against whatever `step_goal` is fresh each tick, so a large re-mint
+## collapses forward speed toward zero on its own (see doc's "no staleness window" reasoning).
 static func _assign_resolved_step_goal(
   state: Dictionary,
-  body: CharacterBody3D,
   ultimate: Vector3,
   resolved_goal: Vector3,
-  motor_v3: Dictionary,
-  delta: float,
-  flag_material_change: bool = true,
 ) -> void:
-  var old_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  if flag_material_change:
-    _maybe_flag_material_step_goal_change(state, body, old_goal, resolved_goal, motor_v3, delta)
   state["step_goal"] = resolved_goal
   state["step_goal_set"] = true
   if ultimate.length_squared() > 1e-8:
@@ -385,8 +350,7 @@ static func _maybe_apply_fixed_objective_overshoot(
   var map_rid: RID = ctx.get("map_rid", RID())
   var agent_r := _agent_radius(body)
   var reminted := _PathClear.resolve_step_objective(map_rid, pos_after, ultimate, agent_r)
-  _assign_resolved_step_goal(state, body, ultimate, reminted, motor_v3, delta)
-  state["force_align_turn_before_move"] = true
+  _assign_resolved_step_goal(state, ultimate, reminted)
 
 
 
@@ -817,12 +781,32 @@ static func note_outcome(
     state["explore_last_move_disp_len"] = disp_len
   elif step_source == &"explore":
     state["explore_last_move_disp_len"] = -1.0
+  ## §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1, substep 6): forward speed
+  ## is now `cos(heading_error)`-scaled every tick, so a body turning to face a badly-misaligned
+  ## explore waypoint can legitimately register `no_progress` (low linear displacement) for
+  ## several ticks in a row while it's actively converging — under the old discrete model that
+  ## case was a TURN_LEFT/TURN_RIGHT action with a separate mechanism, never routed through this
+  ## displacement-based check. Same "improving disqualifies" idiom as `still_ramping` above: if
+  ## facing-to-goal alignment improved since last tick, this is turning-in-place progress, not a
+  ## stuck condition. Peeks `explore_last_facing_dot` (written by `_note_explore_align_progress`
+  ## below, later this same tick) rather than writing it here — that function is the field's sole
+  ## writer; duplicating the write would corrupt its own improving-vs-last-tick comparison.
+  var still_aligning := false
+  if step_source == &"explore" and act == _MotorAction.MOVE_FORWARD:
+    var align_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    var to_goal := Vector3(align_goal.x - pos_after.x, 0.0, align_goal.z - pos_after.z)
+    if to_goal.length_squared() > 1e-8:
+      var facing: Vector3 = body.get("last_move_direction")
+      var cur_dot := facing.dot(to_goal.normalized())
+      var last_dot := float(state.get("explore_last_facing_dot", -2.0))
+      still_aligning = last_dot > -1.5 and cur_dot > last_dot + 0.001
   var explore_idle_stuck := (
     step_source == &"explore"
     and is_latched
     and no_progress
     and not scan_active
     and not still_ramping
+    and not still_aligning
   )
   var stuck_this_tick: bool = move_stuck or explore_idle_stuck
 
@@ -1002,7 +986,6 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     _clear_pursuit_detour_latch(state)
     state["step_ultimate_pos"] = Vector3.ZERO
     state["step_ultimate_pos_set"] = false
-    state["force_align_turn_before_move"] = false
     state["eat_orbit_turn_deg_accumulated"] = 0.0
   var refresh_targets := bool(ctx.get("refresh_step_objective", false))
   var has_step_goal := bool(state.get("step_goal_set", false))
@@ -1054,10 +1037,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
           state["step_source"] = &"live"
           _refresh_live_prey_meta_only(ctx, state, live_food, motor_v3)
         else:
-          var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
-          _apply_live_food_objective(
-            state, live_food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
-          )
+          _apply_live_food_objective(state, live_food, map_rid, creature_pos, agent_r)
           _arm_prey_engagement_from_live_food(ctx, state, live_food, motor_v3)
         _store_food_inventory_step_mode(ctx, state, motor_v3)
       elif state.get("step_source", &"") == &"explore":
@@ -1106,8 +1086,6 @@ static func _derive_find_food_step_objective(
     return
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
-    var body: CharacterBody3D = ctx.get("body")
-    var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
     # Moving prey always remints live (Pass 1); handoff scoring is for stationary food only.
     if not bool(food.get("is_moving", false)):
       var locale_candidate := _peek_locale_memory_tier_winner(
@@ -1119,13 +1097,11 @@ static func _derive_find_food_step_objective(
           food, locale_candidate, adapter, motor_v3
         ):
           _apply_locale_food_objective(
-            ctx, state, locale_candidate, creature_pos, motor_v3, map_rid, agent_r
+            state, locale_candidate, creature_pos, map_rid, agent_r
           )
           _store_food_inventory_step_mode(ctx, state, motor_v3)
           return
-    _apply_live_food_objective(
-      state, food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
-    )
+    _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
     _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
@@ -1325,11 +1301,9 @@ static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = 
 
 ## Apply a locale memory-tier seek objective (anchor + nav substep).
 static func _apply_locale_food_objective(
-  ctx: Dictionary,
   state: Dictionary,
   locale: Dictionary,
   creature_pos: Vector3,
-  motor_v3: Dictionary,
   map_rid: RID,
   agent_r: float,
 ) -> void:
@@ -1337,15 +1311,7 @@ static func _apply_locale_food_objective(
     _reset_locale_progress_state(state)
   var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
   var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, anchor, agent_r)
-  var body: CharacterBody3D = ctx.get("body")
-  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
-  if body != null:
-    _assign_resolved_step_goal(state, body, anchor, resolved, motor_v3, tick_delta)
-  else:
-    state["step_goal"] = resolved
-    state["step_goal_set"] = true
-    state["step_ultimate_pos"] = anchor
-    state["step_ultimate_pos_set"] = true
+  _assign_resolved_step_goal(state, anchor, resolved)
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = locale.get("stimulus_kind_id", &"")
   state["step_source"] = &"locale"
@@ -1381,11 +1347,7 @@ static func _maybe_locale_arrival_bind_or_clear(
       food_pos.distance_to(ultimate) <= eat_max
       or food_pos.distance_to(creature_pos) <= eat_max
     ):
-      var body: CharacterBody3D = ctx.get("body")
-      var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
-      _apply_live_food_objective(
-        state, food, map_rid, creature_pos, agent_r, body, motor_v3, tick_delta
-      )
+      _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
       _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
       _store_food_inventory_step_mode(ctx, state, motor_v3)
       return
@@ -1404,21 +1366,10 @@ static func _apply_live_food_objective(
   map_rid: RID,
   creature_pos: Vector3,
   agent_r: float,
-  body: CharacterBody3D = null,
-  motor_v3: Dictionary = {},
-  delta: float = 1.0 / 60.0,
 ) -> void:
   var ultimate: Vector3 = food.get("pos", Vector3.ZERO)
   var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
-  var iid := int(food.get("instance_id", 0))
-  var flag_material := not _is_continuous_objective_retarget(state, &"live", iid)
-  if body != null:
-    _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, delta, flag_material)
-  else:
-    state["step_goal"] = resolved
-    state["step_goal_set"] = true
-    state["step_ultimate_pos"] = ultimate
-    state["step_ultimate_pos_set"] = true
+  _assign_resolved_step_goal(state, ultimate, resolved)
   state["step_instance_id"] = int(food.get("instance_id", 0))
   state["step_stimulus_kind_id"] = food.get("stimulus_kind_id", &"")
   state["step_source"] = &"live"
@@ -1789,7 +1740,6 @@ static func _remint_alternate_pursuit_detour(
   state["consecutive_blocked"] = 0
   state["los_blocked_latched"] = false
   state["los_verdict_streak"] = 0
-  state["force_align_turn_before_move"] = true
   var scan: Dictionary = ctx.get("scan", {})
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
@@ -1898,16 +1848,7 @@ static func _sync_moving_prey_memory_objective(
     _reset_precise_progress_state(state)
   var ultimate: Vector3 = moving.get("pos", Vector3.ZERO)
   var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, ultimate, agent_r)
-  var body: CharacterBody3D = ctx.get("body")
-  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
-  var flag_material := not _is_continuous_objective_retarget(state, &"memory_moving", new_iid)
-  if body != null:
-    _assign_resolved_step_goal(state, body, ultimate, resolved, motor_v3, tick_delta, flag_material)
-  else:
-    state["step_goal"] = resolved
-    state["step_goal_set"] = true
-    state["step_ultimate_pos"] = ultimate
-    state["step_ultimate_pos_set"] = true
+  _assign_resolved_step_goal(state, ultimate, resolved)
   state["step_instance_id"] = new_iid
   state["step_stimulus_kind_id"] = moving.get("stimulus_kind_id", &"")
   state["step_source"] = &"memory_moving"
@@ -1976,21 +1917,13 @@ static func _sync_food_memory_objective(
   var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
   var env_grid: Variant = ctx.get("environment_grid", null)
   var motor_ctx: Dictionary = {}
-  var body: CharacterBody3D = ctx.get("body")
-  var tick_delta := float(ctx.get("delta", 1.0 / 60.0))
   var precise: Dictionary = adapter.consult_precise_food(creature_pos, motor_v3, food_split, now_ms)
   if bool(precise.get("active", false)):
     var new_iid := int(precise.get("instance_id", 0))
     if int(state.get("step_instance_id", 0)) != new_iid:
       _reset_precise_progress_state(state)
     var precise_pos: Vector3 = precise.get("pos", Vector3.ZERO)
-    if body != null:
-      _assign_resolved_step_goal(state, body, precise_pos, precise_pos, motor_v3, tick_delta)
-    else:
-      state["step_goal"] = precise_pos
-      state["step_goal_set"] = true
-      state["step_ultimate_pos"] = precise_pos
-      state["step_ultimate_pos_set"] = true
+    _assign_resolved_step_goal(state, precise_pos, precise_pos)
     state["step_instance_id"] = new_iid
     state["step_stimulus_kind_id"] = precise.get("stimulus_kind_id", &"")
     state["step_source"] = &"precise"
@@ -2006,11 +1939,22 @@ static func _sync_food_memory_objective(
     state["step_goal_set"] = true
     state["step_instance_id"] = int(coarse.get("instance_id", 0))
     state["step_source"] = &"coarse"
+    ## Coarse tier has no real "ultimate" position, only a rough bearing probe — unlike the
+    ## precise/locale branches above (which route through `_assign_resolved_step_goal` and set
+    ## this explicitly), this must clear it rather than leave it untouched. Leaving a stale
+    ## `step_ultimate_pos`/`step_ultimate_pos_set` from a prior objective meant `_can_eat_now`
+    ## (via `_resolve_eat_target_pos`, which prefers `step_ultimate_pos` when set) evaluated EAT's
+    ## facing/range gates against old garbage instead of the current coarse probe — passing
+    ## incorrectly and freezing the creature in a self-sustaining EAT loop (found live 2026-09-02:
+    ## rabbit motionless for 321 consecutive ticks / ~5.3s in a playfield corner, calories draining
+    ## with no bite ever completing, `step_goal`/facing/distance all frozen identical every tick).
+    state["step_ultimate_pos"] = Vector3.ZERO
+    state["step_ultimate_pos_set"] = false
     return true
   var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, motor_ctx)
   var on_cd := _locale_anchor_on_arrival_cooldown(state, locale.get("anchor", Vector3.ZERO))
   if bool(locale.get("active", false)) and not on_cd:
-    _apply_locale_food_objective(ctx, state, locale, creature_pos, motor_v3, map_rid, agent_r)
+    _apply_locale_food_objective(state, locale, creature_pos, map_rid, agent_r)
     return true
   return false
 
@@ -2630,8 +2574,6 @@ static func apply_immediate_blocked_path_reevaluation(
         _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
         state["flee_backtrack_streak"] = 0
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
-  var new_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  _maybe_flag_material_step_goal_change(state, body, old_goal, new_goal, motor_v3, float(ctx.get("delta", 1.0 / 60.0)))
   # Deliberately NOT stamped back into `flee_waypoint` (removed CLEANUP R1 follow-up,
   # 2026-07-16 duel review — rabbit stuck at playfield edge): this function's backtrack/LOS
   # deflection is meant to be an ephemeral per-tick correction. Persisting it into the latch used
@@ -2714,7 +2656,7 @@ static func completed_step_objective(
 
 
 ## §7.3.0 facing-relative one-action pick toward current [code]step_goal[/code].
-static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: Dictionary) -> int:
+static func align_and_move(body: CharacterBody3D, _motor_v3: Dictionary, state: Dictionary) -> int:
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if not bool(state.get("step_goal_set", false)):
     return _MotorAction.STAY
@@ -2722,31 +2664,15 @@ static func align_and_move(body: CharacterBody3D, motor_v3: Dictionary, state: D
   ## executor sees that action, and available to any future consumer that needs "how far to the
   ## current step objective" without recomputing (e.g. ranged-combat reachability checks).
   state["dist_to_goal"] = _horizontal_distance(body, step_goal)
-  if bool(state.get("force_align_turn_before_move", false)):
-    state["force_align_turn_before_move"] = false
-    var forced_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
-    return _MotorAction.TURN_LEFT if forced_sign > 0 else _MotorAction.TURN_RIGHT
-  if _is_within_move_blend_arc(body, step_goal, motor_v3):
-    return _MotorAction.MOVE_FORWARD
-  var turn_sign := _pick_align_turn_sign(body, step_goal, motor_v3)
-  return _MotorAction.TURN_LEFT if turn_sign > 0 else _MotorAction.TURN_RIGHT
-
-
-## Widened MOVE_FORWARD gate (CLEANUP R1 mitigation #2 — blend turn+move in one tick). True
-## whenever heading error is within [code]move_blend_max_error_deg[/code] — wider than
-## [method _is_facing_aligned_for_move]'s tight `turn_increment_deg` cone — because the executor
-## now blends a bounded turn toward the target into the same tick's move instead of requiring full
-## alignment before `MOVE_FORWARD` is legal. Only gates action *selection*; LOS/nav path clearance
-## (`_run_path_clearance_los_nav`) still uses the tight cone unchanged.
-static func _is_within_move_blend_arc(body: CharacterBody3D, target: Vector3, motor_v3: Dictionary) -> bool:
-  var creature_pos := body.global_position
-  var to_target := Vector3(target.x - creature_pos.x, 0.0, target.z - creature_pos.z)
-  if to_target.length_squared() < 1e-8:
-    return true
-  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
-  var arc_deg := float(motor_v3.get("move_blend_max_error_deg", 60.0))
-  var min_dot := cos(deg_to_rad(arc_deg))
-  return facing.dot(to_target.normalized()) >= min_dot
+  # §1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1, substep 3): goal-directed
+  # movement no longer picks between a pure-turn tick and MOVE_FORWARD — the executor's
+  # `_blend_turn_toward`/`_displace_along_facing` continuous law (turn-rate-capped heading
+  # correction + `cos(heading_error)`-scaled forward speed, floored at zero) handles both axes
+  # every tick from whatever `step_goal` is this tick, so a large heading error now yields a
+  # near-zero-speed "turn in place" MOVE_FORWARD instead of a separate discrete TURN action. The
+  # former `_is_within_move_blend_arc`/`move_blend_max_error_deg` gate is retired, not retuned —
+  # replaced by the continuous law itself, not a wider version of the old cliff.
+  return _MotorAction.MOVE_FORWARD
 
 
 static func _is_facing_aligned_with_tolerance(
