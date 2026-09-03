@@ -282,7 +282,11 @@ static func _food_map_confidence_from_split(food_split: Dictionary) -> float:
 
 
 ## Ranks ready live food by kind yield (desc), then distance; breaks ties with instance id.
-static func best_ready_food_target(food_split: Dictionary, creature_pos: Vector3) -> Dictionary:
+static func best_ready_food_target(
+  food_split: Dictionary,
+  creature_pos: Vector3,
+  excluded_instance_ids: Dictionary = {},
+) -> Dictionary:
   var ready: Array = food_split.get("ready", [])
   if ready.is_empty():
     return {}
@@ -293,6 +297,8 @@ static func best_ready_food_target(food_split: Dictionary, creature_pos: Vector3
     if typeof(entry_v) != TYPE_DICTIONARY:
       continue
     var entry: Dictionary = entry_v
+    if excluded_instance_ids.has(int(entry.get("instance_id", 0))):
+      continue
     var pos: Vector3 = entry.get("pos", Vector3.ZERO)
     var d := creature_pos.distance_to(pos)
     var yield_v := float(entry.get("kind_yield", _NEUTRAL_KIND_YIELD))

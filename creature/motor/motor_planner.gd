@@ -1003,7 +1003,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
       )
       has_step_goal = bool(state.get("step_goal_set", false))
       var live_food := _AwarenessScan.best_ready_food_target(
-        scan.get("food_split", {}), creature_pos
+        scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, motor_v3)
       )
       var live_moving := (
         not live_food.is_empty() and bool(live_food.get("is_moving", false))
@@ -1072,6 +1072,24 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         _maintain_explore_latch(ctx, state, motor_v3)
 
 
+## Instance ids whose passibility_fail_count has crossed the switch threshold — excluded from
+## fresh live-food selection so a "seek" reset doesn't immediately re-pick the same dead end.
+static func _food_pursuit_exclusions(ctx: Dictionary, motor_v3: Dictionary) -> Dictionary:
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null or not adapter.has_method(&"get_beliefs"):
+    return {}
+  var switch_thresh := int(motor_v3.get("passibility_fail_switch_threshold", 2))
+  var excluded: Dictionary = {}
+  var beliefs: Dictionary = adapter.get_beliefs()
+  for iid in beliefs:
+    var row: Variant = beliefs[iid]
+    if typeof(row) != TYPE_DICTIONARY:
+      continue
+    if int((row as Dictionary).get("passibility_fail_count", 0)) >= switch_thresh:
+      excluded[int(iid)] = true
+  return excluded
+
+
 static func _derive_find_food_step_objective(
   ctx: Dictionary,
   state: Dictionary,
@@ -1084,7 +1102,9 @@ static func _derive_find_food_step_objective(
   if _try_maintain_pursuit_detour_latch(ctx, state, motor_v3, scan, creature_pos):
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
-  var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
+  var food := _AwarenessScan.best_ready_food_target(
+    scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, motor_v3)
+  )
   if not food.is_empty():
     # Moving prey always remints live (Pass 1); handoff scoring is for stationary food only.
     if not bool(food.get("is_moving", false)):

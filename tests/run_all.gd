@@ -284,6 +284,8 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_passibility_switch()
   _test_creature_motor_stack_memory_blocked_objective()
   await _test_creature_motor_stack_blocked_memory_writes()
+  await _test_motor_planner_blocked_food_excluded_from_reselection()
+  _test_awareness_scan_best_ready_food_target_excludes_ids()
   _test_food_plant_missing_stimulus_kind_id()
   _test_goal_source_memory()
   _test_goal_kind_phase_c_replay()
@@ -3039,6 +3041,83 @@ func _test_creature_motor_stack_blocked_memory_writes() -> void:
       wrote_memory = true
       break
   _assert(wrote_memory, "stack blocked move writes passibility, dead-end, or §9 action")
+  main.queue_free()
+
+
+## best_ready_food_target's excluded_instance_ids param (fed by _food_pursuit_exclusions) skips
+## fail-locked instances so a "seek" reset doesn't immediately re-pick the same dead end.
+func _test_awareness_scan_best_ready_food_target_excludes_ids() -> void:
+  var split := {
+    "ready": [
+      {"pos": Vector3(0.0, 0.0, -10.0), "instance_id": 201, "kind_yield": 0.9},
+      {"pos": Vector3(0.0, 0.0, -8.0), "instance_id": 202, "kind_yield": 0.3},
+    ],
+    "unready": [],
+  }
+  var unfiltered := _AwarenessScan.best_ready_food_target(split, Vector3.ZERO)
+  _assert(int(unfiltered.get("instance_id", 0)) == 201, "without exclusions, higher-yield bush wins")
+  var filtered := _AwarenessScan.best_ready_food_target(split, Vector3.ZERO, {201: true})
+  _assert(
+    int(filtered.get("instance_id", 0)) == 202,
+    "excluded_instance_ids skips the fail-locked instance and falls back to the next candidate",
+  )
+  var all_excluded := _AwarenessScan.best_ready_food_target(split, Vector3.ZERO, {201: true, 202: true})
+  _assert(all_excluded.is_empty(), "excluding every ready candidate yields no target")
+
+
+## CLEANUP: "seek" resolution (blocked_objective_resolver.gd) reset step state but
+## best_ready_food_target had no passibility_fail awareness, so the very next tick it re-picked
+## the identical unreachable instance -> infinite persist/seek/reblock loop, frozen in place
+## forever (live-observed: rabbit stuck at a boulder). Regression guards that once an instance's
+## passibility_fail_count crosses the switch threshold, the planner stops re-targeting it as the
+## live food objective (falls through to a real explore mint instead).
+func _test_motor_planner_blocked_food_excluded_from_reselection() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var switch_thresh := int(motor_v3.get("passibility_fail_switch_threshold", 2))
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  const FOOD_IID := 88003
+  var now_ms := Time.get_ticks_msec()
+  var scan := {
+    "food_split": {
+      "ready": [{
+        "pos": Vector3(20.0, 1.0, 0.0),
+        "instance_id": FOOD_IID,
+        "stimulus_kind_id": &"shrub_berries",
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+        "is_moving": false,
+      }],
+      "unready": [],
+    },
+  }
+  adapter.sync_after_scan(scan["food_split"], [], now_ms)
+  for _i in switch_thresh:
+    adapter.increment_passibility_fail(FOOD_IID, now_ms)
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": scan,
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": adapter,
+    "now_ms": now_ms,
+    "environment_grid": null,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  _assert(
+    int(state.get("step_instance_id", -1)) != FOOD_IID,
+    "planner does not target a live food instance once its passibility_fail_count hits the switch threshold",
+  )
   main.queue_free()
 
 
