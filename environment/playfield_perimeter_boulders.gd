@@ -62,5 +62,6 @@ static func _spawn_one(parent: Node3D, scene: PackedScene, pos: Vector3) -> void
     return
   parent.add_child(rock)
   rock.global_position = pos
+  rock.scale = Vector3.ONE * PlayfieldBounds3D.BOULDER_VISUAL_SCALE
   rock.add_to_group(&"obstacles")
   PlayfieldBounds3D.ensure_obstacle_physics(rock)

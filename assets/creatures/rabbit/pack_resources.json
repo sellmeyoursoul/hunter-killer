@@ -86,7 +86,7 @@
     "awareness_radius": 150.0,
     "awareness_cone_extra": 400.0,
     "preserve_bias_food_floor": 0.90,
-    "seek_priority_food_ceiling": 0.80,
+    "seek_priority_food_ceiling": 0.60,
     "preserve_seek_blend_smoothness": 0.5,
     "starvation_override_food_ceiling": 0.10,
     "flight_acute_panic_radius": 220.0

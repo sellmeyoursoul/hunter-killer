@@ -50,6 +50,7 @@ const _MotorPathFixture := preload("res://tests/motor_path_fixture.gd")
 const _MotorReplayFixture := preload("res://tests/motor_replay_fixture.gd")
 const _MotorStallDetector := preload("res://tests/motor_stall_detector.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
+const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
@@ -155,6 +156,9 @@ func _run_all() -> void:
   _test_motor_planner_pursuit_detour_skips_reeval_while_latched()
   _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
+  _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block()
+  _test_motor_planner_memory_pursuit_detour_gives_up_after_max_escalations()
+  _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours()
   _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
   _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ()
   _test_motor_planner_locale_arrival_binds_live_or_clears()
@@ -223,6 +227,9 @@ func _run_all() -> void:
   _test_memory_adapter_count_known_objectives_fractional()
   _test_memory_adapter_count_known_objectives_live_dedupe()
   _test_memory_adapter_explore_bearing_coverage_wedge()
+  _test_memory_adapter_explore_bearing_coverage_visited_wedge()
+  _test_memory_adapter_explore_bearing_coverage_visited_wedge_caps_not_sums()
+  _test_visited_path_memory_record_and_maintain()
   _test_motor_explore_seek_empty_map_spawn_prior()
   await _test_motor_explore_seek_wall_bias_opens_away()
   _test_motor_explore_seek_repels_explored_north_wedge()
@@ -315,6 +322,7 @@ func _run_all() -> void:
   _test_playfield_clamp()
   _test_playfield_bounds_3d_collision_only()
   _test_boulder_obstacle_collision_bake()
+  _test_interior_boulder_spawn_scale()
   _test_perimeter_boulder_density()
   _test_spawn_randomizer_reproducible_with_seed()
   _test_spawn_randomizer_respects_margin_and_separation()
@@ -490,6 +498,57 @@ func _test_boulder_obstacle_collision_bake() -> void:
     "baked boulder collider shape is convex, not trimesh (CLEANUP C10)",
   )
   rock.queue_free()
+
+
+## Live finding 2026-09-04/05: a CharacterBody3D could incrementally climb the boulder's convex
+## hull via capsule-edge-rounding, independent of the hull's own face angles (tried a simplified
+## hull and full convex decomposition — neither helped, the mesh is already close to convex).
+## A per-obstacle collision-shape fix (an additive smooth-cylinder "climb guard") was tried and
+## reverted: the exploit depends on the ratio of the fixed-size creature capsule to the mesh's
+## facet size, not the hull's shape alone, so per user direction (2026-09-05) the actual fix is
+## scaling the boulder itself up — physics-repro-confirmed to stop the climb on the plain convex
+## hull alone, no invented collision shape needed, keeping the mesh as the sole physics boundary.
+## Full climb-repro physics belongs in a live/duel smoke pass, not this headless unit (see
+## CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) — this test covers the scale actually taking mechanical
+## effect on the real collision-relevant geometry, not just being set as a cosmetic transform.
+func _test_interior_boulder_spawn_scale() -> void:
+  var boulder: PackedScene = load(
+    "res://assets/environment/obstacle_boulder/h-k-boulder1.blend",
+  ) as PackedScene
+  var rock := boulder.instantiate() as Node3D
+  root.add_child(rock)
+  var aabb_before := _StaticObstacleCollision.world_mesh_aabb(rock)
+  rock.scale = Vector3.ONE * PlayfieldBounds3D.BOULDER_VISUAL_SCALE
+  var aabb_after := _StaticObstacleCollision.world_mesh_aabb(rock)
+  _assert(
+    bool(aabb_before.get("valid", false)) and bool(aabb_after.get("valid", false)),
+    "boulder mesh AABB valid before/after applying BOULDER_VISUAL_SCALE",
+  )
+  var size_before: Vector3 = (
+    (aabb_before.get("max", Vector3.ZERO) as Vector3) - (aabb_before.get("min", Vector3.ZERO) as Vector3)
+  )
+  var size_after: Vector3 = (
+    (aabb_after.get("max", Vector3.ZERO) as Vector3) - (aabb_after.get("min", Vector3.ZERO) as Vector3)
+  )
+  _assert(
+    is_equal_approx(size_after.y / maxf(size_before.y, 1e-6), PlayfieldBounds3D.BOULDER_VISUAL_SCALE),
+    "BOULDER_VISUAL_SCALE actually scales the boulder's real world mesh size",
+  )
+  var colliders: int = PlayfieldBounds3D.ensure_obstacle_physics(rock)
+  _assert(colliders >= 1, "a scaled boulder still bakes convex collision")
+  var sb := rock.get_node_or_null("AutoConvexCollision") as StaticBody3D
+  var cs: CollisionShape3D = null
+  if sb != null:
+    for ch in sb.get_children():
+      if ch is CollisionShape3D:
+        cs = ch as CollisionShape3D
+        break
+  _assert(
+    cs != null and cs.shape is ConvexPolygonShape3D,
+    "scaled boulder collider is still convex, not trimesh (keeps CLEANUP C10 tunnel-resistance)",
+  )
+  rock.queue_free()
+
 
 func _test_bundled_inference_helpers() -> void:
   var BN := load("res://AI_int_lib/bundled_inference_launcher.gd") as Script
@@ -1171,6 +1230,85 @@ func _test_memory_adapter_explore_bearing_coverage_wedge() -> void:
       max_val = wedges[i]
       max_idx = i
   _assert(max_idx == 0, "near north belief peaks in wedge 0 (N)")
+
+
+## Live finding 2026-09-04: a wedge with zero food beliefs used to score identically whether it was
+## "walked through, confirmed empty" or "never been near" — both maxed out explore_w_unexp's pull,
+## which is why a fox bounced east-west between the same two walls instead of trying new ground.
+## `VisitedPathMemory` + `explore_bearing_coverage`'s new accumulator should now tell them apart:
+## a wedge with a recorded visit reads as covered even with zero beliefs, one with no visit doesn't.
+func _test_memory_adapter_explore_bearing_coverage_visited_wedge() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params().duplicate(true)
+  motor_p["explore_bearing_count"] = 8
+  var now_ms := Time.get_ticks_msec()
+  var origin := Vector3.ZERO
+  # Wedge 0 is due north (bearing_wedge_index(origin, (0,0,-40)) == 0, matching the sibling test
+  # above); walk it without ever finding food there.
+  adapter.record_visited_position(Vector3(0.0, 0.0, -40.0), now_ms, motor_p)
+  var wedges := adapter.explore_bearing_coverage(
+    _GkReg.GK_FIND_FOOD, origin, motor_p, {}, now_ms
+  )
+  _assert(
+    wedges[0] > 0.0,
+    "visited-but-empty wedge reads as covered, not zero like an unvisited wedge",
+  )
+  _assert(
+    is_equal_approx(wedges[0], float(motor_p.get("explore_w_visited_wedge", 0.6))),
+    "visited wedge coverage matches explore_w_visited_wedge (no belief in this wedge to add to it)",
+  )
+  for i in range(1, wedges.size()):
+    _assert(
+      is_equal_approx(wedges[i], 0.0),
+      "wedge %d has no visit and no belief, so still reads as genuinely unexplored" % i,
+    )
+
+
+## Repeatedly re-walking the same spot must not make its wedge's coverage grow past
+## explore_w_visited_wedge (would drown out real food-belief signal elsewhere) — capped via `maxf`
+## in `_accumulate_visited_bearing_coverage`, not summed.
+func _test_memory_adapter_explore_bearing_coverage_visited_wedge_caps_not_sums() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_p := _motor_v3_test_params().duplicate(true)
+  motor_p["explore_bearing_count"] = 8
+  motor_p["visited_path_memory_min_spacing"] = 1.0
+  var origin := Vector3.ZERO
+  var t := Time.get_ticks_msec()
+  for i in 5:
+    adapter.record_visited_position(Vector3(0.0, 0.0, -40.0 - float(i) * 2.0), t + i, motor_p)
+  var wedges := adapter.explore_bearing_coverage(_GkReg.GK_FIND_FOOD, origin, motor_p, {}, t + 10)
+  _assert(
+    is_equal_approx(wedges[0], float(motor_p.get("explore_w_visited_wedge", 0.6))),
+    "5 revisits of the same wedge still cap at explore_w_visited_wedge, not 5x it",
+  )
+
+
+## `VisitedPathMemory.record_sample` / `.maintain` pure-function coverage: min-spacing dedup keeps
+## a stationary or slow-moving creature from flooding the history, and TTL eviction ages out stale
+## visits so a long-past patch can look unexplored again.
+func _test_visited_path_memory_record_and_maintain() -> void:
+  var motor_p := _motor_v3_test_params().duplicate(true)
+  motor_p["visited_path_memory_min_spacing"] = 40.0
+  motor_p["visited_path_memory_ttl_sec"] = 10.0
+  motor_p["visited_path_memory_max_entries"] = 3
+  var marks: Array = []
+  marks = _VisitedPath.record_sample(marks, Vector3(0.0, 0.0, 0.0), 0, motor_p)
+  marks = _VisitedPath.record_sample(marks, Vector3(5.0, 0.0, 0.0), 100, motor_p)
+  _assert(marks.size() == 1, "sample within min_spacing of the last one is dropped")
+  marks = _VisitedPath.record_sample(marks, Vector3(50.0, 0.0, 0.0), 200, motor_p)
+  _assert(marks.size() == 2, "sample past min_spacing is recorded")
+  for i in 4:
+    marks = _VisitedPath.record_sample(
+      marks, Vector3(200.0 + float(i) * 50.0, 0.0, 0.0), 300 + i, motor_p
+    )
+  marks = _VisitedPath.maintain(marks, 300, motor_p)
+  _assert(
+    marks.size() <= int(motor_p.get("visited_path_memory_max_entries", 3)),
+    "maintain() enforces visited_path_memory_max_entries",
+  )
+  var stale: Array = [{"world_pos": Vector3.ZERO, "recorded_ms": 0}]
+  stale = _VisitedPath.maintain(stale, 20000, motor_p)
+  _assert(stale.is_empty(), "maintain() evicts entries past visited_path_memory_ttl_sec")
 
 
 func _explore_seek_unit_ctx(body: CharacterBody3D, motor_p: Dictionary, adapter: _MemoryAdapter = null) -> Dictionary:
@@ -3999,6 +4137,174 @@ func _test_motor_planner_live_pursuit_blocked_seek_suppressed() -> void:
     "ghost-only prey (no live ready food) does not suppress §9",
   )
   main.queue_free()
+
+
+## Dead-reckoning toward memory-tracked moving prey that hits an obstacle should detour around it
+## (mirrors _test_motor_planner_pursuit_detour_alternate_on_persistent_block for step_source ==
+## "memory_moving") rather than immediately falling into §9's generic SEEK/explore reset — the gap
+## reported live 2026-09-04 ("fox got stuck on find_food until the rabbit walked into its cone of
+## awareness"): the live-only pursuit-detour system left blocked memory-chases with no way to route
+## around geometry.
+func _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"memory_moving"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["memory_pursuit_detour_waypoint"] = detour_wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["memory_pursuit_detour_ticks_remaining"] = 24
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88070
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["memory_pursuit_detour_count"] = 0
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "scan": _motor_stack_empty_food_scan(),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  var new_wp: Vector3 = state.get("memory_pursuit_detour_waypoint", Vector3.ZERO)
+  _assert(
+    new_wp.distance_to(detour_wp) > 0.5,
+    "persistent block remints a fresh alternate memory-pursuit detour waypoint",
+  )
+  _assert(
+    state.get("step_goal", Vector3.ZERO).distance_to(new_wp) < 0.05,
+    "alternate memory remint keeps step_goal aligned with detour latch",
+  )
+  _assert(
+    state.get("step_source", &"") == &"memory_moving",
+    "alternate memory remint does not mislabel step_source as live",
+  )
+  _assert(
+    int(state.get("memory_pursuit_detour_ticks_remaining", 0))
+    == int(motor_v3.get("pursuit_detour_latch_ticks", 32)),
+    "alternate memory remint refreshes latch TTL",
+  )
+  _assert(
+    int(state.get("memory_pursuit_detour_count", 0)) == 1,
+    "alternate memory remint counts the detour for engagement-latch decay",
+  )
+  main.queue_free()
+
+
+## After max escalations (both sides tried), a memory-pursuit detour gives up and clears rather
+## than looping forever — mirrors the live C1 give-up shape, but for memory pursuit "give up" means
+## falling through to a fresh `_sync_moving_prey_memory_objective` consult next tick instead of a
+## live re-detect (there's no live sighting to fall back on).
+func _test_motor_planner_memory_pursuit_detour_gives_up_after_max_escalations() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["pursuit_detour_max_escalations"] = 2
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"memory_moving"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["memory_pursuit_detour_waypoint"] = detour_wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["memory_pursuit_detour_ticks_remaining"] = 24
+  state["memory_pursuit_detour_escalation_tier"] = 2
+  state["step_ultimate_pos"] = Vector3(20.0, 1.0, 0.0)
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88071
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["memory_pursuit_detour_count"] = 2
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "scan": _motor_stack_empty_food_scan(),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    not bool(state.get("memory_pursuit_detour_waypoint_set", false)),
+    "third escalation gives up and clears the memory-pursuit detour latch",
+  )
+  _assert(
+    int(state.get("consecutive_blocked", 0)) == 0,
+    "give-up resets consecutive_blocked so the fresh consult next tick isn't pre-blocked",
+  )
+  main.queue_free()
+
+
+## Per user request (2026-09-04): repeated obstruction while dead-reckoning should burn down the
+## memory-chase budget faster than open-ground pursuit, so a fox boxed in by geometry falls back to
+## a fresh goal-hub decision instead of spending its whole engagement latch wandering blocked.
+func _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["prey_engagement_detour_decay_step_ticks"] = 4
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"memory_moving"
+  state["prey_engagement_instance_id"] = 88072
+  state["prey_engagement_ticks_remaining"] = 40
+  state["memory_pursuit_detour_count"] = 3
+  var ctx := {"scan": _motor_stack_empty_food_scan(), "motor_v3": motor_v3}
+  (_MotorPlanner as GDScript).call("_tick_prey_engagement_latch", ctx, state)
+  _assert(
+    int(state.get("prey_engagement_ticks_remaining", 0)) == 27,
+    "3 prior detours decay the latch by 1 + 3*4 = 13 ticks this tick, not the plain 1",
+  )
+  var undetoured_state := _MotorPlanner.new_state()
+  undetoured_state["step_source"] = &"memory_moving"
+  undetoured_state["prey_engagement_instance_id"] = 88073
+  undetoured_state["prey_engagement_ticks_remaining"] = 40
+  undetoured_state["memory_pursuit_detour_count"] = 0
+  var undetoured_ctx := {"scan": _motor_stack_empty_food_scan(), "motor_v3": motor_v3}
+  (_MotorPlanner as GDScript).call("_tick_prey_engagement_latch", undetoured_ctx, undetoured_state)
+  _assert(
+    int(undetoured_state.get("prey_engagement_ticks_remaining", 0)) == 39,
+    "open-ground pursuit (no detours) still decays by the plain 1 tick/tick",
+  )
+  _assert(
+    bool(
+      (_MotorPlanner as GDScript).call(
+        "should_suppress_live_pursuit_blocked_resolution",
+        {"body": null},
+        {
+          "step_source": &"memory_moving",
+          "prey_engagement_instance_id": 88074,
+          "prey_engagement_ticks_remaining": 10,
+        },
+      )
+    ),
+    "memory pursuit suppresses §9's generic SEEK/SWITCH the same as live pursuit",
+  )
 
 
 func _test_motor_planner_live_locale_handoff_same_kind_prefers_live() -> void:

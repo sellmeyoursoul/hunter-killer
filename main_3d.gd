@@ -625,6 +625,7 @@ func _spawn_interior_boulders() -> void:
       continue
     _obstacles_root.add_child(rock)
     rock.global_position = pos
+    rock.scale = Vector3.ONE * _Bounds3D.BOULDER_VISUAL_SCALE
     rock.add_to_group(&"obstacles")
     PlayfieldBounds3D.ensure_obstacle_physics(rock)
     _spawn_existing_points.append(Vector2(pos.x, pos.z))

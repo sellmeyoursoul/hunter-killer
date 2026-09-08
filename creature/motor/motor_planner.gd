@@ -75,6 +75,13 @@ static func new_state() -> Dictionary:
     "prey_engagement_instance_id": 0,
     "prey_engagement_ticks_remaining": 0,
     "prey_engagement_latch_total": 0,
+    ## Count of pursuit-detour waypoints minted while dead-reckoning toward a memory-tracked
+    ## moving prey (`step_source == "memory_moving"`) with no live sighting to correct against.
+    ## Each detour decays `prey_engagement_ticks_remaining` faster (`_tick_prey_engagement_latch`)
+    ## so repeated obstruction burns down the memory-chase budget instead of letting it wander the
+    ## full latch duration pinned against geometry — reset on a fresh live sighting or on latch
+    ## expiry (`_arm_prey_engagement_from_live_food`, `_clear_prey_engagement`).
+    "memory_pursuit_detour_count": 0,
     "flee_waypoint": Vector3.ZERO,
     ## See `step_goal_set` — this is the field whose sentinel collision caused C9's 7th-fix bug.
     "flee_waypoint_set": false,
@@ -87,6 +94,20 @@ static func new_state() -> Dictionary:
     "pursuit_detour_ticks_remaining": 0,
     "pursuit_detour_alt_flip": false,
     "pursuit_detour_escalation_tier": 0,
+    ## One-shot: set when `_remint_alternate_pursuit_detour` exhausts its escalations, consumed by
+    ## `should_suppress_live_pursuit_blocked_resolution` to let that tick's dead-end/passibility-fail
+    ## resolution through instead of suppressing it forever for a truly boxed-in stationary target.
+    "pursuit_detour_gave_up": false,
+    ## Memory-pursuit's own detour latch — separate fields/[LatchHold] prefix from the live-pursuit
+    ## ones above so a detour minted while dead-reckoning (`step_source == "memory_moving"`) can't
+    ## be silently consumed by `_try_maintain_pursuit_detour_latch`'s live-only logic (which runs
+    ## unconditionally at the top of `_derive_find_food_step_objective` and would otherwise steal
+    ## it and mis-stamp `step_source` back to `"live"`).
+    "memory_pursuit_detour_waypoint": Vector3.ZERO,
+    "memory_pursuit_detour_waypoint_set": false,
+    "memory_pursuit_detour_ticks_remaining": 0,
+    "memory_pursuit_detour_alt_flip": false,
+    "memory_pursuit_detour_escalation_tier": 0,
     "step_ultimate_pos": Vector3.ZERO,
     ## See `step_goal_set` — same sentinel-collision hazard for the "ultimate" (pre-step-clamp) target.
     "step_ultimate_pos_set": false,
@@ -1031,7 +1052,17 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         )
       elif not live_food.is_empty() and state.get("step_source", &"") != &"locale":
         # Non-moving live remint while already bound (not holding a locale approach).
-        if _pursuit_detour_latch_valid(state) and _prey_engagement_latch_valid(state):
+        #
+        # Bug (2026-09-05, rabbit-boxed-by-boulders-and-shrub live-lock): this used to also
+        # require `_prey_engagement_latch_valid`, which only arms for *moving* prey. A stationary
+        # food target (shrub) boxed in by immovable geometry would mint a pursuit-detour latch via
+        # `_maybe_mint_pursuit_detour_latch` (gated only on live-food presence, not engagement) but
+        # this maintenance branch ran on every other tick while that latch was still active, saw
+        # engagement invalid, fell to the `else` below, and clobbered the detour waypoint with a
+        # fresh (still-blocked) raw food position — producing an exact 4-tick live/blocked/explore
+        # cycle that never converged. The detour machinery itself is generic (waypoint + escalation
+        # + give-up); only require it be active here, not that this is a moving-prey chase.
+        if _pursuit_detour_latch_valid(state):
           state["step_goal"] = state.get("pursuit_detour_waypoint", Vector3.ZERO)
           state["step_goal_set"] = true
           state["step_source"] = &"live"
@@ -1130,6 +1161,8 @@ static func _derive_find_food_step_objective(
     _clear_explore_latch_for_remint(state)
   _store_food_inventory_step_mode(ctx, state, motor_v3)
   if _prey_engagement_latch_valid(state):
+    if _try_maintain_memory_pursuit_detour_latch(state):
+      return
     if _sync_moving_prey_memory_objective(
       ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
     ):
@@ -1639,7 +1672,22 @@ static func should_suppress_live_pursuit_blocked_resolution(
   ctx: Dictionary,
   state: Dictionary,
 ) -> bool:
-  if not _prey_engagement_latch_valid(state):
+  ## Memory-tier pursuit (no live sighting to check against) has its own bounded give-up path —
+  ## `_remint_alternate_memory_pursuit_detour`'s escalate-then-clear, plus `_tick_prey_engagement_latch`
+  ## decaying the engagement latch faster per detour — so it's suppressed here the same as live
+  ## pursuit, rather than falling into §9's generic SEEK/SWITCH mid-detour. Memory pursuit only
+  ## ever exists under an armed engagement latch, so that gate stays here.
+  if _prey_engagement_latch_valid(state) and state.get("step_source", &"") == &"memory_moving":
+    return true
+  ## Plain live food pursuit (moving prey or stationary) has its own detour/give-up path via
+  ## `_maybe_mint_pursuit_detour_latch`/`_remint_alternate_pursuit_detour` — suppress §9 here too,
+  ## regardless of prey-engagement (that latch never arms for stationary food). One-shot escape:
+  ## once that detour has exhausted its escalations, let this tick's resolution through instead of
+  ## suppressing forever (see `_remint_alternate_pursuit_detour`'s give-up branch).
+  if bool(state.get("pursuit_detour_gave_up", false)):
+    state["pursuit_detour_gave_up"] = false
+    return false
+  if state.get("step_source", &"") != &"live":
     return false
   var body: CharacterBody3D = ctx.get("body")
   if body == null:
@@ -1658,7 +1706,7 @@ static func _try_maintain_pursuit_detour_latch(
 ) -> bool:
   if not _pursuit_detour_latch_valid(state):
     return false
-  if not _prey_engagement_latch_valid(state):
+  if not _live_ready_food_present(scan, creature_pos):
     _clear_pursuit_detour_latch(state)
     return false
   var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
@@ -1676,13 +1724,122 @@ static func _try_maintain_pursuit_detour_latch(
   return true
 
 
-static func _maybe_mint_pursuit_detour_latch(
-  ctx: Dictionary,
+static func _memory_pursuit_detour_latch_valid(state: Dictionary) -> bool:
+  return (
+    _LatchHold.is_active(state, "memory_pursuit_detour")
+    and bool(state.get("memory_pursuit_detour_waypoint_set", false))
+  )
+
+
+static func _clear_memory_pursuit_detour_latch(state: Dictionary) -> void:
+  state["memory_pursuit_detour_waypoint"] = Vector3.ZERO
+  state["memory_pursuit_detour_waypoint_set"] = false
+  state["memory_pursuit_detour_alt_flip"] = false
+  _LatchHold.clear(state, "memory_pursuit_detour")
+
+
+## Hold post-blocked-reeval detour substep while dead-reckoning toward memory-tracked moving prey
+## (no live sighting to correct against, so unlike the live consumer above this never re-arms
+## `step_ultimate_pos`/prey engagement from a fresh live sample — `_sync_moving_prey_memory_objective`
+## does that once this latch lapses and control falls back through to it).
+static func _try_maintain_memory_pursuit_detour_latch(state: Dictionary) -> bool:
+  if not _memory_pursuit_detour_latch_valid(state):
+    return false
+  if not _prey_engagement_latch_valid(state):
+    _clear_memory_pursuit_detour_latch(state)
+    return false
+  var latched: Vector3 = state.get("memory_pursuit_detour_waypoint", Vector3.ZERO)
+  state["step_goal"] = latched
+  state["step_goal_set"] = true
+  state["step_source"] = &"memory_moving"
+  _LatchHold.decrement(state, "memory_pursuit_detour")
+  return true
+
+
+## Arm a memory-pursuit detour off the current (blocked) step_goal — mirrors
+## `_maybe_mint_pursuit_detour_latch` but under the memory-only namespace above, and counts the
+## mint into `memory_pursuit_detour_count` so `_tick_prey_engagement_latch` can decay the
+## engagement latch faster the more times this episode has had to detour.
+static func _maybe_mint_memory_pursuit_detour_latch(
   state: Dictionary,
   motor_v3: Dictionary,
 ) -> void:
   if not _prey_engagement_latch_valid(state):
     return
+  if state.get("step_source", &"") != &"memory_moving":
+    return
+  if not bool(state.get("step_goal_set", false)):
+    return
+  var wp: Vector3 = state.get("step_goal", Vector3.ZERO)
+  var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
+  state["memory_pursuit_detour_waypoint"] = wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["step_goal"] = wp
+  state["step_goal_set"] = true
+  _LatchHold.start(state, "memory_pursuit_detour", latch_ticks)
+  state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
+  state["memory_pursuit_detour_count"] = int(state.get("memory_pursuit_detour_count", 0)) + 1
+
+
+## Mint a fresh memory-pursuit detour on the opposite side after persistent block — mirrors
+## `_remint_alternate_pursuit_detour`'s C1 escalate-then-give-up shape. On give-up this just clears
+## the latch (no live re-detect to fall back on); `_derive_find_food_step_objective` falls through
+## to a fresh `_sync_moving_prey_memory_objective` consult next tick, using the prey's current
+## memory-projected position instead of another blind bearing rotation.
+static func _remint_alternate_memory_pursuit_detour(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  var max_escalations := int(motor_v3.get("pursuit_detour_max_escalations", 2))
+  var escalation_result := _LatchHold.escalate(state, "memory_pursuit_detour", max_escalations)
+  if bool(escalation_result.get("gave_up", false)):
+    _clear_memory_pursuit_detour_latch(state)
+    state["consecutive_blocked"] = 0
+    return
+  var creature_pos := body.global_position
+  if not bool(state.get("step_ultimate_pos_set", false)):
+    return
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  var latched: Vector3 = state.get("memory_pursuit_detour_waypoint", Vector3.ZERO)
+  var to_latched := Vector3(latched.x - creature_pos.x, 0.0, latched.z - creature_pos.z)
+  var dist := to_latched.length()
+  if dist < 1e-6:
+    to_latched = Vector3(ultimate.x - creature_pos.x, 0.0, ultimate.z - creature_pos.z)
+    dist = to_latched.length()
+  if dist < 1e-6:
+    return
+  var dir := to_latched.normalized()
+  var alt_sign := -1.0 if bool(state.get("memory_pursuit_detour_alt_flip", false)) else 1.0
+  state["memory_pursuit_detour_alt_flip"] = not bool(state.get("memory_pursuit_detour_alt_flip", false))
+  dir = dir.rotated(Vector3.UP, deg_to_rad(60.0 * alt_sign))
+  var wp := creature_pos + dir * maxf(dist, 3.0)
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var agent_r := _agent_radius(body)
+  wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
+  var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
+  state["memory_pursuit_detour_waypoint"] = wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["step_goal"] = wp
+  state["step_goal_set"] = true
+  state["memory_pursuit_detour_ticks_remaining"] = latch_ticks
+  state["consecutive_blocked"] = 0
+  state["los_blocked_latched"] = false
+  state["los_verdict_streak"] = 0
+  state["memory_pursuit_detour_count"] = int(state.get("memory_pursuit_detour_count", 0)) + 1
+
+
+## Mints for any blocked live food pursuit, moving prey or stationary — gated only on there being
+## a live-visible food target to detour toward, not on `_prey_engagement_latch_valid` (that latch
+## is a moving-prey-only dead-reckoning budget and never arms for stationary food).
+static func _maybe_mint_pursuit_detour_latch(
+  ctx: Dictionary,
+  state: Dictionary,
+  motor_v3: Dictionary,
+) -> void:
   if state.get("step_source", &"") != &"live":
     return
   var body: CharacterBody3D = ctx.get("body")
@@ -1729,7 +1886,21 @@ static func _remint_alternate_pursuit_detour(
   var escalation_result := _LatchHold.escalate(state, "pursuit_detour", max_escalations)
   if bool(escalation_result.get("gave_up", false)):
     _clear_pursuit_detour_latch(state)
-    state["consecutive_blocked"] = 0
+    # Bug fix follow-up (2026-09-05): a truly boxed-in stationary food target (this function has
+    # no engagement-latch decay to fall back on, unlike the memory-pursuit sibling) would otherwise
+    # just remint a fresh detour from `_maybe_mint_pursuit_detour_latch` next blocked streak and
+    # repeat this escalate-then-give-up cycle forever, never reaching `apply_blocked_objective_resolution`
+    # (permanently suppressed by `should_suppress_live_pursuit_blocked_resolution` while any live
+    # food is visible). One-shot flag lets this tick's resolution through so passibility-fail/dead-end
+    # memory actually gets written and the food can be excluded from reselection.
+    #
+    # Deliberately NOT resetting `consecutive_blocked` to 0 here (unlike every other exit path in
+    # this function): `apply_blocked_objective_resolution` re-checks that same counter against
+    # `dead_end_record_min_blocked_ticks` before writing anything, and runs later this same tick —
+    # zeroing it here would make that check fail and silently no-op the write the flag above exists
+    # to unlock. `note_tick_completion` naturally resets it next tick once a fresh (non-detour) live
+    # objective is applied.
+    state["pursuit_detour_gave_up"] = true
     return
   var creature_pos := body.global_position
   if not bool(state.get("step_ultimate_pos_set", false)):
@@ -1771,6 +1942,8 @@ static func _clear_prey_engagement(state: Dictionary) -> void:
   state["prey_engagement_instance_id"] = 0
   state["prey_engagement_ticks_remaining"] = 0
   state["prey_engagement_latch_total"] = 0
+  state["memory_pursuit_detour_count"] = 0
+  _clear_memory_pursuit_detour_latch(state)
 
 
 static func _effective_prey_engagement_latch_ticks(ctx: Dictionary, motor_v3: Dictionary) -> int:
@@ -1806,6 +1979,11 @@ static func _arm_prey_engagement_from_live_food(
   state["prey_engagement_instance_id"] = iid
   state["prey_engagement_ticks_remaining"] = effective
   state["prey_engagement_latch_total"] = effective
+  ## Fresh live sighting corrects any accumulated dead-reckoning drift, so the detour history that
+  ## led to this reacquisition is no longer informative — start the next blind stretch (if any)
+  ## with a clean decay budget.
+  state["memory_pursuit_detour_count"] = 0
+  _clear_memory_pursuit_detour_latch(state)
 
 
 static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> bool:
@@ -1820,6 +1998,12 @@ static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> b
   return false
 
 
+## Per-tick engagement countdown. Normally decrements by 1; while dead-reckoning
+## (`step_source == "memory_moving"`) each detour this episode has needed adds extra decay, so a
+## fox repeatedly boxed in by geometry burns through its memory-chase budget fast and falls back
+## to a fresh goal-hub decision instead of spending the full latch wandering blocked (per user
+## request 2026-09-04: "lower the dead reckoning weight with every detour ... until a new goal
+## wins"). A single stretch of open ground (no detours minted) still gets the full latch duration.
 static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> void:
   if not _prey_engagement_latch_valid(state):
     return
@@ -1827,7 +2011,14 @@ static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> v
   var iid := int(state.get("prey_engagement_instance_id", 0))
   if _live_food_instance_visible(scan, iid):
     return
-  var rem := int(state.get("prey_engagement_ticks_remaining", 0)) - 1
+  var motor_v3: Dictionary = ctx.get("motor_v3", {})
+  var decay := 1
+  if state.get("step_source", &"") == &"memory_moving":
+    var detour_count := int(state.get("memory_pursuit_detour_count", 0))
+    if detour_count > 0:
+      var step := int(motor_v3.get("prey_engagement_detour_decay_step_ticks", 4))
+      decay += detour_count * step
+  var rem := int(state.get("prey_engagement_ticks_remaining", 0)) - decay
   state["prey_engagement_ticks_remaining"] = rem
   if rem <= 0:
     _clear_prey_engagement(state)
@@ -2536,12 +2727,20 @@ static func apply_immediate_blocked_path_reevaluation(
 ) -> void:
   if (
     _pursuit_detour_latch_valid(state)
-    and _prey_engagement_latch_valid(state)
     and state.get("step_source", &"") == &"live"
   ):
     var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
     if int(state.get("consecutive_blocked", 0)) >= min_ticks:
       _remint_alternate_pursuit_detour(ctx, state, body, motor_v3)
+    return
+  if (
+    _memory_pursuit_detour_latch_valid(state)
+    and _prey_engagement_latch_valid(state)
+    and state.get("step_source", &"") == &"memory_moving"
+  ):
+    var min_ticks_mem := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+    if int(state.get("consecutive_blocked", 0)) >= min_ticks_mem:
+      _remint_alternate_memory_pursuit_detour(ctx, state, body, motor_v3)
     return
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if not bool(state.get("step_goal_set", false)):
@@ -2604,6 +2803,7 @@ static func apply_immediate_blocked_path_reevaluation(
   # own call, not just this reactive recheck) re-derives a fresh LOS/nav deflection from that stable
   # target on every consideration tick, so no separate stamp is needed here.
   _maybe_mint_pursuit_detour_latch(ctx, state, motor_v3)
+  _maybe_mint_memory_pursuit_detour_latch(state, motor_v3)
 
 
 static func _run_path_clearance_los_nav(

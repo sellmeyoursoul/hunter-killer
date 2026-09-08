@@ -50,6 +50,16 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 ---
 
+## Falling & vertical traversal (draft)
+
+| Item | Priority | Draft plan | Notes |
+|------|----------|------------|--------|
+| **Define what "falling" actually does** | Medium | — | Right now a `CharacterBody3D` off-floor just free-falls under gravity with no game-facing meaning — no fall damage, no terminal-velocity cap, no landing recovery/stagger, no distinct death cause (see **Distinct player defeat causes** above, which already names "falling" as a future environment-cause bucket without defining the mechanic itself). Needs a decision on: does falling ever hurt/kill, is there a max safe fall height, does landing interrupt the current goal/action, is there recovery time. Surfaced 2026-09-05 while investigating a boulder-climbing bug — user noted climbing *and* falling off edges are both fine/desired in principle, but the game has never actually specified fall behavior beyond raw physics. |
+| **Climbing as a skill/trait, not a physics accident** | Low | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | User's stated direction (2026-09-04/05): wants climbable terrain/obstacles as a deliberate feature — e.g. a spider-like creature able to scale steeper slopes than a fox — rather than the current all-or-nothing `floor_max_angle` shared by every `CharacterBody3D`. Would need per-species (or per-trait) effective slope tolerance. Also the reason a per-obstacle collision-shape "climb guard" (tried 2026-09-05, since reverted — see **Boulder scale vs. accidental-climb workaround** below) was rejected in favor of scaling the boulder itself: an invented invisible shape whose only job is "nothing can climb this" cuts against where physics is headed once climbing ships for real. Ties to **D6** ([CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md)) — "vertical gameplay… later enhancement" — this is that enhancement. |
+| **Boulder scale vs. accidental-climb workaround** | Low | — | Boulders (`h-k-boulder1.blend`) got a 3x visual/collision scale-up (`PlayfieldBounds3D.BOULDER_VISUAL_SCALE`, 2026-09-05) after live-verifying that a fixed-size creature capsule can incrementally "roll up" the boulder's convex-hull collision via capsule-edge-rounding (a Jolt/Godot quirk, not a hull-fidelity problem — tried a simplified hull, full convex decomposition, and an additive smooth-cylinder collision guard; none of the mesh-shape fixes worked as well as just making the object bigger relative to the capsule). This is a stopgap for ground-only dev, not a permanent size decision — once climbing is a real mechanic (see above), revisit whether boulders should be this large by default or whether smaller, genuinely-climbable rock props should exist alongside big landmark-scale ones. |
+
+---
+
 ## Creature goal drivers & habitual replay
 
 | Item | Priority | Draft plan | Notes |

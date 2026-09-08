@@ -300,6 +300,18 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "explore_w_unexp": 0.25,
     "explore_w_forward": 0.10,
     "explore_w_live_near": 0.50,
+    ## Live finding 2026-09-04: belief/live-near coverage alone can't tell "walked through here,
+    ## confirmed empty" from "never been near" — both read as zero coverage, so a picked-clean
+    ## direction kept re-winning explore_w_unexp's pull as if it were still unexplored (root cause
+    ## of a fox bouncing east-west between two walls). `explore_w_visited_wedge` is the capped
+    ## per-wedge contribution (via `maxf`, not summed) from `VisitedPathMemory`'s spatial
+    ## visitation history once a wedge has been physically walked through recently — same
+    ## magnitude class as a coarse belief (0.5) so it competes but doesn't drown out real food
+    ## density elsewhere.
+    "explore_w_visited_wedge": 0.6,
+    "visited_path_memory_ttl_sec": 90.0,
+    "visited_path_memory_max_entries": 64,
+    "visited_path_memory_min_spacing": 40.0,
     ## Wedges within this many neighbors of a blocked bearing get a discounted open_term (fading
     ## linearly to no discount at the edge) instead of scoring identically to a fully-clear wedge
     ## on the far side of the ring — gives explore_w_open real graduation to act on.

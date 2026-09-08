@@ -8,7 +8,12 @@ const _StaticObstacleCollision := preload("res://environment/static_obstacle_col
 signal calories_changed
 
 @export var max_calories: int = 5
-@export var growth_rate: float = 1.0
+## Calories/sec regrowth after a full-grant EAT drops `current_calories` to 0 — regrow time is
+## `max_calories / growth_rate`. Was 1.0 (5s regrow), which let a rabbit ping-pong between two
+## nearby shrubs faster than either could deplete for good, never forcing real exploration; slowed
+## 10x (50s regrow) per user request 2026-09-04 so a shrub cluster within easy walking distance
+## stays empty long enough that the rabbit has to go looking elsewhere instead.
+@export var growth_rate: float = 0.1
 @export var stimulus_kind_id: StringName = &"shrub_berries"
 
 var current_calories: float = 5.0

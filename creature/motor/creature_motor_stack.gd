@@ -70,6 +70,12 @@ const _INVARIANT_FLEE_WP_HISTORY_LEN := 20
 const _INVARIANT_STALL_MIN_DISP := 0.02
 const _INVARIANT_SETTLE_TICKS := 45
 const _INVARIANT_MAX_AIRBORNE_TICKS := 45
+## Rolling per-tick trace kept for every invariant trip's diagnostic dump (2026-09-04, C10 dig-in):
+## `_trip_invariant` hard-quits the instant it fires, so without this the only evidence of a rare
+## flake like the airborne one was a single tick's snapshot — no view of how it got there. 90 ticks
+## is ~1.5s at 60fps, enough to see the approach into a fall, not so much it's a real memory cost.
+const _INVARIANT_TRACE_LEN := 90
+var _invariant_trace: Array = []
 var _invariant_pos_history: Array = []
 var _invariant_flee_wp_history: Array = []
 var _invariant_last_flee_wp: Vector3 = Vector3.ZERO
@@ -244,6 +250,17 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
     return
   var pos := _body.global_position
   var label := _creature_log_label()
+  var on_floor := _body.is_on_floor()
+
+  _invariant_trace.append({
+    "tick": _physics_tick_count,
+    "pos": pos,
+    "on_floor": on_floor,
+    "action": _motor_action_debug_label(int(_MotorAction.normalize(action))),
+    "blocked": outcome.blocked if outcome != null else false,
+  })
+  if _invariant_trace.size() > _INVARIANT_TRACE_LEN:
+    _invariant_trace.pop_front()
 
   if not (is_finite(pos.x) and is_finite(pos.y) and is_finite(pos.z)):
     _trip_invariant(label, "NaN/Inf position", {"pos": pos, "tick": _physics_tick_count})
@@ -252,7 +269,7 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
   if _physics_tick_count <= _INVARIANT_SETTLE_TICKS:
     return
 
-  if _body.is_on_floor():
+  if on_floor:
     _invariant_airborne_ticks = 0
   else:
     _invariant_airborne_ticks += 1
@@ -260,7 +277,13 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
       _trip_invariant(
         label,
         "airborne/off-floor for %d+ ticks (stuck-under-geometry, C10)" % _INVARIANT_MAX_AIRBORNE_TICKS,
-        {"pos": pos, "airborne_ticks": _invariant_airborne_ticks, "tick": _physics_tick_count},
+        {
+          "pos": pos,
+          "airborne_ticks": _invariant_airborne_ticks,
+          "tick": _physics_tick_count,
+          "geometry_probe": _airborne_geometry_probe(pos),
+          "recent_trace": _invariant_trace.duplicate(true),
+        },
       )
       return
 
@@ -304,6 +327,43 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
         return
   else:
     _invariant_pos_history.clear()
+
+
+## Diagnostic-only probe for the C10 airborne trip: casts straight down and straight up from the
+## trip position to tell apart "fell through a gap into open air below" (no floor hit, or one far
+## below) from "wedged inside solid geometry" (a hit essentially at/above the body's own position,
+## or a hit within the body on the up-cast) — `hit_from_inside = true` so a ray starting embedded
+## in a collider still registers, matching `line_of_sight.gd`'s existing raycast convention.
+func _airborne_geometry_probe(pos: Vector3) -> Dictionary:
+  if _body == null or not _body.is_inside_tree():
+    return {}
+  var space := _body.get_world_3d().direct_space_state
+  if space == null:
+    return {}
+  var probe_dist := 50.0
+  var down_query := PhysicsRayQueryParameters3D.create(pos, pos + Vector3.DOWN * probe_dist)
+  down_query.collision_mask = 1  # world_static, matches line_of_sight.gd's WORLD_STATIC_MASK
+  down_query.hit_from_inside = true
+  var down_hit: Dictionary = space.intersect_ray(down_query)
+  var up_query := PhysicsRayQueryParameters3D.create(pos, pos + Vector3.UP * probe_dist)
+  up_query.collision_mask = 1
+  up_query.hit_from_inside = true
+  var up_hit: Dictionary = space.intersect_ray(up_query)
+  var result := {
+    "floor_below_dist": -1.0,
+    "floor_below_collider": "",
+    "ceiling_above_dist": -1.0,
+    "ceiling_above_collider": "",
+  }
+  if not down_hit.is_empty():
+    result["floor_below_dist"] = pos.distance_to(down_hit.get("position", pos))
+    var down_collider: Object = down_hit.get("collider")
+    result["floor_below_collider"] = down_collider.name if down_collider != null else ""
+  if not up_hit.is_empty():
+    result["ceiling_above_dist"] = pos.distance_to(up_hit.get("position", pos))
+    var up_collider: Object = up_hit.get("collider")
+    result["ceiling_above_collider"] = up_collider.name if up_collider != null else ""
+  return result
 
 
 func _trip_invariant(label: String, reason: String, data: Dictionary) -> void:
@@ -692,7 +752,9 @@ func _build_zone_ctx(area_only: bool) -> Dictionary:
 func _maintain_memory_beliefs() -> void:
   if _memory_adapter == null or _body == null:
     return
-  _memory_adapter.maintain_beliefs(_body.global_position, Time.get_ticks_msec(), _motor_v3)
+  var now_ms := Time.get_ticks_msec()
+  _memory_adapter.maintain_beliefs(_body.global_position, now_ms, _motor_v3)
+  _memory_adapter.record_visited_position(_body.global_position, now_ms, _motor_v3)
 
 
 func _rest_area_only_perception() -> bool:

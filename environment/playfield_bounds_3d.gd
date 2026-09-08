@@ -11,6 +11,21 @@ const WORLD_STATIC_COLLISION_MASK := 1
 const GROUND_RAY_HEIGHT := 256.0
 const GROUND_RAY_DEPTH := 512.0
 
+## Live finding 2026-09-04/05: at native scale, a `CharacterBody3D` capsule could incrementally
+## climb the boulder's convex-hull collision via capsule-edge-rounding — a Jolt/Godot quirk where
+## rolling over the edge between two adjacent steep facets reads as shallow-enough-to-be-floor for
+## a moment, regardless of the facets' own angles. Tried reshaping the hull (simplified hull, full
+## convex decomposition, an additive smooth-cylinder guard) — all either didn't help or introduced
+## their own gaps (a cylinder's flat top cap was itself climbable/fall-off-able). The exploit
+## depends on the ratio of the (fixed-size) creature capsule to the mesh's facet size, not pure
+## face-angle math — scaling the boulder itself up removes the exploit without inventing any new
+## collision shape, keeping the mesh as the sole physics boundary per the project's stated
+## preference. Confirmed via physics repro: 3x scale on the plain convex hull alone (no extra
+## shapes) stops the climb; ground-only movement/goals dev treats it as a hard obstacle for now,
+## consistent with "no vertical gameplay yet" (CONVERT_TO_3D.md D6) — once full 3D/climbing ships,
+## revisit whether boulders should stay this large or be genuinely scalable/climbable terrain.
+const BOULDER_VISUAL_SCALE := 3.0
+
 
 ## Params:
 ## - root: Playfield subtree (grasslands import, floor colliders, etc.).

@@ -6,6 +6,7 @@ const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEnd := preload("res://creature/motor/dead_end_memory.gd")
+const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
 const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
@@ -20,6 +21,7 @@ var _beliefs: Dictionary = {}
 var _kind_profile: Dictionary = {}
 var _threat_disposition_mod: float = 1.0
 var _dead_end_marks: Array = []
+var _visited_marks: Array = []
 const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
 const _OccludedGhost := preload("res://creature/motor/occluded_in_zone_ghost.gd")
 var _locale_store: RefCounted
@@ -59,6 +61,7 @@ func reset() -> void:
   _kind_profile.clear()
   _threat_disposition_mod = _ThreatDisposition.DEFAULT_MOD
   _dead_end_marks.clear()
+  _visited_marks.clear()
   if _locale_store != null and _locale_store.has_method(&"reset"):
     _locale_store.call(&"reset")
 
@@ -73,6 +76,15 @@ func sync_after_scan(food_split: Dictionary, threat_samples: Array, now_ms: int)
 func maintain_beliefs(creature_pos: Vector3, now_ms: int, motor_v3: Dictionary) -> void:
   _beliefs = _GoalBelief.maintain(_beliefs, creature_pos, now_ms, motor_v3)
   _dead_end_marks = _DeadEnd.maintain(_dead_end_marks, now_ms, motor_v3)
+  _visited_marks = _VisitedPath.maintain(_visited_marks, now_ms, motor_v3)
+
+
+## Records the creature's current position into its spatial visitation history — goal-agnostic
+## (unlike the belief/live-near accumulators below, "I've physically been here" doesn't depend on
+## what the creature was looking for at the time), so this is called once per tick regardless of
+## goal_kind rather than threaded through per-goal scan data.
+func record_visited_position(world_pos: Vector3, now_ms: int, motor_v3: Dictionary) -> void:
+  _visited_marks = _VisitedPath.record_sample(_visited_marks, world_pos, now_ms, motor_v3)
 
 
 ## Records find_food locale prior + kind EWMA after EAT outcome (§6.2, §8.4).
@@ -830,7 +842,35 @@ func explore_bearing_coverage(
     zone_ctx,
     live_threat_samples,
   )
+  _accumulate_visited_bearing_coverage(coverage, creature_pos, motor_v3, near_r, wedge_count)
   return coverage
+
+
+## Marks a wedge as "covered" when the creature has physically passed near it recently, regardless
+## of what (if anything) was found there — goal-agnostic, unlike the two accumulators above.
+## Capped per-wedge via `maxf` rather than summed: repeatedly re-walking the same patch shouldn't
+## make that wedge's coverage grow without bound and drown out genuine food-belief signal
+## elsewhere, it should just read as "yes, explored" once. Fixes the live finding 2026-09-04 (fox
+## bouncing east-west between two walls): before this, a wedge the creature had already walked
+## through and confirmed empty had the same near-zero coverage as one it had never been near, so
+## `_unexplored_for_wedge` couldn't tell "go somewhere new" from "go back to the empty spot again."
+func _accumulate_visited_bearing_coverage(
+  coverage: PackedFloat32Array,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  near_r: float,
+  wedge_count: int,
+) -> void:
+  var visited_w := float(motor_v3.get("explore_w_visited_wedge", 0.6))
+  for row_v in _visited_marks:
+    if typeof(row_v) != TYPE_DICTIONARY:
+      continue
+    var row: Dictionary = row_v
+    var pos := _read_pos(row.get("world_pos", Vector3.ZERO))
+    if creature_pos.distance_to(pos) > near_r:
+      continue
+    var wedge := _bearing_wedge_index(creature_pos, pos, wedge_count)
+    coverage[wedge] = maxf(coverage[wedge], visited_w)
 
 
 func _live_instance_ids_for_goal(

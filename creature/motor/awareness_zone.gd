@@ -22,7 +22,8 @@ static func effective_reach_toward(
 ) -> float:
   var area_r := float(motor_v3.get("awareness_radius", 1500.0))
   if area_only:
-    return area_r
+    var to_target_area := Vector3(target_pos.x - creature_pos.x, 0.0, target_pos.z - creature_pos.z)
+    return area_r if to_target_area.length() <= area_r else 0.0
   var cone_extra := float(motor_v3.get("awareness_cone_extra", 0.0))
   var half_angle := deg_to_rad(float(motor_v3.get("awareness_cone_half_angle_deg", 45.0)))
   var to_target := Vector3(target_pos.x - creature_pos.x, 0.0, target_pos.z - creature_pos.z)
