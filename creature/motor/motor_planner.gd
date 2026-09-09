@@ -17,6 +17,7 @@ const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _LatchHold := preload("res://creature/motor/latch_hold.gd")
+const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -86,6 +87,13 @@ static func new_state() -> Dictionary:
     ## See `step_goal_set` — this is the field whose sentinel collision caused C9's 7th-fix bug.
     "flee_waypoint_set": false,
     "flee_waypoint_ticks_remaining": 0,
+    ## Sparse interior-bend waypoints (`MotorWaypointChain`) for the winning candidate's own
+    ## navmesh route, when it curves around something — `flee_waypoint` stays the final point
+    ## (drives latch timing / backtrack-history exactly as before), this is what's actually steered
+    ## toward hop by hop so a destination reachable only by curving around an obstacle doesn't get
+    ## driven at in a straight line through that same obstacle. Empty/degenerate for a clear line.
+    "flee_waypoint_chain": PackedVector3Array(),
+    "flee_waypoint_chain_index": 0,
     "flee_backtrack_streak": 0,
     "flee_recent_dirs": [],
     "pursuit_detour_waypoint": Vector3.ZERO,
@@ -2188,6 +2196,8 @@ static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_backtrack_streak"] = 0
   state["flee_recent_dirs"] = []
   state["flee_give_up_active"] = false
+  state["flee_waypoint_chain"] = PackedVector3Array()
+  state["flee_waypoint_chain_index"] = 0
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -2227,13 +2237,13 @@ static func _flee_candidate_probe(
   dist: float,
 ) -> Dictionary:
   if not map_rid.is_valid() or dist <= 0.0:
-    return {"reach": dist, "endpoint": creature_pos + dir * dist}
+    return {"reach": dist, "endpoint": creature_pos + dir * dist, "path": PackedVector3Array()}
   var candidate := creature_pos + dir * dist
   var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, candidate, true)
   if path.size() < 2:
-    return {"reach": 0.0, "endpoint": creature_pos}
+    return {"reach": 0.0, "endpoint": creature_pos, "path": PackedVector3Array()}
   var endpoint: Vector3 = path[path.size() - 1]
-  return {"reach": creature_pos.distance_to(endpoint), "endpoint": endpoint}
+  return {"reach": creature_pos.distance_to(endpoint), "endpoint": endpoint, "path": path}
 
 
 ## True when at least one [code]threat_samples[/code] entry is currently [code]in_awareness[/code].
@@ -2288,6 +2298,8 @@ static func _mint_flee_waypoint(
     var fallback_wp: Vector3 = fallback_probe.get("endpoint", creature_pos)
     state["flee_waypoint"] = fallback_wp
     state["flee_waypoint_set"] = true
+    state["flee_waypoint_chain"] = PackedVector3Array([fallback_wp])
+    state["flee_waypoint_chain_index"] = 0
     _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
     state["flee_backtrack_streak"] = 0
     return fallback_wp
@@ -2378,16 +2390,19 @@ static func _mint_flee_waypoint(
     var best_reach := -1.0
     var best_effective := -1.0
     var best_endpoint := creature_pos
+    var best_path := PackedVector3Array()
     var best_clear_dir := Vector3.ZERO
     var best_clear_reach := -1.0
     var best_clear_effective := -1.0
     var best_clear_endpoint := creature_pos
+    var best_clear_path := PackedVector3Array()
     var found_clear := false
     for i in range(candidate_dirs.size()):
       var candidate_dir: Vector3 = candidate_dirs[i]
       var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
       var reach := float(probe.get("reach", 0.0))
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
+      var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
       var is_shelter_candidate := shelter_active and i == candidate_dirs.size() - 1
       var effective := reach + (shelter_bias_reach if is_shelter_candidate else 0.0)
       if effective > best_effective:
@@ -2395,6 +2410,7 @@ static func _mint_flee_waypoint(
         best_reach = reach
         best_dir = candidate_dir
         best_endpoint = endpoint
+        best_path = cand_path
       var avoided := false
       for avoid_v in avoid_dirs:
         if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
@@ -2405,10 +2421,12 @@ static func _mint_flee_waypoint(
         best_clear_reach = reach
         best_clear_dir = candidate_dir
         best_clear_endpoint = endpoint
+        best_clear_path = cand_path
         found_clear = true
     var final_dir := best_clear_dir if found_clear else best_dir
     var final_reach := best_clear_reach if found_clear else best_reach
     var final_endpoint := best_clear_endpoint if found_clear else best_endpoint
+    var final_path := best_clear_path if found_clear else best_path
 
     # CLEANUP C9 give-up escalation (2026-08-07): the 6-candidate sweep above only samples every
     # 60° — in a genuine corner none of those 6 may reach anywhere close to `flee_dist`, but a
@@ -2424,6 +2442,7 @@ static func _mint_flee_waypoint(
       var scan_best_dir := final_dir
       var scan_best_reach := final_reach
       var scan_best_endpoint := final_endpoint
+      var scan_best_path := final_path
       for i in range(scan_n):
         var ang := TAU * float(i) / float(scan_n)
         var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
@@ -2433,11 +2452,13 @@ static func _mint_flee_waypoint(
           scan_best_reach = reach
           scan_best_dir = candidate_dir
           scan_best_endpoint = probe.get("endpoint", creature_pos)
+          scan_best_path = probe.get("path", PackedVector3Array())
       if scan_best_reach > final_reach:
         final_dir = scan_best_dir
         state["flee_give_up_active"] = true
         final_reach = scan_best_reach
         final_endpoint = scan_best_endpoint
+        final_path = scan_best_path
 
     # CLEANUP RANDOMTESTS RT1 (2026-08-10): both scans above score every candidate purely by
     # navmesh reach — when the creature is near/past the edge of the baked navmesh (confirmed via
@@ -2488,8 +2509,17 @@ static func _mint_flee_waypoint(
     # at full `flee_dist` and pushing against it than degenerating into a self-referential point.
     if reach_known:
       wp = final_endpoint
+      # A route that only reaches `wp` by curving around something (final_path.size() > 2, since a
+      # 2-point path is just a straight line to it) gets driven as a hop-by-hop chain instead of a
+      # straight line through whatever it curved around — see MotorWaypointChain. A clear line
+      # degenerates to a single-point chain, same as the reach_known=false branch below.
+      state["flee_waypoint_chain"] = (
+        _WaypointChain.simplify(final_path) if final_path.size() > 2 else PackedVector3Array([wp])
+      )
     else:
       wp = creature_pos + final_dir * flee_dist
+      state["flee_waypoint_chain"] = PackedVector3Array([wp])
+    state["flee_waypoint_chain_index"] = 0
 
   var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
   history.append({"dir": (wp - creature_pos).normalized(), "until_tick": physics_tick + ttl})
@@ -2497,6 +2527,11 @@ static func _mint_flee_waypoint(
     history = history.slice(history.size() - 3, history.size())
   state["flee_recent_dirs"] = history
 
+  if not (state.get("flee_waypoint_chain", PackedVector3Array()) as PackedVector3Array).size() > 0:
+    # to_wp ~= 0 (threat co-located with creature) skipped the candidate sweep above entirely —
+    # nothing built a chain for this `wp`.
+    state["flee_waypoint_chain"] = PackedVector3Array([wp])
+    state["flee_waypoint_chain_index"] = 0
   state["flee_waypoint"] = wp
   state["flee_waypoint_set"] = true
   var latch_ticks := maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16)))
@@ -2507,7 +2542,30 @@ static func _mint_flee_waypoint(
   return wp
 
 
+## Current immediate hop of [code]flee_waypoint_chain[/code] toward the already-minted
+## [code]flee_waypoint[/code] — advances (and persists) the chain index as [param creature_pos]
+## reaches each interior bend, so a route that only reaches the destination by curving around an
+## obstacle is actually steered through that curve instead of driven at in a straight line.
+static func _advance_flee_waypoint_chain(
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+) -> Vector3:
+  var chain: PackedVector3Array = state.get("flee_waypoint_chain", PackedVector3Array())
+  if chain.is_empty():
+    return state.get("flee_waypoint", Vector3.ZERO)
+  var arrival_tolerance := float(motor_v3.get("arrival_tolerance", 5.0))
+  var result := _WaypointChain.advance(
+    chain, int(state.get("flee_waypoint_chain_index", 0)), creature_pos, arrival_tolerance,
+  )
+  state["flee_waypoint_chain_index"] = int(result.get("index", 0))
+  return result.get("target", state.get("flee_waypoint", Vector3.ZERO))
+
+
 ## Hold latched [code]flee_waypoint[/code] between remints during acute Flight (§12.2 post-6d O1).
+## The latch itself still times/tracks the ultimate [code]flee_waypoint[/code] exactly as before —
+## [method _advance_flee_waypoint_chain] only changes which point *this tick's* [code]step_goal[/code]
+## resolves to, hop by hop through any interior bends that waypoint's own route needed.
 static func _maintain_flee_latch(
   ctx: Dictionary,
   state: Dictionary,
@@ -2518,15 +2576,16 @@ static func _maintain_flee_latch(
     return
   if bool(ctx.get("flight_just_entered", false)):
     _reset_flight_entry_telemetry(state)
-    state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    _mint_flee_waypoint(ctx, state, body, motor_v3)
+    state["step_goal"] = _advance_flee_waypoint_chain(state, body.global_position, motor_v3)
     state["step_goal_set"] = true
     return
-  var latched: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
   if not _LatchHold.is_active(state, "flee_waypoint") or not bool(state.get("flee_waypoint_set", false)):
-    state["step_goal"] = _mint_flee_waypoint(ctx, state, body, motor_v3)
+    _mint_flee_waypoint(ctx, state, body, motor_v3)
+    state["step_goal"] = _advance_flee_waypoint_chain(state, body.global_position, motor_v3)
     state["step_goal_set"] = true
     return
-  state["step_goal"] = latched
+  state["step_goal"] = _advance_flee_waypoint_chain(state, body.global_position, motor_v3)
   state["step_goal_set"] = true
   _LatchHold.decrement(state, "flee_waypoint")
 
@@ -2790,6 +2849,8 @@ static func apply_immediate_blocked_path_reevaluation(
       if streak >= int(motor_v3.get("dead_end_record_min_blocked_ticks", 3)):
         state["flee_waypoint"] = deflected
         state["flee_waypoint_set"] = true
+        state["flee_waypoint_chain"] = PackedVector3Array([deflected])
+        state["flee_waypoint_chain_index"] = 0
         _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
         state["flee_backtrack_streak"] = 0
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)

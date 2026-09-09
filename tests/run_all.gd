@@ -51,6 +51,7 @@ const _MotorReplayFixture := preload("res://tests/motor_replay_fixture.gd")
 const _MotorStallDetector := preload("res://tests/motor_stall_detector.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
+const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
@@ -211,6 +212,11 @@ func _run_all() -> void:
   _test_motor_planner_flight_flee_waypoint_orbit_stable()
   _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter()
   _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief()
+  _test_waypoint_chain_simplify_drops_collinear_points()
+  _test_waypoint_chain_simplify_keeps_real_bends()
+  _test_waypoint_chain_advance_steps_hop_by_hop()
+  _test_waypoint_chain_advance_empty_chain_holds_position()
+  await _test_motor_planner_flee_waypoint_chain_detours_around_obstacle()
   _test_motor_planner_flight_entry_telemetry_reset()
   _test_motor_planner_blocked_move_immediate_path_reevaluation()
   _test_motor_planner_blocked_move_reeval_preserves_flee_latch()
@@ -6547,6 +6553,116 @@ func _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief() 
   _assert(
     to_wp.normalized().dot(away_from_threat) > 0.99,
     "flee waypoint stays straight away from threat with no confirmed shelter belief",
+  )
+  main.queue_free()
+
+
+## MotorWaypointChain.simplify: a straight run of points (same bearing throughout) collapses to
+## just its final point — nothing forces a mid-run micro-turn when the whole leg is one line.
+func _test_waypoint_chain_simplify_drops_collinear_points() -> void:
+  var path := PackedVector3Array([
+    Vector3(0.0, 0.0, 0.0),
+    Vector3(5.0, 0.0, 0.0),
+    Vector3(10.0, 0.0, 0.0),
+    Vector3(15.0, 0.0, 0.0),
+    Vector3(20.0, 0.0, 0.0),
+  ])
+  var chain := _WaypointChain.simplify(path)
+  _assert(chain.size() == 1, "a fully straight path simplifies to just its endpoint")
+  _assert(chain[0].is_equal_approx(Vector3(20.0, 0.0, 0.0)), "surviving point is the path's final point")
+
+
+## A real bend (route goes +X then turns +Z) keeps the corner point plus the endpoint — the exact
+## shape a detour around an obstacle produces, and what the shelter-flee clip bug needed preserved
+## instead of collapsed to a single straight-line target.
+func _test_waypoint_chain_simplify_keeps_real_bends() -> void:
+  var path := PackedVector3Array([
+    Vector3(0.0, 0.0, 0.0),
+    Vector3(5.0, 0.0, 0.0),
+    Vector3(10.0, 0.0, 0.0),
+    Vector3(10.0, 0.0, 5.0),
+    Vector3(10.0, 0.0, 10.0),
+  ])
+  var chain := _WaypointChain.simplify(path)
+  _assert(chain.size() == 2, "one real bend keeps exactly one interior waypoint plus the endpoint")
+  _assert(chain[0].is_equal_approx(Vector3(10.0, 0.0, 0.0)), "kept interior point is the actual corner")
+  _assert(chain[1].is_equal_approx(Vector3(10.0, 0.0, 10.0)), "final point is preserved")
+
+
+## MotorWaypointChain.advance: starting well short of the first hop, the target is that first hop,
+## not the chain's final point — the whole reason this module exists (a route only reachable by
+## curving around something must be steered through the curve, not driven at in a straight line).
+func _test_waypoint_chain_advance_steps_hop_by_hop() -> void:
+  var chain := PackedVector3Array([Vector3(10.0, 0.0, 0.0), Vector3(10.0, 0.0, 10.0)])
+  var r1 := _WaypointChain.advance(chain, 0, Vector3(0.0, 0.0, 0.0), 1.0)
+  _assert(
+    (r1.get("target", Vector3.ZERO) as Vector3).is_equal_approx(Vector3(10.0, 0.0, 0.0)),
+    "far from the first hop: target is the first hop, not the final point",
+  )
+  _assert(not bool(r1.get("done", true)), "not done while an interior hop remains")
+  ## Once within arrival_tolerance of the first hop, advance past it to the final point.
+  var r2 := _WaypointChain.advance(chain, int(r1.get("index", 0)), Vector3(10.0, 0.0, 0.5), 1.0)
+  _assert(
+    (r2.get("target", Vector3.ZERO) as Vector3).is_equal_approx(Vector3(10.0, 0.0, 10.0)),
+    "within tolerance of the first hop: advances to the final point",
+  )
+  _assert(bool(r2.get("done", false)), "done once the final point is the current target")
+
+
+## Empty chain (degenerate / never built) holds the creature's own position rather than erroring —
+## callers fall back to their own ultimate-waypoint field when this happens.
+func _test_waypoint_chain_advance_empty_chain_holds_position() -> void:
+  var here := Vector3(3.0, 0.0, 4.0)
+  var r := _WaypointChain.advance(PackedVector3Array(), 0, here, 1.0)
+  _assert((r.get("target", Vector3.ZERO) as Vector3).is_equal_approx(here), "empty chain targets creature_pos")
+  _assert(bool(r.get("done", false)), "empty chain reports done")
+
+
+## Integration: fleeing a threat with a real detour-forcing obstacle on the away bearing (same
+## "blocked" navmesh fixture C1/C9 use — a center wall near (20,20) that a from-(2,2)-to-(38,38)
+## path must route around) produces a multi-point `flee_waypoint_chain`, and the first advanced hop
+## is the detour's own interior corner, not the far final endpoint — the shelter-clip bug's actual
+## mechanism (a reachable-via-curve destination collapsed to a straight line through what it curved
+## around) reproduced and fixed at the general flee-mint level, not just for the shelter case.
+func _test_motor_planner_flee_waypoint_chain_detours_around_obstacle() -> void:
+  var main := _TerrainTestMainStub.new()
+  root.add_child(main)
+  var built := main.mount_motor_path_fixture("blocked")
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(map_rid.is_valid(), "blocked fixture yields a valid map_rid for the flee chain test")
+  var motor_v3 := _motor_v3_test_params()
+  var body := _spawn_herbivore_body(main, Vector3(2.0, 1.0, 2.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 1.0).normalized()
+  ## Threat placed so "away from threat" points diagonally toward (38, 38) — same corridor the
+  ## sibling `_test_motor_path_fixture_blocked_nav` fixture test already confirmed detours around
+  ## the center wall instead of cutting through it.
+  var threat := _flight_test_threat_at(Vector3(-6.0, 1.0, -6.0), 11.3)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  ctx["map_rid"] = map_rid
+  ctx["memory_adapter"] = _MemoryAdapter.new()
+  var state := _MotorPlanner.new_state()
+  var ready := false
+  for _i in 30:
+    await physics_frame
+    if NavigationServer3D.map_get_path(map_rid, Vector3(2.0, 0.0, 2.0), Vector3(38.0, 0.0, 38.0), true).size() >= 2:
+      ready = true
+      break
+  _assert(ready, "blocked fixture nav path ready before minting a flee waypoint through it")
+  (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var chain: PackedVector3Array = state.get("flee_waypoint_chain", PackedVector3Array())
+  _assert(chain.size() > 1, "flee waypoint through the pinch keeps interior detour waypoints, not just the endpoint")
+  for pt in chain:
+    _assert(
+      not (absf(pt.x - 20.0) < 1.0 and absf(pt.z - 20.0) < 1.0),
+      "no chain waypoint sits inside the center-wall pinch",
+    )
+  var hop: Vector3 = (_MotorPlanner as GDScript).call(
+    "_advance_flee_waypoint_chain", state, body.global_position, motor_v3
+  )
+  var final_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+  _assert(
+    hop.distance_to(final_wp) > 1.0,
+    "first advanced hop is an interior waypoint, not a jump straight to the final destination",
   )
   main.queue_free()
 
