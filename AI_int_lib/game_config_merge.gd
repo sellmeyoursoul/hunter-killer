@@ -434,6 +434,24 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "shelter_eval_confirm_cycles": 5,
     "shelter_eval_max_cycles": 15,
     "shelter_probe_retry_cooldown_cycles": 2,
+    ## Graded shelter-belief confidence (2026-09-11 design review) — GoalBeliefMemory.shelter_tier_weight.
+    ## observed: a passive/opportunistic glance cleared the enclosure threshold, no confirm cycle.
+    ## confirmed: the deliberate multi-cycle STAY-evaluate passed. battle_tested: the creature was
+    ## actually at/near this confirmed shelter when a real threat's danger window cleared — known
+    ## safety, not just a good guess. Feeds `consult_shelter_beliefs`' preference among confirmed
+    ## shelters, the weighted `shelter_map_confidence` sum, and (via that sum) how far below
+    ## `seek_priority_food_ceiling` a creature can still get pulled into a GOAL_SHELTER STAY-evaluate.
+    "shelter_confidence_observed": 0.3,
+    "shelter_confidence_confirmed": 0.6,
+    "shelter_confidence_battle_tested": 1.0,
+    ## Concealment-rest (2026-09-12 design review) — `Action.WAIT` while occupying a shelter spot.
+    ## Composure factor (`CreatureStatCurve.saturating(stat_composure)` × `curr_point_comp/max_point_comp`)
+    ## lerps the effective multiplier between worst (no discount, like STAY) and best (full
+    ## discount, like REST) — see `creature_motor_stack.gd::_refresh_wait_calorie_multiplier`.
+    "wait_calorie_multiplier_worst": 1.0,
+    "wait_calorie_multiplier_best": 0.5,
+    "wait_composure_curve_anchor_stat": 10.0,
+    "wait_composure_curve_anchor_value": 0.75,
     "goal_inventory_min_shelter": 1.0,
     "goal_shelter_explore_floor": 0.25,
     "goal_memory_ttl_sec_shelter": 300.0,

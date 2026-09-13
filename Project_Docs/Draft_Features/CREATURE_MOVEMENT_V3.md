@@ -903,11 +903,27 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 ```
 
 - **Wire id:** **`shelter`** ([`goal_kind_registry.gd`](../../creature/memory/goal_kind_registry.gd)).
-- **Actions:** **`MOVE_*` / `TURN_*`** to approach; **`STAY`** at candidate to evaluate — **not** `REST` (no cone-off / half-calorie recovery during probe).
+- **Actions:** **`MOVE_*` / `TURN_*`** to approach; **`WAIT`** at candidate to evaluate (superseded from plain `STAY` — see concealment-rest below) — **not** `REST` (no cone-off during probe; discounted but not half-baseline unless composure earns it).
 - **Eligibility (consideration):** §1 — `calorie_ratio ≥ seek_priority_food_ceiling`; **not** during acute threat / Flight fast-path.
 - **Weight:** `effective_base_shelter = goal_base_shelter × food_map_confidence` (§1).
 - **Outcome hook:** Successful STAY probe → instance **`shelter`** belief (+ locale salient write when MEMORY enables `shelter` writes). Failed fit → instance passibility mark on `_goal_belief` + optional geographic dead-end row (§3 **B + C**).
 - **v1 scope:** Live squeeze/passage candidates in awareness + belief tiers per §8; full squeeze fingerprint `context_hash` deferred ([CREATURE_MEMORY.md §7](CREATURE_MEMORY.md)).
+
+**Resolved — graded shelter belief confidence (2026-09-11 design review, superseding the plain confirmed/failed split above):** `shelter` beliefs carry a `shelter_tier` (`observed` / `confirmed` / `battle_tested` / `failed`), weighted via `GoalBeliefMemory.shelter_tier_weight` (config: `shelter_confidence_observed` 0.3, `_confirmed` 0.6, `_battle_tested` 1.0). Tiers:
+
+| Tier | Written by | Meaning |
+|------|-----------|---------|
+| `observed` | `CreatureMotorStack._maybe_observe_shelter_opportunistically` — fires on any `EAT`/`STAY`/`WAIT` tick, regardless of active goal or calorie ratio | A passive glance cleared the enclosure threshold; never overwrites `confirmed`/`battle_tested` |
+| `confirmed` | The deliberate multi-cycle STAY-evaluate above passed | Belief is fit-validated |
+| `battle_tested` | `MemoryAdapter.notify_safety_recovered_near_shelter`, called from `CreatureMotorStack._update_safety_on_consideration` on the `safety_met` false→true transition (same `awareness_radius` signal already gating Safety state — no extra jeopardy-proximity check) | The creature was actually at/near this confirmed shelter when a real danger window cleared — known-good, not just a good guess |
+
+`MemoryAdapter.consult_shelter_beliefs` selects by tier weight first, distance only as a tiebreak. `MemoryAdapter.shelter_confidence_score` (formerly `count_confirmed_shelter_beliefs`) sums tier weight across **all** in-range unexpired beliefs (any tier) into `shelter_map_confidence`, which **broadens** the `calorie_ratio ≥ seek_priority_food_ceiling` eligibility line above: `MotorGoalHub.build_eligible_goals` now also admits `GOAL_SHELTER` whenever `shelter_map_confidence > 0` — a moderately-hungry creature with even an `observed`-only lead gets a STAY-evaluate chance, without pulling a starving creature off food (`find_food`'s own urgency curve still dominates at low ratios). **Deferred (explicit, until combat lands):** squeeze-fit/creature-size-vs-gap math in the enclosure probe, and any tier downgrade/decay on a later failure.
+
+**Resolved — concealment-rest (`Action.WAIT`, 2026-09-12 design review):** Shelter arrival — both during the STAY-evaluate probe and continued occupancy after `confirmed` — now emits **`WAIT`**, not `STAY`. `WAIT` is "active observational rest": idle in place like `STAY`, calorie-discounted like `REST`, but — unlike `REST` — it does **not** drop to area-only perception (§8.1); the full awareness cone stays live, since this can run while a threat is still nearby. Triggers on shelter arrival; ends the moment another goal wins arbitration (Flight, `find_food`, etc.) — no separate cooldown state needed, since `GOAL_SHELTER`'s existing eligibility/scoring already governs occupancy. The handoff to true `REST` (deeper discount, cone dropped) happens for free: once the existing `safety_met` window closes (threat out of awareness for `safety_time` consideration cycles) and calories are ≥ 95%, `GOAL_REST` becomes eligible and outscores `GOAL_SHELTER`.
+
+- **Calorie cost** (`MotorAction.calorie_cost_for`, `Action.WAIT`): `baseline × wait_calorie_multiplier × dt`, where `wait_calorie_multiplier` is recomputed every tick (`CreatureMotorStack._refresh_wait_calorie_multiplier`) from the creature's **composure**: `composure_factor = CreatureStatCurve.saturating(stat_composure, wait_composure_curve_anchor_stat=10, wait_composure_curve_anchor_value=0.75) × (curr_point_comp / max_point_comp)`, lerped between `wait_calorie_multiplier_worst` (1.0, no discount) and `_best` (0.5, `REST`-parity).
+- **Composure is currently a stub** ([CREATURE_ATTRIBUTES_USAGE.md §3.4](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)): `CreatureDefinition.stat_composure` (1–25, default 10) exists with `max_point_comp()`/`curr_point_comp()` via `StatMath.stat_to_point` (now implemented at `res://creature/stat_math.gd`, superseding the "future" note in [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md)) — but the pool is always full; nothing spends composure yet.
+- **`CreatureStatCurve.saturating`** (`res://creature/creature_stat_curve.gd`) is a general-purpose stat→`0..1` curve, not specific to composure — pins at an anchor stat/value and asymptotically approaches `1.0` with diminishing gains, reusable for any future stat-driven multiplier.
 
 ### 6.5 Mate
 

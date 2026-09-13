@@ -52,7 +52,7 @@ static func apply_action(
       blocked = _displace_along_facing(body, 1.0, delta, pos_before, dist_to_goal, motor_v3, align_frac)
     _MotorAction.Action.MOVE_BACKWARD:
       blocked = _displace_along_facing(body, -1.0, delta, pos_before, null, motor_v3)
-    _MotorAction.Action.STAY, _MotorAction.Action.REST, _MotorAction.Action.EAT:
+    _MotorAction.Action.STAY, _MotorAction.Action.REST, _MotorAction.Action.EAT, _MotorAction.Action.WAIT:
       pass
     _:
       act = _MotorAction.Action.STAY

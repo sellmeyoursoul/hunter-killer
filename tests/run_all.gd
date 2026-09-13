@@ -51,7 +51,10 @@ const _MotorReplayFixture := preload("res://tests/motor_replay_fixture.gd")
 const _MotorStallDetector := preload("res://tests/motor_stall_detector.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
+const _StatCurve := preload("res://creature/creature_stat_curve.gd")
+const _StatMath := preload("res://creature/stat_math.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
+const _GoalBeliefMemoryScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
@@ -200,10 +203,12 @@ func _run_all() -> void:
   _test_motor_goal_hub_effective_urgency_sated_mapping()
   _test_motor_goal_hub_effective_urgency_sated_patrol()
   _test_motor_goal_hub_effective_urgency_hungry_unchanged()
+  _test_motor_goal_hub_shelter_eligible_below_ceiling_with_observed_lead()
   _test_motor_goal_hub_shelter_effective_base_bootstrap_floor()
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
+  _test_creature_motor_stack_safety_recovery_upgrades_nearby_confirmed_shelter()
   _test_creature_motor_stack_consideration_advances()
   _test_motor_planner_path_clearance_gated_by_cadence()
   _test_motor_planner_avoid_hostiles_refresh_on_consideration_only()
@@ -248,9 +253,17 @@ func _run_all() -> void:
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
   await _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient()
+  await _test_motor_planner_select_action_shelter_arrival_is_wait()
+  _test_creature_stat_curve_saturating_pinned_and_monotonic()
+  _test_stat_math_stat_to_point_table_and_extrapolation()
+  _test_motor_action_wait_calorie_cost_uses_multiplier()
+  await _test_creature_motor_stack_composure_scales_wait_multiplier()
   _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief()
   _test_memory_adapter_shelter_belief_ttl_uses_shelter_specific_keys()
   _test_memory_adapter_shelter_belief_survives_lru_cap()
+  _test_memory_adapter_shelter_observation_writes_observed_tier_not_active_for_flee()
+  _test_memory_adapter_shelter_observation_never_downgrades_confirmed()
+  _test_memory_adapter_shelter_selection_prefers_battle_tested_over_closer_confirmed()
   _test_blocked_objective_resolver_goal_consideration_chaos_only()
   # §12.2 post-6d-explore E7 — headless matrix (explore seek + planner gates)
   _test_motor_explore_seek_zero_belief_baseline()
@@ -1682,7 +1695,7 @@ func _test_motor_planner_shelter_eval_confirm_cycle_progression() -> void:
     (_MotorPlanner as GDScript).call("_sync_shelter_objective", ctx, state, anchor, motor_v3)
     var result: StringName = state.get("shelter_eval_result", &"")
     var done_now: Variant = (_MotorPlanner as GDScript).call(
-      "completed_step_objective", body, state, motor_v3, _MotorAction.STAY
+      "completed_step_objective", body, state, motor_v3, _MotorAction.WAIT
     )
     if i < required - 1:
       _assert(result == &"", "eval result stays unresolved before the confirm-cycle threshold (i=%d)" % i)
@@ -1737,6 +1750,109 @@ func _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient() -> voi
   await process_frame
 
 
+## Concealment-rest (2026-09-12): shelter arrival ticks WAIT, not STAY — same idle-in-place shape,
+## calorie-discounted, keeping the awareness cone (unlike REST).
+func _test_motor_planner_select_action_shelter_arrival_is_wait() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var anchor := Vector3(20.0, 1.0, 20.0)
+  var body := _spawn_herbivore_body(main, anchor)
+  var motor_v3 := _motor_v3_test_params()
+  _shelter_test_blocker_ring(main, anchor, 2.0)
+  await physics_frame
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"precise"
+  state["shelter_candidate_instance_id"] = 424244
+  state["shelter_candidate_anchor"] = anchor
+  state["shelter_candidate_anchor_set"] = true
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "space_state": main.get_world_3d().direct_space_state,
+    "memory_adapter": null,
+    "incumbent": {"goal_kind": _GkReg.GK_SHELTER},
+    "delta": 1.0 / 60.0,
+  }
+  var action := _MotorPlanner.select_action(ctx, state)
+  _assert(action == _MotorAction.WAIT, "shelter arrival ticks WAIT, not STAY")
+  main.queue_free()
+  await process_frame
+
+
+## Pins the saturating curve at its anchor and checks it never plateaus beyond it.
+func _test_creature_stat_curve_saturating_pinned_and_monotonic() -> void:
+  var f10 := _StatCurve.saturating(10.0, 10.0, 0.75)
+  _assert(is_equal_approx(f10, 0.75), "saturating curve hits the anchor value exactly at the anchor stat")
+  var f1 := _StatCurve.saturating(1.0, 10.0, 0.75)
+  var f25 := _StatCurve.saturating(25.0, 10.0, 0.75)
+  var f100 := _StatCurve.saturating(100.0, 10.0, 0.75)
+  _assert(f1 < f10, "curve value below anchor stat is lower than at the anchor")
+  _assert(f25 > f10 and f25 < 1.0, "curve keeps climbing past the anchor without reaching 1.0")
+  _assert(f100 > f25 and f100 < 1.0, "curve still adds value far beyond the anchor, ever more slowly")
+  _assert((f25 - f10) > (f100 - f25), "gains diminish as the stat climbs (25->10 gap bigger than 100->25)")
+
+
+## Table lookup for 1..25 matches the spec source list at its endpoints; extrapolation beyond 25
+## keeps climbing without ever plateauing (diminishing modifier, never zero).
+func _test_stat_math_stat_to_point_table_and_extrapolation() -> void:
+  _assert(is_equal_approx(_StatMath.stat_to_point(1), 132.82), "stat_to_point(1) matches spec table")
+  _assert(is_equal_approx(_StatMath.stat_to_point(25), 975.99), "stat_to_point(25) matches spec table")
+  var p25 := _StatMath.stat_to_point(25)
+  var p26 := _StatMath.stat_to_point(26)
+  var p30 := _StatMath.stat_to_point(30)
+  _assert(p26 > p25, "stat 26 exceeds the table ceiling via extrapolation")
+  _assert(p30 > p26, "extrapolation keeps climbing past 26")
+  _assert((p26 - p25) > (p30 - p26) / 4.0, "extrapolation modifier decays (early >25 gains outweigh later ones)")
+
+
+## WAIT's calorie cost reads `wait_calorie_multiplier`, defaulting to `rest_baseline_multiplier`
+## when unset (a body without composure wiring behaves like plain REST-rate idling).
+func _test_motor_action_wait_calorie_cost_uses_multiplier() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var delta := 1.0 / 60.0
+  var baseline := float(motor_v3.get("calorie_baseline_drain_per_sec", 1.0))
+  var default_cost := _MotorAction.calorie_cost_for(_MotorAction.WAIT, delta, motor_v3)
+  _assert(
+    is_equal_approx(default_cost, baseline * float(motor_v3.get("rest_baseline_multiplier", 0.5)) * delta),
+    "WAIT falls back to rest_baseline_multiplier when wait_calorie_multiplier is unset",
+  )
+  motor_v3["wait_calorie_multiplier"] = 0.2
+  var discounted_cost := _MotorAction.calorie_cost_for(_MotorAction.WAIT, delta, motor_v3)
+  _assert(
+    is_equal_approx(discounted_cost, baseline * 0.2 * delta),
+    "WAIT honors an explicit wait_calorie_multiplier",
+  )
+
+
+## Higher composure ⇒ cheaper WAIT: `creature_motor_stack.gd`'s per-tick refresh should lerp
+## `wait_calorie_multiplier` toward `wait_calorie_multiplier_best` as stat_composure climbs.
+func _test_creature_motor_stack_composure_scales_wait_multiplier() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var low_body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var high_body := _spawn_herbivore_body(main, Vector3(10.0, 1.0, 0.0))
+  await physics_frame
+  var low_def := (low_body.get("definition") as _CreatureDefinition).duplicate()
+  var high_def := (high_body.get("definition") as _CreatureDefinition).duplicate()
+  low_def.stat_composure = 1
+  high_def.stat_composure = 25
+  low_body.set("definition", low_def)
+  high_body.set("definition", high_def)
+  var low_stack := _motor_stack_test_configure(low_body)
+  var high_stack := _motor_stack_test_configure(high_body)
+  low_stack.call("_refresh_wait_calorie_multiplier")
+  high_stack.call("_refresh_wait_calorie_multiplier")
+  var low_mul := float(low_stack._motor_v3.get("wait_calorie_multiplier"))
+  var high_mul := float(high_stack._motor_v3.get("wait_calorie_multiplier"))
+  _assert(high_mul < low_mul, "higher composure yields a cheaper (lower) WAIT calorie multiplier")
+  var best := float(low_stack._motor_v3.get("wait_calorie_multiplier_best", 0.5))
+  var worst := float(low_stack._motor_v3.get("wait_calorie_multiplier_worst", 1.0))
+  _assert(low_mul <= worst + 1e-6 and low_mul >= best - 1e-6, "low-composure WAIT multiplier stays within [best, worst]")
+  _assert(high_mul <= worst + 1e-6 and high_mul >= best - 1e-6, "high-composure WAIT multiplier stays within [best, worst]")
+  main.queue_free()
+  await process_frame
+
+
 ## Replaces the hardcoded `GK_SHELTER: return 0.0` stub — a confirmed shelter belief makes
 ## `_feasibility_for_goal`/`MemoryAdapter.best_shelter_feasibility` return the PRECISE tier.
 func _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief() -> void:
@@ -1764,8 +1880,11 @@ func _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief() 
     "confirmed shelter belief -> PRECISE-tier feasibility",
   )
   _assert(
-    adapter.count_confirmed_shelter_beliefs(body.global_position, motor_v3, now_ms) == 1,
-    "confirmed shelter belief counted for shelter_map_confidence",
+    is_equal_approx(
+      adapter.shelter_confidence_score(body.global_position, motor_v3, now_ms),
+      float(motor_v3.get("shelter_confidence_confirmed", 0.6)),
+    ),
+    "confirmed shelter belief weighted into shelter_map_confidence at its confirmed-tier weight",
   )
   main.queue_free()
 
@@ -1807,6 +1926,75 @@ func _test_memory_adapter_shelter_belief_survives_lru_cap() -> void:
   _assert(
     adapter.consult_shelter_beliefs(shelter_anchor, motor_v3, now_ms + 1000 + max_entries + 5).get("active", false),
     "confirmed shelter belief survives LRU cap eviction despite stale last_observed_ms",
+  )
+
+
+## 2026-09-11 shelter-tier design review: a passive/opportunistic sighting writes a weak
+## `observed`-tier row that `consult_shelter_beliefs` (flee's target-picking consult) does NOT
+## treat as active — only confirmed-or-better shelters are worth flee committing distance to.
+func _test_memory_adapter_shelter_observation_writes_observed_tier_not_active_for_flee() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var now_ms := 3_000_000
+  var anchor := Vector3(4.0, 1.0, 4.0)
+  var iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+  adapter.record_shelter_observation(iid, anchor, 0.7, now_ms)
+  _assert(
+    not adapter.consult_shelter_beliefs(anchor, motor_v3, now_ms).get("active", false),
+    "an observed-only shelter belief is not active for flee's shelter-bias consult",
+  )
+  _assert(
+    is_equal_approx(
+      adapter.shelter_confidence_score(anchor, motor_v3, now_ms),
+      float(motor_v3.get("shelter_confidence_observed", 0.3)),
+    ),
+    "observed-only belief still contributes its (lower) weight to shelter_map_confidence",
+  )
+
+
+## A real STAY-evaluate confirm must never be clobbered back down to `observed` by a later passive
+## glance at the same cell — a confirm outranks a passing glance, always.
+func _test_memory_adapter_shelter_observation_never_downgrades_confirmed() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var now_ms := 3_100_000
+  var anchor := Vector3(4.0, 1.0, 4.0)
+  var iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+  adapter.record_shelter_evaluation(iid, anchor, true, 0.9, now_ms)
+  adapter.record_shelter_observation(iid, anchor, 0.6, now_ms + 1000)
+  _assert(
+    adapter.consult_shelter_beliefs(anchor, motor_v3, now_ms + 1000).get("active", false),
+    "a later passive observation at the same cell does not demote an existing confirmed belief",
+  )
+  _assert(
+    is_equal_approx(
+      adapter.shelter_confidence_score(anchor, motor_v3, now_ms + 1000),
+      float(motor_v3.get("shelter_confidence_confirmed", 0.6)),
+    ),
+    "confidence stays at the confirmed weight, not reset to the lower observed weight",
+  )
+
+
+## consult_shelter_beliefs prefers a farther battle-tested shelter over a closer merely-confirmed
+## one — tier weight is the primary sort key, distance only breaks ties within equal tiers.
+func _test_memory_adapter_shelter_selection_prefers_battle_tested_over_closer_confirmed() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var now_ms := 3_200_000
+  var creature_pos := Vector3.ZERO
+  var near_confirmed_anchor := Vector3(10.0, 1.0, 0.0)
+  var far_battle_tested_anchor := Vector3(100.0, 1.0, 0.0)
+  var near_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(near_confirmed_anchor, motor_v3)
+  var far_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(far_battle_tested_anchor, motor_v3)
+  adapter.record_shelter_evaluation(near_iid, near_confirmed_anchor, true, 0.9, now_ms)
+  adapter.record_shelter_evaluation(far_iid, far_battle_tested_anchor, true, 0.9, now_ms)
+  ## Promote the far one to battle-tested by simulating a safety recovery while standing there.
+  adapter.notify_safety_recovered_near_shelter(far_battle_tested_anchor, motor_v3, now_ms + 1000)
+  var picked := adapter.consult_shelter_beliefs(creature_pos, motor_v3, now_ms + 1000)
+  _assert(picked.get("active", false), "a shelter is picked")
+  _assert(
+    int(picked.get("instance_id", 0)) == far_iid,
+    "the farther battle-tested shelter is preferred over the nearer merely-confirmed one",
   )
 
 
@@ -6159,6 +6347,38 @@ func _test_motor_goal_hub_effective_urgency_hungry_unchanged() -> void:
   )
 
 
+## 2026-09-11 shelter-tier design review: below `seek_priority_food_ceiling`, GOAL_SHELTER used to
+## be excluded outright regardless of anything else known — a hungry creature standing in a good
+## hiding spot had no way to ever confirm it. A nonzero `shelter_map_confidence` (even from an
+## `observed`-only lead, which weighs less than a confirmed one) now lets it in anyway; it still
+## has to win normal scoring afterward, this only widens who gets to compete.
+func _test_motor_goal_hub_shelter_eligible_below_ceiling_with_observed_lead() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var seek_ceil := float(motor_v3.get("seek_priority_food_ceiling", 0.80))
+  var hungry_ctx := {
+    "motor_v3": motor_v3,
+    "calorie_ratio": seek_ceil - 0.1,
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "safety_met": false,
+    "shelter_map_confidence": 0.0,
+  }
+  var eligible_no_lead := _MotorGoalHub.build_eligible_goals(hungry_ctx)
+  var has_shelter_no_lead := false
+  for row in eligible_no_lead:
+    if (row as Dictionary).get("goal_kind", &"") == _MotorGoalHub.GOAL_SHELTER:
+      has_shelter_no_lead = true
+  _assert(not has_shelter_no_lead, "below the calorie ceiling with no shelter lead, shelter stays excluded")
+  var hungry_with_lead_ctx := hungry_ctx.duplicate(true)
+  hungry_with_lead_ctx["shelter_map_confidence"] = float(motor_v3.get("shelter_confidence_observed", 0.3))
+  var eligible_with_lead := _MotorGoalHub.build_eligible_goals(hungry_with_lead_ctx)
+  var has_shelter_with_lead := false
+  for row2 in eligible_with_lead:
+    if (row2 as Dictionary).get("goal_kind", &"") == _MotorGoalHub.GOAL_SHELTER:
+      has_shelter_with_lead = true
+  _assert(has_shelter_with_lead, "below the calorie ceiling but with an observed lead, shelter becomes eligible")
+
+
 ## C18-family shelter fix: GOAL_SHELTER's effective_base now reads `shelter_map_confidence` (not
 ## the unrelated `food_map_confidence` it was accidentally coupled to before), with a bootstrap
 ## floor so shelter can still compete ("go look") before any candidate has ever been confirmed —
@@ -6249,6 +6469,37 @@ func _test_creature_motor_stack_tick_valid_action() -> void:
   _assert(_MotorAction.is_valid_action(int(outcome.action)), "stack tick emits a valid MotorAction")
   _assert(body.current_calories < before, "stack tick debits calories")
   main.queue_free()
+
+## 2026-09-11 shelter-tier design review: the tick a creature's own threat-free streak
+## (`safety_met`) first goes true — not merely "still safe," the actual false->true transition —
+## upgrades a nearby confirmed shelter to battle-tested. Drives `_update_safety_on_consideration`
+## directly (bypassing full `tick()`'s live awareness scan) so the transition is exercised without
+## needing a real threat fixture.
+func _test_creature_motor_stack_safety_recovery_upgrades_nearby_confirmed_shelter() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var anchor := body.global_position
+  var iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+  stack.get_memory_adapter().record_shelter_evaluation(iid, anchor, true, 0.9, Time.get_ticks_msec())
+  var required := maxi(1, int(motor_v3.get("safety_time", 5)))
+  for _i in required:
+    stack.call("_update_safety_on_consideration")
+  _assert(stack.is_safety_met(), "safety_met goes true after a full threat-free window")
+  var now_ms := Time.get_ticks_msec()
+  var picked := stack.get_memory_adapter().consult_shelter_beliefs(anchor, motor_v3, now_ms)
+  _assert(picked.get("active", false), "the shelter belief is still active after the upgrade")
+  _assert(
+    is_equal_approx(
+      stack.get_memory_adapter().shelter_confidence_score(anchor, motor_v3, now_ms),
+      float(motor_v3.get("shelter_confidence_battle_tested", 1.0)),
+    ),
+    "safety recovering near the confirmed shelter upgraded it to the battle-tested weight",
+  )
+  main.queue_free()
+
 
 func _test_creature_motor_stack_consideration_advances() -> void:
   var main := Node3D.new()

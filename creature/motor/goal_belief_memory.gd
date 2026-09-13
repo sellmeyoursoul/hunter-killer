@@ -4,8 +4,21 @@ extends Object
 const TIER_PRECISE := &"PRECISE"
 const TIER_COARSE := &"COARSE"
 
+## Graded shelter-belief confidence (`shelter_tier` field — distinct from the generic memory
+## PRECISE/COARSE `tier` above, which is about staleness/promotion, not shelter quality).
+## `SHELTER_TIER_OBSERVED`: a passive/opportunistic enclosure probe cleared the threshold once,
+## with no deliberate STAY-evaluate confirm cycle. `SHELTER_TIER_CONFIRMED`: the full multi-cycle
+## STAY-evaluate passed. `SHELTER_TIER_BATTLE_TESTED`: the creature was actually near this
+## confirmed shelter when a real threat's danger window cleared (survived while sheltering here) —
+## "known safety," not just "looks safe."
+const SHELTER_TIER_OBSERVED := &"observed"
+const SHELTER_TIER_CONFIRMED := &"confirmed"
+const SHELTER_TIER_BATTLE_TESTED := &"battle_tested"
+const SHELTER_TIER_FAILED := &"failed"
+
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 
 
 ## Unit step direction [param d] → sector index 0..7 (N, NE, E, SE, S, SW, W, NW; **−Z = N**).
@@ -178,11 +191,45 @@ static func increment_passibility_fail(
   return beliefs
 
 
+## Synthetic per-cell instance id for a shelter anchor — one grid-cell hash shared by every path
+## that can write a shelter belief (deliberate STAY-evaluate nomination, passive opportunistic
+## observation) so repeated probes near the same physical spot collapse onto one row instead of
+## minting a new synthetic id per centimeter of drift, and so a passively-`observed` row and a
+## later deliberately-`confirmed` pass at the same spot upgrade the *same* row rather than
+## colliding as two.
+static func shelter_cell_instance_id(anchor: Vector3, motor_v3: Dictionary) -> int:
+  var idx := _GoalSource.grid_indices_for_anchor(anchor, motor_v3)
+  return hash([&"shelter_candidate", idx.x, idx.y])
+
+
+## Configured weight for [param shelter_tier] — `SHELTER_TIER_OBSERVED`/`_CONFIRMED`/
+## `_BATTLE_TESTED` read `shelter_confidence_observed`/`_confirmed`/`_battle_tested` off
+## [param motor_v3]; anything else (a failed STAY-evaluate, an unrecognized/empty tier) is 0 —
+## no pull, no confidence contribution. Centralizing this read (rather than each caller matching
+## on the tier string) keeps the three weights' meaning consistent everywhere they're consumed:
+## goal-hub's shelter confidence sum, eligibility-gate broadening, and `consult_shelter_beliefs`'
+## preference-among-confirmed selection.
+static func shelter_tier_weight(shelter_tier: StringName, motor_v3: Dictionary) -> float:
+  match shelter_tier:
+    SHELTER_TIER_OBSERVED:
+      return float(motor_v3.get("shelter_confidence_observed", 0.3))
+    SHELTER_TIER_CONFIRMED:
+      return float(motor_v3.get("shelter_confidence_confirmed", 0.6))
+    SHELTER_TIER_BATTLE_TESTED:
+      return float(motor_v3.get("shelter_confidence_battle_tested", 1.0))
+    _:
+      return 0.0
+
+
 ## Upsert one GK_SHELTER STAY-evaluate outcome (§6.4). Dedicated constructor rather than
 ## `_upsert_row` — the generic one unconditionally resets tier/fail-counters on every call, which
 ## would wipe a prior confirm/fail verdict on the next re-observation; shelter's confirm/fail
 ## semantics must survive re-observation instead. `shelter_fail_count` resets to 0 on confirm,
-## increments on each consecutive failed evaluation.
+## increments on each consecutive failed evaluation. Always a deliberate outcome (nomination only
+## binds a candidate after it already clears the enclosure threshold, and this is only ever called
+## once that candidate's STAY-evaluate cycle actually finishes) — so [param fit_confirmed] maps
+## directly to `SHELTER_TIER_CONFIRMED`/`SHELTER_TIER_FAILED`, never `SHELTER_TIER_OBSERVED` (that
+## tier is passive-only, see [method upsert_shelter_observation]).
 static func upsert_shelter_row(
   beliefs: Dictionary,
   instance_id: int,
@@ -211,7 +258,77 @@ static func upsert_shelter_row(
     "enclosure_fraction": enclosure_fraction,
     "shelter_fail_count": fail_count,
     "shelter_last_eval_ms": now_ms,
+    "shelter_tier": SHELTER_TIER_CONFIRMED if fit_confirmed else SHELTER_TIER_FAILED,
   }
+
+
+## Upsert one passive/opportunistic shelter sighting — a creature lingering somewhere (EAT/STAY)
+## that happens to clear the enclosure threshold, with no deliberate approach-and-confirm cycle.
+## Never overwrites an existing `SHELTER_TIER_CONFIRMED`/`_BATTLE_TESTED` row at the same cell with
+## a lesser `observed` tier (a real confirm outranks a passing glance); does still refresh
+## `last_observed_ms`/position on an already-`observed` or brand-new row, and lets a fresh
+## observation reopen a cell that previously `SHELTER_TIER_FAILED` its STAY-evaluate (worth another
+## look — geometry or the failure's cause may have changed since).
+static func upsert_shelter_observation(
+  beliefs: Dictionary,
+  instance_id: int,
+  anchor: Vector3,
+  now_ms: int,
+  enclosure_fraction: float,
+) -> void:
+  if instance_id == 0:
+    return
+  var prior: Dictionary = beliefs.get(instance_id, {}) as Dictionary
+  var prior_tier: StringName = prior.get("shelter_tier", &"")
+  if prior_tier == SHELTER_TIER_CONFIRMED or prior_tier == SHELTER_TIER_BATTLE_TESTED:
+    return
+  beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_SHELTER,
+    "tier": TIER_PRECISE,
+    "last_world_pos": anchor,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": true,
+    "is_moving": false,
+    "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": int(prior.get("passibility_fail_count", 0)),
+    "last_passibility_fail_ms": int(prior.get("last_passibility_fail_ms", 0)),
+    "fit_confirmed": false,
+    "enclosure_fraction": enclosure_fraction,
+    "shelter_fail_count": int(prior.get("shelter_fail_count", 0)),
+    "shelter_last_eval_ms": int(prior.get("shelter_last_eval_ms", 0)),
+    "shelter_tier": SHELTER_TIER_OBSERVED,
+  }
+
+
+## Upgrades the nearest `SHELTER_TIER_CONFIRMED` belief within [param upgrade_radius] of
+## [param creature_pos] to `SHELTER_TIER_BATTLE_TESTED` — called on the tick a creature's own
+## threat-free streak (`safety_met`) first goes true, i.e. "a real danger window just cleared
+## while I was here." A no-op when nothing confirmed is that close (most safety recoveries happen
+## nowhere near a known shelter — this only fires for the ones that do) or already battle-tested.
+static func upgrade_confirmed_shelter_to_battle_tested(
+  beliefs: Dictionary,
+  creature_pos: Vector3,
+  now_ms: int,
+  upgrade_radius: float,
+) -> void:
+  var best_iid := 0
+  var best_d_sq := INF
+  for iid in beliefs.keys():
+    var row: Dictionary = beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or row.get("shelter_tier", &"") != SHELTER_TIER_CONFIRMED:
+      continue
+    var d_sq := creature_pos.distance_squared_to(_read_pos_v3(row.get("last_world_pos", Vector3.ZERO)))
+    if d_sq <= upgrade_radius * upgrade_radius and d_sq < best_d_sq:
+      best_d_sq = d_sq
+      best_iid = int(iid)
+  if best_iid == 0:
+    return
+  var upgraded: Dictionary = beliefs[best_iid]
+  upgraded["shelter_tier"] = SHELTER_TIER_BATTLE_TESTED
+  upgraded["last_observed_ms"] = now_ms
+  beliefs[best_iid] = upgraded
 
 
 ## Upsert beliefs for bushes seen this tick; returns updated belief table.

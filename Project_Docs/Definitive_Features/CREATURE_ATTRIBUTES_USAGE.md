@@ -4,7 +4,7 @@
 > **Conversion math:** [SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md) (`stat_to_point`).  
 > **Motivation traits** (`explorer_builder`, …) are **not** stat pools — see [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) §3.
 >
-> **Implementation snapshot (repo):** Stat baselines and `curr_point_*` / `max_point_*` pools are **not wired** in GDScript yet (`CreatureStats` / `stat_math.gd` remain future per model plan). Vitals that **are** live use `CreatureDefinition` + `creature_vitals_*` (`current_calories`, movement-cost multipliers, perception **scales**). This doc records **where Project_Docs say each stat pool should affect mechanics** once pools exist.
+> **Implementation snapshot (repo):** Stat baselines and `curr_point_*` / `max_point_*` pools are **not wired** in GDScript yet for most stats (`CreatureStats` remains future per model plan) — **except Composure** (§3.4), stubbed 2026-09-12 for the concealment-rest feature. `stat_to_point` **is** implemented at [`res://creature/stat_math.gd`](../../creature/stat_math.gd), superseding the "future" note in [SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md). Vitals that **are** live use `CreatureDefinition` + `creature_vitals_*` (`current_calories`, movement-cost multipliers, perception **scales**). This doc records **where Project_Docs say each stat pool should affect mechanics** once pools exist.
 
 ---
 
@@ -68,8 +68,8 @@ Status key: **Live** = affects shipped logic today via another field; **Specifie
 | Aspect | Detail |
 |--------|--------|
 | **Semantic** | Keep clear judgment under stress ([EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC)). |
-| **Documented mechanics** | Pool sizing via `stat_to_point(stat_composure)` ([SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md)). **No** explicit link in active docs to **`jeopardy_forced_turn`**, flee panic, or **`scripted_intent_hold`** — those use fixed `creature_motor` ticks ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5). |
-| **Status** | **Semantic only** / **Reserved** (natural future hook: stress events under **Avoid hostiles**). |
+| **Documented mechanics** | Pool sizing via `stat_to_point(stat_composure)` ([SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md)) — **implemented**, [`res://creature/stat_math.gd`](../../creature/stat_math.gd). **Live (2026-09-12):** `Action.WAIT`'s calorie discount ([CREATURE_MOVEMENT_V3.md §6.4](../Draft_Features/CREATURE_MOVEMENT_V3.md) concealment-rest) reads `stat_composure` through `CreatureStatCurve.saturating` (pinned `f(10)=0.75`, [`res://creature/creature_stat_curve.gd`](../../creature/creature_stat_curve.gd)) × `curr_point_comp/max_point_comp`, lerping `wait_calorie_multiplier` between full-cost and `REST`-parity. **Stub caveat:** `curr_point_comp` is always full — nothing spends composure yet, so only the stat-baseline half of the formula is currently live. **No** link yet to **`jeopardy_forced_turn`**, flee panic, or **`scripted_intent_hold`** — those still use fixed `creature_motor` ticks ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5). |
+| **Status** | **Live** (WAIT calorie discount, stat-baseline only) / **Reserved** (point-pool spend — natural future hook: stress events under **Avoid hostiles**). |
 
 ### 3.5 Observation — `stat_observation`, `curr_point_observ`, `max_point_observ`
 
@@ -112,7 +112,7 @@ Status key: **Live** = affects shipped logic today via another field; **Specifie
 | **Fitness** | Strength / exertion budget | No | `spend_fit`; movement calorie costs |
 | **Endurance** | Fatigue before exhaustion | No (HUD fatigue **planned**) | Locomotion burn; Preserve-calories coupling |
 | **Will** | Override exhaustion/injury | No | *(none named)* |
-| **Composure** | Performance under stress | No | *(none named)* |
+| **Composure** | Performance under stress | **Partial** (`Action.WAIT` calorie discount via stat baseline only — point pool always full) | Point-pool spend; stress events under Avoid hostiles |
 | **Observation** | Perceive + react | **Partial** (motor awareness keys + definition scales; **not** pools) | Replan interval **n** ([POST_LOS_MOVEMENT.md](../Draft_Features/POST_LOS_MOVEMENT.md)); future LoS |
 | **Charm** | Persuasion / aid | No | Multi-agent / social phases |
 | **Wit** | Unpredictability | No | Combat / conversation phases |
@@ -147,3 +147,4 @@ These appear in the same [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MOD
 | Date | Change |
 |------|--------|
 | 2026-05-30 | Initial tier III map from Project_Docs review (model plan stat pools vs motor/memory/vitals). |
+| 2026-09-12 | Composure §3.4 promoted to **Live** (partial): `stat_to_point` implemented (`stat_math.gd`); `Action.WAIT` concealment-rest calorie discount reads `stat_composure` via the new `CreatureStatCurve.saturating` curve. Point pool (`curr_point_comp`/`max_point_comp`) stubbed always-full — no spend mechanic yet. See [CREATURE_MOVEMENT_V3.md §6.4](../Draft_Features/CREATURE_MOVEMENT_V3.md). |

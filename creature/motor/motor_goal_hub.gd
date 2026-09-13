@@ -41,7 +41,15 @@ static func build_eligible_goals(ctx: Dictionary) -> Array[Dictionary]:
   out.append(_goal_row(GOAL_FIND_FOOD, motor_v3))
   if not threat_samples.is_empty():
     out.append(_goal_row(GOAL_AVOID_HOSTILES, motor_v3))
-  if cr >= seek_ceil:
+  ## 2026-09-11 shelter-tier design review: a well-fed creature can go looking for shelter on
+  ## spare attention alone (`cr >= seek_ceil`, original condition) — but a hungry one that's
+  ## already passively noticed a promising nearby spot (`shelter_map_confidence > 0` from even an
+  ## `observed`-only lead) should get a real chance to detour and run STAY-evaluate on it too,
+  ## instead of being excluded outright purely on calorie ratio. It still competes normally in
+  ## scoring afterward — `find_food`'s own urgency curve already dominates at genuinely low ratios,
+  ## so this doesn't pull a starving creature off food, only gives a moderately-hungry one with an
+  ## actual lead the option.
+  if cr >= seek_ceil or float(ctx.get("shelter_map_confidence", 0.0)) > 0.0:
     out.append(_goal_row(GOAL_SHELTER, motor_v3))
   if cr >= _REST_CALORIE_FLOOR and bool(ctx.get("safety_met", false)):
     out.append(_goal_row(GOAL_REST, motor_v3))

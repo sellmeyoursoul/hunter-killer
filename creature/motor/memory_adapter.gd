@@ -291,6 +291,27 @@ func record_shelter_evaluation(
   _GoalBelief.upsert_shelter_row(_beliefs, instance_id, anchor, now_ms, fit_confirmed, enclosure_fraction)
 
 
+## Records a passive/opportunistic shelter sighting (no deliberate approach-and-confirm) — see
+## [method GoalBeliefMemory.upsert_shelter_observation]. Lets a hungry-and-lingering creature build
+## a weak, unconfirmed lead on somewhere it happened to be standing, without ever making shelter
+## the active goal or interrupting whatever it was actually doing.
+func record_shelter_observation(
+  instance_id: int,
+  anchor: Vector3,
+  enclosure_fraction: float,
+  now_ms: int,
+) -> void:
+  _GoalBelief.upsert_shelter_observation(_beliefs, instance_id, anchor, now_ms, enclosure_fraction)
+
+
+## Upgrades the nearest confirmed shelter within [param motor_v3]'s [code]arrival_tolerance[/code]
+## of [param creature_pos] to battle-tested — call on the tick this creature's own threat-free
+## streak (`safety_met`) first goes true. See [method GoalBeliefMemory.upgrade_confirmed_shelter_to_battle_tested].
+func notify_safety_recovered_near_shelter(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> void:
+  var upgrade_radius := float(motor_v3.get("arrival_tolerance", 5.0))
+  _GoalBelief.upgrade_confirmed_shelter_to_battle_tested(_beliefs, creature_pos, now_ms, upgrade_radius)
+
+
 ## True when [param instance_id] failed its last shelter evaluation — used to skip immediately
 ## re-nominating a candidate that already failed the squeeze-fit check.
 func shelter_candidate_recently_failed(instance_id: int) -> bool:
@@ -304,9 +325,14 @@ func shelter_candidate_recently_failed(instance_id: int) -> bool:
   )
 
 
-## Nearest confirmed [code]shelter[/code] belief (§6.4 v1 scope — PRECISE-confirmed tier only; no
-## COARSE/locale cascade — shelter has no "ready right now" top tier the way food does, and
-## confirmed shelters don't tier-demote the way food beliefs do, see [method GoalBeliefMemory.maintain]).
+## Best confirmed-or-better [code]shelter[/code] belief (§6.4 v1 scope — PRECISE-confirmed tier
+## only; no COARSE/locale cascade — shelter has no "ready right now" top tier the way food does,
+## and confirmed shelters don't tier-demote the way food beliefs do, see
+## [method GoalBeliefMemory.maintain]). "Best" is tier weight first (a farther battle-tested
+## shelter beats a closer merely-confirmed one), nearest-distance only as the tiebreak within equal
+## tiers — `SHELTER_TIER_OBSERVED` never qualifies here, same as before this weighting existed;
+## only something that actually passed a real confirm (or was lived-in through a real threat) is
+## worth flee committing distance to.
 func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> Dictionary:
   var inactive := {"active": false, "pos": Vector3.ZERO, "instance_id": 0, "source": &"shelter_precise"}
   var precise_r := float(motor_v3.get("goal_memory_precise_radius_shelter", motor_v3.get("goal_memory_precise_radius", 1000.0)))
@@ -315,9 +341,17 @@ func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms
   var best_iid := 0
   var best_pos := Vector3.ZERO
   var best_d_sq := INF
+  var best_weight := -1.0
   for iid in _beliefs.keys():
     var row: Dictionary = _beliefs[iid]
-    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or not bool(row.get("fit_confirmed", false)):
+    var shelter_tier: StringName = row.get("shelter_tier", &"")
+    if (
+      row.get("goal_kind", &"") != _GkReg.GK_SHELTER
+      or (
+        shelter_tier != _GoalBelief.SHELTER_TIER_CONFIRMED
+        and shelter_tier != _GoalBelief.SHELTER_TIER_BATTLE_TESTED
+      )
+    ):
       continue
     var pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
     var dist := creature_pos.distance_to(pos)
@@ -325,8 +359,10 @@ func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms
       continue
     if now_ms - int(row.get("last_observed_ms", 0)) > ttl_ms:
       continue
+    var weight := _GoalBelief.shelter_tier_weight(shelter_tier, motor_v3)
     var d_sq := creature_pos.distance_squared_to(pos)
-    if d_sq < best_d_sq:
+    if weight > best_weight or (is_equal_approx(weight, best_weight) and d_sq < best_d_sq):
+      best_weight = weight
       best_d_sq = d_sq
       best_iid = int(iid)
       best_pos = pos
@@ -335,27 +371,32 @@ func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms
   return {"active": true, "pos": best_pos, "instance_id": best_iid, "source": &"shelter_precise"}
 
 
-## Shelter feasibility — confirmed belief present or [code]0.0[/code] (replaces the
+## Shelter feasibility — confirmed-or-better belief present or [code]0.0[/code] (replaces the
 ## [code]creature_motor_stack.gd[/code] hardcoded stub, §6.4).
 func best_shelter_feasibility(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> float:
   return FEASIBILITY_PRECISE if consult_shelter_beliefs(creature_pos, motor_v3, now_ms).get("active", false) else 0.0
 
 
-## Confirmed-shelter count in range — feeds [code]shelter_map_confidence[/code]
-## (mirrors [method count_known_objectives] for [code]find_food[/code]).
-func count_confirmed_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> int:
+## Tier-weighted shelter confidence in range — feeds `shelter_map_confidence`, which in turn both
+## scales `GOAL_SHELTER`'s `effective_base` and (broadened alongside this change) lets a hungry
+## creature with an `observed`-only lead nearby become eligible for `GOAL_SHELTER` at all, not just
+## a well-fed one. Sums [method GoalBeliefMemory.shelter_tier_weight] across every in-range,
+## unexpired shelter belief (`observed`/`confirmed`/`battle_tested` — a failed STAY-evaluate
+## contributes 0) rather than counting confirmed ones — mirrors [method count_known_objectives]
+## for [code]find_food[/code] in shape, but weighted instead of a flat count.
+func shelter_confidence_score(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> float:
   var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
   var ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec_shelter", motor_v3.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
-  var total := 0
+  var total := 0.0
   for iid in _beliefs.keys():
     var row: Dictionary = _beliefs[iid]
-    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or not bool(row.get("fit_confirmed", false)):
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER:
       continue
     if creature_pos.distance_to(_read_pos(row.get("last_world_pos", Vector3.ZERO))) > forget_r:
       continue
     if now_ms - int(row.get("last_observed_ms", 0)) > ttl_ms:
       continue
-    total += 1
+    total += _GoalBelief.shelter_tier_weight(row.get("shelter_tier", &""), motor_v3)
   return total
 
 

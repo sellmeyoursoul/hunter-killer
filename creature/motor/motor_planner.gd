@@ -18,6 +18,7 @@ const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd"
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _LatchHold := preload("res://creature/motor/latch_hold.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
+const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -189,6 +190,13 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   # step goal, so this is `true` the same tick REST is reached.
   if goal_kind == _MotorGoalHub.GOAL_REST and _at_arrival(body, step_goal, motor_v3):
     return _MotorAction.REST
+  ## Concealment-rest (2026-09-12 design): occupying (or still evaluating) a shelter spot is
+  ## `WAIT`, not plain `STAY` — same idle-in-place shape, but at a composure-scaled calorie
+  ## discount and (unlike `REST`) without losing the awareness cone, since this can happen while
+  ## a threat is still active nearby. Covers both the STAY-evaluate probe window and continued
+  ## occupancy after a shelter's confirmed.
+  if goal_kind == _GkReg.GK_SHELTER and _at_arrival(body, step_goal, motor_v3):
+    return _MotorAction.WAIT
   ## Bound food instance: do not STAY at arrival_tolerance before EAT step-range is reached.
   if _at_arrival(body, step_goal, motor_v3):
     if goal_kind != _GkReg.GK_FIND_FOOD or int(state.get("step_instance_id", 0)) == 0:
@@ -1517,12 +1525,12 @@ static func _try_nominate_shelter_candidate(
   return true
 
 
-## Synthetic per-cell instance id for a shelter candidate anchor — reuses the same grid-cell hash
-## the locale-write system dedups on, so repeated probes near the same spot collapse onto one
-## belief row instead of minting a new synthetic id per centimeter of drift.
+## Synthetic per-cell instance id for a shelter candidate anchor — delegates to
+## [method GoalBeliefMemory.shelter_cell_instance_id] (shared with the passive/opportunistic
+## observation path in `creature_motor_stack.gd`) so a spot probed both ways always resolves to
+## the same belief row instead of two independently-hashed ones.
 static func _shelter_candidate_instance_id(anchor: Vector3, motor_v3: Dictionary) -> int:
-  var idx := _GoalSource.grid_indices_for_anchor(anchor, motor_v3)
-  return hash([&"shelter_candidate", idx.x, idx.y])
+  return _GoalBelief.shelter_cell_instance_id(anchor, motor_v3)
 
 
 ## STAY-evaluate: re-probes the bound candidate every consideration cycle, accumulating consecutive
@@ -2926,10 +2934,15 @@ static func completed_step_objective(
 ) -> bool:
   if action == _MotorAction.EAT:
     return true
-  if action == _MotorAction.STAY:
-    if state.get("goal_kind", &"") == _GkReg.GK_SHELTER and bool(state.get("shelter_eval_active", false)):
+  ## Shelter arrival now ticks `WAIT` (concealment-rest, 2026-09-12), not `STAY` — see
+  ## `select_action`'s GK_SHELTER branch. `STAY` still means arrival for every other goal kind.
+  if action == _MotorAction.WAIT and state.get("goal_kind", &"") == _GkReg.GK_SHELTER:
+    if bool(state.get("shelter_eval_active", false)):
       var result: StringName = state.get("shelter_eval_result", &"")
       return result == &"confirmed" or result == &"failed"
+    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+    return bool(state.get("step_goal_set", false)) and _at_arrival(body, step_goal, motor_v3)
+  if action == _MotorAction.STAY:
     var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
     if bool(state.get("step_goal_set", false)) and _at_arrival(body, step_goal, motor_v3):
       return true

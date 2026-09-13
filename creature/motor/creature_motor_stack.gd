@@ -16,6 +16,9 @@ const _ExploreLog := preload("res://creature/motor/motor_planner_explore_log.gd"
 const _ReplayCapture := preload("res://creature/motor/motor_planner_replay_capture.gd")
 const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
+const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
+const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
+const _StatCurve := preload("res://creature/creature_stat_curve.gd")
 
 
 var _body: CharacterBody3D
@@ -132,6 +135,7 @@ func configure(
 ## One physics tick: awareness scan, consideration cadence, planner action, execution.
 func tick(delta: float) -> _ActionOutcome:
   _physics_tick_count += 1
+  _refresh_wait_calorie_multiplier()
   _run_live_scan()
   _maintain_memory_beliefs()
   var area_only := _rest_area_only_perception()
@@ -218,8 +222,17 @@ func tick(delta: float) -> _ActionOutcome:
     )
   if int(outcome.action) == _MotorAction.EAT:
     _try_complete_eat()
-  if int(outcome.action) == _MotorAction.STAY and _incumbent.get("goal_kind", &"") == _GkReg.GK_SHELTER:
+  if int(outcome.action) == _MotorAction.WAIT and _incumbent.get("goal_kind", &"") == _GkReg.GK_SHELTER:
     _try_complete_shelter_evaluation()
+  if (
+    (
+      int(outcome.action) == _MotorAction.EAT
+      or int(outcome.action) == _MotorAction.STAY
+      or int(outcome.action) == _MotorAction.WAIT
+    )
+    and not bool(_planner_state.get("shelter_eval_active", false))
+  ):
+    _maybe_observe_shelter_opportunistically()
   if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
     if _memory_adapter != null:
       _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
@@ -563,6 +576,8 @@ func _motor_action_debug_label(act: int) -> String:
       return "REST"
     _MotorAction.EAT:
       return "EAT"
+    _MotorAction.WAIT:
+      return "WAIT"
     _:
       return "?"
 
@@ -708,17 +723,20 @@ func _refresh_food_inventory() -> void:
   )
 
 
-## Confirmed-shelter-belief signal for `GOAL_SHELTER`'s `effective_base` (§1) — parallel to
-## [method _refresh_food_inventory], but counting confirmed shelter beliefs instead of known food.
+## Tier-weighted shelter-belief signal for `GOAL_SHELTER`'s `effective_base` (§1) — parallel to
+## [method _refresh_food_inventory], but a weighted shelter-confidence sum instead of a known-food
+## count. Also (as of the shelter-tier work) the eligibility-gate broadener in `motor_goal_hub.gd`:
+## a nonzero value here — even from `observed`-only leads, which weigh less than confirmed ones —
+## lets `GOAL_SHELTER` compete below the calorie ceiling that otherwise excludes it outright.
 func _refresh_shelter_map_confidence() -> void:
   if _memory_adapter == null or _body == null:
     _shelter_map_confidence = 0.0
     return
-  var confirmed := _memory_adapter.count_confirmed_shelter_beliefs(
+  var score := _memory_adapter.shelter_confidence_score(
     _body.global_position, _motor_v3, Time.get_ticks_msec(),
   )
   var min_req := maxf(1.0, float(_motor_v3.get("goal_inventory_min_shelter", 1.0)))
-  _shelter_map_confidence = clampf(float(confirmed) / min_req, 0.0, 1.0)
+  _shelter_map_confidence = clampf(score / min_req, 0.0, 1.0)
 
 
 func _refresh_danger_samples(area_only: bool) -> void:
@@ -784,7 +802,16 @@ func _update_safety_on_consideration() -> void:
   else:
     _safety_cycles += 1
   _threat_seen_since_safety_check = false
+  var was_safety_met := _safety_met
   _safety_met = _safety_cycles >= required
+  ## A real danger window just cleared (false -> true, not merely "still safe") — if that happened
+  ## while at/near a confirmed shelter, it's now known-good, not just observationally confirmed.
+  ## `awareness_radius` (the same signal `_threat_seen_since_safety_check` already gates on — no
+  ## extra jeopardy-proximity check) is close enough to count per 2026-09-11 design review.
+  if _safety_met and not was_safety_met and _memory_adapter != null and _body != null:
+    _memory_adapter.notify_safety_recovered_near_shelter(
+      _body.global_position, _motor_v3, Time.get_ticks_msec(),
+    )
 
 
 func _build_context() -> Dictionary:
@@ -1083,6 +1110,29 @@ func _try_complete_shelter_evaluation() -> void:
   _planner_state["shelter_probe_cooldown_cycles"] = int(_motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
 
 
+## Passive shelter recognition (2026-09-11 design review): a creature lingering somewhere for its
+## own reasons (EAT/STAY) — regardless of current goal, calorie ratio, or whether `GOAL_SHELTER` is
+## even eligible right now — gets a cheap, no-commitment check of whether it happens to already be
+## standing somewhere shelter-quality. Writes a weak `SHELTER_TIER_OBSERVED` belief on a hit; never
+## moves the creature, never touches `step_goal`, and never overwrites an already-confirmed row
+## (see `upsert_shelter_observation`). This is what lets a shelter belief exist at all for a spot
+## the creature only ever visited while too hungry for `GOAL_SHELTER` to have won arbitration.
+func _maybe_observe_shelter_opportunistically() -> void:
+  if _memory_adapter == null or _body == null or not _body.is_inside_tree():
+    return
+  var space := _body.get_world_3d().direct_space_state
+  if space == null:
+    return
+  var pos := _body.global_position
+  var probe_radius := float(_motor_v3.get("shelter_enclosure_probe_radius", 2.5))
+  var blocker_mask := int(_motor_v3.get("shelter_enclosure_blocker_mask", 8))
+  var frac := _ShelterProbe.enclosure_fraction(space, pos, probe_radius, blocker_mask)
+  if frac < float(_motor_v3.get("shelter_enclosure_detect_threshold", 0.5)):
+    return
+  var iid := _GoalBelief.shelter_cell_instance_id(pos, _motor_v3)
+  _memory_adapter.record_shelter_observation(iid, pos, frac, Time.get_ticks_msec())
+
+
 func _clear_prey_engagement_planner_state() -> void:
   _planner_state["prey_engagement_instance_id"] = 0
   _planner_state["prey_engagement_ticks_remaining"] = 0
@@ -1125,6 +1175,28 @@ func _clamp_playfield_if_needed() -> bool:
   if _body.has_method(&"clamp_playfield_position"):
     return bool(_body.call(&"clamp_playfield_position"))
   return false
+
+
+## Recomputes [code]wait_calorie_multiplier[/code] on [member _motor_v3] from the body's composure
+## stat/point-pool (2026-09-12 concealment-rest design): `saturating(stat_composure)` curve value
+## (pinned to `wait_composure_curve_anchor_value` at `wait_composure_curve_anchor_stat`, default
+## 0.75 @ 10) times `curr_point_comp/max_point_comp` gives a `0..1` composure factor, which lerps
+## the WAIT multiplier between `wait_calorie_multiplier_worst` (no discount, like STAY) and
+## `wait_calorie_multiplier_best` (full discount, like REST) — full composure factor => cheapest.
+func _refresh_wait_calorie_multiplier() -> void:
+  var factor := 0.0
+  var def_v: Variant = _body.get("definition") if _body != null else null
+  if def_v is _CreatureDefinition:
+    var def: _CreatureDefinition = def_v
+    var anchor_stat := float(_motor_v3.get("wait_composure_curve_anchor_stat", 10.0))
+    var anchor_value := float(_motor_v3.get("wait_composure_curve_anchor_value", 0.75))
+    var curve := _StatCurve.saturating(float(def.stat_composure), anchor_stat, anchor_value)
+    var max_pool := maxf(1e-6, def.max_point_comp())
+    var pool_ratio := clampf(def.curr_point_comp() / max_pool, 0.0, 1.0)
+    factor = clampf(curve * pool_ratio, 0.0, 1.0)
+  var worst := float(_motor_v3.get("wait_calorie_multiplier_worst", 1.0))
+  var best := float(_motor_v3.get("wait_calorie_multiplier_best", 0.5))
+  _motor_v3["wait_calorie_multiplier"] = lerpf(worst, best, factor)
 
 
 func _traits_from_body() -> Dictionary:

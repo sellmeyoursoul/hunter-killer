@@ -3,6 +3,8 @@ class_name CreatureDefinition
 ## Leaf **data** for one species (or archetype): diet, vitals caps, locomotion, perception scales, asset root.
 ## Behaviors live in `res://creature/capabilities/*`; see [CREATURE_MODEL_PLAN.md](../../Project_Docs/Draft_Features/CREATURE_MODEL_PLAN.md) for field intent.
 
+const _StatMath := preload("res://creature/stat_math.gd")
+
 enum FeedingMode {
   HERBIVORE,
   CARNIVORE,
@@ -39,3 +41,20 @@ enum FeedingMode {
 @export var locomotion_profile: Resource
 ## Optional UI / swap skin / audio variant — heavy content stays in scenes.
 @export var variant_scene: PackedScene
+
+## Stat pool baseline (1-25 authored table, `stat_to_point` §[SHARED_STATTOPOINT_PLAN.md](../../Project_Docs/Draft_Features/SHARED_STATTOPOINT_PLAN.md)).
+## Composure is otherwise **semantic only / reserved** ([CREATURE_ATTRIBUTES_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) §3.4) —
+## this is a minimal stub (baseline + always-full point pool) so `curr_point_comp/max_point_comp`
+## exist to read; nothing spends composure yet, so `curr_point_comp` never falls below
+## `max_point_comp` until a future system drains it.
+@export_range(1, 25) var stat_composure: int = 10
+
+
+## Max composure point pool via the shared [code]stat_to_point[/code] conversion.
+func max_point_comp() -> float:
+  return _StatMath.stat_to_point(stat_composure)
+
+
+## Current composure point pool — always full until a future system spends composure.
+func curr_point_comp() -> float:
+  return max_point_comp()

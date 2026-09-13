@@ -8,6 +8,8 @@
 
 **Phase name:** Shared stat → point pool conversion (`stat_to_point`)
 
+**Status (2026-09-12):** Implemented at [`res://creature/stat_math.gd`](../../creature/stat_math.gd) (`StatMath.stat_to_point`), consumed so far only by `CreatureDefinition.max_point_comp()` (Composure stub, [CREATURE_ATTRIBUTES_USAGE.md §3.4](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)). Other stats' pools remain unwired.
+
 **One-line objective:** Specify the **lookup table and extrapolation rule** that maps integer stat baselines (1–25 table, >25 asymptotic growth) to **max point pools** used by [CREATURE_MODEL_PLAN.md](CREATURE_MODEL_PLAN.md).
 
 **Out of scope (explicit non-goals):**  
@@ -84,7 +86,7 @@ Original pseudocode intent:
 
 | Input | Behavior |
 |-------|----------|
-| `stat_num < 1` | <<Question: clamp to 1, return 0, or assert in debug?> |
+| `stat_num < 1` | Resolved: clamps to 1 (`maxi(1, stat_num)`), no assert. |
 | `stat_num > 25` | Extrapolation loop above |
 
 ### Scene & file changes
