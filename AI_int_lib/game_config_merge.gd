@@ -452,6 +452,18 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "wait_calorie_multiplier_best": 0.5,
     "wait_composure_curve_anchor_stat": 10.0,
     "wait_composure_curve_anchor_value": 0.75,
+    ## Prey-race giveaway (2026-09-12) — a predator chasing a live-visible, non-closing moving
+    ## prey (open terrain, no blocking obstacle to trip the existing §9 passibility-fail giveup)
+    ## gives up after `prey_race_giveup_ticks`, itself scaled by observation the same way WAIT's
+    ## calorie discount is scaled by composure: worst (low observation, slow to realize) down to
+    ## best (high observation, realizes fast). Give-up reuses the existing passibility-fail
+    ## exclusion machinery rather than a new one — see `motor_planner.gd::_arm_prey_engagement_from_live_food`.
+    "prey_race_giveup_ticks_worst": 90.0,
+    "prey_race_giveup_ticks_best": 20.0,
+    "prey_race_observation_curve_anchor_stat": 10.0,
+    "prey_race_observation_curve_anchor_value": 0.75,
+    "prey_race_not_closing_epsilon": 0.05,
+    "prey_race_exclusion_cooldown_ticks": 60,
     "goal_inventory_min_shelter": 1.0,
     "goal_shelter_explore_floor": 0.25,
     "goal_memory_ttl_sec_shelter": 300.0,

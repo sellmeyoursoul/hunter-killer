@@ -136,6 +136,7 @@ func configure(
 func tick(delta: float) -> _ActionOutcome:
   _physics_tick_count += 1
   _refresh_wait_calorie_multiplier()
+  _refresh_prey_race_giveup_ticks()
   _run_live_scan()
   _maintain_memory_beliefs()
   var area_only := _rest_area_only_perception()
@@ -1197,6 +1198,27 @@ func _refresh_wait_calorie_multiplier() -> void:
   var worst := float(_motor_v3.get("wait_calorie_multiplier_worst", 1.0))
   var best := float(_motor_v3.get("wait_calorie_multiplier_best", 0.5))
   _motor_v3["wait_calorie_multiplier"] = lerpf(worst, best, factor)
+
+
+## Recomputes `prey_race_giveup_ticks` on [member _motor_v3] from the body's observation stat
+## (2026-09-12 prey-race giveaway design): `saturating(stat_observation)` curve value scales how
+## quickly a predator recognizes a live, unblocked chase isn't closing distance — high observation
+## ⇒ fewer ticks tolerated (`prey_race_giveup_ticks_best`), low observation ⇒ more
+## (`_worst`) — mirrors `_refresh_wait_calorie_multiplier`'s composure lerp shape.
+func _refresh_prey_race_giveup_ticks() -> void:
+  var factor := 0.0
+  var def_v: Variant = _body.get("definition") if _body != null else null
+  if def_v is _CreatureDefinition:
+    var def: _CreatureDefinition = def_v
+    var anchor_stat := float(_motor_v3.get("prey_race_observation_curve_anchor_stat", 10.0))
+    var anchor_value := float(_motor_v3.get("prey_race_observation_curve_anchor_value", 0.75))
+    var curve := _StatCurve.saturating(float(def.stat_observation), anchor_stat, anchor_value)
+    var max_pool := maxf(1e-6, def.max_point_observ())
+    var pool_ratio := clampf(def.curr_point_observ() / max_pool, 0.0, 1.0)
+    factor = clampf(curve * pool_ratio, 0.0, 1.0)
+  var worst := float(_motor_v3.get("prey_race_giveup_ticks_worst", 90.0))
+  var best := float(_motor_v3.get("prey_race_giveup_ticks_best", 20.0))
+  _motor_v3["prey_race_giveup_ticks"] = lerpf(worst, best, factor)
 
 
 func _traits_from_body() -> Dictionary:

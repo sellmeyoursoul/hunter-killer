@@ -84,6 +84,19 @@ static func new_state() -> Dictionary:
     ## full latch duration pinned against geometry — reset on a fresh live sighting or on latch
     ## expiry (`_arm_prey_engagement_from_live_food`, `_clear_prey_engagement`).
     "memory_pursuit_detour_count": 0,
+    ## Prey-race giveaway (2026-09-12): tracks the best (smallest) distance-to-target seen since
+    ## `prey_race_instance_id` was last (re)armed, and how many consecutive live re-arm ticks have
+    ## passed without that best distance improving — a live-visible, unblocked chase that isn't
+    ## closing distance (as opposed to a blocked-path failure, which §9 already handles). See
+    ## `_arm_prey_engagement_from_live_food`.
+    "prey_race_instance_id": 0,
+    "prey_race_best_dist": INF,
+    "prey_race_stall_ticks": 0,
+    ## Give-up cooldown (see `_food_pursuit_exclusions`, `_tick_prey_race_exclusion_cooldown`) —
+    ## separate from the tracking fields above so a give-up on one instance doesn't get wiped by
+    ## `_clear_prey_race_tracking` re-arming on whatever's selected next.
+    "prey_race_excluded_instance_id": 0,
+    "prey_race_excluded_ticks_remaining": 0,
     "flee_waypoint": Vector3.ZERO,
     ## See `step_goal_set` — this is the field whose sentinel collision caused C9's 7th-fix bug.
     "flee_waypoint_set": false,
@@ -1040,7 +1053,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
       )
       has_step_goal = bool(state.get("step_goal_set", false))
       var live_food := _AwarenessScan.best_ready_food_target(
-        scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, motor_v3)
+        scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, state, motor_v3)
       )
       var live_moving := (
         not live_food.is_empty() and bool(live_food.get("is_moving", false))
@@ -1121,12 +1134,20 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
 
 ## Instance ids whose passibility_fail_count has crossed the switch threshold — excluded from
 ## fresh live-food selection so a "seek" reset doesn't immediately re-pick the same dead end.
-static func _food_pursuit_exclusions(ctx: Dictionary, motor_v3: Dictionary) -> Dictionary:
+## Also merges [param state]'s prey-race giveaway exclusion (see
+## `_track_prey_race_and_maybe_give_up`) — that one can't reuse the belief row's own
+## `passibility_fail_count` because the live-scan sync resets it to 0 every tick the target
+## remains visible (`GoalBeliefMemory.sync_from_scene` → `_upsert_row`), which would otherwise
+## erase the giveaway signal before this function ever saw it for a continuously-visible target.
+static func _food_pursuit_exclusions(ctx: Dictionary, state: Dictionary, motor_v3: Dictionary) -> Dictionary:
+  var excluded: Dictionary = {}
+  var race_iid := int(state.get("prey_race_excluded_instance_id", 0))
+  if race_iid != 0 and int(state.get("prey_race_excluded_ticks_remaining", 0)) > 0:
+    excluded[race_iid] = true
   var adapter: RefCounted = ctx.get("memory_adapter")
   if adapter == null or not adapter.has_method(&"get_beliefs"):
-    return {}
+    return excluded
   var switch_thresh := int(motor_v3.get("passibility_fail_switch_threshold", 2))
-  var excluded: Dictionary = {}
   var beliefs: Dictionary = adapter.get_beliefs()
   for iid in beliefs:
     var row: Variant = beliefs[iid]
@@ -1150,7 +1171,7 @@ static func _derive_find_food_step_objective(
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
   var food := _AwarenessScan.best_ready_food_target(
-    scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, motor_v3)
+    scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, state, motor_v3)
   )
   if not food.is_empty():
     # Moving prey always remints live (Pass 1); handoff scoring is for stationary food only.
@@ -1960,6 +1981,29 @@ static func _clear_prey_engagement(state: Dictionary) -> void:
   state["prey_engagement_latch_total"] = 0
   state["memory_pursuit_detour_count"] = 0
   _clear_memory_pursuit_detour_latch(state)
+  _clear_prey_race_tracking(state)
+
+
+static func _clear_prey_race_tracking(state: Dictionary) -> void:
+  state["prey_race_instance_id"] = 0
+  state["prey_race_best_dist"] = INF
+  state["prey_race_stall_ticks"] = 0
+
+
+## Decays the prey-race giveaway exclusion (see `_track_prey_race_and_maybe_give_up`) once per
+## planner tick — called from `_tick_prey_engagement_latch` (unconditional, once per GK_FIND_FOOD
+## tick) rather than from `_food_pursuit_exclusions` itself, since that function can run twice in
+## one tick (once in `_sync_step_objective`'s own live-food peek, again inside
+## `_derive_find_food_step_objective`) and would otherwise double-decay.
+static func _tick_prey_race_exclusion_cooldown(state: Dictionary) -> void:
+  var remaining := int(state.get("prey_race_excluded_ticks_remaining", 0))
+  if remaining <= 0:
+    state["prey_race_excluded_instance_id"] = 0
+    return
+  remaining -= 1
+  state["prey_race_excluded_ticks_remaining"] = remaining
+  if remaining <= 0:
+    state["prey_race_excluded_instance_id"] = 0
 
 
 static func _effective_prey_engagement_latch_ticks(ctx: Dictionary, motor_v3: Dictionary) -> int:
@@ -2000,6 +2044,51 @@ static func _arm_prey_engagement_from_live_food(
   ## with a clean decay budget.
   state["memory_pursuit_detour_count"] = 0
   _clear_memory_pursuit_detour_latch(state)
+  _track_prey_race_and_maybe_give_up(ctx, state, food, iid, motor_v3)
+
+
+## Prey-race giveaway (2026-09-12): a live-visible, unblocked chase that simply isn't closing
+## distance never trips §9's blocked-path passibility-fail path (no obstacle ever stalls
+## `MOVE_FORWARD`), so without this it would pursue indefinitely. Tracks the best distance-to-
+## target seen since `iid` was last (re)armed; `prey_race_giveup_ticks` (motor_v3, observation-
+## scaled — `creature_motor_stack.gd::_refresh_prey_race_giveup_ticks`) consecutive re-arm ticks
+## without improving that best triggers the same exclusion `_food_pursuit_exclusions` already
+## grants a repeatedly-blocked target, rather than inventing a second give-up mechanism.
+static func _track_prey_race_and_maybe_give_up(
+  ctx: Dictionary,
+  state: Dictionary,
+  food: Dictionary,
+  iid: int,
+  motor_v3: Dictionary,
+) -> void:
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return
+  if int(state.get("prey_race_instance_id", 0)) != iid:
+    state["prey_race_instance_id"] = iid
+    state["prey_race_best_dist"] = INF
+    state["prey_race_stall_ticks"] = 0
+  var food_pos: Vector3 = food.get("pos", Vector3.ZERO)
+  var dist := body.global_position.distance_to(food_pos)
+  var best_dist := float(state.get("prey_race_best_dist", INF))
+  var epsilon := float(motor_v3.get("prey_race_not_closing_epsilon", 0.05))
+  if dist < best_dist - epsilon:
+    state["prey_race_best_dist"] = dist
+    state["prey_race_stall_ticks"] = 0
+    return
+  var stall := int(state.get("prey_race_stall_ticks", 0)) + 1
+  state["prey_race_stall_ticks"] = stall
+  var giveup_ticks := int(motor_v3.get("prey_race_giveup_ticks", 90.0))
+  if stall < giveup_ticks:
+    return
+  ## Give up: exclude this instance from fresh live-food selection for a cooldown window (planner
+  ## state, not the shared belief row's `passibility_fail_count` — see `_food_pursuit_exclusions`'
+  ## doc comment for why that counter can't be reused here).
+  state["prey_race_excluded_instance_id"] = iid
+  state["prey_race_excluded_ticks_remaining"] = int(
+    motor_v3.get("prey_race_exclusion_cooldown_ticks", 60)
+  )
+  _clear_prey_race_tracking(state)
 
 
 static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> bool:
@@ -2021,6 +2110,7 @@ static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> b
 ## request 2026-09-04: "lower the dead reckoning weight with every detour ... until a new goal
 ## wins"). A single stretch of open ground (no detours minted) still gets the full latch duration.
 static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> void:
+  _tick_prey_race_exclusion_cooldown(state)
   if not _prey_engagement_latch_valid(state):
     return
   var scan: Dictionary = ctx.get("scan", {})

@@ -48,6 +48,11 @@ enum FeedingMode {
 ## exist to read; nothing spends composure yet, so `curr_point_comp` never falls below
 ## `max_point_comp` until a future system drains it.
 @export_range(1, 25) var stat_composure: int = 10
+## Same stub caveat as [member stat_composure] — [CREATURE_ATTRIBUTES_USAGE.md §3.5](../../Project_Docs/Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md).
+## Live consumer: predator prey-race giveaway ([CREATURE_MOVEMENT_V3.md §6.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md), 2026-09-12) —
+## higher observation shortens how long a predator chases a live-visible prey that isn't closing
+## distance before recognizing the race is lost.
+@export_range(1, 25) var stat_observation: int = 10
 
 
 ## Max composure point pool via the shared [code]stat_to_point[/code] conversion.
@@ -58,3 +63,13 @@ func max_point_comp() -> float:
 ## Current composure point pool — always full until a future system spends composure.
 func curr_point_comp() -> float:
   return max_point_comp()
+
+
+## Max observation point pool via the shared [code]stat_to_point[/code] conversion.
+func max_point_observ() -> float:
+  return _StatMath.stat_to_point(stat_observation)
+
+
+## Current observation point pool — always full until a future system spends observation.
+func curr_point_observ() -> float:
+  return max_point_observ()

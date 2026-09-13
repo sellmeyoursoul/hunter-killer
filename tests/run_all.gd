@@ -258,6 +258,10 @@ func _run_all() -> void:
   _test_stat_math_stat_to_point_table_and_extrapolation()
   _test_motor_action_wait_calorie_cost_uses_multiplier()
   await _test_creature_motor_stack_composure_scales_wait_multiplier()
+  _test_motor_planner_prey_race_giveup_excludes_non_closing_chase()
+  _test_motor_planner_prey_race_closing_chase_never_excluded()
+  _test_motor_planner_prey_race_exclusion_cooldown_expires()
+  await _test_creature_motor_stack_observation_scales_prey_race_giveup_ticks()
   _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief()
   _test_memory_adapter_shelter_belief_ttl_uses_shelter_specific_keys()
   _test_memory_adapter_shelter_belief_survives_lru_cap()
@@ -1822,6 +1826,121 @@ func _test_motor_action_wait_calorie_cost_uses_multiplier() -> void:
     is_equal_approx(discounted_cost, baseline * 0.2 * delta),
     "WAIT honors an explicit wait_calorie_multiplier",
   )
+
+
+## Prey-race giveaway (2026-09-12): a live-visible, unblocked chase that never closes distance
+## trips the same exclusion machinery as a repeatedly-blocked target after `prey_race_giveup_ticks`
+## non-improving re-arm ticks.
+func _test_motor_planner_prey_race_giveup_excludes_non_closing_chase() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["prey_race_giveup_ticks"] = 3
+  var state := _MotorPlanner.new_state()
+  var ctx := {"body": body, "memory_adapter": null}
+  var iid := 77001
+  ## Distance never improves (fixed far position) — should give up after 3 non-closing re-arms.
+  ## The first call only establishes the baseline best distance (nothing to compare against yet),
+  ## so it takes `prey_race_giveup_ticks + 1` calls total to cross the threshold.
+  var food := {"instance_id": iid, "is_moving": true, "pos": Vector3(50.0, 1.0, 0.0)}
+  for i in 4:
+    (_MotorPlanner as GDScript).call(
+      "_track_prey_race_and_maybe_give_up", ctx, state, food, iid, motor_v3
+    )
+    var excluded_now: Dictionary = (_MotorPlanner as GDScript).call(
+      "_food_pursuit_exclusions", ctx, state, motor_v3
+    )
+    if i < 3:
+      _assert(not excluded_now.has(iid), "not excluded before giveup_ticks is reached (i=%d)" % i)
+  var excluded: Dictionary = (_MotorPlanner as GDScript).call(
+    "_food_pursuit_exclusions", ctx, state, motor_v3
+  )
+  _assert(excluded.has(iid), "non-closing chase is excluded after prey_race_giveup_ticks")
+  main.queue_free()
+
+
+## A chase that keeps closing distance every re-arm never accumulates stall ticks, so it's never
+## excluded even after many re-arms.
+func _test_motor_planner_prey_race_closing_chase_never_excluded() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["prey_race_giveup_ticks"] = 3
+  var state := _MotorPlanner.new_state()
+  var ctx := {"body": body, "memory_adapter": null}
+  var iid := 77002
+  for i in 10:
+    var food := {"instance_id": iid, "is_moving": true, "pos": Vector3(50.0 - float(i), 1.0, 0.0)}
+    (_MotorPlanner as GDScript).call(
+      "_track_prey_race_and_maybe_give_up", ctx, state, food, iid, motor_v3
+    )
+  var excluded: Dictionary = (_MotorPlanner as GDScript).call(
+    "_food_pursuit_exclusions", ctx, state, motor_v3
+  )
+  _assert(not excluded.has(iid), "a chase that keeps closing distance is never excluded")
+  main.queue_free()
+
+
+## The giveaway exclusion decays after `prey_race_exclusion_cooldown_ticks` and stops excluding.
+func _test_motor_planner_prey_race_exclusion_cooldown_expires() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["prey_race_giveup_ticks"] = 1
+  motor_v3["prey_race_exclusion_cooldown_ticks"] = 2
+  var state := _MotorPlanner.new_state()
+  var ctx := {"body": body, "memory_adapter": null}
+  var iid := 77003
+  var food := {"instance_id": iid, "is_moving": true, "pos": Vector3(50.0, 1.0, 0.0)}
+  ## First call only establishes the baseline distance; the second sees no improvement and, with
+  ## `prey_race_giveup_ticks == 1`, gives up immediately.
+  for _i in 2:
+    (_MotorPlanner as GDScript).call(
+      "_track_prey_race_and_maybe_give_up", ctx, state, food, iid, motor_v3
+    )
+  var excluded_immediately: Dictionary = (_MotorPlanner as GDScript).call(
+    "_food_pursuit_exclusions", ctx, state, motor_v3
+  )
+  _assert(excluded_immediately.has(iid), "excluded right after giveup")
+  for _i in 3:
+    (_MotorPlanner as GDScript).call("_tick_prey_race_exclusion_cooldown", state)
+  var excluded_after_cooldown: Dictionary = (_MotorPlanner as GDScript).call(
+    "_food_pursuit_exclusions", ctx, state, motor_v3
+  )
+  _assert(not excluded_after_cooldown.has(iid), "exclusion decays after the cooldown window")
+  main.queue_free()
+
+
+## Higher observation ⇒ fewer prey_race_giveup_ticks tolerated: `creature_motor_stack.gd`'s
+## per-tick refresh should lerp toward `prey_race_giveup_ticks_best` as stat_observation climbs.
+func _test_creature_motor_stack_observation_scales_prey_race_giveup_ticks() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var low_body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var high_body := _spawn_carnivore_body(main, Vector3(10.0, 1.0, 0.0))
+  await physics_frame
+  var low_def := (low_body.get("definition") as _CreatureDefinition).duplicate()
+  var high_def := (high_body.get("definition") as _CreatureDefinition).duplicate()
+  low_def.stat_observation = 1
+  high_def.stat_observation = 25
+  low_body.set("definition", low_def)
+  high_body.set("definition", high_def)
+  var low_stack := _motor_stack_test_configure(low_body)
+  var high_stack := _motor_stack_test_configure(high_body)
+  low_stack.call("_refresh_prey_race_giveup_ticks")
+  high_stack.call("_refresh_prey_race_giveup_ticks")
+  var low_ticks := float(low_stack._motor_v3.get("prey_race_giveup_ticks"))
+  var high_ticks := float(high_stack._motor_v3.get("prey_race_giveup_ticks"))
+  _assert(high_ticks < low_ticks, "higher observation yields fewer tolerated non-closing ticks")
+  var best := float(low_stack._motor_v3.get("prey_race_giveup_ticks_best", 20.0))
+  var worst := float(low_stack._motor_v3.get("prey_race_giveup_ticks_worst", 90.0))
+  _assert(low_ticks <= worst + 1e-6 and low_ticks >= best - 1e-6, "low-observation ticks stay within [best, worst]")
+  _assert(high_ticks <= worst + 1e-6 and high_ticks >= best - 1e-6, "high-observation ticks stay within [best, worst]")
+  main.queue_free()
+  await process_frame
 
 
 ## Higher composure ⇒ cheaper WAIT: `creature_motor_stack.gd`'s per-tick refresh should lerp
