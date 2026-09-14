@@ -156,6 +156,14 @@ func notify_locale_food_arrival_empty(
   _locale_store.clear_salient_continuation()
 
 
+## Hard-clears a locale belief cell after a bounded on-the-ground search around it came up empty
+## (2026-09-13 stuck-rabbit fix) — see `GoalSourceMemoryStore.invalidate_locale_belief_near`.
+func invalidate_locale_belief_near(anchor: Vector3, motor_p: Dictionary) -> void:
+  if _locale_store == null:
+    return
+  _locale_store.invalidate_locale_belief_near(anchor, motor_p)
+
+
 ## Returns the internal locale-prior store (salient writes land in 6d.2).
 func get_locale_store() -> RefCounted:
   return _locale_store

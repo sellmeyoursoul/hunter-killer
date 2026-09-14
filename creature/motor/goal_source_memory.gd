@@ -585,6 +585,26 @@ func try_salient_write(
   return true
 
 
+## Hard-erases every GK_FIND_FOOD row at [param anchor]'s grid cell (2026-09-13 stuck-rabbit fix).
+## `try_salient_write`'s per-visit `TIER_FAILURE` write already erodes a repeatedly-empty cell's
+## `stored_strength` via `lerpf(..., sr, write_blend)` toward its success ratio, but that's an
+## asymptotic decay — it approaches zero but never reaches it. Worse, merely zeroing the row
+## wouldn't be enough on its own: `consult_locale_seek`'s inactive fallback only fires when
+## `_nearest_find_food_prior_anchor` also finds nothing, and that helper matches on cell presence
+## alone, ignoring `stored_strength` — so a zeroed-but-still-present row would keep winning forever
+## regardless of rank. Erasing the row is what actually retires the cell until a fresh observation
+## recreates it.
+func invalidate_locale_belief_near(anchor: Vector3, motor_p: Dictionary) -> void:
+  var cell := grid_indices_for_anchor(anchor, motor_p)
+  for key in _rows.keys():
+    var row: Dictionary = _rows[key]
+    if row.get("goal_kind") != _GkReg.GK_FIND_FOOD:
+      continue
+    if int(row.get("cell_x", 0)) != cell.x or int(row.get("cell_y", 0)) != cell.y:
+      continue
+    _rows.erase(key)
+
+
 func clear_salient_continuation() -> void:
   _last_salient_tier2 = &""
   _last_salient_goal_kind = &""

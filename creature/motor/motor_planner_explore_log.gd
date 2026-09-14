@@ -90,6 +90,20 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
   var prefix := ""
   if not creature_label.is_empty():
     prefix = "%s " % _fw(creature_label, 8)
+  var eat_dbg := ""
+  if str(snap.get("goal_kind", "")) == "find_food":
+    var ult: Vector3 = snap.get("eat_ultimate_pos", Vector3.ZERO)
+    eat_dbg = (
+      " ult=(%6.1f,%6.1f) uset=%d udist=%6.2f wr=%d fa=%d cp=%d"
+    ) % [
+      ult.x,
+      ult.z,
+      1 if bool(snap.get("eat_ultimate_set", false)) else 0,
+      float(snap.get("eat_dist_to_ultimate", -1.0)),
+      1 if bool(snap.get("eat_within_range", false)) else 0,
+      1 if bool(snap.get("eat_facing_aligned", false)) else 0,
+      1 if bool(snap.get("eat_clear_path", false)) else 0,
+    ]
   return (
     prefix
     + "t=%04d act=%s blk=%s cal=%3d%% "
@@ -97,6 +111,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + "tgt=(%8.1f,%8.1f) id=%5d "
     + "err=%+7.1f dot=%7.3f dist=%7.2f enp=%d "
     + "scan=%s blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
+    + eat_dbg
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),

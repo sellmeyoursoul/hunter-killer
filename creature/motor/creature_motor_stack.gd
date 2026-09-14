@@ -57,6 +57,9 @@ var _env_grid_test_override: Variant = null
 var _use_env_grid_test_override: bool = false
 var _memory_adapter: _MemoryAdapter
 var _last_outcome: _ActionOutcome
+## Debug-only: this tick's planner ctx (body/space_state/eye_height), kept for
+## `get_debug_snapshot`'s `debug_eat_gate_snapshot` call — not consulted by any decision logic.
+var _last_planner_ctx: Dictionary = {}
 var _benign_episode_pending: bool = false
 var _was_flight_fast_path: bool = false
 
@@ -84,6 +87,15 @@ var _invariant_flee_wp_history: Array = []
 var _invariant_last_flee_wp: Vector3 = Vector3.ZERO
 var _invariant_airborne_ticks: int = 0
 var _invariant_tripped: bool = false
+## C10 repro aid (2026-09-14): the trip-time `geometry_probe` alone only shows where the body
+## ended up ~45 ticks *after* losing the floor — by then it's drifted well past the actual liftoff
+## point. This snapshots position/velocity/floor-normal/geometry the instant `is_on_floor()` first
+## flips false, so the trip payload can show both ends of the fall. Also used to log recoverable
+## near-misses (airborne, then re-landed before the fatal threshold) — see the `on_floor` branch
+## below — since those are likely far more common than the fatal case and, unlogged, leave zero
+## trace to spot the pattern across runs.
+var _invariant_liftoff_snapshot: Dictionary = {}
+var _invariant_last_floor_normal: Vector3 = Vector3.UP
 
 
 ## Wires body, vitals, merged [code]creature_motor_v3[/code], and goal catalog at spawn.
@@ -168,6 +180,7 @@ func tick(delta: float) -> _ActionOutcome:
   var planner_ctx := _build_planner_context(ctx, delta)
   planner_ctx["refresh_step_objective"] = ran_consideration
   planner_ctx["run_path_clearance"] = ran_consideration
+  _last_planner_ctx = planner_ctx
 
   var pos_before_tick := _body.global_position
   var action := _MotorPlanner.select_action(planner_ctx, _planner_state)
@@ -266,10 +279,12 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
   var label := _creature_log_label()
   var on_floor := _body.is_on_floor()
 
+  var velocity: Vector3 = _body.velocity
   _invariant_trace.append({
     "tick": _physics_tick_count,
     "pos": pos,
     "on_floor": on_floor,
+    "velocity": velocity,
     "action": _motor_action_debug_label(int(_MotorAction.normalize(action))),
     "blocked": outcome.blocked if outcome != null else false,
   })
@@ -284,8 +299,36 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
     return
 
   if on_floor:
+    _invariant_last_floor_normal = _body.get_floor_normal()
+    if _invariant_airborne_ticks > 0 and not _invariant_liftoff_snapshot.is_empty():
+      # Recovered before the fatal threshold — log it anyway (non-fatal `push_warning`, not a
+      # trip) so recoverable near-misses build a corpus across runs instead of leaving no trace.
+      # Likely far more common than the outright-stuck case and probably the same underlying
+      # cause (a slope/seam that only sometimes fails to re-catch the body in time).
+      push_warning(
+        "MOTOR_INVARIANT_NEAR_MISS [%s] airborne %d ticks then recovered | %s"
+        % [
+          label,
+          _invariant_airborne_ticks,
+          JSON.stringify({
+            "liftoff": _invariant_liftoff_snapshot,
+            "recovered_pos": pos,
+            "recovered_tick": _physics_tick_count,
+          }),
+        ]
+      )
     _invariant_airborne_ticks = 0
+    _invariant_liftoff_snapshot = {}
   else:
+    if _invariant_airborne_ticks == 0:
+      _invariant_liftoff_snapshot = {
+        "tick": _physics_tick_count,
+        "pos": pos,
+        "velocity": velocity,
+        "floor_normal_before_liftoff": _invariant_last_floor_normal,
+        "action": _motor_action_debug_label(int(_MotorAction.normalize(action))),
+        "geometry_probe": _airborne_geometry_probe(pos),
+      }
     _invariant_airborne_ticks += 1
     if _invariant_airborne_ticks > _INVARIANT_MAX_AIRBORNE_TICKS:
       _trip_invariant(
@@ -293,9 +336,11 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
         "airborne/off-floor for %d+ ticks (stuck-under-geometry, C10)" % _INVARIANT_MAX_AIRBORNE_TICKS,
         {
           "pos": pos,
+          "velocity": velocity,
           "airborne_ticks": _invariant_airborne_ticks,
           "tick": _physics_tick_count,
           "geometry_probe": _airborne_geometry_probe(pos),
+          "liftoff": _invariant_liftoff_snapshot,
           "recent_trace": _invariant_trace.duplicate(true),
         },
       )
@@ -366,6 +411,11 @@ func _airborne_geometry_probe(pos: Vector3) -> Dictionary:
   var result := {
     "floor_below_dist": -1.0,
     "floor_below_collider": "",
+    ## Slope angle at the exact probe point (deg from vertical UP) — a legit steep slope the
+    ## floor-snap simply can't hold vs. a flat/near-flat spot that shouldn't have dropped the body
+    ## at all (mesh seam/gap) look identical in `floor_below_dist` alone but not in this.
+    "floor_below_normal": Vector3.ZERO,
+    "floor_below_slope_deg": -1.0,
     "ceiling_above_dist": -1.0,
     "ceiling_above_collider": "",
   }
@@ -373,6 +423,9 @@ func _airborne_geometry_probe(pos: Vector3) -> Dictionary:
     result["floor_below_dist"] = pos.distance_to(down_hit.get("position", pos))
     var down_collider: Object = down_hit.get("collider")
     result["floor_below_collider"] = down_collider.name if down_collider != null else ""
+    var down_normal: Vector3 = down_hit.get("normal", Vector3.UP)
+    result["floor_below_normal"] = down_normal
+    result["floor_below_slope_deg"] = rad_to_deg(down_normal.angle_to(Vector3.UP))
   if not up_hit.is_empty():
     result["ceiling_above_dist"] = pos.distance_to(up_hit.get("position", pos))
     var up_collider: Object = up_hit.get("collider")
@@ -518,6 +571,9 @@ func get_debug_snapshot() -> Dictionary:
     # exact tick's body position even on ticks that never reach align_and_move (EAT, orbit,
     # STAY-at-arrival) — CLEANUP R1 debugging follow-up (2026-07-15 duel review).
     bearing["dist_to_goal"] = to_target.length()
+  var eat_gate := {}
+  if str(ps.get("goal_kind", "")) == str(_GkReg.GK_FIND_FOOD):
+    eat_gate = _MotorPlanner.debug_eat_gate_snapshot(_last_planner_ctx, ps, step_goal, _motor_v3)
   return {
     "action": action_label,
     "blocked": blocked,
@@ -557,6 +613,12 @@ func get_debug_snapshot() -> Dictionary:
     "pursuit_detour_ticks_remaining": int(ps.get("pursuit_detour_ticks_remaining", 0)),
     "food_inventory_step_mode": int(ps.get("food_inventory_step_mode", -1)),
     "is_carnivore": _is_carnivore_body(),
+    "eat_ultimate_set": bool(eat_gate.get("eat_ultimate_set", false)),
+    "eat_ultimate_pos": eat_gate.get("eat_ultimate_pos", Vector3.ZERO),
+    "eat_dist_to_ultimate": float(eat_gate.get("eat_dist_to_ultimate", -1.0)),
+    "eat_within_range": bool(eat_gate.get("eat_within_range", false)),
+    "eat_facing_aligned": bool(eat_gate.get("eat_facing_aligned", false)),
+    "eat_clear_path": bool(eat_gate.get("eat_clear_path", false)),
   }
 
 

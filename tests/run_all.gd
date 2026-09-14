@@ -315,6 +315,9 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_blocked_objective()
   await _test_creature_motor_stack_blocked_memory_writes()
   await _test_motor_planner_blocked_food_excluded_from_reselection()
+  _test_motor_planner_locale_empty_arrival_starts_search()
+  await _test_motor_planner_locale_search_giveup_invalidates_belief()
+  await _test_motor_planner_locale_handoff_respects_arrival_cooldown()
   _test_awareness_scan_best_ready_food_target_excludes_ids()
   _test_food_plant_missing_stimulus_kind_id()
   _test_goal_source_memory()
@@ -3568,6 +3571,148 @@ func _test_motor_planner_blocked_food_excluded_from_reselection() -> void:
   _assert(
     int(state.get("step_instance_id", -1)) != FOOD_IID,
     "planner does not target a live food instance once its passibility_fail_count hits the switch threshold",
+  )
+  main.queue_free()
+
+
+## 2026-09-13 stuck-rabbit fix: an empty locale arrival (`_clear_locale_step_fields`) must start
+## the bounded nearby-search window, not just the revisit cooldown.
+func _test_motor_planner_locale_empty_arrival_starts_search() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var anchor := Vector3(10.0, 0.0, 10.0)
+  var state := _MotorPlanner.new_state()
+  state["step_ultimate_pos"] = anchor
+  state["step_ultimate_pos_set"] = true
+  state["step_goal"] = anchor
+  state["step_goal_set"] = true
+  state["step_source"] = &"locale"
+  (_MotorPlanner as GDScript).call("_clear_locale_step_fields", state, motor_v3)
+  _assert(
+    bool(state.get("locale_search_anchor_set", false)),
+    "empty locale arrival arms the nearby-search window",
+  )
+  _assert(
+    (state.get("locale_search_anchor", Vector3.ZERO) as Vector3).distance_to(anchor) < 0.01,
+    "search window is anchored at the just-cleared locale point",
+  )
+  _assert(
+    int(state.get("locale_search_ticks_remaining", 0))
+    == int(motor_v3.get("locale_search_ticks", 240)),
+    "search window starts at the configured tick budget",
+  )
+  _assert(not bool(state.get("step_goal_set", false)), "step objective is cleared alongside it")
+
+
+## 2026-09-13 stuck-rabbit fix: once the search budget runs out with nothing found, the locale
+## belief for that cell is hard-invalidated (not left to `notify_locale_food_arrival_empty`'s
+## asymptotic per-visit erosion, which never actually reaches zero on its own).
+func _test_motor_planner_locale_search_giveup_invalidates_belief() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var anchor := Vector3(10.0, 0.0, 10.0)  # cell (0,0) at the default 52m coverage cell.
+  adapter.seed_locale_prior_for_test(0, 0, 1.0)
+  var pre := adapter.consult_locale_seek(anchor, motor_v3)
+  _assert(bool(pre.get("active", false)), "sanity: seeded locale row consults active before giveup")
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"locale_search"
+  state["locale_search_anchor"] = anchor
+  state["locale_search_anchor_set"] = true
+  state["locale_search_ticks_remaining"] = 1
+  state["step_goal"] = anchor
+  state["step_goal_set"] = true
+  var ctx := {"body": body, "memory_adapter": adapter}
+  (_MotorPlanner as GDScript).call(
+    "_maybe_search_arrival_remint", ctx, state, body.global_position, motor_v3, RID(), 0.4
+  )
+  _assert(
+    not bool(state.get("locale_search_anchor_set", false)),
+    "search window clears itself once the budget is spent",
+  )
+  _assert(
+    str(state.get("step_source", &"")) == "",
+    "give-up releases the step objective so the next tier-derivation can take over",
+  )
+  var post := adapter.consult_locale_seek(anchor, motor_v3)
+  _assert(
+    not bool(post.get("active", false)),
+    "invalidated cell no longer consults active with no other candidate in memory",
+  )
+  main.queue_free()
+
+
+## 2026-09-13 stuck-rabbit fix: the live-vs-locale handoff branch (a second call site minting a
+## locale step objective, distinct from `_sync_food_memory_objective`) used to skip the
+## arrival-cooldown check entirely, so a just-cleared empty anchor could be re-picked here on the
+## very same tick — the actual mechanism behind the reproduced stuck rabbit (rather than an
+## eat-range gating bug, which is what the tick-log instrumentation initially suggested).
+func _test_motor_planner_locale_handoff_respects_arrival_cooldown() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  adapter.seed_locale_prior_for_test(0, 0, 1.0)
+  # `consult_locale_seek`'s anchor is the cell *center* (26,26 for cell (0,0) at the default 52m
+  # coverage cell), not an arbitrary point inside it — the cooldown match is an exact-point
+  # comparison (`_locale_anchor_on_arrival_cooldown`), so this must match what the handoff's
+  # `_peek_locale_memory_tier_winner` call will actually return.
+  var cell_center := Vector3(26.0, 0.0, 26.0)
+  const FOOD_IID := 88010
+  var now_ms := Time.get_ticks_msec()
+  var scan := {
+    "food_split": {
+      "ready": [{
+        "pos": Vector3(-30.0, 1.0, -30.0),
+        "instance_id": FOOD_IID,
+        "stimulus_kind_id": &"shrub_berries",
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+        "is_moving": false,
+        "kind_yield": 0.1,  # low vs. locale's neutral-prior 0.5 so locale would normally win the handoff.
+      }],
+      "unready": [],
+    },
+  }
+  adapter.sync_after_scan(scan["food_split"], [], now_ms)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal_set"] = false
+  # Simulate having just cleared this exact anchor (empty arrival) this same consideration cycle.
+  state["locale_arrival_clear_anchor"] = cell_center
+  state["locale_arrival_clear_anchor_set"] = true
+  state["locale_arrival_clear_cooldown_ticks"] = int(
+    motor_v3.get("locale_revisit_cooldown_ticks", 300)
+  )
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": scan,
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": adapter,
+    "now_ms": now_ms,
+    "environment_grid": null,
+    "refresh_step_objective": true,
+  }
+  _MotorPlanner.select_action(ctx, state)
+  _assert(
+    str(state.get("step_source", &"")) != "locale",
+    "on-cooldown anchor is not re-adopted via the live-vs-locale handoff branch",
+  )
+  _assert(
+    int(state.get("step_instance_id", -1)) == FOOD_IID,
+    "the discovered live food is bound instead of the cooling-down locale anchor",
   )
   main.queue_free()
 

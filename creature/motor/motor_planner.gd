@@ -67,6 +67,14 @@ static func new_state() -> Dictionary:
     ## See `step_goal_set` — same sentinel-collision hazard for the cleared-anchor bookkeeping.
     "locale_arrival_clear_anchor_set": false,
     "locale_arrival_clear_cooldown_ticks": 0,
+    ## Bounded nearby-search after an empty locale arrival (2026-09-13 stuck-rabbit fix): rather
+    ## than immediately falling back to open-ended `explore` (or, before the fix, silently
+    ## re-picking the same dead anchor — see `_locale_anchor_on_arrival_cooldown`), the creature
+    ## spends a few waypoints actually looking around the cell it thought had food before giving
+    ## up on it. See `_maybe_search_arrival_remint` / `_mint_locale_search_waypoint`.
+    "locale_search_anchor": Vector3.ZERO,
+    "locale_search_anchor_set": false,
+    "locale_search_ticks_remaining": 0,
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
     ## Prior tick's MOVE_FORWARD displacement magnitude for the still-ramping check in
@@ -1031,6 +1039,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["locale_arrival_clear_anchor"] = Vector3.ZERO
     state["locale_arrival_clear_anchor_set"] = false
     state["locale_arrival_clear_cooldown_ticks"] = 0
+    _clear_locale_search_state(state)
     _reset_explore_align_progress_state(state)
     _clear_prey_engagement(state)
     _clear_pursuit_detour_latch(state)
@@ -1051,6 +1060,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
       _maybe_locale_arrival_bind_or_clear(
         ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
       )
+      _maybe_search_arrival_remint(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
       has_step_goal = bool(state.get("step_goal_set", false))
       var live_food := _AwarenessScan.best_ready_food_target(
         scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, state, motor_v3)
@@ -1174,11 +1184,25 @@ static func _derive_find_food_step_objective(
     scan.get("food_split", {}), creature_pos, _food_pursuit_exclusions(ctx, state, motor_v3)
   )
   if not food.is_empty():
+    # A live target beats an unresolved local search — abandon the search, not just this tick's
+    # objective, so a later empty arrival elsewhere starts a fresh search window instead of
+    # inheriting a stale countdown.
+    _clear_locale_search_state(state)
     # Moving prey always remints live (Pass 1); handoff scoring is for stationary food only.
     if not bool(food.get("is_moving", false)):
       var locale_candidate := _peek_locale_memory_tier_winner(
         ctx, creature_pos, motor_v3, scan
       )
+      ## BUGFIX (2026-09-13, stuck-rabbit): this handoff used to skip the arrival-cooldown check
+      ## that `_sync_food_memory_objective` (the other locale-pick call site) already applies —
+      ## an anchor `_clear_locale_step_fields` had just cleared (arrived, nothing there) could be
+      ## re-picked here on the very same tick, forever, since the live-food branch above never
+      ## reaches this far. See `_locale_anchor_on_arrival_cooldown`.
+      if (
+        not locale_candidate.is_empty()
+        and _locale_anchor_on_arrival_cooldown(state, locale_candidate.get("anchor", Vector3.ZERO))
+      ):
+        locale_candidate = {}
       if not locale_candidate.is_empty():
         var adapter: RefCounted = ctx.get("memory_adapter")
         if not _live_vs_locale_handoff_prefers_live(
@@ -1204,6 +1228,18 @@ static func _derive_find_food_step_objective(
       ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
     ):
       return
+  ## Bounded nearby-search after an empty locale arrival (2026-09-13 stuck-rabbit fix): prefer
+  ## looking around the cell the creature just found empty over immediately wandering off via
+  ## generic `explore` — `_maybe_search_arrival_remint` owns the countdown/give-up, this just
+  ## keeps minting waypoints while a search window is active and nothing better turned up above.
+  if (
+    bool(state.get("locale_search_anchor_set", false))
+    and int(state.get("locale_search_ticks_remaining", 0)) > 0
+    and not bool(state.get("step_goal_set", false))
+  ):
+    _mint_locale_search_waypoint(state, creature_pos, motor_v3, map_rid, agent_r)
+    _store_food_inventory_step_mode(ctx, state, motor_v3)
+    return
   var explore_first := (
     inv_mode == _FOOD_INV_UNDERSTOCKED and not _prey_engagement_latch_valid(state)
   )
@@ -1387,6 +1423,12 @@ static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = 
     state["locale_arrival_clear_cooldown_ticks"] = int(
       motor_v3.get("locale_revisit_cooldown_ticks", 300)
     )
+    ## Kick off the bounded nearby-search (2026-09-13 stuck-rabbit fix) — `_mint_locale_search_waypoint`
+    ## picks the first waypoint the next time `_derive_find_food_step_objective` runs (this same
+    ## tick, since clearing `step_goal_set` above just made `has_step_goal` false).
+    state["locale_search_anchor"] = cleared_anchor
+    state["locale_search_anchor_set"] = true
+    state["locale_search_ticks_remaining"] = int(motor_v3.get("locale_search_ticks", 240))
 
 
 ## Apply a locale memory-tier seek objective (anchor + nav substep).
@@ -1405,6 +1447,78 @@ static func _apply_locale_food_objective(
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = locale.get("stimulus_kind_id", &"")
   state["step_source"] = &"locale"
+
+
+## Clears the bounded nearby-search window (2026-09-13 stuck-rabbit fix) — a live target winning
+## out, a goal-kind switch, or the search itself giving up all end it the same way.
+static func _clear_locale_search_state(state: Dictionary) -> void:
+  state["locale_search_anchor"] = Vector3.ZERO
+  state["locale_search_anchor_set"] = false
+  state["locale_search_ticks_remaining"] = 0
+
+
+## Picks a fresh random waypoint within `locale_search_radius` of the search anchor and assigns it
+## as this tick's step objective — `step_source = &"locale_search"` (not `&"locale"`) so none of
+## the locale-specific EAT-handoff/no-progress machinery mistakes it for a bound food approach;
+## `step_instance_id` stays 0 and `step_ultimate_pos` is left unset so `_can_eat_now` never fires
+## on a point that isn't actually food.
+static func _mint_locale_search_waypoint(
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> void:
+  var anchor: Vector3 = state.get("locale_search_anchor", Vector3.ZERO)
+  var radius := float(motor_v3.get("locale_search_radius", 12.0))
+  var angle := randf() * TAU
+  var dist := randf_range(radius * 0.4, radius)
+  var raw := anchor + Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
+  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, raw, agent_r)
+  state["step_goal"] = resolved
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = Vector3.ZERO
+  state["step_ultimate_pos_set"] = false
+  state["step_instance_id"] = 0
+  state["step_stimulus_kind_id"] = &""
+  state["step_source"] = &"locale_search"
+
+
+## Per-tick upkeep for an active nearby-search (2026-09-13 stuck-rabbit fix): counts the window
+## down regardless of movement (idling at a search waypoint still spends the budget), mints a new
+## waypoint on arrival at the current one, and — once the budget runs out with nothing found —
+## hard-invalidates the anchor's locale belief (see `GoalSourceMemoryStore.invalidate_locale_belief_near`;
+## the per-visit `TIER_FAILURE` erosion `notify_locale_food_arrival_empty` already applies only
+## asymptotically approaches zero, so with no competing candidate the cell stayed `active` forever
+## at a vanishingly small rank — this is the hard stale-out that actually retires it) and falls
+## back to the ordinary `explore` path the very next tier-derivation.
+static func _maybe_search_arrival_remint(
+  ctx: Dictionary,
+  state: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  map_rid: RID,
+  agent_r: float,
+) -> void:
+  if state.get("step_source", &"") != &"locale_search":
+    return
+  var remaining := int(state.get("locale_search_ticks_remaining", 0)) - 1
+  state["locale_search_ticks_remaining"] = remaining
+  if remaining <= 0:
+    var anchor: Vector3 = state.get("locale_search_anchor", Vector3.ZERO)
+    var adapter: RefCounted = ctx.get("memory_adapter")
+    if adapter != null and adapter.has_method(&"invalidate_locale_belief_near"):
+      adapter.invalidate_locale_belief_near(anchor, motor_v3)
+    _clear_locale_search_state(state)
+    state["step_goal"] = Vector3.ZERO
+    state["step_goal_set"] = false
+    state["step_source"] = &""
+    return
+  var goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  var tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  if creature_pos.distance_to(goal) > tol:
+    return
+  _mint_locale_search_waypoint(state, creature_pos, motor_v3, map_rid, agent_r)
 
 
 ## At locale ultimate within eat range: bind nearby live food or clear locale orbit.
@@ -2795,6 +2909,34 @@ static func _can_eat_now(
   if not _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
     return false
   return _has_clear_contact_path_for_action(body, eat_tgt, ctx)
+
+
+## Debug-only breakdown of the `_can_eat_now` gates for the tick log (2026-09-13 stuck-rabbit
+## repro: shows whether `step_ultimate_pos` diverges from `step_goal` and which gate is failing).
+static func debug_eat_gate_snapshot(
+  ctx: Dictionary,
+  state: Dictionary,
+  step_goal: Vector3,
+  motor_v3: Dictionary,
+) -> Dictionary:
+  var body: CharacterBody3D = ctx.get("body")
+  var ultimate_set := bool(state.get("step_ultimate_pos_set", false))
+  var eat_tgt := _resolve_eat_target_pos(state, step_goal)
+  var out := {
+    "eat_ultimate_set": ultimate_set,
+    "eat_ultimate_pos": eat_tgt,
+    "eat_dist_to_ultimate": -1.0,
+    "eat_within_range": false,
+    "eat_facing_aligned": false,
+    "eat_clear_path": false,
+  }
+  if body == null or eat_tgt.length_squared() < 1e-8:
+    return out
+  out["eat_dist_to_ultimate"] = body.global_position.distance_to(eat_tgt)
+  out["eat_within_range"] = _is_within_eat_range(body, eat_tgt, motor_v3, 0.0)
+  out["eat_facing_aligned"] = _is_facing_aligned_for_eat(body, eat_tgt, motor_v3)
+  out["eat_clear_path"] = _has_clear_contact_path_for_action(body, eat_tgt, ctx)
+  return out
 
 
 ## Shared solid-blocker gate for contact actions (EAT today; reuse for combat once it lands) —

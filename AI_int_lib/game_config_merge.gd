@@ -484,6 +484,13 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## memory_adapter.gd for the companion fix (repeated empty arrivals now also erode that cell's
     ## stored_strength, so it loses out over time even once back off cooldown).
     "locale_revisit_cooldown_ticks": 300,
+    ## Bounded nearby-search after an empty locale arrival (2026-09-13 stuck-rabbit fix): duration
+    ## (physics ticks) and radius (world meters) of the look-around before the anchor's locale
+    ## belief is hard-invalidated (`GoalSourceMemoryStore.invalidate_locale_belief_near`) and the
+    ## creature falls back to ordinary `explore`. See `_maybe_search_arrival_remint` /
+    ## `_mint_locale_search_waypoint` in motor_planner.gd.
+    "locale_search_ticks": 240,
+    "locale_search_radius": 12.0,
     "approach_overshoot_guard_move_steps": 2,
     ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
     ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of
