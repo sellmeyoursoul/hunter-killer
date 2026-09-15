@@ -19,3 +19,4 @@ creature_size = 1.7
 collision_capsule_radius = 0.6
 collision_capsule_height = 2.0
 locomotion_profile = SubResource("sub_loco")
+stat_dexterity = 25

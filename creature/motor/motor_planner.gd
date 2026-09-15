@@ -510,11 +510,24 @@ static func _should_explore_boundary_scan(
   return _is_near_playfield_boundary(body, motor_v3)
 
 
+## Assumed physics tick rate for converting the per-creature continuous turn rate
+## ([code]move_turn_rate_deg_per_sec[/code]) into a tick-count budget — matches the project's
+## default `physics_ticks_per_second` (60Hz). Tick-count budgets (this, `dead_end_record_min_blocked_ticks`-
+## derived latches) are Bucket-2 durations per CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1's tunable
+## audit — independent of *how* movement executes, so staying tick-based (not a real-time degree
+## accumulator) is intentional, not a shortcut; see §9 for the 2026-09-15 dexterity-unification note.
+const _ASSUMED_PHYSICS_DELTA := 1.0 / 60.0
+
+
+## Ticks for one full 360° boundary-scan revolution at [param motor_v3]'s per-creature
+## [code]move_turn_rate_deg_per_sec[/code] (2026-09-15 dexterity unification — previously derived
+## from the fixed [code]turn_increment_deg[/code] step, same for every creature).
 static func _boundary_scan_turn_budget(motor_v3: Dictionary) -> int:
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
-  if turn_deg <= 0.0:
+  var deg_per_sec := float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0))
+  var deg_per_tick := deg_per_sec * _ASSUMED_PHYSICS_DELTA
+  if deg_per_tick <= 0.0:
     return 16
-  return maxi(1, int(ceil(360.0 / turn_deg)))
+  return maxi(1, int(ceil(360.0 / deg_per_tick)))
 
 
 ## Horizontal bearing toward playfield interior after rim boundary scan (inbound normal, not rim tangent).
@@ -565,6 +578,10 @@ static func _apply_explore_rim_escape_replan(
   _reset_explore_align_progress_state(state)
 
 
+## `turn_increment_deg` here is a sign-pick probe angle only (simulates one small step each way to
+## see which improves) — decoupled from actual turn execution, which uses the per-creature
+## `move_turn_rate_deg_per_sec` rate instead (2026-09-15 dexterity unification, §9). Any reasonably
+## small angle works equally well for this sign decision.
 static func _pick_boundary_scan_sign(body: CharacterBody3D, hug: Dictionary, motor_v3: Dictionary) -> int:
   var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
   if inbound.length_squared() < 1e-12:
@@ -1101,6 +1118,15 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         # fresh (still-blocked) raw food position — producing an exact 4-tick live/blocked/explore
         # cycle that never converged. The detour machinery itself is generic (waypoint + escalation
         # + give-up); only require it be active here, not that this is a moving-prey chase.
+        #
+        # Decision (2026-09-14): this branch intentionally does NOT call `_clear_locale_search_state`
+        # when it takes over from an active `locale_search`. `_maybe_search_arrival_remint` only
+        # decrements `locale_search_ticks_remaining` while `step_source == &"locale_search"`, so
+        # switching `step_source` to `&"live"` here freezes (pauses) the countdown and anchor instead
+        # of resetting them — if the live target goes away, the tier hierarchy resumes the search
+        # with its remaining budget intact rather than re-rolling a fresh anchor/window. Kept
+        # deliberately: time spent chasing live food isn't wasted search time, so it shouldn't count
+        # against the give-up budget.
         if _pursuit_detour_latch_valid(state):
           state["step_goal"] = state.get("pursuit_detour_waypoint", Vector3.ZERO)
           state["step_goal_set"] = true
@@ -2983,7 +3009,9 @@ static func _select_eat_orbit_or_align(
   if _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
     state["eat_orbit_turn_deg_accumulated"] = 0.0
     return -1
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  ## 2026-09-15 dexterity unification: real per-tick degrees at this creature's own turn rate
+  ## (was the fixed `turn_increment_deg` step, same for every creature regardless of dexterity).
+  var turn_deg := float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0)) * delta
   var revs := float(motor_v3.get("eat_orbit_break_revolutions", 3.0))
   var limit_deg := revs * 360.0
   var acc := float(state.get("eat_orbit_turn_deg_accumulated", 0.0))
@@ -3212,7 +3240,11 @@ static func _is_facing_aligned_with_tolerance(
   if to_target.length_squared() < 1e-8:
     return true
   var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_RIGHT)
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  ## 2026-09-15 dexterity unification: an explicit tolerance, decoupled from `turn_increment_deg`
+  ## (now purely a sign-pick probe angle) and from the per-creature `move_turn_rate_deg_per_sec` —
+  ## this gate is a fixed LoS/path-clearance cone (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1's own
+  ## note: "independently of action selection"), not tied to how fast any creature actually turns.
+  var turn_deg := float(motor_v3.get("move_alignment_tolerance_deg", 22.5))
   var min_dot := cos(deg_to_rad(turn_deg * tolerance_multiplier))
   return facing.dot(to_target.normalized()) >= min_dot
 
@@ -3248,8 +3280,10 @@ static func _facing_dot_to_target(body: CharacterBody3D, target: Vector3) -> flo
   return clampf(facing.dot(to_target.normalized()), -1.0, 1.0)
 
 
+## Same decoupled tolerance as [method _is_facing_aligned_with_tolerance] (2026-09-15) —
+## `move_alignment_tolerance_deg`, not `turn_increment_deg`.
 static func _move_alignment_min_dot(motor_v3: Dictionary) -> float:
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  var turn_deg := float(motor_v3.get("move_alignment_tolerance_deg", 22.5))
   return cos(deg_to_rad(turn_deg))
 
 

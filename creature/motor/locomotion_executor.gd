@@ -44,9 +44,9 @@ static func apply_action(
 
   match act:
     _MotorAction.Action.TURN_LEFT:
-      _rotate_facing(body, motor_v3, 1.0)
+      _rotate_facing(body, motor_v3, 1.0, delta)
     _MotorAction.Action.TURN_RIGHT:
-      _rotate_facing(body, motor_v3, -1.0)
+      _rotate_facing(body, motor_v3, -1.0, delta)
     _MotorAction.Action.MOVE_FORWARD:
       var align_frac := _blend_turn_toward(body, motor_v3, delta, move_turn_target)
       blocked = _displace_along_facing(body, 1.0, delta, pos_before, dist_to_goal, motor_v3, align_frac)
@@ -82,14 +82,12 @@ static func _arrival_damping_frac(dist_to_goal: Variant, motor_v3: Dictionary) -
   return lerpf(_ARRIVAL_DAMPING_MIN_SPEED_FRAC, 1.0, dist / radius)
 
 
-static func _turn_increment_rad(motor_v3: Dictionary) -> float:
-  return deg_to_rad(float(motor_v3.get("turn_increment_deg", 22.5)))
-
-
 ## Max angular rate (rad/sec) for the continuous blended turn+move law (§1 R1 —
-## CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1), distinct from [method _turn_increment_rad]'s fixed
-## per-tick step, which stays reserved for pure-orientation actions ([code]TURN_LEFT[/code]/
-## [code]TURN_RIGHT[/code] — boundary scan, EAT-orbit) that this law doesn't touch.
+## CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1) — and, since the 2026-09-15 dexterity turn-rate
+## unification (§9), also the rate [method _rotate_facing] applies for pure-orientation actions
+## ([code]TURN_LEFT[/code]/[code]TURN_RIGHT[/code] — boundary scan, EAT-orbit). One rate, one
+## source, per creature (dexterity-derived via `creature_motor_stack.gd`'s
+## `_refresh_move_turn_rate`) — no more separate fixed per-tick step for the discrete actions.
 static func _move_turn_rate_rad(motor_v3: Dictionary) -> float:
   return deg_to_rad(float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0)))
 
@@ -133,11 +131,19 @@ static func _blend_turn_toward(
   return maxf(0.0, new_facing.dot(to_n))
 
 
-static func _rotate_facing(body: CharacterBody3D, motor_v3: Dictionary, direction_sign: float) -> void:
+## Pure-orientation turn (boundary-scan sweep, EAT-orbit) at the same per-creature
+## [method _move_turn_rate_rad] as the continuous blended turn+move law (2026-09-15 dexterity
+## turn-rate unification) — previously a fixed `turn_increment_deg` step per call, independent of
+## [param delta] or the creature's own rate. `turn_increment_deg` stays alive only as
+## `motor_planner.gd`'s sign-pick probe angle (a "which way improves" simulation, not an applied
+## rotation) — fully decoupled from actual turn execution now.
+static func _rotate_facing(
+  body: CharacterBody3D, motor_v3: Dictionary, direction_sign: float, delta: float
+) -> void:
   var facing: Vector3 = body.get("last_move_direction")
   if facing.length_squared() < 1e-12:
     facing = _MotorPlane.HORIZONTAL_RIGHT
-  var angle := _turn_increment_rad(motor_v3) * direction_sign
+  var angle := _move_turn_rate_rad(motor_v3) * maxf(0.0, delta) * direction_sign
   facing = facing.rotated(Vector3.UP, angle).normalized()
   body.set("last_move_direction", facing)
   _clear_horizontal_velocity(body)

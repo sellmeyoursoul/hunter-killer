@@ -33,7 +33,7 @@
 - [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
 - Prefer **Resource** or **composition** for stats so `Player` and `Mob` do not duplicate large blocks of logic prematurely.
 
-**Stat point math:** Centralize in [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md).
+**Stat point math:** Centralize in [SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md).
 
 ---
 
@@ -137,7 +137,7 @@ Creatures are modeled as having **goals** that future utility, scripted motor, o
 
 ### Methods (intent)
 
-- **`generate_points()`** (internal): For each stat baseline, set `max_point_*` and usually `curr_point_*` via [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md). Original spec chained formulas; implementation doc should restate in GDScript-friendly steps when coding.  
+- **`generate_points()`** (internal): For each stat baseline, set `max_point_*` and usually `curr_point_*` via [SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md). Original spec chained formulas; implementation doc should restate in GDScript-friendly steps when coding.  
 - **`initialize_outlook()`** (internal): Seeds motivation sliders; **may live only on concrete species** if abstract `Creature` stays data-only.
 
 ### Scene & file changes
@@ -152,7 +152,7 @@ Creatures are modeled as having **goals** that future utility, scripted motor, o
 
 ### Dependencies
 
-- [SHARED_STATTOPOINT_PLAN.md](SHARED_STATTOPOINT_PLAN.md)  
+- [SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md)  
 - [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) (§5.1 — `CharacterBody*D` + `move_and_slide` for creature locomotion)  
 - [CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) (motivation traits in evolution / motor stack)
 

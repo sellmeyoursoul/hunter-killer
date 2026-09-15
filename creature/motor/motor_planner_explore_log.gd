@@ -104,6 +104,17 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
       1 if bool(snap.get("eat_facing_aligned", false)) else 0,
       1 if bool(snap.get("eat_clear_path", false)) else 0,
     ]
+  ## Flee gate/evaluation-window data collection (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9 slice
+  ## candidate, 2026-09-15) — raw per-tick nearest-threat distance, whenever any threat is in
+  ## awareness (not gated to `avoid_hostiles`, so the stream covers the approach before Flight
+  ## wins arbitration too). `tid=` lets an offline pass stitch one predator's distance series
+  ## together across ticks even if the nearest threat changes. `tdist=-1.00` means no threat.
+  var thr_dbg := ""
+  if int(snap.get("threat_count", 0)) > 0:
+    thr_dbg = " tdist=%7.2f tid=%5d" % [
+      float(snap.get("nearest_threat_dist", -1.0)),
+      int(snap.get("nearest_threat_id", 0)),
+    ]
   return (
     prefix
     + "t=%04d act=%s blk=%s cal=%3d%% "
@@ -112,6 +123,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + "err=%+7.1f dot=%7.3f dist=%7.2f enp=%d "
     + "scan=%s blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
     + eat_dbg
+    + thr_dbg
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),

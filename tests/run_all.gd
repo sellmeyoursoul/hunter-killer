@@ -51,7 +51,6 @@ const _MotorReplayFixture := preload("res://tests/motor_replay_fixture.gd")
 const _MotorStallDetector := preload("res://tests/motor_stall_detector.gd")
 const _MemoryAdapter := preload("res://creature/motor/memory_adapter.gd")
 const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
-const _StatCurve := preload("res://creature/creature_stat_curve.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBeliefMemoryScr := preload("res://creature/motor/goal_belief_memory.gd")
@@ -152,6 +151,7 @@ func _run_all() -> void:
   _test_motor_planner_eat_uses_ultimate_not_step_goal()
   await _test_motor_planner_eat_blocked_by_solid_between()
   _test_motor_planner_eat_orbit_break_after_revolutions()
+  _test_motor_planner_eat_orbit_break_scales_with_turn_rate()
   await _test_motor_locale_approach_no_oscillation_smoke()
   await _test_motor_live_pursuit_no_turn_storm_smoke()
   await _test_motor_pursuit_pinch_detour_smoke()
@@ -196,6 +196,7 @@ func _run_all() -> void:
   _test_locomotion_executor_stay_calorie_debit()
   await _test_locomotion_executor_move_blocked()
   _test_locomotion_executor_continuous_turn_rate_cap()
+  _test_locomotion_executor_rotate_facing_uses_turn_rate_not_fixed_step()
   _test_locomotion_executor_continuous_forward_speed_scales_with_alignment()
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
@@ -254,10 +255,13 @@ func _run_all() -> void:
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
   await _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient()
   await _test_motor_planner_select_action_shelter_arrival_is_wait()
-  _test_creature_stat_curve_saturating_pinned_and_monotonic()
+  _test_stat_math_peg_curve_pinned_and_monotonic()
+  _test_motor_planner_boundary_scan_turn_budget_scales_with_turn_rate()
   _test_stat_math_stat_to_point_table_and_extrapolation()
   _test_motor_action_wait_calorie_cost_uses_multiplier()
   await _test_creature_motor_stack_composure_scales_wait_multiplier()
+  await _test_creature_motor_stack_dexterity_scales_move_turn_rate()
+  await _test_creature_motor_stack_move_turn_rate_untouched_without_definition()
   _test_motor_planner_prey_race_giveup_excludes_non_closing_chase()
   _test_motor_planner_prey_race_closing_chase_never_excluded()
   _test_motor_planner_prey_race_exclusion_cooldown_expires()
@@ -1786,17 +1790,34 @@ func _test_motor_planner_select_action_shelter_arrival_is_wait() -> void:
   await process_frame
 
 
-## Pins the saturating curve at its anchor and checks it never plateaus beyond it.
-func _test_creature_stat_curve_saturating_pinned_and_monotonic() -> void:
-  var f10 := _StatCurve.saturating(10.0, 10.0, 0.75)
-  _assert(is_equal_approx(f10, 0.75), "saturating curve hits the anchor value exactly at the anchor stat")
-  var f1 := _StatCurve.saturating(1.0, 10.0, 0.75)
-  var f25 := _StatCurve.saturating(25.0, 10.0, 0.75)
-  var f100 := _StatCurve.saturating(100.0, 10.0, 0.75)
-  _assert(f1 < f10, "curve value below anchor stat is lower than at the anchor")
-  _assert(f25 > f10 and f25 < 1.0, "curve keeps climbing past the anchor without reaching 1.0")
-  _assert(f100 > f25 and f100 < 1.0, "curve still adds value far beyond the anchor, ever more slowly")
-  _assert((f25 - f10) > (f100 - f25), "gains diminish as the stat climbs (25->10 gap bigger than 100->25)")
+## Pegs the three-peg curve exactly at stat 1/10/25 and checks it never plateaus beyond 25.
+func _test_stat_math_peg_curve_pinned_and_monotonic() -> void:
+  var v1 := _StatMath.peg_curve(1, 100.0, 500.0, 900.0)
+  var v10 := _StatMath.peg_curve(10, 100.0, 500.0, 900.0)
+  var v25 := _StatMath.peg_curve(25, 100.0, 500.0, 900.0)
+  var v30 := _StatMath.peg_curve(30, 100.0, 500.0, 900.0)
+  _assert(is_equal_approx(v1, 100.0), "peg_curve(1) hits v1 exactly")
+  _assert(is_equal_approx(v10, 500.0), "peg_curve(10) hits v10 exactly")
+  _assert(is_equal_approx(v25, 900.0), "peg_curve(25) hits v25 exactly")
+  _assert(v30 > v25, "stat 30 exceeds v25 via extrapolation")
+  var v40 := _StatMath.peg_curve(40, 100.0, 500.0, 900.0)
+  _assert(v40 > v30, "extrapolation keeps climbing past 30")
+  _assert((v30 - v25) > (v40 - v30) / 4.0, "extrapolation modifier decays (early >25 gains outweigh later ones)")
+
+
+## 2026-09-15 dexterity turn-rate unification (§9) — a slower creature's boundary-scan revolution
+## takes proportionally more ticks, since the budget is now derived from the per-creature
+## `move_turn_rate_deg_per_sec` (at the assumed 60Hz physics rate) instead of a flat
+## `turn_increment_deg` step shared by every creature.
+func _test_motor_planner_boundary_scan_turn_budget_scales_with_turn_rate() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var default_budget: int = (_MotorPlanner as GDScript).call("_boundary_scan_turn_budget", motor_v3)
+  _assert(default_budget == 16, "default 1350 deg/sec at 60Hz still yields the historical 16-tick budget")
+  var slow_v3 := motor_v3.duplicate()
+  slow_v3["move_turn_rate_deg_per_sec"] = 90.0
+  var slow_budget: int = (_MotorPlanner as GDScript).call("_boundary_scan_turn_budget", slow_v3)
+  _assert(slow_budget > default_budget, "a slower turn rate needs more ticks for a full 360 scan")
+  _assert(slow_budget == 240, "90 deg/sec at 60Hz = 1.5 deg/tick -> ceil(360/1.5) = 240 ticks")
 
 
 ## Table lookup for 1..25 matches the spec source list at its endpoints; extrapolation beyond 25
@@ -1918,7 +1939,7 @@ func _test_motor_planner_prey_race_exclusion_cooldown_expires() -> void:
 
 
 ## Higher observation ⇒ fewer prey_race_giveup_ticks tolerated: `creature_motor_stack.gd`'s
-## per-tick refresh should lerp toward `prey_race_giveup_ticks_best` as stat_observation climbs.
+## per-tick refresh should approach `prey_race_giveup_ticks_at_stat_25` as stat_observation climbs.
 func _test_creature_motor_stack_observation_scales_prey_race_giveup_ticks() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -1938,16 +1959,16 @@ func _test_creature_motor_stack_observation_scales_prey_race_giveup_ticks() -> v
   var low_ticks := float(low_stack._motor_v3.get("prey_race_giveup_ticks"))
   var high_ticks := float(high_stack._motor_v3.get("prey_race_giveup_ticks"))
   _assert(high_ticks < low_ticks, "higher observation yields fewer tolerated non-closing ticks")
-  var best := float(low_stack._motor_v3.get("prey_race_giveup_ticks_best", 20.0))
-  var worst := float(low_stack._motor_v3.get("prey_race_giveup_ticks_worst", 90.0))
-  _assert(low_ticks <= worst + 1e-6 and low_ticks >= best - 1e-6, "low-observation ticks stay within [best, worst]")
-  _assert(high_ticks <= worst + 1e-6 and high_ticks >= best - 1e-6, "high-observation ticks stay within [best, worst]")
+  var v25 := float(low_stack._motor_v3.get("prey_race_giveup_ticks_at_stat_25", 22.19))
+  var v1 := float(low_stack._motor_v3.get("prey_race_giveup_ticks_at_stat_1", 80.94))
+  _assert(low_ticks <= v1 + 1e-6 and low_ticks >= v25 - 1e-6, "low-observation ticks stay within [stat-25, stat-1] pegs")
+  _assert(high_ticks <= v1 + 1e-6 and high_ticks >= v25 - 1e-6, "high-observation ticks stay within [stat-25, stat-1] pegs")
   main.queue_free()
   await process_frame
 
 
 ## Higher composure ⇒ cheaper WAIT: `creature_motor_stack.gd`'s per-tick refresh should lerp
-## `wait_calorie_multiplier` toward `wait_calorie_multiplier_best` as stat_composure climbs.
+## `wait_calorie_multiplier` toward `wait_calorie_multiplier_at_stat_25` as stat_composure climbs.
 func _test_creature_motor_stack_composure_scales_wait_multiplier() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -1967,10 +1988,57 @@ func _test_creature_motor_stack_composure_scales_wait_multiplier() -> void:
   var low_mul := float(low_stack._motor_v3.get("wait_calorie_multiplier"))
   var high_mul := float(high_stack._motor_v3.get("wait_calorie_multiplier"))
   _assert(high_mul < low_mul, "higher composure yields a cheaper (lower) WAIT calorie multiplier")
-  var best := float(low_stack._motor_v3.get("wait_calorie_multiplier_best", 0.5))
-  var worst := float(low_stack._motor_v3.get("wait_calorie_multiplier_worst", 1.0))
-  _assert(low_mul <= worst + 1e-6 and low_mul >= best - 1e-6, "low-composure WAIT multiplier stays within [best, worst]")
-  _assert(high_mul <= worst + 1e-6 and high_mul >= best - 1e-6, "high-composure WAIT multiplier stays within [best, worst]")
+  var v25 := float(low_stack._motor_v3.get("wait_calorie_multiplier_at_stat_25", 0.5156))
+  var v1 := float(low_stack._motor_v3.get("wait_calorie_multiplier_at_stat_1", 0.9353))
+  _assert(low_mul <= v1 + 1e-6 and low_mul >= v25 - 1e-6, "low-composure WAIT multiplier stays within [stat-25, stat-1] pegs")
+  _assert(high_mul <= v1 + 1e-6 and high_mul >= v25 - 1e-6, "high-composure WAIT multiplier stays within [stat-25, stat-1] pegs")
+  main.queue_free()
+  await process_frame
+
+
+## Higher dexterity ⇒ faster turning: `creature_motor_stack.gd`'s per-tick refresh should approach
+## `move_turn_rate_deg_per_sec_at_stat_25` as stat_dexterity climbs (2026-09-15, §9).
+func _test_creature_motor_stack_dexterity_scales_move_turn_rate() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var low_body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var high_body := _spawn_herbivore_body(main, Vector3(10.0, 1.0, 0.0))
+  await physics_frame
+  var low_def := (low_body.get("definition") as _CreatureDefinition).duplicate()
+  var high_def := (high_body.get("definition") as _CreatureDefinition).duplicate()
+  low_def.stat_dexterity = 1
+  high_def.stat_dexterity = 25
+  low_body.set("definition", low_def)
+  high_body.set("definition", high_def)
+  var low_stack := _motor_stack_test_configure(low_body)
+  var high_stack := _motor_stack_test_configure(high_body)
+  low_stack.call("_refresh_move_turn_rate")
+  high_stack.call("_refresh_move_turn_rate")
+  var low_rate := float(low_stack._motor_v3.get("move_turn_rate_deg_per_sec"))
+  var high_rate := float(high_stack._motor_v3.get("move_turn_rate_deg_per_sec"))
+  _assert(high_rate > low_rate, "higher dexterity yields a faster turn rate")
+  var v25 := float(low_stack._motor_v3.get("move_turn_rate_deg_per_sec_at_stat_25", 1350.0))
+  var v1 := float(low_stack._motor_v3.get("move_turn_rate_deg_per_sec_at_stat_1", 183.7))
+  _assert(low_rate <= v25 + 1e-6 and low_rate >= v1 - 1e-6, "low-dexterity turn rate stays within [stat-1, stat-25] pegs")
+  _assert(high_rate <= v25 + 1e-6 and high_rate >= v1 - 1e-6, "high-dexterity turn rate stays within [stat-1, stat-25] pegs")
+  _assert(is_equal_approx(high_rate, v25), "stat 25 with a full pool hits the pegged ceiling exactly")
+  main.queue_free()
+  await process_frame
+
+
+## A body with no CreatureDefinition keeps the flat `move_turn_rate_deg_per_sec` default —
+## `_refresh_move_turn_rate` must not silently degrade non-creature bodies to the stat-1 floor.
+func _test_creature_motor_stack_move_turn_rate_untouched_without_definition() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await physics_frame
+  body.set("definition", null)
+  var stack := _motor_stack_test_configure(body)
+  var before := float(stack._motor_v3.get("move_turn_rate_deg_per_sec", -1.0))
+  stack.call("_refresh_move_turn_rate")
+  var after := float(stack._motor_v3.get("move_turn_rate_deg_per_sec", -1.0))
+  _assert(is_equal_approx(before, after), "no definition: _refresh_move_turn_rate leaves the flat default untouched")
   main.queue_free()
   await process_frame
 
@@ -4084,7 +4152,9 @@ func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
     "now_ms": Time.get_ticks_msec(),
     "delta": delta,
   }
-  var turn_deg := float(motor_v3.get("turn_increment_deg", 22.5))
+  ## 2026-09-15: eat-orbit's per-tick degrees now come from `move_turn_rate_deg_per_sec * delta`
+  ## (dexterity turn-rate unification, §9), not the retired-from-this-path `turn_increment_deg`.
+  var turn_deg := float(motor_v3.get("move_turn_rate_deg_per_sec", 1350.0)) * delta
   var revs := float(motor_v3.get("eat_orbit_break_revolutions", 3))
   var turns_before_break := int(ceil((revs * 360.0) / turn_deg)) - 1
   var saw_turn := false
@@ -4109,6 +4179,40 @@ func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
   _assert(
     resume == _MotorAction.TURN_LEFT or resume == _MotorAction.TURN_RIGHT,
     "C3 orbit: resumes TURN toward ultimate after break",
+  )
+  main.queue_free()
+
+
+## 2026-09-15 dexterity turn-rate unification (§9) — a slower `move_turn_rate_deg_per_sec` should
+## take proportionally more ticks to break the orbit (accumulates fewer degrees per tick), proving
+## `_select_eat_orbit_or_align` reads the per-creature rate rather than a fixed step.
+func _test_motor_planner_eat_orbit_break_scales_with_turn_rate() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["move_turn_rate_deg_per_sec"] = 90.0
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var ultimate := Vector3(eat_max * 0.4, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = ultimate
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = 911912
+  state["step_source"] = &"live"
+  var act: int = (_MotorPlanner as GDScript).call(
+    "_select_eat_orbit_or_align", body, ultimate, state, motor_v3, delta
+  )
+  _assert(act == _MotorAction.TURN_LEFT or act == _MotorAction.TURN_RIGHT, "orbit still turns at a slow rate")
+  var expected_acc := 90.0 * delta
+  _assert(
+    is_equal_approx(float(state.get("eat_orbit_turn_deg_accumulated", -1.0)), expected_acc),
+    "one orbit tick accumulates exactly move_turn_rate_deg_per_sec * delta, not a fixed 22.5 step",
   )
   main.queue_free()
 
@@ -6518,6 +6622,36 @@ func _test_locomotion_executor_continuous_turn_rate_cap() -> void:
     "single MOVE_FORWARD tick's turn is capped at move_turn_rate_deg_per_sec * delta",
   )
   _assert(turned_deg > max_turn_deg * 0.5, "turn actually advances toward the target within the cap")
+  main.queue_free()
+
+## 2026-09-15 dexterity turn-rate unification (§9) — `TURN_LEFT`/`TURN_RIGHT` (boundary-scan,
+## EAT-orbit) now turn at the same `move_turn_rate_deg_per_sec * delta` rate as the continuous
+## law, not a fixed per-call `turn_increment_deg` step. Confirms both the rate-scaling and the
+## delta-scaling (double delta, double rotation) directly, at the executor level.
+func _test_locomotion_executor_rotate_facing_uses_turn_rate_not_fixed_step() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["move_turn_rate_deg_per_sec"] = 90.0
+  var delta := 1.0 / 60.0
+  _LocomotionExecutor.apply_action(body, _MotorAction.TURN_LEFT, delta, motor_v3)
+  var facing: Vector3 = body.last_move_direction.normalized()
+  var turned_deg := rad_to_deg(acos(clampf(Vector3(1.0, 0.0, 0.0).dot(facing), -1.0, 1.0)))
+  _assert(
+    absf(turned_deg - 90.0 * delta) < 0.05,
+    "TURN_LEFT rotates by move_turn_rate_deg_per_sec * delta, not a fixed turn_increment_deg step",
+  )
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  _LocomotionExecutor.apply_action(body, _MotorAction.TURN_LEFT, delta * 2.0, motor_v3)
+  var facing2: Vector3 = body.last_move_direction.normalized()
+  var turned_deg2 := rad_to_deg(acos(clampf(Vector3(1.0, 0.0, 0.0).dot(facing2), -1.0, 1.0)))
+  _assert(
+    absf(turned_deg2 - 90.0 * delta * 2.0) < 0.05,
+    "doubling delta doubles the rotation — framerate-independent, not a fixed per-call step",
+  )
   main.queue_free()
 
 ## Forward speed is `cos(post-turn heading error)`, floored at zero — this test measures the

@@ -127,5 +127,5 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
 | **`res://` repo layout migration** | Medium | [Draft_Features/REPO_LAYOUT_PLAN.md](Draft_Features/REPO_LAYOUT_PLAN.md) | Systems vs **`assets/`**, optional **`systems/`** rename, **`scenes/app/`**, **`config/`**; aligns with [ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) §4 / §9; **do not apply** until draft questions resolved |
-| **Stat → point pool math** | Low | [Draft_Features/SHARED_STATTOPOINT_PLAN.md](Draft_Features/SHARED_STATTOPOINT_PLAN.md) | Feeds [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md). |
+| **Stat display cap for UI** | Low | [Completed_Features/SHARED_STATTOPOINT_PLAN.md §9](Completed_Features/SHARED_STATTOPOINT_PLAN.md) | Should stats cap at a max int (e.g. 99) for UI display? Open since the original spec (2026-05-11); math itself is fully implemented/resolved (`stat_to_point`, `StatMath.peg_curve`) — this is UI-only and has no UI to answer it against yet. |
 | **World-model feature umbrella** | Low | [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](Draft_Features/VISION_WORLD_BUILDER_PLAN.md) | Index of domain plans; archive table: [Completed_Features/EARLY_SPEC_DOC](Completed_Features/EARLY_SPEC_DOC) |

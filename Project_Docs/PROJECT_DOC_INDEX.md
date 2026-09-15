@@ -54,17 +54,18 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | File | Notes |
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
+| [Draft_Features/CM_V3_MULTI_MOBS.md](Draft_Features/CM_V3_MULTI_MOBS.md) | **Multi-predator support** (investigation, not started) — scene/spawn structure, HUD observability, flee direction blending needed before more than one live predator per encounter is possible; companion to [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)'s learned evasive-turn-bias sketch. |
 | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
 | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Canonical:** motivation tree Tier-1/2, **`CreatureDefinition`** traits (−100…+100), goal-kind rollup, habitual **`believed_goal_*`** modulation + strategy-class **`<<Question>>`** Actions **1–3**. Consumed by [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) + [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
 | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Creature memory** (working → definitive): goal-aligned beliefs (food, danger, mates, shelter); success-pattern backends + **§14** tuning; read **[CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md)** first for Tier-2 / traits / replay semantics. |
 | [Draft_Features/CREATURE_MODEL_PLAN.md](Draft_Features/CREATURE_MODEL_PLAN.md) | Creature fields / schema; memory → [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md); Tier-2 trait narrative → [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) §3. |
 | [Draft_Features/CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) | **ENGINE motor refactor (active source of truth):** `creature_motor_v3`, per-root **`creature_motor_stack`**, hub / planner / facing-relative execution, memory adapter; phasing **6a→6d**. Supersedes V2 + POST_LOS (archived). |
 | [Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | **V3 follow-on:** bug fixes, playtest gaps, headless smoke extensions — companion to [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md); not §12 phasing. |
+| [Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) | **Cross-cutting design review:** flee-waypoint/R1 architecture risk, shared abstractions (stuck detector, sentinel-bool convention, per-tick LoS subsystem), stat-curve conventions, dexterity turn-rate unification (§9) — companion to [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md), not §12 phasing. |
 | [Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md](Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md) | **Randomized spawn stress-test log:** issues surfaced by [ENVIRONMENT_MODEL_PLAN.md §6.4](Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)'s randomized interior boulder / food / duel-pair spawn; sibling to [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md), not a duplicate. |
 | [Draft_Features/PLANT_ECOLOGY_PLAN.md](Draft_Features/PLANT_ECOLOGY_PLAN.md) | Long-term plant ecology. |
 | [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | Plants / food index (active design; shipped slice archived). |
 | [Draft_Features/REPO_LAYOUT_PLAN.md](Draft_Features/REPO_LAYOUT_PLAN.md) | `res://` layout draft (not authoritative). |
-| [Draft_Features/SHARED_STATTOPOINT_PLAN.md](Draft_Features/SHARED_STATTOPOINT_PLAN.md) | Stat → point pools. |
 | [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](Draft_Features/VISION_WORLD_BUILDER_PLAN.md) | World-builder umbrella. |
 
 ---
@@ -105,6 +106,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) | Shipped motor avoidance (code may link here — **reference only** unless task cites this file). |
 | [Completed_Features/OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) | Object / grid avoidance archive. |
 | [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md) | **Completed** Project_Docs reorg (option B) — historical; active policy is **this index** + `AGENTS.md`. |
+| [Completed_Features/SHARED_STATTOPOINT_PLAN.md](Completed_Features/SHARED_STATTOPOINT_PLAN.md) | Stat → point pool conversion (`StatMath.stat_to_point`) and the general three-peg stat curve (`StatMath.peg_curve`) — **implemented and wired**, `res://creature/stat_math.gd`. |
 
 ---
 

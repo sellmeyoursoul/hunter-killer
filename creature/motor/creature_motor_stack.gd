@@ -18,7 +18,7 @@ const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd"
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
-const _StatCurve := preload("res://creature/creature_stat_curve.gd")
+const _StatMath := preload("res://creature/stat_math.gd")
 
 
 var _body: CharacterBody3D
@@ -149,6 +149,7 @@ func tick(delta: float) -> _ActionOutcome:
   _physics_tick_count += 1
   _refresh_wait_calorie_multiplier()
   _refresh_prey_race_giveup_ticks()
+  _refresh_move_turn_rate()
   _run_live_scan()
   _maintain_memory_beliefs()
   var area_only := _rest_area_only_perception()
@@ -619,7 +620,33 @@ func get_debug_snapshot() -> Dictionary:
     "eat_within_range": bool(eat_gate.get("eat_within_range", false)),
     "eat_facing_aligned": bool(eat_gate.get("eat_facing_aligned", false)),
     "eat_clear_path": bool(eat_gate.get("eat_clear_path", false)),
+    "nearest_threat_dist": _nearest_threat_debug_info().get("dist", -1.0),
+    "nearest_threat_id": _nearest_threat_debug_info().get("instance_id", 0),
   }
+
+
+## Nearest in-awareness threat's distance + instance id, for the flee gate/evaluation-window
+## data-collection pass (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9 slice candidate, 2026-09-15) —
+## raw per-tick signal only, no trend/gate logic here. Mirrors `_flee_objective`'s own
+## nearest-selection (`gate_dist` + `in_awareness`) so the logged distance is the same one flee
+## itself would react to, not a separately-computed approximation. `dist` is `-1.0` when no threat
+## is in awareness this tick (distinct from a real zero-distance reading).
+func _nearest_threat_debug_info() -> Dictionary:
+  var nearest_d := INF
+  var nearest_id := 0
+  for sample_v in _threat_samples:
+    if typeof(sample_v) != TYPE_DICTIONARY:
+      continue
+    var sample: Dictionary = sample_v
+    if not bool(sample.get("in_awareness", false)):
+      continue
+    var d := float(sample.get("gate_dist", INF))
+    if d < nearest_d:
+      nearest_d = d
+      nearest_id = int(sample.get("instance_id", 0))
+  if is_inf(nearest_d):
+    return {"dist": -1.0, "instance_id": 0}
+  return {"dist": nearest_d, "instance_id": nearest_id}
 
 
 ## Short debug label for a [MotorAction] id ([code]-1[/code] → [code]"?"[/code]).
@@ -1241,46 +1268,67 @@ func _clamp_playfield_if_needed() -> bool:
 
 
 ## Recomputes [code]wait_calorie_multiplier[/code] on [member _motor_v3] from the body's composure
-## stat/point-pool (2026-09-12 concealment-rest design): `saturating(stat_composure)` curve value
-## (pinned to `wait_composure_curve_anchor_value` at `wait_composure_curve_anchor_stat`, default
-## 0.75 @ 10) times `curr_point_comp/max_point_comp` gives a `0..1` composure factor, which lerps
-## the WAIT multiplier between `wait_calorie_multiplier_worst` (no discount, like STAY) and
-## `wait_calorie_multiplier_best` (full discount, like REST) — full composure factor => cheapest.
+## stat/point-pool (2026-09-15 curve-convention migration, from the 2026-09-12 concealment-rest
+## design): `StatMath.peg_curve(stat_composure, ...)` gives the full-pool value directly (pegged at
+## stat 1/10/25, see `wait_calorie_multiplier_at_stat_*`), then `curr_point_comp/max_point_comp`
+## lerps from `_at_stat_1` (no discount, like STAY, when the pool is fully spent) toward that
+## pegged value as the pool refills — full pool at full composure gives the cheapest WAIT.
 func _refresh_wait_calorie_multiplier() -> void:
-  var factor := 0.0
+  var v1 := float(_motor_v3.get("wait_calorie_multiplier_at_stat_1", 0.9353))
+  var v10 := float(_motor_v3.get("wait_calorie_multiplier_at_stat_10", 0.625))
+  var v25 := float(_motor_v3.get("wait_calorie_multiplier_at_stat_25", 0.5156))
+  var mult := v1
   var def_v: Variant = _body.get("definition") if _body != null else null
   if def_v is _CreatureDefinition:
     var def: _CreatureDefinition = def_v
-    var anchor_stat := float(_motor_v3.get("wait_composure_curve_anchor_stat", 10.0))
-    var anchor_value := float(_motor_v3.get("wait_composure_curve_anchor_value", 0.75))
-    var curve := _StatCurve.saturating(float(def.stat_composure), anchor_stat, anchor_value)
+    var curve_value := _StatMath.peg_curve(def.stat_composure, v1, v10, v25)
     var max_pool := maxf(1e-6, def.max_point_comp())
     var pool_ratio := clampf(def.curr_point_comp() / max_pool, 0.0, 1.0)
-    factor = clampf(curve * pool_ratio, 0.0, 1.0)
-  var worst := float(_motor_v3.get("wait_calorie_multiplier_worst", 1.0))
-  var best := float(_motor_v3.get("wait_calorie_multiplier_best", 0.5))
-  _motor_v3["wait_calorie_multiplier"] = lerpf(worst, best, factor)
+    mult = lerpf(v1, curve_value, pool_ratio)
+  _motor_v3["wait_calorie_multiplier"] = mult
 
 
 ## Recomputes `prey_race_giveup_ticks` on [member _motor_v3] from the body's observation stat
-## (2026-09-12 prey-race giveaway design): `saturating(stat_observation)` curve value scales how
-## quickly a predator recognizes a live, unblocked chase isn't closing distance — high observation
-## ⇒ fewer ticks tolerated (`prey_race_giveup_ticks_best`), low observation ⇒ more
-## (`_worst`) — mirrors `_refresh_wait_calorie_multiplier`'s composure lerp shape.
+## (2026-09-15 curve-convention migration, from the 2026-09-12 prey-race giveaway design):
+## `StatMath.peg_curve(stat_observation, ...)` gives the full-pool tick count directly (pegged at
+## stat 1/10/25, see `prey_race_giveup_ticks_at_stat_*`) — high observation ⇒ fewer ticks
+## tolerated, low observation ⇒ more — mirrors `_refresh_wait_calorie_multiplier`'s pool-ratio lerp.
 func _refresh_prey_race_giveup_ticks() -> void:
-  var factor := 0.0
+  var v1 := float(_motor_v3.get("prey_race_giveup_ticks_at_stat_1", 80.94))
+  var v10 := float(_motor_v3.get("prey_race_giveup_ticks_at_stat_10", 37.5))
+  var v25 := float(_motor_v3.get("prey_race_giveup_ticks_at_stat_25", 22.19))
+  var ticks := v1
   var def_v: Variant = _body.get("definition") if _body != null else null
   if def_v is _CreatureDefinition:
     var def: _CreatureDefinition = def_v
-    var anchor_stat := float(_motor_v3.get("prey_race_observation_curve_anchor_stat", 10.0))
-    var anchor_value := float(_motor_v3.get("prey_race_observation_curve_anchor_value", 0.75))
-    var curve := _StatCurve.saturating(float(def.stat_observation), anchor_stat, anchor_value)
+    var curve_value := _StatMath.peg_curve(def.stat_observation, v1, v10, v25)
     var max_pool := maxf(1e-6, def.max_point_observ())
     var pool_ratio := clampf(def.curr_point_observ() / max_pool, 0.0, 1.0)
-    factor = clampf(curve * pool_ratio, 0.0, 1.0)
-  var worst := float(_motor_v3.get("prey_race_giveup_ticks_worst", 90.0))
-  var best := float(_motor_v3.get("prey_race_giveup_ticks_best", 20.0))
-  _motor_v3["prey_race_giveup_ticks"] = lerpf(worst, best, factor)
+    ticks = lerpf(v1, curve_value, pool_ratio)
+  _motor_v3["prey_race_giveup_ticks"] = ticks
+
+
+## Recomputes `move_turn_rate_deg_per_sec` on [member _motor_v3] from the body's dexterity stat
+## (2026-09-15 dexterity turn-rate unification, CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9):
+## `StatMath.peg_curve(stat_dexterity, ...)` pegged at stat 1/10/25 (`move_turn_rate_deg_per_sec_at_stat_*`)
+## governs both the continuous goal-directed turn law (`locomotion_executor.gd::_blend_turn_toward`)
+## and boundary-scan/EAT-orbit's turn stepping (`_rotate_facing`) — one rate, one source. Unlike
+## the composure/observation refreshes, a body with no [CreatureDefinition] is left untouched
+## (keeps whatever flat `move_turn_rate_deg_per_sec` default `game_config_merge.gd` already merged
+## in) rather than degrading to the stat-1 floor — non-creature test/generic bodies shouldn't
+## silently slow down just because this refresh started running.
+func _refresh_move_turn_rate() -> void:
+  var def_v: Variant = _body.get("definition") if _body != null else null
+  if not (def_v is _CreatureDefinition):
+    return
+  var def: _CreatureDefinition = def_v
+  var v1 := float(_motor_v3.get("move_turn_rate_deg_per_sec_at_stat_1", 183.7))
+  var v10 := float(_motor_v3.get("move_turn_rate_deg_per_sec_at_stat_10", 691.6))
+  var v25 := float(_motor_v3.get("move_turn_rate_deg_per_sec_at_stat_25", 1350.0))
+  var curve_value := _StatMath.peg_curve(def.stat_dexterity, v1, v10, v25)
+  var max_pool := maxf(1e-6, def.max_point_dex())
+  var pool_ratio := clampf(def.curr_point_dex() / max_pool, 0.0, 1.0)
+  _motor_v3["move_turn_rate_deg_per_sec"] = lerpf(v1, curve_value, pool_ratio)
 
 
 func _traits_from_body() -> Dictionary:

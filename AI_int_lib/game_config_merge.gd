@@ -362,16 +362,33 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
 ## V3 motor defaults ([CREATURE_MOVEMENT_V3.md §7.5 / §12.2 6a](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 static func default_creature_motor_v3_params() -> Dictionary:
   var core := {
+    ## Sign-pick probe angle only (2026-09-15) — `_pick_boundary_scan_sign`/`_pick_shorter_arc_turn_sign`
+    ## simulate one small step each way to decide left-vs-right; decoupled from actual turn
+    ## execution, which reads `move_turn_rate_deg_per_sec` instead. Not a per-tick applied step.
     "turn_increment_deg": 22.5,
+    ## Explicit facing-alignment tolerance for path-clearance/LoS gating (2026-09-15) —
+    ## `_is_facing_aligned_with_tolerance`/`_move_alignment_min_dot`. Previously derived from
+    ## `turn_increment_deg`; split out because that key no longer represents an applied turn step.
+    "move_alignment_tolerance_deg": 22.5,
     ## §1 R1 continuous controller (CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §1) — max angular rate for
-    ## the executor's blended turn+move law (substep 1: scaffolding only, not yet wired to any
-    ## consumer). Distinct from `turn_increment_deg`, which stays a fixed per-tick step for the
-    ## pure-orientation behaviors (boundary_scan, eat-orbit) that remain outside this slice's scope.
-    ## Default derived to match `turn_increment_deg`'s existing worst-case per-tick cap at the
-    ## default 60Hz physics rate (22.5 / (1/60) = 1350), so the continuous law's max turn speed
-    ## isn't a step change from today's — the win instead comes from proportional (not fixed-step)
-    ## turning at smaller errors, and forward speed no longer freezing to zero above a hard gate.
+    ## the executor's blended turn+move law. Since the 2026-09-15 dexterity turn-rate unification
+    ## (§9), also the rate boundary-scan/EAT-orbit's pure-orientation turning uses (`_rotate_facing`)
+    ## — one rate, one source, no more separate fixed per-tick step for those. This flat value is
+    ## the pre-dexterity default / fallback for a body with no `CreatureDefinition`
+    ## (`creature_motor_stack.gd::_refresh_move_turn_rate` leaves it untouched in that case) —
+    ## creature bodies get a per-dexterity value instead, see the three pegs below. Default derived
+    ## to match the old fixed-step's worst-case per-tick cap at 60Hz (22.5 / (1/60) = 1350), so the
+    ## continuous law's max turn speed wasn't a step change from the pre-R1 default when it shipped.
     "move_turn_rate_deg_per_sec": 1350.0,
+    ## Dexterity-pegged turn-rate curve (2026-09-15, CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9) —
+    ## `StatMath.peg_curve(stat_dexterity, ...)` via `creature_motor_stack.gd::_refresh_move_turn_rate`.
+    ## Stat 25 preserved at exactly the historical flat default above (already live-tested through
+    ## every C9/C1-C5 acceptance leg) rather than pushed faster; 1 and 10 derived from `StatMath`'s
+    ## own point-pool table ratios (`T[10]/T[1]`≈3.7645, `T[25]/T[10]`≈1.95198) so the shape matches
+    ## every other stat curve in the project.
+    "move_turn_rate_deg_per_sec_at_stat_1": 183.7,
+    "move_turn_rate_deg_per_sec_at_stat_10": 691.6,
+    "move_turn_rate_deg_per_sec_at_stat_25": 1350.0,
     "calorie_baseline_drain_per_sec": 1.0,
     "move_calorie_per_sec": 1.0,
     "rest_baseline_multiplier": 0.5,
@@ -444,24 +461,26 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "shelter_confidence_observed": 0.3,
     "shelter_confidence_confirmed": 0.6,
     "shelter_confidence_battle_tested": 1.0,
-    ## Concealment-rest (2026-09-12 design review) — `Action.WAIT` while occupying a shelter spot.
-    ## Composure factor (`CreatureStatCurve.saturating(stat_composure)` × `curr_point_comp/max_point_comp`)
-    ## lerps the effective multiplier between worst (no discount, like STAY) and best (full
-    ## discount, like REST) — see `creature_motor_stack.gd::_refresh_wait_calorie_multiplier`.
-    "wait_calorie_multiplier_worst": 1.0,
-    "wait_calorie_multiplier_best": 0.5,
-    "wait_composure_curve_anchor_stat": 10.0,
-    "wait_composure_curve_anchor_value": 0.75,
-    ## Prey-race giveaway (2026-09-12) — a predator chasing a live-visible, non-closing moving
-    ## prey (open terrain, no blocking obstacle to trip the existing §9 passibility-fail giveup)
-    ## gives up after `prey_race_giveup_ticks`, itself scaled by observation the same way WAIT's
-    ## calorie discount is scaled by composure: worst (low observation, slow to realize) down to
-    ## best (high observation, realizes fast). Give-up reuses the existing passibility-fail
-    ## exclusion machinery rather than a new one — see `motor_planner.gd::_arm_prey_engagement_from_live_food`.
-    "prey_race_giveup_ticks_worst": 90.0,
-    "prey_race_giveup_ticks_best": 20.0,
-    "prey_race_observation_curve_anchor_stat": 10.0,
-    "prey_race_observation_curve_anchor_value": 0.75,
+    ## Concealment-rest (2026-09-12 design review; curve migrated 2026-09-15) — `Action.WAIT`
+    ## while occupying a shelter spot. `StatMath.peg_curve(stat_composure, ...)` pegged at stat
+    ## 1/10/25 gives the full-pool multiplier directly; `curr_point_comp/max_point_comp` lerps from
+    ## `_at_stat_1` (no discount, like STAY, pool fully spent) toward that pegged value as the pool
+    ## refills — see `creature_motor_stack.gd::_refresh_wait_calorie_multiplier`. Stat-1/10/25
+    ## values preserve what the retired single-anchor `saturating` curve produced at those same
+    ## three stats, so this migration is not a live-behavior change, only a shape/mechanism one.
+    "wait_calorie_multiplier_at_stat_1": 0.9353,
+    "wait_calorie_multiplier_at_stat_10": 0.625,
+    "wait_calorie_multiplier_at_stat_25": 0.5156,
+    ## Prey-race giveaway (2026-09-12; curve migrated 2026-09-15) — a predator chasing a
+    ## live-visible, non-closing moving prey (open terrain, no blocking obstacle to trip the
+    ## existing §9 passibility-fail giveup) gives up after `prey_race_giveup_ticks`, itself scaled
+    ## by observation the same way WAIT's calorie discount is scaled by composure via
+    ## `StatMath.peg_curve` — low observation (stat 1, slow to realize) down to high observation
+    ## (stat 25, realizes fast). Give-up reuses the existing passibility-fail exclusion machinery
+    ## rather than a new one — see `motor_planner.gd::_arm_prey_engagement_from_live_food`.
+    "prey_race_giveup_ticks_at_stat_1": 80.94,
+    "prey_race_giveup_ticks_at_stat_10": 37.5,
+    "prey_race_giveup_ticks_at_stat_25": 22.19,
     "prey_race_not_closing_epsilon": 0.05,
     "prey_race_exclusion_cooldown_ticks": 60,
     "goal_inventory_min_shelter": 1.0,

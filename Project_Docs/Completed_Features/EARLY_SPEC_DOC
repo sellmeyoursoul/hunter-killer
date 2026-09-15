@@ -11,7 +11,7 @@ Start active work at [Draft_Features/VISION_WORLD_BUILDER_PLAN.md](../Draft_Feat
 | Full plant ecology (beyond POC) | [Draft_Features/PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) |
 | Plants + hunger POC | [Draft_Features/PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md) |
 | Terrain / environment props | [Definitive_Features/ENVIRONMENT_MODEL_PLAN.md](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) |
-| stat → point pool math | [Draft_Features/SHARED_STATTOPOINT_PLAN.md](../Draft_Features/SHARED_STATTOPOINT_PLAN.md) |
+| stat → point pool math | [Draft_Features/SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md) |
 | LLM scope (conversation, not motor) | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](../Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) |
 | Scripted mob avoidance / motor | [MOB_AVOIDANCE_PLAN.md](MOB_AVOIDANCE_PLAN.md) |
 | Blank template for new features | [FEATURE_PLAN_TEMPLATE.md](../FEATURE_PLAN_TEMPLATE.md) |
