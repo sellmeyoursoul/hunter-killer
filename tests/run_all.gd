@@ -165,6 +165,13 @@ func _run_all() -> void:
   _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours()
   _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
   _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ()
+  # STUCK-RABBIT FIX (2026-09-16) — live-vs-locale handoff defaults to live, two survival exceptions
+  _test_motor_planner_live_locale_handoff_prefers_close_affordable_live_over_richer_locale()
+  _test_motor_planner_live_locale_handoff_net_loss_prefers_locale()
+  _test_motor_planner_live_locale_handoff_starvation_risk_prefers_locale()
+  _test_motor_planner_live_locale_handoff_change_stability_scales_margin()
+  _test_motor_planner_food_yield_estimate_noise_frac_pegs_stat_curve()
+  _test_motor_planner_apply_food_yield_noise_zero_frac_is_noop()
   _test_motor_planner_locale_arrival_binds_live_or_clears()
   _test_motor_planner_precise_backtrack_ignored()
   _test_motor_planner_explore_latch()
@@ -216,6 +223,11 @@ func _run_all() -> void:
   # §12.2 post-6d P4 — Flight flee waypoint latch + entry telemetry
   _test_motor_planner_flight_close_range_forward_egress()
   _test_motor_planner_flight_flee_waypoint_orbit_stable()
+  # CM_V3_MULTI_MOBS.md step 4 — multi-threat flee bearing blending
+  _test_motor_planner_flee_objective_single_threat_matches_nearest_only()
+  _test_motor_planner_flee_objective_blends_multiple_threats()
+  _test_motor_planner_flee_objective_surrounded_threats_degrade_gracefully()
+  _test_motor_planner_flee_objective_smoothing_dampens_bearing_swing()
   _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter()
   _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief()
   _test_waypoint_chain_simplify_drops_collinear_points()
@@ -636,7 +648,7 @@ func _test_creature_3d_predation_contact() -> void:
   pred_body.set("current_calories", 20.0)
   var pred_cal_before := float(pred_body.get("current_calories"))
   var hit_state: Array = [0]
-  prey_body.hit.connect(func() -> void: hit_state[0] = int(hit_state[0]) + 1)
+  prey_body.hit.connect(func(_predator: Node) -> void: hit_state[0] = int(hit_state[0]) + 1)
   var contact := Vector3(20.0, 0.0, 20.0)
   herb_root.global_position = contact
   carn_root.global_position = contact + Vector3(3.0, 0.0, 0.0)
@@ -1058,6 +1070,15 @@ func _motor_v3_test_params() -> Dictionary:
   p["awareness_cone_half_angle_deg"] = 80.0
   p["awareness_requires_los"] = false
   return p
+
+
+## `stat_observation` food-yield-estimate noise is on by default even at neutral stat (see
+## `_food_yield_estimate_noise_frac`) — deterministic handoff tests that assert exact outcomes on
+## precise borderline numbers must zero it out, same convention as C7's `goal_consideration_chaos`.
+func _zero_food_yield_noise(motor_v3: Dictionary) -> void:
+  motor_v3["food_yield_estimate_noise_frac_v1"] = 0.0
+  motor_v3["food_yield_estimate_noise_frac_v10"] = 0.0
+  motor_v3["food_yield_estimate_noise_frac_v25"] = 0.0
 
 
 ## Flight urgency via hub scoring (ctx keys flow into urgency_flight hub_ctx).
@@ -4972,6 +4993,191 @@ func _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ() -
   main.queue_free()
 
 
+## STUCK-RABBIT FIX (2026-09-16): a close, affordable live target must beat a locale memory that's
+## merely *richer in estimated yield* — the exact bug reported live (rabbit abandoned a shrub it was
+## one step from reaching for a remembered target across the map, then reversed and had to re-turn).
+## Same "richer locale" shape as the test above (neutral-prior locale > a modest live yield), but
+## live is now close instead of far — the fix's whole point is that proximity now matters at all.
+func _test_motor_planner_live_locale_handoff_prefers_close_affordable_live_over_richer_locale() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 30.0
+  var motor_v3 := _motor_v3_test_params()
+  _zero_food_yield_noise(motor_v3)
+  var creature_pos := body.global_position
+  var live_food := {
+    "pos": Vector3(5.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_a",
+    "kind_yield": 0.3,
+  }
+  var locale := {
+    "anchor": Vector3(100.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_b",
+  }
+  var prefers_live: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body
+  )
+  _assert(
+    prefers_live,
+    "close, affordable live food beats a merely richer-estimated but far locale memory",
+  )
+  main.queue_free()
+
+
+## Exception A (net loss): travel cost alone exceeds the live target's own yield — not worth the
+## trip regardless of what locale offers, so locale wins even though nothing here is starvation-related.
+func _test_motor_planner_live_locale_handoff_net_loss_prefers_locale() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 30.0
+  var motor_v3 := _motor_v3_test_params()
+  _zero_food_yield_noise(motor_v3)
+  var creature_pos := body.global_position
+  var live_food := {
+    "pos": Vector3(50.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_a",
+    "kind_yield": 0.1,
+  }
+  var locale := {
+    "anchor": Vector3(50.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_b",
+  }
+  var prefers_live: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body
+  )
+  _assert(
+    not prefers_live,
+    "net-loss live target (travel cost exceeds its own yield) loses to locale",
+  )
+  main.queue_free()
+
+
+## Exception B (starvation risk): live target is net-positive standalone (passes Exception A), but
+## its round trip (there, eat, back) would leave calories at/below the safety margin while locale's
+## one-way trip stays safely above it — locale wins even though live "pays for itself" on paper.
+func _test_motor_planner_live_locale_handoff_starvation_risk_prefers_locale() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 5.0
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["food_handoff_starvation_margin_frac"] = 0.05
+  _zero_food_yield_noise(motor_v3)
+  var creature_pos := body.global_position
+  var live_food := {
+    "pos": Vector3(15.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_a",
+    "kind_yield": 0.6,
+  }
+  var locale := {
+    "anchor": Vector3(2.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_b",
+  }
+  var prefers_live: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body
+  )
+  _assert(
+    not prefers_live,
+    "live target passes the standalone net-loss check but its round trip risks starvation while locale's one-way trip is safe",
+  )
+  main.queue_free()
+
+
+func _test_motor_planner_live_locale_handoff_change_stability_scales_margin() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.speed = 5.0
+  body.caloric_needs = 30
+  body.current_calories = 7.0
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["food_handoff_starvation_margin_frac"] = 0.1
+  _zero_food_yield_noise(motor_v3)
+  var creature_pos := body.global_position
+  var live_food := {
+    "pos": Vector3(20.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_a",
+    "kind_yield": 1.0,
+  }
+  var locale := {
+    "anchor": Vector3(2.0, 1.0, 0.0),
+    "stimulus_kind_id": &"shrub_b",
+  }
+  var prefers_live_neutral: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body,
+    {"change_stability": 0.0}
+  )
+  _assert(
+    prefers_live_neutral,
+    "neutral change_stability: round trip net (4.0) clears the unscaled margin (3.0) so live still wins",
+  )
+  var prefers_live_stability: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body,
+    {"change_stability": 100.0}
+  )
+  _assert(
+    not prefers_live_stability,
+    "Stability (+100) widens the margin to 1.5x (4.5), tipping the same round trip into the starvation exception",
+  )
+  var prefers_live_change: bool = (_MotorPlanner as GDScript).call(
+    "_live_vs_locale_handoff_prefers_live", live_food, locale, null, motor_v3, creature_pos, body,
+    {"change_stability": -100.0}
+  )
+  _assert(
+    prefers_live_change,
+    "Change (-100) narrows the margin to 0.5x (1.5), keeping live preferred on the same round trip",
+  )
+  main.queue_free()
+
+
+## `_food_yield_estimate_noise_frac` pegs to configured v1/v10/v25 at stat 1/10/25 exactly (no RNG
+## involved in the curve lookup itself — deterministic), confirming stat 10 (both current
+## archetypes' default) carries the configured moderate noise, not a silent zero, while stat 25
+## (best Observation) is close to exact and stat 1 (worst) is wide.
+func _test_motor_planner_food_yield_estimate_noise_frac_pegs_stat_curve() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["food_yield_estimate_noise_frac_v1"] = 0.4
+  motor_v3["food_yield_estimate_noise_frac_v10"] = 0.15
+  motor_v3["food_yield_estimate_noise_frac_v25"] = 0.03
+  var frac_1: float = (_MotorPlanner as GDScript).call(
+    "_food_yield_estimate_noise_frac", {"stat_observation": 1}, motor_v3
+  )
+  var frac_10: float = (_MotorPlanner as GDScript).call(
+    "_food_yield_estimate_noise_frac", {"stat_observation": 10}, motor_v3
+  )
+  var frac_25: float = (_MotorPlanner as GDScript).call(
+    "_food_yield_estimate_noise_frac", {"stat_observation": 25}, motor_v3
+  )
+  var frac_default: float = (_MotorPlanner as GDScript).call(
+    "_food_yield_estimate_noise_frac", {}, motor_v3
+  )
+  _assert(is_equal_approx(frac_1, 0.4), "stat_observation=1 pegs exactly to v1")
+  _assert(is_equal_approx(frac_10, 0.15), "stat_observation=10 pegs exactly to v10")
+  _assert(is_equal_approx(frac_25, 0.03), "stat_observation=25 pegs exactly to v25")
+  _assert(
+    is_equal_approx(frac_default, 0.15),
+    "missing stat_observation defaults to 10 (neutral), not a silent zero",
+  )
+
+
+## With noise fracs zeroed, `_apply_food_yield_noise` is an exact no-op — confirms the escape hatch
+## the deterministic handoff tests above rely on (`_zero_food_yield_noise`) actually disables jitter
+## rather than merely shrinking it.
+func _test_motor_planner_apply_food_yield_noise_zero_frac_is_noop() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  _zero_food_yield_noise(motor_v3)
+  var value: float = (_MotorPlanner as GDScript).call(
+    "_apply_food_yield_noise", 12.5, {"stat_observation": 10}, motor_v3
+  )
+  _assert(is_equal_approx(value, 12.5), "zeroed noise frac leaves the estimate untouched")
+
+
 func _test_motor_planner_locale_arrival_binds_live_or_clears() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -7150,6 +7356,98 @@ func _test_motor_planner_flight_flee_waypoint_orbit_stable() -> void:
         saw_aligned_move = true
   _assert(saw_aligned_move, "orbit flight: at least one aligned MOVE_F")
   main.queue_free()
+
+
+## CM_V3_MULTI_MOBS.md step 4 — with exactly one threat, blending must reduce to the historical
+## nearest-only bearing exactly (a single normalized away-vector's own weight cancels out), so 1v1
+## flee stays bit-identical to pre-blending behavior.
+func _test_motor_planner_flee_objective_single_threat_matches_nearest_only() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var creature_pos := Vector3(0.0, 1.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(10.0, 1.0, 0.0), 10.0)
+  var ctx := {"threat_samples": [threat]}
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_flee_objective", ctx, creature_pos, motor_v3, {})
+  var expected_dir := Vector3(-1.0, 0.0, 0.0)
+  var expected := creature_pos + expected_dir * float(motor_v3.get("awareness_radius", 150.0))
+  _assert(
+    wp.distance_to(expected) < 0.01,
+    "single-threat flee_objective matches historical nearest-only away bearing",
+  )
+
+
+## Two threats on opposite bearings at equal distance should split the difference (perpendicular
+## bearing), not just flee the nearest one — the doc's explicit acceptance criterion (§6): demonstrably
+## reacts to more than the single nearest threat.
+func _test_motor_planner_flee_objective_blends_multiple_threats() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var creature_pos := Vector3(0.0, 1.0, 0.0)
+  ## East threat and north threat, same distance -> pure nearest-only would flee due west; blended
+  ## should flee roughly southwest (away from both), clearly off the due-west nearest-only bearing.
+  var threat_east := _flight_test_threat_at(Vector3(10.0, 1.0, 0.0), 10.0)
+  var threat_north := _flight_test_threat_at(Vector3(0.0, 1.0, 10.0), 10.0)
+  var ctx := {"threat_samples": [threat_east, threat_north]}
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_flee_objective", ctx, creature_pos, motor_v3, {})
+  var dir := (wp - creature_pos)
+  dir.y = 0.0
+  dir = dir.normalized()
+  _assert(dir.x < -0.1 and dir.z < -0.1, "blended bearing flees away from both east and north threats")
+  var nearest_only_dir := Vector3(-1.0, 0.0, 0.0)
+  _assert(
+    dir.distance_to(nearest_only_dir) > 0.1,
+    "blended bearing measurably differs from single-nearest-only bearing",
+  )
+
+
+## Two threats directly opposite at equal weight cancel toward a degenerate seed — must not crash
+## or return a zero/NaN vector; falls back to a valid horizontal direction so `_mint_flee_waypoint`'s
+## downstream reachability scoring still has something to work with.
+func _test_motor_planner_flee_objective_surrounded_threats_degrade_gracefully() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var creature_pos := Vector3(0.0, 1.0, 0.0)
+  var threat_east := _flight_test_threat_at(Vector3(10.0, 1.0, 0.0), 10.0)
+  var threat_west := _flight_test_threat_at(Vector3(-10.0, 1.0, 0.0), 10.0)
+  var ctx := {"threat_samples": [threat_east, threat_west]}
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_flee_objective", ctx, creature_pos, motor_v3, {})
+  var dir := (wp - creature_pos)
+  _assert(is_finite(dir.x) and is_finite(dir.y) and is_finite(dir.z), "surrounded flee bearing stays finite")
+  dir.y = 0.0
+  _assert(dir.length() > 1.0, "surrounded flee bearing still produces a real (non-zero) waypoint")
+
+
+## Smoothing (`flee_bearing_smoothing`) must dampen a large bearing swing between remints when 2+
+## threats contributed both times — targets the C9-class resonance risk of two similar-weight
+## threats on opposite/adjacent sides flipping the seed bearing every remint.
+func _test_motor_planner_flee_objective_smoothing_dampens_bearing_swing() -> void:
+  var creature_pos := Vector3(0.0, 1.0, 0.0)
+  var threat_a := _flight_test_threat_at(Vector3(10.0, 1.0, 0.0), 10.0)
+  var threat_b := _flight_test_threat_at(Vector3(0.0, 1.0, 10.0), 10.0)
+  var ctx := {"threat_samples": [threat_a, threat_b]}
+  var motor_v3_smoothed := _motor_v3_test_params()
+  motor_v3_smoothed["flee_bearing_smoothing"] = 0.9
+  var state_smoothed := {}
+  var wp1: Vector3 = (_MotorPlanner as GDScript).call(
+    "_flee_objective", ctx, creature_pos, motor_v3_smoothed, state_smoothed
+  )
+  ## Second remint: threat_b's relative weight flips (much closer now) so the raw unsmoothed
+  ## blend would swing sharply toward due-south; smoothing should hold much closer to wp1's bearing.
+  threat_b["gate_dist"] = 1.0
+  ctx["threat_samples"] = [threat_a, threat_b]
+  var wp2_smoothed: Vector3 = (_MotorPlanner as GDScript).call(
+    "_flee_objective", ctx, creature_pos, motor_v3_smoothed, state_smoothed
+  )
+  ## With smoothing off, `state` can't influence the result — a single fresh call on the second
+  ## scenario alone gives the same raw (unsmoothed) bearing a from-scratch remint would produce.
+  var motor_v3_unsmoothed := _motor_v3_test_params()
+  motor_v3_unsmoothed["flee_bearing_smoothing"] = 0.0
+  var wp2_unsmoothed: Vector3 = (_MotorPlanner as GDScript).call(
+    "_flee_objective", ctx, creature_pos, motor_v3_unsmoothed, {}
+  )
+  var swing_smoothed := (wp2_smoothed - wp1).length()
+  var swing_unsmoothed := (wp2_unsmoothed - wp1).length()
+  _assert(
+    swing_smoothed < swing_unsmoothed * 0.7,
+    "smoothing measurably dampens the bearing swing vs. unsmoothed re-blend",
+  )
 
 
 ## RANDOMTESTS RT4 Slice 2 (2026-08-26): a confirmed, nearby shelter belief roughly perpendicular

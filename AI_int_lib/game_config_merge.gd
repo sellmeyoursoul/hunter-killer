@@ -24,10 +24,20 @@ static func default_perception_params() -> Dictionary:
 ## [code]seed == 0[/code] draws a fresh OS-random seed each run. A non-empty [code]locked_layout_path[/code]
 ## bypasses randomization entirely and loads fractions verbatim from that JSON file — the "lock this
 ## layout until the bug is resolved" escape hatch.
+## [code]creatures[/code] ([CM_V3_MULTI_MOBS.md](../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md))
+## is a flat list of [code]{archetype, count, player_controlled}[/code] entries — spawn is entirely
+## species-agnostic (`main_3d.gd::_spawn_configured_creatures`); herbivore/carnivore is just each
+## archetype's own [code]feeding_mode[/code] trait, never a spawn-time bucket. Default below
+## reproduces the historical 1v1 rabbit-vs-fox duel; add more entries (any archetype, any count) for
+## "2 foxes + 2 rabbits" or "a lion, a tiger, a bear" without touching spawn code.
 static func default_playfield_spawn_params() -> Dictionary:
   return {
     "seed": 0,
     "locked_layout_path": "",
+    "creatures": [
+      {"archetype": "res://creature/species/rabbit_archetype.tres", "count": 1, "player_controlled": true},
+      {"archetype": "res://creature/species/fox_archetype.tres", "count": 1},
+    ],
   }
 
 
@@ -328,6 +338,20 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_ticks_min": 8,
     "predator_prey_engagement_latch_ticks_max": 120,
     "flee_waypoint_latch_ticks": 16,
+    ## Multi-threat flee bearing blending ([CM_V3_MULTI_MOBS.md]
+    ## (../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md) step 4) — `_flee_objective` sums every
+    ## in-awareness threat's away-unit-vector weighted by `1 / max(gate_dist, flee_threat_weight_min_dist)`
+    ## rather than fleeing the nearest threat alone. With exactly one threat this reduces to the
+    ## historical nearest-only bearing exactly (a single normalized vector's weight cancels out).
+    ## Floor keeps a point-blank threat's weight finite instead of blowing up toward infinity.
+    "flee_threat_weight_min_dist": 1.0,
+    ## Lerp factor pulling each remint's raw blended bearing toward the previous remint's chosen
+    ## bearing (`flee_blend_dir_prev`) — only applied when 2+ threats contributed (never with a
+    ## single threat, so 1v1 flee stays bit-identical to pre-blending behavior). 0 = no smoothing
+    ## (full oscillation risk restored); 1 = bearing never updates. Targets the C9-class resonance
+    ## risk of two similar-weight threats on opposite/adjacent sides flipping the seed bearing
+    ## between remints — tune against live multi-predator testing, not assumed correct at 0.35.
+    "flee_bearing_smoothing": 0.35,
     "pursuit_detour_latch_ticks": 32,
     ## Max escalation tries (`LatchHold.escalate`, [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §4]
     ## (../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)) before
@@ -538,6 +562,19 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "kind_profile_neutral_prior": 0.5,
     "kind_profile_ewma_alpha": 0.15,
     "kind_nutrition_yield_reference_calories": 5.0,
+    ## Live-vs-locale food handoff starvation safety margin ([CM stuck-rabbit fix, 2026-09-16] —
+    ## `motor_planner.gd::_live_vs_locale_handoff_prefers_live`), as a fraction of `caloric_needs`.
+    ## A live target whose round trip (there, eat, back) would leave projected calories at or below
+    ## this buffer — while the locale alternative's one-way trip would not — loses to locale, even
+    ## though the live target isn't an outright net loss on its own. Not exactly 0: travel cost here
+    ## is a straight-line/constant-speed estimate (no turning overhead), so a thin margin protects
+    ## against that estimation error actually starving the creature.
+    "food_handoff_starvation_margin_frac": 0.125,
+    "food_handoff_starvation_margin_scale_min": 0.5,
+    "food_handoff_starvation_margin_scale_max": 1.5,
+    "food_yield_estimate_noise_frac_v1": 0.4,
+    "food_yield_estimate_noise_frac_v10": 0.15,
+    "food_yield_estimate_noise_frac_v25": 0.03,
     "locale_prior_ewma_alpha": 0.15,
     "unknown_kind_multiplier": 1.0,
     "believed_goal_hotspot_near_radius": 250.0,

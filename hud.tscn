@@ -128,29 +128,13 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("3_motor_dbg")
 
-[node name="HerbivoreLabel" type="Label" parent="MotorPlannerDebugHud"]
+[node name="CreatureLabels" type="VBoxContainer" parent="MotorPlannerDebugHud"]
 layout_mode = 0
 offset_left = 16.0
 offset_top = 64.0
-offset_right = 420.0
-offset_bottom = 280.0
-theme_override_fonts/font = ExtResource("2_8sq4i")
-theme_override_font_sizes/font_size = 18
-text = "Herb motor"
-
-[node name="CarnivoreLabel" type="Label" parent="MotorPlannerDebugHud"]
-layout_mode = 0
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -420.0
-offset_top = 64.0
-offset_right = -16.0
-offset_bottom = 280.0
-grow_horizontal = 0
-theme_override_fonts/font = ExtResource("2_8sq4i")
-theme_override_font_sizes/font_size = 18
-text = "Carn motor"
-horizontal_alignment = 2
+offset_right = 296.0
+offset_bottom = 864.0
+theme_override_constants/separation = 12
 
 [node name="MessageTimer" type="Timer" parent="." unique_id=1993260872]
 wait_time = 2.0

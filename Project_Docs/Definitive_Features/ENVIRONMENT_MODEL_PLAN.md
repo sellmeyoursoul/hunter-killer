@@ -160,7 +160,7 @@
 
 ### 6.4 Randomized playfield spawn layout (interior boulders / food / duel pair)
 
-**Purpose:** a deliberate clutter stress test, **not** gameplay balancing — every run randomizes the 18 interior boulders, the 5 food shrubs (3 solid + 2 open), and the herbivore/carnivore duel pair, so the movement / memory / goals engines have to cope with realistic (sometimes overlapping) prop layouts instead of the hand-tuned fractions **`main_3d.gd`** shipped with previously. **Perimeter boulders are unaffected** — still procedurally placed along the edge by [`playfield_perimeter_boulders.gd`](../../environment/playfield_perimeter_boulders.gd) exactly as before.
+**Purpose:** a deliberate clutter stress test, **not** gameplay balancing — every run randomizes the 18 interior boulders, the 5 food shrubs (3 solid + 2 open), and every spawned creature (species-agnostic — see `creatures` below), so the movement / memory / goals engines have to cope with realistic (sometimes overlapping) prop layouts instead of the hand-tuned fractions **`main_3d.gd`** shipped with previously. **Perimeter boulders are unaffected** — still procedurally placed along the edge by [`playfield_perimeter_boulders.gd`](../../environment/playfield_perimeter_boulders.gd) exactly as before.
 
 **Overlap policy (intentional asymmetry):**
 - **Interior boulders and food** (`_SpawnRandomizer.pick_uniform_fraction`) are pure uniform-random within the edge margin — **no** mutual-separation or terrain-depression check. They may overlap each other or land in awkward terrain on purpose.
@@ -172,17 +172,18 @@
 |-----|---------|---------|
 | `seed` | `0` | `0` draws a fresh OS-random seed each run; nonzero is accepted but not the primary lock mechanism (see below). |
 | `locked_layout_path` | `""` (empty) | Non-empty `res://`/`user://` path → skip randomization entirely and load fractions verbatim from that JSON file. |
+| `creatures` | 1 rabbit (`player_controlled`) + 1 fox | List of `{archetype, count, player_controlled}` — fully species-agnostic ([CM_V3_MULTI_MOBS.md](../Draft_Features/CM_V3_MULTI_MOBS.md)): any archetype, any count, no herbivore/carnivore-specific spawn code. Only the first two spawned creatures (across all entries, in list order) get the overlap-checked "duel pair" placement below; any beyond that draw a live, overlap-avoiding fraction. |
 
-**Locations file:** every resolved layout is written (debug builds only, `res://` is otherwise read-only) to **`res://spawn_layout_last_run.json`** — overwritten on every `_build_playfield()` (world objects) and every `new_game()` (duel pair re-roll). Format: `{"seed": int, "interior_boulders": [[fx,fy], ...], "solid_shrubs": [...], "open_shrubs": [...], "herbivore": [fx,fy], "carnivore": [fx,fy]}`.
+**Locations file:** every resolved layout is written (debug builds only, `res://` is otherwise read-only) to **`res://spawn_layout_last_run.json`** — overwritten on every `_build_playfield()` (world objects) and every `new_game()` (creature re-roll). Format: `{"seed": int, "interior_boulders": [[fx,fy], ...], "solid_shrubs": [...], "open_shrubs": [...], "creature_0": [fx,fy], "creature_1": [fx,fy]}` (`creature_0`/`creature_1` are positional — the first two creatures spawned, not fixed species).
 
 **Lock workflow (freeze a buggy layout until it's root-caused):**
 1. Reproduce the bug.
 2. Copy `spawn_layout_last_run.json` to a descriptive name, e.g. `spawn_layout_locked_<bug>.json`.
 3. Set `playfield_spawn.locked_layout_path` in `game_config.json` (or a `user://game_config.json` override, to avoid dirtying the committed default) to that path.
 4. Commit the locked file if the repro should be shareable across machines.
-5. Every run now loads that exact layout — boulders, food, and the duel pair — until the path is cleared.
+5. Every run now loads that exact layout — boulders, food, and the first two spawned creatures — until the path is cleared.
 
-**Key files:** [`playfield_spawn_randomizer.gd`](../../environment/playfield_spawn_randomizer.gd) (pick + serialize/parse helpers, no scene/physics dependency — independently unit-tested), [`playfield_ground_sampler.gd`](../../environment/playfield_ground_sampler.gd) `pick_duel_spawn_fractions()` (optional `rng`/`existing_points` params layered on the existing elevation-rim/no-depression filtering), `main_3d.gd` `_init_spawn_layout()` / `_spawn_interior_boulders()` / `_ensure_food_plants()` / `_spawn_duel_pair()` / `_write_spawn_layout_file()` / `_load_spawn_layout_file()`.
+**Key files:** [`playfield_spawn_randomizer.gd`](../../environment/playfield_spawn_randomizer.gd) (pick + serialize/parse helpers, no scene/physics dependency — independently unit-tested), [`playfield_ground_sampler.gd`](../../environment/playfield_ground_sampler.gd) `pick_duel_spawn_fractions()` (optional `rng`/`existing_points` params layered on the existing elevation-rim/no-depression filtering), `main_3d.gd` `_init_spawn_layout()` / `_resolve_creature_spawn_plan()` / `_spawn_interior_boulders()` / `_ensure_food_plants()` / `_spawn_configured_creatures()` / `_write_spawn_layout_file()` / `_load_spawn_layout_file()`.
 
 **Testing:** this is a deliberate clutter stress test of the movement/memory/goals engines (§6.4 above) — issues found while running with randomized spawn are tracked in [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](../Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md), not in this file.
 

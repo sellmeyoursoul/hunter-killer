@@ -41,6 +41,12 @@ enum FeedingMode {
 @export var locomotion_profile: Resource
 ## Optional UI / swap skin / audio variant — heavy content stays in scenes.
 @export var variant_scene: PackedScene
+## Creature root scene to instantiate for this species (`res://creature/templates/*.tscn`) — spawn
+## code ([CM_V3_MULTI_MOBS.md](../../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md)) reads this
+## instead of switching on herbivore/carnivore, so a new species is just a new archetype resource,
+## not a new code path. Every template wraps the same generic scripts; [member feeding_mode] (not
+## which template is used) is what makes a creature hostile/edible.
+@export var body_scene: PackedScene
 
 ## Stat pool baseline (1-25 authored table, `stat_to_point` §[SHARED_STATTOPOINT_PLAN.md](../../Project_Docs/Completed_Features/SHARED_STATTOPOINT_PLAN.md)).
 ## Composure is otherwise **semantic only / reserved** ([CREATURE_ATTRIBUTES_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md) §3.4) —

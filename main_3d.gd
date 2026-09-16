@@ -4,10 +4,7 @@ extends Node3D
 const _Brand := preload("res://product_brand.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
-const _HerbScene := preload("res://creature/templates/creature_herbivore_kinematic_3d.tscn")
-const _CarnScene := preload("res://creature/templates/creature_carnivore_kinematic_3d.tscn")
-const _RabbitArchetype := preload("res://creature/species/rabbit_archetype.tres")
-const _FoxArchetype := preload("res://creature/species/fox_archetype.tres")
+const _ConfigMerge := preload("res://AI_int_lib/game_config_merge.gd")
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
@@ -23,8 +20,8 @@ const _OPEN_SHRUB_3D := "res://assets/plants/open_shrub/open_shrub_3d.tscn"
 ## forces the duel spawn to the playfield edge so fox-chases-rabbit-into-a-corner reproduces on
 ## demand instead of by chance. Flip to true to re-enable the forced repro spawn.
 ## RANDOMTESTS (2026-08-10): flipped off so the duel pair uses the randomized/terrain-aware
-## picker in [method _spawn_duel_pair] like every other object — C9/C10/C11 are closed enough
-## that pinning the spawn is no longer worth masking real random-layout coverage.
+## picker in [method _spawn_configured_creatures] like every other object — C9/C10/C11 are closed
+## enough that pinning the spawn is no longer worth masking real random-layout coverage.
 const _DEBUG_FORCE_EDGE_CHASE_SPAWN := false
 
 ## TEMP-REPRO (rabbit-refuge manual playtest, 2026-08-12): force-spawns an extra ring of
@@ -81,10 +78,17 @@ var _camera_zoom_scale := 1.0
 var _round_ended: bool = false
 var _motor_playfield_size: Vector2 = Vector2.ZERO
 var _playfield_bounds: Dictionary = {}
-var _herbivore_root: Node3D
-var _carnivore_root: Node3D
-var _herb_body: CharacterBody3D
-var _carn_body: CharacterBody3D
+## Fully generic creature spawn ([CM_V3_MULTI_MOBS.md](../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md)):
+## every spawned creature (any species, any count) lives in these three parallel-indexed arrays —
+## `_player_body` is the one flagged `player_controlled` in `playfield_spawn.creatures`, not "the
+## herbivore." Herbivore/carnivore is each archetype's own `feeding_mode` trait, never a bucket here.
+var _creature_roots: Array[Node3D] = []
+var _creature_bodies: Array[CharacterBody3D] = []
+var _player_body: CharacterBody3D
+## Resolved from `playfield_spawn.creatures` once per playfield build (see [method
+## _resolve_creature_spawn_plan]) — each entry: `definition` (CreatureDefinition), `body_scene`,
+## `count`, `player_controlled`.
+var _creature_spawn_plan: Array[Dictionary] = []
 var _solid_shrub_scene: PackedScene
 var _open_shrub_scene: PackedScene
 var _boulder_scene: PackedScene
@@ -143,16 +147,49 @@ func get_environment_grid() -> Resource:
   return environment_grid
 
 
+func get_player_creature_body() -> CharacterBody3D:
+  return _player_body
+
+
+func get_player_creature_root() -> Node3D:
+  return _player_body.get_parent() as Node3D if _player_body != null else null
+
+
+func get_all_creature_roots() -> Array[Node3D]:
+  return _creature_roots
+
+
+func get_all_creature_bodies() -> Array[CharacterBody3D]:
+  return _creature_bodies
+
+
+## Back-compat aliases — `ai_driver.gd`/`hud.gd`/`motor_planner_debug_hud.gd`/tests still call these
+## by name. "Herbivore" now just means "the player-controlled creature" (whichever spawn entry has
+## `player_controlled = true`), not a fixed species — see [CM_V3_MULTI_MOBS.md]
+## (../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md).
 func get_herbivore_motor_body() -> Node:
-  return _herb_body
+  return get_player_creature_body()
 
 
 func get_herbivore_creature_root() -> Node3D:
-  return _herbivore_root
+  return get_player_creature_root()
 
 
+## First non-player creature (back-compat single-predator accessor — the F10 HUD is still
+## single-carnivore-only; prefer [method get_carnivore_creature_roots] for multi-predator code).
 func get_carnivore_creature_root() -> Node3D:
-  return _carnivore_root
+  for root in get_carnivore_creature_roots():
+    return root
+  return null
+
+
+func get_carnivore_creature_roots() -> Array[Node3D]:
+  var out: Array[Node3D] = []
+  for root in _creature_roots:
+    var body := root.get_node_or_null("Body") as CharacterBody3D
+    if body != null and body != _player_body:
+      out.append(root)
+  return out
 
 
 ## Baked ground-elevation grid for rim spawn placement and terrain-aware motor (null when invalid).
@@ -169,20 +206,18 @@ func new_game() -> void:
   if ad != null:
     ad.clear_creature_registry()
   _reset_food_plants()
-  _spawn_duel_pair()
+  _spawn_configured_creatures()
   if ad != null:
-    ad.register_creature_root(_herbivore_root)
-    ad.register_creature_root(_carnivore_root)
-    if _herbivore_root.has_method(&"configure_motor_stack"):
-      _herbivore_root.call("configure_motor_stack")
-    if _carnivore_root.has_method(&"configure_motor_stack"):
-      _carnivore_root.call("configure_motor_stack")
+    for root in _creature_roots:
+      ad.register_creature_root(root)
+      if root.has_method(&"configure_motor_stack"):
+        root.call("configure_motor_stack")
     ad.sync_duel_control_modes()
     ad.set_duel_round_active(true)
-    ad.set_primary_creature(_herb_body)
+    ad.set_primary_creature(_player_body)
     ad.notify_main_new_game()
-  if _herb_body != null and _herb_body.has_signal(&"hit") and not _herb_body.hit.is_connected(_on_player_hit):
-    _herb_body.hit.connect(_on_player_hit)
+  if _player_body != null and _player_body.has_signal(&"hit") and not _player_body.hit.is_connected(_on_player_hit):
+    _player_body.hit.connect(_on_player_hit)
   $StartTimer.start()
   $HUD.reset_vitals_display()
   $HUD.update_score(score)
@@ -190,11 +225,14 @@ func new_game() -> void:
   $Music.play()
 
 
-func end_round(outcome_tag: String, winner: String) -> void:
+## `winning_predator` (§9 decision: each carnivore's own outcome is tracked independently, not a
+## flat "carnivore" aggregate) is the specific body credited with the catch — null for starvation
+## or a non-predation end, where no single carnivore earned the win.
+func end_round(outcome_tag: String, winner: String, winning_predator: Node = null) -> void:
   if _round_ended:
     return
   _round_ended = true
-  _log_round_outcome(outcome_tag, winner)
+  _log_round_outcome(outcome_tag, winner, winning_predator)
   game_over()
 
 
@@ -217,7 +255,7 @@ func _process(delta: float) -> void:
     CameraMode.TOP_DOWN:
       _apply_top_down_camera()
     CameraMode.OVER_SHOULDER:
-      if _herb_body == null or not is_instance_valid(_herb_body) or _herb_body.visible == false:
+      if _player_body == null or not is_instance_valid(_player_body) or _player_body.visible == false:
         return
       _apply_over_shoulder_camera()
 
@@ -299,8 +337,8 @@ func _apply_top_down_camera() -> void:
 
 func _apply_over_shoulder_camera() -> void:
   var cam := $CameraRig/Camera3D as Camera3D
-  var target := _herb_body.global_position
-  var facing: Vector3 = _herb_body.last_move_direction
+  var target := _player_body.global_position
+  var facing: Vector3 = _player_body.last_move_direction
   if facing.length_squared() < 1e-8:
     facing = Vector3(0.0, 0.0, -1.0)
   else:
@@ -335,6 +373,7 @@ func _build_playfield() -> void:
   _obstacles_root.name = "Obstacles3D"
   _playfield_root.add_child(_obstacles_root)
   _init_spawn_layout()
+  _resolve_creature_spawn_plan()
   _spawn_perimeter_boulders()
   _spawn_interior_boulders()
   _ensure_food_plants()
@@ -372,7 +411,66 @@ func _playfield_spawn_config() -> Dictionary:
   var gc := get_node_or_null("/root/GameConfig")
   if gc != null and gc.has_method(&"get_playfield_spawn_params"):
     return gc.call(&"get_playfield_spawn_params")
-  return {"seed": 0, "locked_layout_path": ""}
+  return _ConfigMerge.default_playfield_spawn_params()
+
+
+## Resolves `playfield_spawn.creatures` (list of `{archetype, count, player_controlled}`) into
+## `_creature_spawn_plan` once per playfield build — run early (before the navmesh bake, which needs
+## every species' capsule radius) so [method _spawn_configured_creatures] just walks the plan later.
+## Species-agnostic by construction: nothing here knows or cares which archetypes are
+## herbivores/carnivores — that's each `CreatureDefinition.feeding_mode`'s own business.
+func _resolve_creature_spawn_plan() -> void:
+  _creature_spawn_plan = []
+  var cfg_v: Variant = _playfield_spawn_config().get("creatures", [])
+  if typeof(cfg_v) == TYPE_ARRAY:
+    for entry_v in (cfg_v as Array):
+      if typeof(entry_v) != TYPE_DICTIONARY:
+        continue
+      var entry: Dictionary = entry_v
+      var archetype_path := str(entry.get("archetype", "")).strip_edges()
+      if archetype_path.is_empty():
+        continue
+      var def := load(archetype_path) as CreatureDefinition
+      if def == null or def.body_scene == null:
+        OLog.error(
+          "Main3D: creature spawn entry %s missing/invalid archetype or body_scene — skipped"
+          % archetype_path,
+          false,
+          "Main3D",
+        )
+        continue
+      _creature_spawn_plan.append({
+        "definition": def,
+        "body_scene": def.body_scene,
+        "count": maxi(1, int(entry.get("count", 1))),
+        "player_controlled": bool(entry.get("player_controlled", false)),
+      })
+  if _creature_spawn_plan.is_empty():
+    OLog.info(
+      "Main3D: playfield_spawn.creatures resolved to zero entries — falling back to default rabbit+fox duel",
+      true,
+      "Main3D",
+    )
+    _creature_spawn_plan = _default_creature_spawn_plan()
+  var has_player := false
+  for plan_entry in _creature_spawn_plan:
+    if bool(plan_entry.get("player_controlled", false)):
+      has_player = true
+      break
+  if not has_player:
+    (_creature_spawn_plan[0] as Dictionary)["player_controlled"] = true
+
+
+## Safety net when config resolution yields nothing usable — reproduces the historical 1v1 duel.
+func _default_creature_spawn_plan() -> Array[Dictionary]:
+  var out: Array[Dictionary] = []
+  var rabbit := load("res://creature/species/rabbit_archetype.tres") as CreatureDefinition
+  if rabbit != null and rabbit.body_scene != null:
+    out.append({"definition": rabbit, "body_scene": rabbit.body_scene, "count": 1, "player_controlled": true})
+  var fox := load("res://creature/species/fox_archetype.tres") as CreatureDefinition
+  if fox != null and fox.body_scene != null:
+    out.append({"definition": fox, "body_scene": fox.body_scene, "count": 1, "player_controlled": false})
+  return out
 
 
 ## Loads a locations file written by [method _write_spawn_layout_file] (or a hand-copied lock
@@ -431,10 +529,10 @@ func get_navigation_map_rid() -> RID:
 
 func _duel_max_capsule_radius() -> float:
   var r := 0.35
-  if _RabbitArchetype != null:
-    r = maxf(r, float(_RabbitArchetype.collision_capsule_radius))
-  if _FoxArchetype != null:
-    r = maxf(r, float(_FoxArchetype.collision_capsule_radius))
+  for plan_entry in _creature_spawn_plan:
+    var def: CreatureDefinition = plan_entry.get("definition")
+    if def != null:
+      r = maxf(r, float(def.collision_capsule_radius))
   return r
 
 
@@ -850,67 +948,110 @@ func _reset_food_plants() -> void:
       c.call(&"reset_session")
 
 
-func _spawn_duel_pair() -> void:
+## Group membership derived purely from the archetype's own traits — never from a "which bucket did
+## spawn put me in" decision. `player_controlled` marks the one human/engine-primary creature;
+## `feeding_mode` (not the scene template) decides hostile (`mobs`) vs edible (`prey`)/`herbivores`.
+func _creature_groups_for(def: CreatureDefinition, player_controlled: bool) -> Array[StringName]:
+  var groups: Array[StringName] = [&"creatures"]
+  if player_controlled:
+    groups.append(&"player")
+  if def.feeding_mode == CreatureDefinition.FeedingMode.CARNIVORE:
+    groups.append(&"mobs")
+  else:
+    groups.append(&"prey")
+    if def.feeding_mode == CreatureDefinition.FeedingMode.HERBIVORE:
+      groups.append(&"herbivores")
+  return groups
+
+
+## Spawns every creature in `_creature_spawn_plan` (resolved by [method _resolve_creature_spawn_plan]
+## from `playfield_spawn.creatures`) — any archetype, any count, no herbivore/carnivore special
+## case ([CM_V3_MULTI_MOBS.md](../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md)). Only the first
+## two spawned creatures honor the locked-layout file / `_DEBUG_FORCE_EDGE_CHASE_SPAWN` repro pin
+## (both predate multi-species support, and existing repro files/scene spawn markers only name two
+## slots); any beyond that always draw a live, overlap-avoiding fraction.
+func _spawn_configured_creatures() -> void:
   _ensure_ground_sampler_ready()
-  var herb_frac := Vector2(0.50, 0.50)
-  var carn_frac := Vector2(0.18, 0.50)
+  var total := 0
+  for plan_entry in _creature_spawn_plan:
+    total += int(plan_entry.get("count", 1))
   ## Randomized Playfield Spawn: creature spawns are the one object type that must avoid overlap
   ## with everything else already placed (boulders/food) — see
   ## [ENVIRONMENT_MODEL_PLAN.md §6.4](../Project_Docs/Definitive_Features/ENVIRONMENT_MODEL_PLAN.md).
-  var locked_herb: Variant = _locked_fraction("herbivore")
-  var locked_carn: Variant = _locked_fraction("carnivore")
-  if locked_herb != null and locked_carn != null:
-    herb_frac = locked_herb
-    carn_frac = locked_carn
-  elif _ground_sampler != null and _ground_sampler.is_valid():
+  var fracs: Array[Vector2] = []
+  var locked_0: Variant = _locked_fraction("creature_0")
+  var locked_1: Variant = _locked_fraction("creature_1")
+  if total >= 2 and locked_0 != null and locked_1 != null:
+    fracs.append(locked_0)
+    fracs.append(locked_1)
+  elif total >= 2 and _ground_sampler != null and _ground_sampler.is_valid():
     var spawn_fracs: Array = _ground_sampler.pick_duel_spawn_fractions(
       PlayfieldGroundSampler.SPAWN_MIN_SEPARATION_FRAC, _spawn_rng, _spawn_existing_points
     )
     if spawn_fracs.size() >= 2:
-      herb_frac = spawn_fracs[0] as Vector2
-      carn_frac = spawn_fracs[1] as Vector2
-  if _DEBUG_FORCE_EDGE_CHASE_SPAWN:
-    # Rabbit pinned near the left edge; fox spawns to its interior side so fleeing the fox drives
-    # the rabbit straight into the corner instead of away from it — reproduces the boundary
+      fracs.append(spawn_fracs[0] as Vector2)
+      fracs.append(spawn_fracs[1] as Vector2)
+  while fracs.size() < mini(total, 2):
+    fracs.append(Vector2(0.5, 0.5))
+  if _DEBUG_FORCE_EDGE_CHASE_SPAWN and total >= 2:
+    # First two spawned creatures pinned to the edge-chase repro layout — reproduces the boundary
     # ping-pong on demand (awareness_radius default 1500 means separation distance doesn't matter).
-    herb_frac = Vector2(0.05, 0.5)
-    carn_frac = Vector2(0.20, 0.5)
-  _spawn_last_layout["herbivore"] = herb_frac
-  _spawn_last_layout["carnivore"] = carn_frac
-  _write_spawn_layout_file()
-  var hpos := _spawn_position("HerbivoreSpawn", herb_frac)
-  var cpos := _spawn_position("CarnivoreSpawn", carn_frac)
-  var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
-  if _ground_sampler != null and _ground_sampler.is_valid():
-    OLog.info(
-      "Main3D duel spawn: herb_frac=(%.2f,%.2f) carn_frac=(%.2f,%.2f) herb_elev=%.2f carn_elev=%.2f"
-      % [
-        herb_frac.x,
-        herb_frac.y,
-        carn_frac.x,
-        carn_frac.y,
-        _ground_sampler.sample_elevation(Vector2(hpos.x, hpos.z), hint_y),
-        _ground_sampler.sample_elevation(Vector2(cpos.x, cpos.z), hint_y),
-      ],
-      false,
-      "Main3D",
+    fracs[0] = Vector2(0.05, 0.5)
+    fracs[1] = Vector2(0.20, 0.5)
+  for _i in range(fracs.size(), total):
+    fracs.append(
+      _SpawnRandomizer.pick_clear_fraction(
+        _spawn_rng, _playfield_bounds, _ground_sampler, _spawn_existing_points
+      )
     )
-  _herbivore_root = _HerbScene.instantiate() as Node3D
-  _herbivore_root.set("definition", _RabbitArchetype)
-  add_child(_herbivore_root)
-  _herb_body = _herbivore_root.get_node("Body") as CharacterBody3D
-  _setup_motor_body(_herb_body, [&"player", &"prey", &"herbivores", &"creatures"])
-  _snap_creature_to_ground(_herbivore_root, _herb_body, hpos, "herbivore")
-  _carnivore_root = _CarnScene.instantiate() as Node3D
-  _carnivore_root.set("definition", _FoxArchetype)
-  add_child(_carnivore_root)
-  _carn_body = _carnivore_root.get_node("Body") as CharacterBody3D
-  _setup_motor_body(_carn_body, [&"mobs", &"creatures"])
-  _snap_creature_to_ground(_carnivore_root, _carn_body, cpos, "carnivore")
-  if _herb_body.has_method(&"start_duel_spawn"):
-    _herb_body.call(&"start_duel_spawn")
-  if _carn_body.has_method(&"start_duel_spawn"):
-    _carn_body.call(&"start_duel_spawn")
+  if fracs.size() > 0:
+    _spawn_last_layout["creature_0"] = fracs[0]
+  if fracs.size() > 1:
+    _spawn_last_layout["creature_1"] = fracs[1]
+  _write_spawn_layout_file()
+  var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
+  _creature_roots = []
+  _creature_bodies = []
+  _player_body = null
+  var idx := 0
+  for plan_entry in _creature_spawn_plan:
+    var def: CreatureDefinition = plan_entry.get("definition")
+    var body_scene: PackedScene = plan_entry.get("body_scene")
+    var count: int = int(plan_entry.get("count", 1))
+    var player_controlled: bool = bool(plan_entry.get("player_controlled", false))
+    var groups := _creature_groups_for(def, player_controlled)
+    for _n in range(count):
+      var frac: Vector2 = fracs[idx] if idx < fracs.size() else Vector2(0.5, 0.5)
+      var marker_name := "HerbivoreSpawn" if idx == 0 else ("CarnivoreSpawn" if idx == 1 else "")
+      var pos := _spawn_position(marker_name, frac)
+      if _ground_sampler != null and _ground_sampler.is_valid():
+        OLog.info(
+          "Main3D duel spawn: creature[%d] species=%s frac=(%.2f,%.2f) elev=%.2f player=%s"
+          % [
+            idx,
+            str(def.species_id),
+            frac.x,
+            frac.y,
+            _ground_sampler.sample_elevation(Vector2(pos.x, pos.z), hint_y),
+            str(player_controlled),
+          ],
+          false,
+          "Main3D",
+        )
+      var root := body_scene.instantiate() as Node3D
+      root.set("definition", def)
+      add_child(root)
+      var body := root.get_node("Body") as CharacterBody3D
+      _setup_motor_body(body, groups)
+      _snap_creature_to_ground(root, body, pos, str(def.species_id))
+      if body.has_method(&"start_duel_spawn"):
+        body.call(&"start_duel_spawn")
+      _spawn_existing_points.append(Vector2(pos.x, pos.z))
+      _creature_roots.append(root)
+      _creature_bodies.append(body)
+      if player_controlled and _player_body == null:
+        _player_body = body
+      idx += 1
   call_deferred("_settle_spawned_creature_bodies")
 
 
@@ -924,7 +1065,7 @@ func _setup_motor_body(body: CharacterBody3D, groups: Array[StringName]) -> void
 
 
 func _spawn_position(marker_name: String, fallback_frac: Vector2) -> Vector3:
-  var m := get_node_or_null(marker_name)
+  var m := get_node_or_null(marker_name) if not marker_name.is_empty() else null
   if m is Node3D and (m as Node3D).position.length_squared() > 1e-6:
     return (m as Node3D).global_position
   return _Bounds3D.world_position_from_fraction(_playfield_bounds, fallback_frac, 0.0)
@@ -962,7 +1103,7 @@ func _settle_spawned_creature_bodies() -> void:
   await get_tree().physics_frame
   var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
   var space := get_world_3d().direct_space_state if get_world_3d() != null else null
-  for body in [_herb_body, _carn_body]:
+  for body in _creature_bodies:
     if body == null or not is_instance_valid(body):
       continue
     var creature_root: Node = body.get_parent()
@@ -972,7 +1113,7 @@ func _settle_spawned_creature_bodies() -> void:
       _Bounds3D.settle_character_body_on_floor(body)
   await get_tree().physics_frame
   if space != null:
-    for body in [_herb_body, _carn_body]:
+    for body in _creature_bodies:
       if body == null or not is_instance_valid(body):
         continue
       if body.is_on_floor():
@@ -1015,7 +1156,7 @@ func _log_playfield_diagnostics() -> void:
 
 func _log_spawn_floor_contact() -> void:
   await get_tree().physics_frame
-  for body in [_herb_body, _carn_body]:
+  for body in _creature_bodies:
     if body == null or not is_instance_valid(body):
       continue
     var on_floor: bool = body.is_on_floor()
@@ -1034,14 +1175,12 @@ func _log_spawn_floor_contact() -> void:
 
 
 func _clear_creatures() -> void:
-  if _herbivore_root != null and is_instance_valid(_herbivore_root):
-    _herbivore_root.queue_free()
-  if _carnivore_root != null and is_instance_valid(_carnivore_root):
-    _carnivore_root.queue_free()
-  _herbivore_root = null
-  _carnivore_root = null
-  _herb_body = null
-  _carn_body = null
+  for root in _creature_roots:
+    if root != null and is_instance_valid(root):
+      root.queue_free()
+  _creature_roots = []
+  _creature_bodies = []
+  _player_body = null
 
 
 func _clear_children(node: Node) -> void:
@@ -1093,16 +1232,24 @@ func _create_default_open_grid() -> Resource:
   return grid
 
 
-func _log_round_outcome(outcome_tag: String, winner: String) -> void:
-  var herb_cal := -1
-  var carn_cal := -1
-  if _herb_body != null and is_instance_valid(_herb_body):
-    herb_cal = int(round(float(_herb_body.current_calories)))
-  if _carn_body != null and is_instance_valid(_carn_body):
-    carn_cal = int(round(float(_carn_body.current_calories)))
+## Each non-player creature's own outcome is logged independently (`win` for the credited
+## `winning_predator`, `active` for every other still-live one) rather than a single flat
+## "carnivore" result — see §9 decision in [CM_V3_MULTI_MOBS.md]
+## (../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md).
+func _log_round_outcome(outcome_tag: String, winner: String, winning_predator: Node = null) -> void:
+  var player_cal := -1
+  if _player_body != null and is_instance_valid(_player_body):
+    player_cal = int(round(float(_player_body.current_calories)))
+  var other_parts: PackedStringArray = []
+  for body in _creature_bodies:
+    if body == null or not is_instance_valid(body) or body == _player_body:
+      continue
+    var cal := int(round(float(body.current_calories)))
+    var result := "win" if body == winning_predator else "active"
+    other_parts.append("%s#%d:%s(cal=%d)" % [body.name, body.get_instance_id(), result, cal])
   OLog.info(
-    "CREATURE_GOALS round: winner=%s cause=%s herb_cal=%d carn_cal=%d"
-    % [winner, outcome_tag, herb_cal, carn_cal],
+    "CREATURE_GOALS round: winner=%s cause=%s player_cal=%d others=[%s]"
+    % [winner, outcome_tag, player_cal, ", ".join(other_parts)],
     false,
     "Main3D",
   )
@@ -1117,24 +1264,24 @@ func _on_start_timer_timeout() -> void:
   $ScoreTimer.start()
 
 
-func _on_player_hit() -> void:
+func _on_player_hit(predator: Node = null) -> void:
   var prey_cal := 0
-  if _herb_body != null:
-    prey_cal = int(round(float(_herb_body.current_calories)))
+  if _player_body != null:
+    prey_cal = int(round(float(_player_body.current_calories)))
   $HUD.set_carnivore_score_display(prey_cal)
   var tag := "predation_carn_win"
-  if _herb_body != null and _herb_body.has_method(&"was_defeated_by_starvation"):
-    if _herb_body.call(&"was_defeated_by_starvation"):
+  if _player_body != null and _player_body.has_method(&"was_defeated_by_starvation"):
+    if _player_body.call(&"was_defeated_by_starvation"):
       tag = "starvation_herb"
-  end_round(tag, "carnivore")
+  end_round(tag, "carnivore", predator)
 
 
 func _on_hud_start_game() -> void:
   _reset_top_down_camera_control()
   _camera_mode = CameraMode.OVER_SHOULDER
   new_game()
-  if _herb_body != null and _herb_body.has_method(&"set_control_mode"):
-    _herb_body.set_control_mode(_ControlMode.human_as_int())
+  if _player_body != null and _player_body.has_method(&"set_control_mode"):
+    _player_body.set_control_mode(_ControlMode.human_as_int())
 
 
 func _on_hud_ai_player_game() -> void:

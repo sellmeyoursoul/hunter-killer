@@ -1337,6 +1337,7 @@ func _traits_from_body() -> Dictionary:
     "change_stability": 0.0,
     "compassion_self_interest": 0.0,
     "community_individual": 0.0,
+    "stat_observation": 10,
   }
   if _body == null:
     return traits
@@ -1346,6 +1347,7 @@ func _traits_from_body() -> Dictionary:
     traits["change_stability"] = float((def_v as Resource).get("change_stability"))
     traits["compassion_self_interest"] = float((def_v as Resource).get("compassion_self_interest"))
     traits["community_individual"] = float((def_v as Resource).get("community_individual"))
+    traits["stat_observation"] = int((def_v as Resource).get("stat_observation"))
   return traits
 
 

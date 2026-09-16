@@ -10,6 +10,7 @@ const _AwarenessScan := preload("res://creature/motor/awareness_zone_scan.gd")
 const _PathClear := preload("res://creature/motor/motor_path_clear.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
+const _StatMath := preload("res://creature/stat_math.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
@@ -118,6 +119,14 @@ static func new_state() -> Dictionary:
     "flee_waypoint_chain_index": 0,
     "flee_backtrack_streak": 0,
     "flee_recent_dirs": [],
+    ## Last remint's chosen multi-threat blended "away" bearing — smoothing memory for
+    ## [method _flee_objective]'s bearing-selection blend, so two similar-weight threats on
+    ## opposite/adjacent sides can't flip the seed bearing wildly between remints (the exact
+    ## oscillation shape that took C9 seven fix iterations to close for single-threat geometry
+    ## alone). See `step_goal_set` for why this needs an explicit `_set` sentinel, not a
+    ## Vector3.ZERO check.
+    "flee_blend_dir_prev": Vector3.ZERO,
+    "flee_blend_dir_prev_set": false,
     "pursuit_detour_waypoint": Vector3.ZERO,
     ## See `step_goal_set` — same sentinel-collision hazard for the pursuit-detour latch.
     "pursuit_detour_waypoint_set": false,
@@ -1146,7 +1155,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         ## target (the same bug class as CLEANUP C9's 7th fix, left unguarded here). Gate on
         ## `_flee_has_visible_threat` the same way `_mint_flee_waypoint` already does.
         var flee_valid := _flee_has_visible_threat(ctx)
-        state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3) if flee_valid else Vector3.ZERO
+        state["step_goal"] = _flee_objective(ctx, creature_pos, motor_v3, state) if flee_valid else Vector3.ZERO
         state["step_goal_set"] = flee_valid
         state["step_instance_id"] = 0
         state["step_source"] = &"live"
@@ -1232,7 +1241,8 @@ static func _derive_find_food_step_objective(
       if not locale_candidate.is_empty():
         var adapter: RefCounted = ctx.get("memory_adapter")
         if not _live_vs_locale_handoff_prefers_live(
-          food, locale_candidate, adapter, motor_v3
+          food, locale_candidate, adapter, motor_v3, creature_pos, ctx.get("body"),
+          ctx.get("traits", {})
         ):
           _apply_locale_food_objective(
             state, locale_candidate, creature_pos, map_rid, agent_r
@@ -1277,11 +1287,38 @@ static func _derive_find_food_step_objective(
     _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, _GkReg.GK_FIND_FOOD)
 
 
+## `stat_observation`-scaled noise fraction for a calorie-per-EAT estimate — three-peg curve
+## (`_StatMath.peg_curve`, same tool as `_effective_prey_engagement_latch_ticks`'s D10 usage)
+## pegged at stat 1/10/25, so stat 10 (both current archetypes' default) still carries the same
+## moderate noise `goal_consideration_chaos` uses elsewhere, not a silent zero.
+static func _food_yield_estimate_noise_frac(traits: Dictionary, motor_v3: Dictionary) -> float:
+  var stat_observation := int(traits.get("stat_observation", 10))
+  var v1 := float(motor_v3.get("food_yield_estimate_noise_frac_v1", 0.4))
+  var v10 := float(motor_v3.get("food_yield_estimate_noise_frac_v10", 0.15))
+  var v25 := float(motor_v3.get("food_yield_estimate_noise_frac_v25", 0.03))
+  return maxf(0.0, _StatMath.peg_curve(stat_observation, v1, v10, v25))
+
+
+## Jitters a calorie-per-EAT estimate by ±`_food_yield_estimate_noise_frac` — a creature never
+## truly knows a food source's nutrition until it eats; Observation scales how far off the guess
+## can be, not whether there's a guess at all.
+static func _apply_food_yield_noise(value: float, traits: Dictionary, motor_v3: Dictionary) -> float:
+  var frac := _food_yield_estimate_noise_frac(traits, motor_v3)
+  if frac <= 0.0:
+    return value
+  return value * (1.0 + randf_range(-frac, frac))
+
+
 ## Calories-per-EAT v1 from live sample [code]kind_yield[/code] × reference calories.
-static func _calories_per_eat_from_live_food(food: Dictionary, motor_v3: Dictionary) -> float:
+static func _calories_per_eat_from_live_food(
+  food: Dictionary,
+  motor_v3: Dictionary,
+  traits: Dictionary = {},
+) -> float:
   var ref := maxf(1.0, float(motor_v3.get("kind_nutrition_yield_reference_calories", 5.0)))
   var neutral := float(motor_v3.get("kind_profile_neutral_prior", 0.5))
-  return float(food.get("kind_yield", neutral)) * ref
+  var base := float(food.get("kind_yield", neutral)) * ref
+  return _apply_food_yield_noise(base, traits, motor_v3)
 
 
 ## Locale calories-per-EAT v1: kind-facet when [code]stimulus_kind_id[/code] known, else neutral prior.
@@ -1289,6 +1326,7 @@ static func _calories_per_eat_from_locale(
   locale: Dictionary,
   adapter: RefCounted,
   motor_v3: Dictionary,
+  traits: Dictionary = {},
 ) -> float:
   var ref := maxf(1.0, float(motor_v3.get("kind_nutrition_yield_reference_calories", 5.0)))
   var neutral := float(motor_v3.get("kind_profile_neutral_prior", 0.5))
@@ -1298,7 +1336,7 @@ static func _calories_per_eat_from_locale(
     yield_v = float(
       adapter.consult_kind_facet(_LearnReg.FACET_NUTRITION_YIELD, kind, motor_v3)
     )
-  return yield_v * ref
+  return _apply_food_yield_noise(yield_v * ref, traits, motor_v3)
 
 
 ## Resolve locale kind for handoff: consult field, or live kind when food is at the locale anchor.
@@ -1318,20 +1356,91 @@ static func _locale_kind_for_handoff(
   return &""
 
 
-## Pass 4 C2 handoff: same [code]stimulus_kind_id[/code] → prefer live; else higher calories-per-EAT.
+## Calorie cost of covering `dist` at this creature's own move speed, under the live V3 per-second
+## movement cost model ([code]_MotorAction.calorie_cost_for[/code] — flat [code]move_calorie_per_sec[/code]
+## while moving; the legacy [code]calorie_cost_per_unit_moved[/code] distance-linear model is dead
+## code once V3 action calories are enabled, so that key is deliberately not read here).
+static func _travel_calorie_cost(dist: float, body: CharacterBody3D, motor_v3: Dictionary) -> float:
+  if dist <= 0.0:
+    return 0.0
+  var speed := 1.0
+  if body != null:
+    speed = maxf(0.1, float(body.get("speed")))
+  var move_rate := float(motor_v3.get("move_calorie_per_sec", 1.0))
+  return move_rate * (dist / speed)
+
+
+## Live-vs-locale food handoff. STUCK-RABBIT FIX (2026-09-16): a locale candidate is, by
+## construction, never something currently observed (it comes from memory — a currently-visible
+## match would already be the live candidate, not a separate locale one) — so this now **defaults
+## to the live target** and only hands off to locale for one of two survival/economics reasons, not
+## a bare "which yields more calories" comparison. The old pure-calorie comparison could (and did,
+## live) abandon a live target the creature was one step from reaching in favor of a remembered one
+## far across the map with a marginally better estimated yield.
+## (A) **Net loss:** the live target's own travel cost already exceeds its yield — not worth the
+## trip regardless of what locale offers.
+## (B) **Starvation risk:** the live target's full round trip (there, eat, then back — "turning
+## back" is modeled as retracing the same distance, the only concretely computable proxy for
+## resuming search afterward, since where that search goes next is unknowable at decision time)
+## would leave the creature below a starvation safety margin, while locale's one-way trip would not.
+## Both exceptions are deliberately survival/economics-only, not preference-weighted. Exception B's
+## margin is scaled by `change_stability` (0.5x-1.5x around the configured base, same convention as
+## `_effective_prey_engagement_latch_ticks`): Stability leans on a bigger safety buffer and peels off
+## to known/locale ground sooner; Change runs the buffer thinner and pushes further toward live
+## food before giving up. Exception A (net loss) is deliberately left unscaled — a trip that loses
+## calories is a bad trip regardless of personality. `stat_observation` jitters both calorie
+## estimates themselves (see `_apply_food_yield_noise`) before either exception is evaluated — a
+## keen-eyed creature's estimates are close to true yield; a poor observer's estimates can be badly
+## wrong in either direction, occasionally tripping (or missing) an exception a perfect estimate
+## wouldn't have. Distance-perception noise (how far away something *seems*) was discussed and
+## deliberately deferred as a separate, more general system — every distance used in this handoff is
+## exact straight-line math off a known position (currently observed or recalled), never a guess, so
+## it has no natural home here; a future reusable perception-noise layer (e.g. ranged-combat
+## targeting, threat-range misjudgment) is a distinct follow-up, not folded into this fix.
+static func _food_handoff_starvation_margin(
+  traits: Dictionary,
+  caloric_needs: float,
+  motor_v3: Dictionary,
+) -> float:
+  var margin_frac := float(motor_v3.get("food_handoff_starvation_margin_frac", 0.125))
+  var change_stability := float(traits.get("change_stability", 0.0))
+  var t := clampf((change_stability + 100.0) / 200.0, 0.0, 1.0)
+  var scale_min := float(motor_v3.get("food_handoff_starvation_margin_scale_min", 0.5))
+  var scale_max := float(motor_v3.get("food_handoff_starvation_margin_scale_max", 1.5))
+  var scale := lerpf(scale_min, scale_max, t)
+  return margin_frac * scale * caloric_needs
+
+
 static func _live_vs_locale_handoff_prefers_live(
   live_food: Dictionary,
   locale: Dictionary,
   adapter: RefCounted,
   motor_v3: Dictionary,
+  creature_pos: Vector3,
+  body: CharacterBody3D,
+  traits: Dictionary = {},
 ) -> bool:
   var live_kind: StringName = live_food.get("stimulus_kind_id", &"")
   var locale_kind := _locale_kind_for_handoff(locale, live_food, motor_v3)
   if live_kind != &"" and locale_kind != &"" and live_kind == locale_kind:
     return true
-  var live_cal := _calories_per_eat_from_live_food(live_food, motor_v3)
-  var locale_cal := _calories_per_eat_from_locale(locale, adapter, motor_v3)
-  return live_cal >= locale_cal
+  var live_cal := _calories_per_eat_from_live_food(live_food, motor_v3, traits)
+  var locale_cal := _calories_per_eat_from_locale(locale, adapter, motor_v3, traits)
+  var live_pos: Vector3 = live_food.get("pos", creature_pos)
+  var locale_pos: Vector3 = locale.get("anchor", creature_pos)
+  var live_travel := _travel_calorie_cost(creature_pos.distance_to(live_pos), body, motor_v3)
+  if live_cal - live_travel <= 0.0:
+    return false
+  var current_calories := float(body.get("current_calories")) if body != null else INF
+  var caloric_needs := maxf(1.0, float(body.get("caloric_needs"))) if body != null else 1.0
+  var margin := _food_handoff_starvation_margin(traits, caloric_needs, motor_v3)
+  var live_round_trip_net := current_calories - (2.0 * live_travel) + live_cal
+  if live_round_trip_net <= margin:
+    var locale_travel := _travel_calorie_cost(creature_pos.distance_to(locale_pos), body, motor_v3)
+    var locale_one_way_net := current_calories - locale_travel + locale_cal
+    if locale_one_way_net > margin:
+      return false
+  return true
 
 
 ## True when the incumbent precise/coarse/locale [code]step_source[/code] no longer
@@ -2436,6 +2545,8 @@ static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_give_up_active"] = false
   state["flee_waypoint_chain"] = PackedVector3Array()
   state["flee_waypoint_chain_index"] = 0
+  state["flee_blend_dir_prev"] = Vector3.ZERO
+  state["flee_blend_dir_prev_set"] = false
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -2542,7 +2653,7 @@ static func _mint_flee_waypoint(
     state["flee_backtrack_streak"] = 0
     return fallback_wp
 
-  var wp := _flee_objective(ctx, creature_pos, motor_v3)
+  var wp := _flee_objective(ctx, creature_pos, motor_v3, state)
   var to_wp := Vector3(wp.x - creature_pos.x, 0.0, wp.z - creature_pos.z)
   var physics_tick := int(ctx.get("physics_tick", 0))
   var backtrack_dot := float(motor_v3.get("blocked_approach_backtrack_dot", 0.55))
@@ -2839,34 +2950,77 @@ static func _select_flight_action(ctx: Dictionary, state: Dictionary) -> int:
   return _locomote_toward_step_goal(body, motor_v3, state, ctx)
 
 
-static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Dictionary) -> Vector3:
+## Threat's world position from a `threat_samples` entry (`world_pos_3d` when present, else the
+## legacy 2D `world_pos` promoted to XZ at the creature's own height).
+static func _threat_world_pos(sample: Dictionary, creature_pos: Vector3) -> Vector3:
+  if sample.has("world_pos_3d"):
+    return sample["world_pos_3d"]
+  var wp: Vector2 = sample.get("world_pos", Vector2.ZERO)
+  return Vector3(wp.x, creature_pos.y, wp.y)
+
+
+## Multi-threat flee bearing ([CM_V3_MULTI_MOBS.md]
+## (../../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md) step 4) — proximity-weighted sum of
+## every in-awareness threat's away-unit-vector, not nearest-only. Weighting (not "closing" gating)
+## is what [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)
+## calls for here — "closing" is a separate concept scoped to that doc's own future reward-signal
+## question, not bearing selection. With exactly one threat this reduces to the historical
+## nearest-only bearing exactly: a single normalized vector's own weight cancels out on normalize,
+## and smoothing (below) never engages with fewer than 2 contributors — 1v1 flee is bit-identical
+## to pre-blending behavior.
+## `state` (default `{}`) carries `flee_blend_dir_prev` smoothing memory across remints — lerped in
+## (angle-space, not vector slerp, since both directions are always horizontal/XZ) only when 2+
+## threats contributed, targeting the C9-class resonance risk of two similar-weight threats on
+## opposite/adjacent sides flipping the seed bearing between remints.
+static func _flee_objective(
+  ctx: Dictionary,
+  creature_pos: Vector3,
+  motor_v3: Dictionary,
+  state: Dictionary = {},
+) -> Vector3:
   var threats: Array = ctx.get("threat_samples", [])
   if threats.is_empty():
     return Vector3.ZERO
-  var nearest: Dictionary = {}
-  var nearest_d := INF
+  var min_dist := maxf(0.01, float(motor_v3.get("flee_threat_weight_min_dist", 1.0)))
+  var blended := Vector3.ZERO
+  var contributor_count := 0
   for sample_v in threats:
     if typeof(sample_v) != TYPE_DICTIONARY:
       continue
     var sample: Dictionary = sample_v
     if not bool(sample.get("in_awareness", false)):
       continue
-    var d := float(sample.get("gate_dist", INF))
-    if d < nearest_d:
-      nearest_d = d
-      nearest = sample
-  if nearest.is_empty():
+    var away := creature_pos - _threat_world_pos(sample, creature_pos)
+    away.y = 0.0
+    if away.length_squared() < 1e-8:
+      away = _MotorPlane.HORIZONTAL_FORWARD
+    else:
+      away = away.normalized()
+    var dist := float(sample.get("gate_dist", INF))
+    var weight := 1.0 / maxf(dist, min_dist)
+    blended += away * weight
+    contributor_count += 1
+  if contributor_count == 0:
     return Vector3.ZERO
-  var threat_pos := Vector3.ZERO
-  if nearest.has("world_pos_3d"):
-    threat_pos = nearest["world_pos_3d"]
-  else:
-    var wp: Vector2 = nearest.get("world_pos", Vector2.ZERO)
-    threat_pos = Vector3(wp.x, creature_pos.y, wp.y)
-  var away := creature_pos - threat_pos
-  away.y = 0.0
-  if away.length_squared() < 1e-8:
-    away = _MotorPlane.HORIZONTAL_FORWARD
+  blended.y = 0.0
+  if blended.length_squared() < 1e-8:
+    # Weighted vectors roughly cancel (surrounded from opposite sides) — no meaningful bearing to
+    # prefer; `_mint_flee_waypoint`'s 6-candidate reachability scoring downstream picks the
+    # best-reaching direction regardless of how degenerate this seed is, so this only needs to hand
+    # it *something* horizontal, not a "correct" escape direction.
+    blended = _MotorPlane.HORIZONTAL_FORWARD
+  var away_dir := blended.normalized()
+  if contributor_count > 1:
+    var smoothing := clampf(float(motor_v3.get("flee_bearing_smoothing", 0.35)), 0.0, 1.0)
+    if smoothing > 0.0 and bool(state.get("flee_blend_dir_prev_set", false)):
+      var prev: Vector3 = state.get("flee_blend_dir_prev", Vector3.ZERO)
+      if prev.length_squared() > 1e-8:
+        var prev_ang := Vector2(prev.x, prev.z).angle()
+        var new_ang := Vector2(away_dir.x, away_dir.z).angle()
+        var blended_ang := lerp_angle(prev_ang, new_ang, 1.0 - smoothing)
+        away_dir = Vector3(cos(blended_ang), 0.0, sin(blended_ang))
+  state["flee_blend_dir_prev"] = away_dir
+  state["flee_blend_dir_prev_set"] = true
   # CLEANUP RT1 follow-up (2026-08-12): was `awareness_radius * 0.5` — on a small (playfield-
   # scaled-down) arena that put the flee waypoint only halfway to the edge of the creature's own
   # (already-shrunk) awareness disc, well inside the fox's fixed, unscaled `eat_action_max_distance`
@@ -2875,7 +3029,7 @@ static func _flee_objective(ctx: Dictionary, creature_pos: Vector3, motor_v3: Di
   # playfield size (`scale_creature_motor_v3_for_playfield`), so this stays proportionate as arenas
   # grow.
   var flee_dist := float(motor_v3.get("awareness_radius", 150.0))
-  return creature_pos + away.normalized() * flee_dist
+  return creature_pos + away_dir * flee_dist
 
 
 static func _explore_step_goal(creature_pos: Vector3, state: Dictionary, motor_v3: Dictionary, ctx: Dictionary) -> Vector3:

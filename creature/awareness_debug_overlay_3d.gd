@@ -6,7 +6,9 @@ extends Node3D
 ## Geometry uses scaled [code]creature_motor_v3[/code] — same as [code]CreatureMotorStack[/code] live scan.
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _DebugColor := preload("res://creature/creature_debug_color.gd")
 const _PLAYING_STATE: int = 2
+const _ZONE_FILL_ALPHA := 0.14
 
 var _dev_toggle: bool = false
 var _mesh_inst: MeshInstance3D
@@ -197,7 +199,10 @@ func _rebuild_draw() -> void:
       _append_sector_tris(st, reach, a0, a1, LIFT + 0.01, 24)
   var mesh := st.commit()
   var mat := StandardMaterial3D.new()
-  mat.albedo_color = Color(0.25, 0.82, 1.0, 0.14)
+  ## Per-creature color ([CreatureDebugColor]) — same hue this creature's F10 HUD label uses, so a
+  ## fenced-off zone in the 3D view can be matched to its output at a glance with N creatures live.
+  var owner_iid := int(par.get("creature_instance_id")) if par != null else 0
+  mat.albedo_color = _DebugColor.color_for_instance_id(owner_iid, _ZONE_FILL_ALPHA)
   mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
   mat.cull_mode = BaseMaterial3D.CULL_DISABLED
   mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED

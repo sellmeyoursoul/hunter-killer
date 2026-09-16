@@ -3,7 +3,10 @@ extends CharacterBody3D
 ## **Gravity and jump** are owned here so [code]AiDriver[/code] can stay thin (2D-style direction promoted to XZ).
 ## Motor bridge: [method set_creature_move_intent] accepts [code]Vector3[/code] or legacy [code]Vector2[/code] motor-plane intent.
 
-signal hit
+## `predator` is the specific carnivore body that caused this defeat (null for starvation) — lets a
+## listener with more than one carnivore in play ([CM_V3_MULTI_MOBS.md]
+## (../../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md)) attribute the round outcome to the right one.
+signal hit(predator: Node)
 
 const _LocoProfile := preload("res://creature/definition/locomotion_profile.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
@@ -392,7 +395,7 @@ func _check_starvation_after_calorie_debit() -> void:
     return
   _starvation_fired = true
   _apply_defeat_local()
-  hit.emit()
+  hit.emit(null)
   var main := get_tree().current_scene
   if main != null and main.has_method(&"end_round") and is_hostile:
     main.call(&"end_round", "starvation_carn_herb_win", "herbivore")
@@ -455,7 +458,7 @@ func try_grant_as_prey_to(predator: CharacterBody3D) -> bool:
     meal = int(gc.get_creature_motor_params().get("predator_prey_meal_calories", meal))
   predator.call(&"add_calories_from_prey", meal)
   _apply_defeat_local()
-  hit.emit()
+  hit.emit(predator)
   return true
 
 
