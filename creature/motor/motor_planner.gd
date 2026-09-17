@@ -133,6 +133,17 @@ static func new_state() -> Dictionary:
     "pursuit_detour_ticks_remaining": 0,
     "pursuit_detour_alt_flip": false,
     "pursuit_detour_escalation_tier": 0,
+    ## Two-boulder-pinch fix (2026-09-16): a live pursuit blocked by geometry can have its target
+    ## drop out of `_AwarenessZone.membership_with_los`'s facing/LOS cone for a single consideration
+    ## tick (e.g. while the creature's facing is mid-turn against the obstruction) even though the
+    ## food itself hasn't moved or been consumed. Without this grace budget, that one-tick dropout
+    ## made `_derive_find_food_step_objective` treat the target as gone and hand off to generic
+    ## `_mint_explore_objective_for_goal`, which stamps `step_source = "explore"` — and
+    ## `_maybe_mint_pursuit_detour_latch` refuses to arm a detour for any source but `"live"`, so the
+    ## block that caused this never gets remembered. Next tick the target reappears, the maintenance
+    ## branch reapplies the *same raw, still-blocked* position, and the cycle repeats forever. See
+    ## `_live_food_awareness_grace_ticks_remaining`.
+    "live_food_awareness_grace_ticks_remaining": 0,
     ## One-shot: set when `_remint_alternate_pursuit_detour` exhausts its escalations, consumed by
     ## `should_suppress_live_pursuit_blocked_resolution` to let that tick's dead-end/passibility-fail
     ## resolution through instead of suppressing it forever for a truly boxed-in stationary target.
@@ -1252,6 +1263,28 @@ static func _derive_find_food_step_objective(
     _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
     _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
+    state["live_food_awareness_grace_ticks_remaining"] = maxi(
+      0, int(motor_v3.get("live_food_awareness_grace_ticks", 2))
+    )
+    return
+  ## Two-boulder-pinch fix (2026-09-16, see state-init comment): the awareness/LOS cone that feeds
+  ## `best_ready_food_target` can drop a live target for a single consideration tick without the
+  ## food having moved or been consumed — most visibly while a blocked live pursuit is mid-turn
+  ## against obstructing geometry. Handing off to generic explore on that one tick stamps
+  ## `step_source = "explore"`, and `_maybe_mint_pursuit_detour_latch` only arms for `"live"`, so the
+  ## block that caused this is never remembered and the very next tick's maintenance branch walks
+  ## straight back into the same obstruction. Coast on the existing live step_goal for a few ticks
+  ## instead of discarding it — a real loss (eaten, despawned, walked out of range) still falls
+  ## through to the explore/search fallback below once the grace budget runs out.
+  elif (
+    state.get("step_source", &"") == &"live"
+    and bool(state.get("step_goal_set", false))
+    and bool(state.get("step_ultimate_pos_set", false))
+    and int(state.get("live_food_awareness_grace_ticks_remaining", 0)) > 0
+  ):
+    state["live_food_awareness_grace_ticks_remaining"] = (
+      int(state.get("live_food_awareness_grace_ticks_remaining", 0)) - 1
+    )
     return
   var inv_mode := _resolve_food_inventory_step_mode(ctx, motor_v3)
   if _food_inventory_mode_changed(ctx, state, motor_v3):

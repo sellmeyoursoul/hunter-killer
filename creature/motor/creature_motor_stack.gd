@@ -244,6 +244,11 @@ func tick(delta: float) -> _ActionOutcome:
       int(outcome.action) == _MotorAction.EAT
       or int(outcome.action) == _MotorAction.STAY
       or int(outcome.action) == _MotorAction.WAIT
+      ## `REST` split out of generic `STAY` 2026-08-26 (see `motor_planner.gd`'s `GOAL_REST` cleanup
+      ## comment) — this check predates that split by about two weeks and was never updated, so a
+      ## resting creature (the textbook "lingering somewhere for its own reasons" case this
+      ## function's own doc comment describes) silently never got probed for shelter quality.
+      or int(outcome.action) == _MotorAction.REST
     )
     and not bool(_planner_state.get("shelter_eval_active", false))
   ):

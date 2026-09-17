@@ -353,6 +353,11 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     ## between remints — tune against live multi-predator testing, not assumed correct at 0.35.
     "flee_bearing_smoothing": 0.35,
     "pursuit_detour_latch_ticks": 32,
+    ## Two-boulder-pinch fix (2026-09-16, `motor_planner.gd::_derive_find_food_step_objective`):
+    ## consecutive consideration ticks a live food target may sit outside the awareness/LOS cone
+    ## before the pursuit gives up on it and falls back to generic explore. Bridges a momentary
+    ## facing-cone dropout during a blocked approach without masking a real loss (eaten/despawned).
+    "live_food_awareness_grace_ticks": 2,
     ## Max escalation tries (`LatchHold.escalate`, [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §4]
     ## (../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)) before
     ## `_remint_alternate_pursuit_detour` gives up and clears the latch — the only safety valve

@@ -263,6 +263,7 @@ func _run_all() -> void:
   _test_motor_planner_select_action_returns_rest_for_goal_rest()
   _test_motor_planner_shelter_no_candidate_explore()
   await _test_shelter_enclosure_probe_ring_detects_blockers()
+  await _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
   await _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient()
@@ -331,6 +332,7 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_blocked_objective()
   await _test_creature_motor_stack_blocked_memory_writes()
   await _test_motor_planner_blocked_food_excluded_from_reselection()
+  await _test_motor_planner_live_food_awareness_grace_holds_through_transient_dropout()
   _test_motor_planner_locale_empty_arrival_starts_search()
   await _test_motor_planner_locale_search_giveup_invalidates_belief()
   await _test_motor_planner_locale_handoff_respects_arrival_cooldown()
@@ -1659,6 +1661,55 @@ func _test_shelter_enclosure_probe_ring_detects_blockers() -> void:
   var open_point := Vector3(-50.0, 1.0, -50.0)
   var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, 8)
   _assert(is_equal_approx(frac_open, 0.0), "open point with no nearby geometry reads as unenclosed")
+  main.queue_free()
+  await process_frame
+
+
+## Fix (2026-09-16): `_maybe_observe_shelter_opportunistically`'s call-site gate in
+## `CreatureMotorStack.tick` predates `MotorAction.REST` being split out of generic `STAY`
+## (2026-08-26) by about two weeks and was never updated, so a creature resting somewhere — the
+## textbook "lingering for its own reasons" case that function's own doc comment describes — never
+## triggered the passive shelter-belief check. A fully-fed, unthreatened creature standing inside
+## real enclosing geometry should settle into REST and pick up a shelter observation exactly like
+## one that happens to STAY or WAIT there.
+func _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  body.current_calories = float(body.caloric_needs)
+  stack.set_threat_samples_for_test([])
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  ## `safety_met` only flips true after `safety_time` (default 5) consecutive threat-free
+  ## consideration cycles, each `goal_replan_base_ticks` (default 8) physics ticks apart — let it
+  ## accumulate naturally. No enclosing geometry yet: the creature explores/wanders for a couple
+  ## dozen ticks before REST wins, and it walks straight through `open_shrub_3d`-style layer-8
+  ## blockers anyway (herbivore collision mask excludes that layer), so a ring placed at spawn
+  ## wouldn't constrain — or even reflect — where it actually ends up resting.
+  var saw_rest := false
+  for _i in 120:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    if outcome != null and int(outcome.action) == _MotorAction.REST:
+      saw_rest = true
+      break
+  _assert(saw_rest, "fully-fed, safe creature with no food urgency settles into REST")
+  ## GOAL_REST holds the creature's current position once won (`_sync_shelter_or_rest_objective`),
+  ## so it's now stationary — build the enclosing ring around wherever it actually landed, then let
+  ## a few more REST ticks run so the (now-present) geometry has a chance to be observed.
+  var rest_pos := body.global_position
+  _shelter_test_blocker_ring(main, rest_pos, 2.0)
+  await physics_frame
+  for _i in 12:
+    stack.tick(1.0 / 60.0)
+  var adapter := stack.get_memory_adapter()
+  var motor_v3 := _motor_v3_test_params()
+  var confidence := adapter.shelter_confidence_score(rest_pos, motor_v3, Time.get_ticks_msec())
+  _assert(
+    confidence > 0.0,
+    "resting inside real enclosing geometry writes a passive shelter observation" +
+    " (previously silently skipped because REST wasn't in the trigger gate)",
+  )
   main.queue_free()
   await process_frame
 
@@ -3660,6 +3711,66 @@ func _test_motor_planner_blocked_food_excluded_from_reselection() -> void:
   _assert(
     int(state.get("step_instance_id", -1)) != FOOD_IID,
     "planner does not target a live food instance once its passibility_fail_count hits the switch threshold",
+  )
+  main.queue_free()
+
+
+## Two-boulder-pinch fix (2026-09-16): the awareness/LOS cone feeding `best_ready_food_target` can
+## drop a live target for a tick or two without the food having moved or been consumed (most
+## visibly while a blocked pursuit is mid-turn against obstructing geometry). Before this fix, one
+## empty-scan tick was enough to hand the objective off to generic explore, stamping
+## `step_source = "explore"` — and `_maybe_mint_pursuit_detour_latch` only arms while
+## `step_source == "live"`, so the block that caused the dropout was never remembered and the very
+## next tick's live-food maintenance branch walked straight back into the same obstruction forever.
+func _test_motor_planner_live_food_awareness_grace_holds_through_transient_dropout() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var grace_budget := int(motor_v3.get("live_food_awareness_grace_ticks", 2))
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var empty_scan := {"food_split": {"ready": [], "unready": []}}
+  var held_goal := Vector3(20.0, 1.0, 0.0)
+  var creature_pos := body.global_position
+  var state := _MotorPlanner.new_state()
+  # Hand-seed "was already live-pursuing food last tick" — the realistic precondition for the
+  # dropout this fix targets, without needing a full prior tick that actually found food.
+  state["step_source"] = &"live"
+  state["step_goal"] = held_goal
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = held_goal
+  state["step_ultimate_pos_set"] = true
+  state["live_food_awareness_grace_ticks_remaining"] = grace_budget
+  var ctx := {
+    "body": body,
+    "traits": {},
+    "memory_adapter": adapter,
+    "now_ms": Time.get_ticks_msec(),
+  }
+  for i in grace_budget:
+    (_MotorPlanner as GDScript).call(
+      "_derive_find_food_step_objective", ctx, state, creature_pos, motor_v3, empty_scan, RID(), 0.35
+    )
+    _assert(
+      state.get("step_source", &"") == &"live",
+      "grace tick %d/%d: coasts on the held live objective instead of falling to explore" % [i + 1, grace_budget],
+    )
+    _assert(
+      (state.get("step_goal", Vector3.ZERO) as Vector3).distance_to(held_goal) < 0.01,
+      "held step_goal is untouched during the grace window (tick %d)" % (i + 1),
+    )
+  _assert(
+    int(state.get("live_food_awareness_grace_ticks_remaining", -1)) == 0,
+    "grace budget is fully consumed after %d consecutive empty ticks" % grace_budget,
+  )
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective", ctx, state, creature_pos, motor_v3, empty_scan, RID(), 0.35
+  )
+  _assert(
+    state.get("step_source", &"") != &"live",
+    "a genuinely persistent loss (grace exhausted) still falls through to the real fallback — not an infinite hold",
   )
   main.queue_free()
 
