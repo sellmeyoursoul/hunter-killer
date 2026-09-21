@@ -218,6 +218,7 @@ func _run_all() -> void:
   _test_locomotion_executor_continuous_forward_speed_scales_with_alignment()
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
+  await _test_motor_planner_note_outcome_sawtooth_block_accumulates_on_live_source()
   _test_motor_goal_hub_incumbent_bonus_stops_near_tie_flip_flop()
   _test_motor_goal_hub_urgency_eat_preserve_band()
   _test_motor_goal_hub_effective_urgency_sated_mapping()
@@ -7718,6 +7719,44 @@ func _test_locomotion_executor_continuous_forward_speed_scales_with_alignment() 
     "180 deg heading error still has negative (>90 deg) residual alignment after one rate-capped turn — the speed law floors this at zero",
   )
   main.queue_free()
+
+## 2026-09-21 crack-through-shrub regression: a wolf-sized/oversize body pressing a live target
+## through geometry it doesn't fit gets a ghost-layer stop every other tick (the stop zeroes velocity,
+## so the next tick's tiny cold-start step fits and reads unblocked, then re-blocks). `blk` therefore
+## alternated 1/0 and, for a `live` step source, every unblocked tick zeroed `consecutive_blocked`,
+## so §9 blocked-objective resolution never ran. The count must survive a non-progressing unblocked
+## MOVE_FORWARD, and still reset on real progress.
+func _test_motor_planner_note_outcome_sawtooth_block_accumulates_on_live_source() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await physics_frame
+  var motor_v3 := _motor_v3_test_params()
+  var min_ticks := int(motor_v3.get("dead_end_record_min_blocked_ticks", 3))
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = Vector3(0.0, 1.0, 12.0)
+  state["step_goal_set"] = true
+  var pos_before := body.global_position
+  var fired := false
+  for i in min_ticks * 2 + 2:
+    var blocked := i % 2 == 0
+    ## Blocked ticks make no progress; the in-between "unblocked" ticks creep a sliver toward the goal.
+    var disp := Vector3.ZERO if blocked else Vector3(0.0, 0.0, 0.0005)
+    var outcome := _ActionOutcome.new(disp, blocked, 0.0, _MotorAction.MOVE_FORWARD)
+    if _motor_planner_note_outcome(state, body, outcome, motor_v3, i + 1, pos_before, false):
+      fired = true
+      break
+  _assert(fired, "alternating blocked/unblocked-creep ticks on a live source still reach the blocked threshold")
+  ## Real progress toward the goal still clears the count.
+  state["consecutive_blocked"] = min_ticks - 1
+  body.global_position = Vector3(0.0, 1.0, 0.3)
+  var progress := _ActionOutcome.new(Vector3(0.0, 0.0, 0.3), false, 0.0, _MotorAction.MOVE_FORWARD)
+  _motor_planner_note_outcome(state, body, progress, motor_v3, 99, Vector3(0.0, 1.0, 0.0), false)
+  _assert(int(state.get("consecutive_blocked", -1)) == 0, "a real step toward the goal still resets the blocked count")
+  main.queue_free()
+
 
 ## 2026-09-21 open-field flip-flop regression: sated `find_food` (0.157) vs a far, non-closing wolf's
 ## `avoid_hostiles` (~0.19-0.21) were near-tied, and the pure-max hub swapped goals (wiping planner

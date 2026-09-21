@@ -985,6 +985,20 @@ static func note_outcome(
     var locale_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
     if _tick_had_meaningful_progress(body, locale_goal, tick_disp, act, motor_v3, stuck_eps):
       _reset_locale_progress_state(state)
+  elif (
+    act == _MotorAction.MOVE_FORWARD
+    and int(state.get("consecutive_blocked", 0)) > 0
+    and not _tick_had_meaningful_progress(
+      body, state.get("step_goal", Vector3.ZERO), tick_disp, act, motor_v3, stuck_eps
+    )
+  ):
+    ## Sawtooth-block fix (2026-09-21, rabbit "looking at a shrub through a crack it doesn't fit
+    ## through"): a ghost-layer stop zeroes velocity, so the *next* tick's tiny cold-start step fits
+    ## and reads as unblocked, then the tick after re-blocks — `blk` alternated 1/0 every tick and
+    ## this branch (live/coarse sources, which unlike the latched sources never checked progress)
+    ## zeroed the counter on every unblocked tick, so it never reached `min_ticks` and the blocked-
+    ## objective resolver never ran. Hold the count on a non-progressing MOVE_FORWARD instead.
+    pass
   else:
     state["consecutive_blocked"] = 0
 
