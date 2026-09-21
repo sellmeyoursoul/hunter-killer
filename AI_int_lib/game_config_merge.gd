@@ -521,6 +521,11 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## consult (see `motor_planner.gd::_hold_live_food_lost_to_locale`) — long enough to walk to the
     ## locale target instead of turning back to the remembered copy of the food it just rejected.
     "live_locale_handoff_exclusion_ticks": 240,
+    ## Hub incumbent hysteresis — the incumbent goal's weight is scaled by (1 + this) at each
+    ## consideration (`MotorGoalHub.apply_incumbent_bonus`), so a challenger must clearly beat it.
+    ## 0.4 keeps a sated find_food from being pulled off by a far, non-closing threat's low avoid
+    ## weight, while a genuinely nearer threat (higher urgency) still takes over. Untuned.
+    "goal_incumbent_switch_margin": 0.4,
     "goal_inventory_min_shelter": 1.0,
     "goal_shelter_explore_floor": 0.25,
     "goal_memory_ttl_sec_shelter": 300.0,

@@ -218,6 +218,7 @@ func _run_all() -> void:
   _test_locomotion_executor_continuous_forward_speed_scales_with_alignment()
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
+  _test_motor_goal_hub_incumbent_bonus_stops_near_tie_flip_flop()
   _test_motor_goal_hub_urgency_eat_preserve_band()
   _test_motor_goal_hub_effective_urgency_sated_mapping()
   _test_motor_goal_hub_effective_urgency_sated_patrol()
@@ -7717,6 +7718,51 @@ func _test_locomotion_executor_continuous_forward_speed_scales_with_alignment() 
     "180 deg heading error still has negative (>90 deg) residual alignment after one rate-capped turn — the speed law floors this at zero",
   )
   main.queue_free()
+
+## 2026-09-21 open-field flip-flop regression: sated `find_food` (0.157) vs a far, non-closing wolf's
+## `avoid_hostiles` (~0.19-0.21) were near-tied, and the pure-max hub swapped goals (wiping planner
+## state and undoing progress) every time the wolf flickered in/out of awareness. Weights below are
+## the ones read off the live log. Without the incumbent bonus the far-wolf avoid weight wins on
+## every consideration it is present; with it, the incumbent holds both ways and only a clearly
+## stronger challenger takes over.
+func _test_motor_goal_hub_incumbent_bonus_stops_near_tie_flip_flop() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["goal_consideration_chaos"] = 0.0
+  var food := &"find_food"
+  var avoid := &"avoid_hostiles"
+  var far_wolf := [
+    {"goal_kind": food, "weight": 0.157},
+    {"goal_kind": avoid, "weight": 0.214},
+  ]
+  _assert(
+    _MotorGoalHub.pick_winner(far_wolf, motor_v3).get("goal_kind") == avoid,
+    "precondition: with no incumbent the far wolf's avoid weight beats sated find_food",
+  )
+  var held_food := _MotorGoalHub.pick_winner(
+    _MotorGoalHub.apply_incumbent_bonus(far_wolf, food, motor_v3), motor_v3
+  )
+  _assert(held_food.get("goal_kind") == food, "incumbent find_food holds against a far wolf's near-tied avoid")
+  _assert(is_equal_approx(float(held_food.get("weight_pre_bonus", 0.0)), 0.157), "original weight is preserved")
+  var held_avoid := _MotorGoalHub.pick_winner(
+    _MotorGoalHub.apply_incumbent_bonus(far_wolf, avoid, motor_v3), motor_v3
+  )
+  _assert(held_avoid.get("goal_kind") == avoid, "incumbent avoid also holds (hysteresis is symmetric)")
+  var near_wolf := [
+    {"goal_kind": food, "weight": 0.157},
+    {"goal_kind": avoid, "weight": 0.5},
+  ]
+  var takeover := _MotorGoalHub.pick_winner(
+    _MotorGoalHub.apply_incumbent_bonus(near_wolf, food, motor_v3), motor_v3
+  )
+  _assert(takeover.get("goal_kind") == avoid, "a clearly stronger challenger still takes over from the incumbent")
+  motor_v3["goal_incumbent_switch_margin"] = 0.0
+  var no_margin := _MotorGoalHub.pick_winner(
+    _MotorGoalHub.apply_incumbent_bonus(far_wolf, food, motor_v3), motor_v3
+  )
+  _assert(no_margin.get("goal_kind") == avoid, "margin 0 disables the bonus")
+  var untouched: Array = _MotorGoalHub.apply_incumbent_bonus(far_wolf, &"", _motor_v3_test_params())
+  _assert(is_equal_approx(float((untouched[0] as Dictionary).get("weight", 0.0)), 0.157), "no incumbent leaves weights untouched")
+
 
 func _test_motor_goal_hub_starvation_eat_only() -> void:
   var motor_v3 := _motor_v3_test_params()

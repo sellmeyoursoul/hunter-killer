@@ -194,6 +194,34 @@ static func urgency_flight(threat_samples: Array, motor_v3: Dictionary, hub_ctx:
   return best
 
 
+## Incumbent-goal hysteresis (2026-09-21, rabbit flip-flopping in the open): `pick_winner` is a pure
+## max over this consideration's weights, so two near-equal goals swap on every consideration where a
+## flickering input (a far, non-closing wolf drifting in/out of awareness) tips the balance — and each
+## swap wipes the planner state, discarding whatever progress the outgoing goal had made. Returns
+## [param scored] with the incumbent goal's weight scaled by `1 + goal_incumbent_switch_margin`
+## (original kept as `weight_pre_bonus`), so a challenger must clearly beat it to take over. Does not
+## touch the acute Flight fast path, which bypasses the hub entirely.
+static func apply_incumbent_bonus(
+  scored: Array,
+  incumbent_goal_kind: StringName,
+  motor_v3: Dictionary,
+) -> Array:
+  var margin := maxf(0.0, float(motor_v3.get("goal_incumbent_switch_margin", 0.4)))
+  if incumbent_goal_kind == &"" or margin <= 0.0:
+    return scored
+  var out: Array = []
+  for row_v in scored:
+    if typeof(row_v) != TYPE_DICTIONARY:
+      out.append(row_v)
+      continue
+    var row: Dictionary = (row_v as Dictionary).duplicate(true)
+    if row.get("goal_kind", &"") == incumbent_goal_kind:
+      row["weight_pre_bonus"] = float(row.get("weight", 0.0))
+      row["weight"] = float(row.get("weight", 0.0)) * (1.0 + margin)
+    out.append(row)
+  return out
+
+
 ## Winner = max [code]weight[/code]; [code]goal_consideration_chaos[/code] breaks near-ties.
 static func pick_winner(scored: Array, motor_v3: Dictionary) -> Dictionary:
   if scored.is_empty():

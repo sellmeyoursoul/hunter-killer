@@ -1110,6 +1110,7 @@ func _run_consideration(ctx: Dictionary) -> void:
     row["feasibility"] = _feasibility_for_goal(row, ctx)
     enriched.append(row)
   var scored := _MotorGoalHub.score_goals(enriched, ctx)
+  scored = _MotorGoalHub.apply_incumbent_bonus(scored, _incumbent.get("goal_kind", &""), _motor_v3)
   _active_goals = scored
   var winner := _MotorGoalHub.pick_winner(scored, _motor_v3)
   if winner.is_empty():
