@@ -181,7 +181,13 @@ static func _displace_along_facing(
     body.move_and_slide()
   # Blocked-detection uses the unit direction, not the damped intent — a slow-but-real approach
   # near the goal must not register as blocked just because commanded speed is intentionally low.
-  return _is_move_blocked(body, dir, pos_before)
+  if _is_move_blocked(body, dir, pos_before):
+    return true
+  # PHYSICS_SQUEEZE.md §3 decision 25 (2026-09-18): `_is_move_blocked` only sees real physics-layer
+  # contact (`is_on_wall()`) — a ghost-layer stop (decision 16) never touches real collision, so it
+  # was previously invisible here, leaving `ActionOutcome.blocked` false for a body that had just
+  # been silently held in place by `_clamp_velocity_to_ghost_fit`.
+  return body.has_method(&"was_ghost_layer_blocked_last_move") and body.call(&"was_ghost_layer_blocked_last_move")
 
 
 static func _expected_horizontal_speed(body: CharacterBody3D) -> float:

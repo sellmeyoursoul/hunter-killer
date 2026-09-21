@@ -20,6 +20,8 @@ const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _LatchHold := preload("res://creature/motor/latch_hold.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
+const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
+const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -1291,7 +1293,7 @@ static func _derive_find_food_step_objective(
     _clear_explore_latch_for_remint(state)
   _store_food_inventory_step_mode(ctx, state, motor_v3)
   if _prey_engagement_latch_valid(state):
-    if _try_maintain_memory_pursuit_detour_latch(state):
+    if _try_maintain_memory_pursuit_detour_latch(state, motor_v3, creature_pos):
       return
     if _sync_moving_prey_memory_objective(
       ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
@@ -1306,7 +1308,7 @@ static func _derive_find_food_step_objective(
     and int(state.get("locale_search_ticks_remaining", 0)) > 0
     and not bool(state.get("step_goal_set", false))
   ):
-    _mint_locale_search_waypoint(state, creature_pos, motor_v3, map_rid, agent_r)
+    _mint_locale_search_waypoint(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
     return
   var explore_first := (
@@ -1631,6 +1633,7 @@ static func _clear_locale_search_state(state: Dictionary) -> void:
 ## `step_instance_id` stays 0 and `step_ultimate_pos` is left unset so `_can_eat_now` never fires
 ## on a point that isn't actually food.
 static func _mint_locale_search_waypoint(
+  ctx: Dictionary,
   state: Dictionary,
   creature_pos: Vector3,
   motor_v3: Dictionary,
@@ -1642,7 +1645,10 @@ static func _mint_locale_search_waypoint(
   var angle := randf() * TAU
   var dist := randf_range(radius * 0.4, radius)
   var raw := anchor + Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
-  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, raw, agent_r)
+  # §9 slice 6 (2026-09-18): don't commit to a random search point a ghost-layer object actually
+  # sits between here and — truncate to the real reachable point along that route first.
+  var scanned := _route_scanned_endpoint(ctx, ctx.get("body"), map_rid, creature_pos, raw)
+  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, scanned, agent_r)
   state["step_goal"] = resolved
   state["step_goal_set"] = true
   state["step_ultimate_pos"] = Vector3.ZERO
@@ -1686,7 +1692,7 @@ static func _maybe_search_arrival_remint(
   var tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
   if creature_pos.distance_to(goal) > tol:
     return
-  _mint_locale_search_waypoint(state, creature_pos, motor_v3, map_rid, agent_r)
+  _mint_locale_search_waypoint(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
 
 
 ## At locale ultimate within eat range: bind nearby live food or clear locale orbit.
@@ -1803,8 +1809,14 @@ static func _try_nominate_shelter_candidate(
   var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_FORWARD).normalized()
   var probe_center := creature_pos + facing * float(motor_v3.get("shelter_probe_lookahead_dist", 3.0))
   var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
-  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", 8))
-  var frac := _ShelterProbe.enclosure_fraction(space, probe_center, probe_radius, blocker_mask)
+  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
+  ## Stage A (decision 13/33): nominate at the occupant's own live capsule size, not a generic
+  ## point ray — a shape-cast sweep, so a gap too narrow for this body reads as enclosed even when
+  ## a zero-width ray would have slipped straight through it.
+  var frac := _ShelterProbe.enclosure_fraction(
+    space, probe_center, probe_radius, blocker_mask, 1.0, _ShelterProbe.RING_SAMPLES, [],
+    _agent_radius(body), _agent_height(body),
+  )
   if frac < float(motor_v3.get("shelter_enclosure_detect_threshold", 0.5)):
     state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
     return false
@@ -1817,9 +1829,14 @@ static func _try_nominate_shelter_candidate(
   state["shelter_candidate_anchor_set"] = true
   state["shelter_candidate_instance_id"] = iid
   state["step_instance_id"] = iid
-  state["step_goal"] = probe_center
+  # §9 slice 6 (2026-09-18): the candidate's own identity/anchor stays `probe_center` regardless —
+  # only the actual walk-toward target gets truncated if a ghost-layer object sits on the way
+  # there, the same way every other mint site now guards its committed point.
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var walk_target := _route_scanned_endpoint(ctx, body, map_rid, creature_pos, probe_center)
+  state["step_goal"] = walk_target
   state["step_goal_set"] = true
-  state["step_ultimate_pos"] = probe_center
+  state["step_ultimate_pos"] = walk_target
   state["step_ultimate_pos_set"] = true
   state["step_source"] = &"precise"
   state["shelter_eval_active"] = false
@@ -1850,8 +1867,15 @@ static func _begin_or_continue_shelter_eval(
   state["step_goal_set"] = true
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
   var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
-  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", 8))
-  var frac := _ShelterProbe.enclosure_fraction(space, anchor, probe_radius, blocker_mask)
+  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
+  var eval_body: CharacterBody3D = ctx.get("body")
+  var agent_r := _agent_radius(eval_body) if eval_body != null else 0.0
+  var agent_h := _agent_height(eval_body) if eval_body != null else 0.0
+  ## Stage A (decision 13/33): same self-radius shape-cast sweep as nomination, so STAY-evaluate
+  ## confirm can't drift from what was actually nominated.
+  var frac := _ShelterProbe.enclosure_fraction(
+    space, anchor, probe_radius, blocker_mask, 1.0, _ShelterProbe.RING_SAMPLES, [], agent_r, agent_h,
+  )
   state["shelter_eval_last_fraction"] = frac
   var confirm_thresh := float(motor_v3.get("shelter_enclosure_confirm_threshold", 0.65))
   state["shelter_eval_cycles"] = (
@@ -2016,6 +2040,18 @@ static func should_suppress_live_pursuit_blocked_resolution(
 
 
 ## Hold post-blocked-reeval detour substep during live prey pursuit (post-6d-approach-geometry C1).
+## PHYSICS_SQUEEZE.md §3 decision 32 (2026-09-21): [param motor_v3] added for the arrival check
+## below — `_maybe_mint_pursuit_detour_latch` freezes whatever the currently-resolved nav waypoint
+## happens to be for `pursuit_detour_latch_ticks` (default 32) with no regard for how close it
+## already is, and this function used to hold that frozen point for the *entire* latch duration
+## regardless of arrival. Live repro: a rabbit reaching within centimeters of a frozen intermediate
+## nav waypoint (still ~14 units from the actual live-food ultimate) kept "pursuing" that same point
+## — visibly circling in place — for the rest of the latch window, since nothing here ever
+## re-derived toward the real target early. Neither the generic §9 blocked-resolution path (`
+## should_suppress_live_pursuit_blocked_resolution` deliberately defers to this latch for live
+## pursuit) nor this latch's own escalation (`_remint_alternate_pursuit_detour`, gated on real
+## physics-collision `consecutive_blocked`) ever fired, because circling near an open point isn't
+## "blocked" in either sense — it's a pure missing-arrival-check gap.
 static func _try_maintain_pursuit_detour_latch(
   ctx: Dictionary,
   state: Dictionary,
@@ -2029,6 +2065,10 @@ static func _try_maintain_pursuit_detour_latch(
     _clear_pursuit_detour_latch(state)
     return false
   var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  if creature_pos.distance_to(latched) <= arrival_tol:
+    _clear_pursuit_detour_latch(state)
+    return false
   state["step_goal"] = latched
   state["step_goal_set"] = true
   state["step_source"] = &"live"
@@ -2061,13 +2101,25 @@ static func _clear_memory_pursuit_detour_latch(state: Dictionary) -> void:
 ## (no live sighting to correct against, so unlike the live consumer above this never re-arms
 ## `step_ultimate_pos`/prey engagement from a fresh live sample — `_sync_moving_prey_memory_objective`
 ## does that once this latch lapses and control falls back through to it).
-static func _try_maintain_memory_pursuit_detour_latch(state: Dictionary) -> bool:
+## PHYSICS_SQUEEZE.md §3 decision 32 (2026-09-21): [param motor_v3]/[param creature_pos] added for
+## the same arrival-release fix as `_try_maintain_pursuit_detour_latch` (its live-pursuit sibling) —
+## this memory-moving-prey detour latch had the identical missing-arrival-check gap, just never
+## caught live since the confirmed repro happened to be a live pursuit.
+static func _try_maintain_memory_pursuit_detour_latch(
+  state: Dictionary,
+  motor_v3: Dictionary,
+  creature_pos: Vector3,
+) -> bool:
   if not _memory_pursuit_detour_latch_valid(state):
     return false
   if not _prey_engagement_latch_valid(state):
     _clear_memory_pursuit_detour_latch(state)
     return false
   var latched: Vector3 = state.get("memory_pursuit_detour_waypoint", Vector3.ZERO)
+  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  if creature_pos.distance_to(latched) <= arrival_tol:
+    _clear_memory_pursuit_detour_latch(state)
+    return false
   state["step_goal"] = latched
   state["step_goal_set"] = true
   state["step_source"] = &"memory_moving"
@@ -2138,6 +2190,9 @@ static func _remint_alternate_memory_pursuit_detour(
   var wp := creature_pos + dir * maxf(dist, 3.0)
   var map_rid: RID = ctx.get("map_rid", RID())
   var agent_r := _agent_radius(body)
+  # §9 slice 6 (2026-09-18): mirrors `_remint_alternate_pursuit_detour`'s own route-scan guard —
+  # don't commit to a fresh alternate-side pick a ghost-layer object sits between here and.
+  wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["memory_pursuit_detour_waypoint"] = wp
@@ -2240,6 +2295,9 @@ static func _remint_alternate_pursuit_detour(
   var wp := creature_pos + dir * maxf(dist, 3.0)
   var map_rid: RID = ctx.get("map_rid", RID())
   var agent_r := _agent_radius(body)
+  # §9 slice 6 (2026-09-18): the ±60° alternate-side detour point is a fresh speculative pick —
+  # don't commit to one a ghost-layer object actually sits between here and.
+  wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["pursuit_detour_waypoint"] = wp
@@ -2516,7 +2574,15 @@ static func _sync_food_memory_objective(
   var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
   var env_grid: Variant = ctx.get("environment_grid", null)
   var motor_ctx: Dictionary = {}
-  var precise: Dictionary = adapter.consult_precise_food(creature_pos, motor_v3, food_split, now_ms)
+  ## PHYSICS_SQUEEZE.md §3 decision 31 (2026-09-21): exclude any instance
+  ## `apply_blocked_objective_resolution` has already flagged as repeatedly unreachable (same set
+  ## the live-food branch above already passes to `best_ready_food_target`) — without this, a
+  ## boulder-blocked precise/coarse food memory just gets re-picked identically the very next tick,
+  ## silently undoing the resolver's switch/seek decision forever.
+  var food_exclusions := _food_pursuit_exclusions(ctx, state, motor_v3)
+  var precise: Dictionary = adapter.consult_precise_food(
+    creature_pos, motor_v3, food_split, now_ms, food_exclusions
+  )
   if bool(precise.get("active", false)):
     var new_iid := int(precise.get("instance_id", 0))
     if int(state.get("step_instance_id", 0)) != new_iid:
@@ -2529,7 +2595,7 @@ static func _sync_food_memory_objective(
     return true
   var incumbent_iid := int(state.get("step_instance_id", 0))
   var coarse: Dictionary = adapter.consult_coarse_bearing(
-    creature_pos, motor_v3, food_split, incumbent_iid, now_ms
+    creature_pos, motor_v3, food_split, incumbent_iid, now_ms, food_exclusions
   )
   if bool(coarse.get("active", false)):
     var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
@@ -2628,6 +2694,70 @@ static func _flee_candidate_probe(
   return {"reach": creature_pos.distance_to(endpoint), "endpoint": endpoint, "path": path}
 
 
+## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18, implementation slice 2): [param probe]'s
+## `reach`/`endpoint`/`path` come from [method _flee_candidate_probe]'s pure navmesh query, which —
+## since the navmesh bake now excludes the ghost query-only layer entirely (decision 22, §9 slice
+## 1) — has no idea whether [param body] can actually fit through anything along that path. Runs
+## [RoutePlausibilityScan] against the probe's own path and, when it finds a real blocker, returns
+## a truncated probe (reach/endpoint/path all cut back to the blocker) so a candidate a creature
+## can't actually use never outscores one it can. Returns [param probe] unchanged when there's
+## nothing to scan (already-empty path) or no physics space available (matches every other
+## space-optional check in this file — synthetic test fixtures with no `space_state` keep today's
+## pre-scan behavior rather than erroring).
+static func _apply_route_plausibility_scan(
+  probe: Dictionary,
+  ctx: Dictionary,
+  body: CharacterBody3D,
+) -> Dictionary:
+  var path: PackedVector3Array = probe.get("path", PackedVector3Array())
+  if path.size() < 2 or body == null:
+    return probe
+  var space_state: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  if space_state == null:
+    return probe
+  var scan := _RouteScan.scan_path(
+    space_state, path, _agent_radius(body), _agent_height(body), [body.get_rid()],
+  )
+  if not bool(scan.get("blocked", false)):
+    return probe
+  return {
+    "reach": float(scan.get("reach", 0.0)),
+    "endpoint": scan.get("reach_point", probe.get("endpoint", Vector3.ZERO)),
+    "path": scan.get("path", path),
+  }
+
+
+## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 / §9 slice 6 (2026-09-18): the single-target sibling
+## of [method _apply_route_plausibility_scan] — that one truncates a *probe dict* (flee's discrete
+## bearing candidates); this one truncates a single navigable point, for the other mint sites that
+## just want "the real point I can walk toward," not a scored-candidate list. Builds the navmesh
+## path to [param target] itself and reuses the same scan, so a mint site never commits to a point
+## a ghost-layer object actually sits between it and — the same class of gap decision 22 closed for
+## flee, just for `_mint_locale_search_waypoint`, explore's own waypoint mint, the C1 pursuit-detour
+## re-mint, and the shelter precise-candidate probe (decision 21's other four mint sites). Returns
+## [param target] unchanged when there's no path, no body, or no physics space to scan against —
+## matches every other space-optional check in this file.
+static func _route_scanned_endpoint(
+  ctx: Dictionary,
+  body: CharacterBody3D,
+  map_rid: RID,
+  creature_pos: Vector3,
+  target: Vector3,
+) -> Vector3:
+  if not map_rid.is_valid() or body == null:
+    return target
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, target, true)
+  if path.size() < 2:
+    return target
+  var probe := {
+    "reach": creature_pos.distance_to(target),
+    "endpoint": target,
+    "path": path,
+  }
+  var scanned := _apply_route_plausibility_scan(probe, ctx, body)
+  return scanned.get("endpoint", target)
+
+
 ## True when at least one [code]threat_samples[/code] entry is currently [code]in_awareness[/code].
 ## [method _flee_objective] has no meaningful answer without one (returns [code]Vector3.ZERO[/code]
 ## as a "no threat" sentinel) — callers must check this directly rather than trust that return
@@ -2674,8 +2804,10 @@ static func _mint_flee_waypoint(
     # the map edge either; a reach of 0 just holds position for this one tick until the next
     # reconsideration has real threat data to steer by.
     var fallback_dist := float(motor_v3.get("awareness_radius", 150.0))
-    var fallback_probe := _flee_candidate_probe(
-      ctx.get("map_rid", RID()), creature_pos, _MotorPlane.HORIZONTAL_FORWARD, fallback_dist,
+    var fallback_probe := _apply_route_plausibility_scan(
+      _flee_candidate_probe(ctx.get("map_rid", RID()), creature_pos, _MotorPlane.HORIZONTAL_FORWARD, fallback_dist),
+      ctx,
+      body,
     )
     var fallback_wp: Vector3 = fallback_probe.get("endpoint", creature_pos)
     state["flee_waypoint"] = fallback_wp
@@ -2781,7 +2913,9 @@ static func _mint_flee_waypoint(
     var found_clear := false
     for i in range(candidate_dirs.size()):
       var candidate_dir: Vector3 = candidate_dirs[i]
-      var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
+      var probe := _apply_route_plausibility_scan(
+        _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist), ctx, body,
+      )
       var reach := float(probe.get("reach", 0.0))
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
@@ -2828,7 +2962,9 @@ static func _mint_flee_waypoint(
       for i in range(scan_n):
         var ang := TAU * float(i) / float(scan_n)
         var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
-        var probe := _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist)
+        var probe := _apply_route_plausibility_scan(
+          _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist), ctx, body,
+        )
         var reach := float(probe.get("reach", 0.0))
         if reach > scan_best_reach:
           scan_best_reach = reach
@@ -3087,15 +3223,43 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
   return step_goal
 
 
-## True when [param body] is within [code]eat_action_max_distance[/code] world meters of [param target].
-## [param delta] kept for call-site stability; unused for the meter range gate.
+## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18): `eat_action_max_distance` is a
+## fixed, deliberately-unscaled world-meter constant (see `motor_plane.gd`'s
+## `_UNSCALED_MOTOR_DISTANCE_KEYS` comment — it was previously bugged the *other* direction,
+## shrinking to ~0.5m on small playfields). That fix assumed predator bodies stay small; a wolf's
+## own live capsule radius (~7m post-decision-14 scaling) now exceeds the flat 5m constant outright
+## — a wolf could drive its own center to the near edge of a rabbit's capsule (already well past
+## simple surface contact) and still fail this gate. Live repro (2026-09-18): 3 wolves visibly
+## overlapping a rabbit, never eating it. Fixed by adding each body's own live capsule radius as a
+## reach bonus on top of the tuned constant — `eat_action_max_distance` now means "reach beyond
+## simple contact," not "reach from body center," matching how `_has_clear_contact_path_for_action`
+## already reasons about the two bodies' physical extents rather than pretending they're points.
+static func _eat_reach_radius_bonus(body: CharacterBody3D, target_instance_id: int) -> float:
+  var bonus := 0.0
+  if body != null and body.has_method(&"get_collision_capsule_radius"):
+    bonus += float(body.call(&"get_collision_capsule_radius"))
+  if target_instance_id != 0:
+    var target := instance_from_id(target_instance_id)
+    if target is Object and (target as Object).has_method(&"get_collision_capsule_radius"):
+      bonus += float((target as Object).call(&"get_collision_capsule_radius"))
+  return bonus
+
+
+## True when [param body] is within [code]eat_action_max_distance[/code] world meters of [param
+## target], plus each body's own live capsule radius (see [method _eat_reach_radius_bonus]).
+## [param delta] kept for call-site stability; unused for the meter range gate. [param
+## target_instance_id], when nonzero and resolvable to a body with its own capsule radius (live
+## prey), is added to the reach the same way; omitted or unresolvable (a plant target, a stale id)
+## contributes nothing extra, leaving that case's existing behavior unchanged.
 static func _is_within_eat_range(
   body: CharacterBody3D,
   target: Vector3,
   motor_v3: Dictionary,
   _delta: float,
+  target_instance_id: int = 0,
 ) -> bool:
   var max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  max_dist += _eat_reach_radius_bonus(body, target_instance_id)
   return body.global_position.distance_to(target) <= max_dist
 
 
@@ -3117,7 +3281,7 @@ static func _can_eat_now(
   var eat_tgt := _resolve_eat_target_pos(state, step_goal)
   if eat_tgt.length_squared() < 1e-8:
     return false
-  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta):
+  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta, int(state.get("step_instance_id", 0))):
     return false
   if not _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
     return false
@@ -3146,7 +3310,9 @@ static func debug_eat_gate_snapshot(
   if body == null or eat_tgt.length_squared() < 1e-8:
     return out
   out["eat_dist_to_ultimate"] = body.global_position.distance_to(eat_tgt)
-  out["eat_within_range"] = _is_within_eat_range(body, eat_tgt, motor_v3, 0.0)
+  out["eat_within_range"] = _is_within_eat_range(
+    body, eat_tgt, motor_v3, 0.0, int(state.get("step_instance_id", 0))
+  )
   out["eat_facing_aligned"] = _is_facing_aligned_for_eat(body, eat_tgt, motor_v3)
   out["eat_clear_path"] = _has_clear_contact_path_for_action(body, eat_tgt, ctx)
   return out
@@ -3190,7 +3356,7 @@ static func _select_eat_orbit_or_align(
   if eat_tgt.length_squared() < 1e-8:
     state["eat_orbit_turn_deg_accumulated"] = 0.0
     return -1
-  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta):
+  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta, int(state.get("step_instance_id", 0))):
     state["eat_orbit_turn_deg_accumulated"] = 0.0
     return -1
   if _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
@@ -3490,6 +3656,12 @@ static func _agent_radius(body: CharacterBody3D) -> float:
   if body.has_method(&"get_collision_capsule_radius"):
     return maxf(0.1, float(body.call(&"get_collision_capsule_radius")))
   return 0.35
+
+
+static func _agent_height(body: CharacterBody3D) -> float:
+  if body.has_method(&"get_collision_capsule_height"):
+    return maxf(0.2, float(body.call(&"get_collision_capsule_height")))
+  return 1.2
 
 
 static func _at_arrival(body: CharacterBody3D, step_goal: Vector3, motor_v3: Dictionary) -> bool:

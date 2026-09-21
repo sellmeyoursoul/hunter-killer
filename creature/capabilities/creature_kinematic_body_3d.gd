@@ -20,6 +20,7 @@ const _CreaturePredationMath := preload("res://creature/capabilities/creature_pr
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _ConfigMerge := preload("res://AI_int_lib/game_config_merge.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
+const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 
 @export var definition: Variant
 @export var is_hostile: bool = false
@@ -43,6 +44,13 @@ var current_calories: float = 30.0
 ## Stable per-instance identity for logs/debugging (distinct from `definition.species_id`, which is
 ## shared by every creature of that species) — set once in `_ready()` from `get_instance_id()`.
 var creature_instance_id: int = 0
+
+## PHYSICS_SQUEEZE.md §3 decision 25 (2026-09-18): whether the most recent [method
+## apply_horizontal_move_intent] call had its horizontal velocity zeroed by [method
+## _clamp_velocity_to_ghost_fit] (a real, non-escaping ghost-layer overlap) — read by
+## [LocomotionExecutor]'s blocked-detection, which otherwise only sees real physics-layer contact
+## (`is_on_wall()`) and has no visibility into this query-only layer at all.
+var _last_ghost_layer_blocked: bool = false
 
 var _food_intake_policy: Resource
 var _starvation_fired: bool = false
@@ -162,6 +170,14 @@ func get_collision_capsule_height() -> float:
   return _base_capsule_height * factor
 
 
+## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): public read for [method
+## apply_horizontal_move_intent]'s own gravity scale, so a caller estimating this body's fall
+## kinematics (the C10 airborne-invariant threshold's terrain-scaled buffer; later, jump-distance/
+## fall-damage decisions) matches the actual physics instead of assuming a fixed 1.0.
+func get_gravity_multiplier() -> float:
+  return float(_resolve_locomotion().get("gravity_multiplier"))
+
+
 ## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code].
 func get_los_eye_height() -> float:
   return get_collision_capsule_height() * 0.9
@@ -222,10 +238,16 @@ func apply_capsule_footprint_from_visual(visual_root: Node3D, inset_ratio: float
   return true
 
 
+## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): the diet-role `+8` bit (carnivore-only real
+## collision against the retired `plant_mob_block` layer) is retired — nothing in the project has
+## been on real layer 8 since decision 25 migrated object-scale obstacles onto the query-only
+## ghost layer (16), and `MotorPathClear.has_clear_contact_path`'s ghost-layer raycast (decision 28)
+## already independently catches every case this bit used to gate. Both diet roles now share the
+## same real mask (terrain only) — real-physics solidity no longer distinguishes predator/prey.
 func _apply_physics_layers() -> void:
   if is_hostile:
     collision_layer = 4
-    collision_mask = 9
+    collision_mask = 1
   else:
     collision_layer = 2
     collision_mask = 1
@@ -536,7 +558,60 @@ func apply_horizontal_move_intent(intent: Vector3, delta: float) -> void:
   if not is_on_floor():
     var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
     velocity.y -= g * grav_mul * delta
+  _last_ghost_layer_blocked = _clamp_velocity_to_ghost_fit(delta)
   move_and_slide()
+
+
+## PHYSICS_SQUEEZE.md §3 decision 25 (2026-09-18): read by [LocomotionExecutor] to fold a
+## ghost-layer stop into its own blocked-detection — see [member _last_ghost_layer_blocked].
+func was_ghost_layer_blocked_last_move() -> bool:
+  return _last_ghost_layer_blocked
+
+
+## PHYSICS_SQUEEZE.md decision 16 (2026-09-18): object-scale obstacles are query-only — never on
+## any creature's real `collision_mask`, so `move_and_slide` alone never stops a body from walking
+## straight through one. This is the live per-step gate that actually enforces per-instance fit:
+## before committing this tick's move, shape-cast this body's own real capsule at where it's about
+## to end up; if that overlaps the ghost layer, cancel the horizontal move so the body doesn't
+## tunnel into geometry it doesn't fit through. A body whose capsule *does* fit takes no penalty
+## here — Mode-B `movement_impact` slowdown (decision 16 §3) is a separate, not-yet-wired concern.
+## Point-check at the tick's destination, not a full motion sweep (§8a's route scan is the
+## sweep-based version, used ahead of time for candidate scoring, not here).
+##
+## §8e escape hatch (2026-09-18, added after a live repro): a creature that ends up overlapping a
+## ghost-layer shape — confirmed live: an herbivore approaching `open_shrub_3d` to EAT, then
+## getting trapped once the shrub's `MobBlocker` re-syncs its collision to the depleted-visual mesh
+## right as eating completes (`bush_food_3d.gd`'s `_refresh_visual()`) — would otherwise never
+## recover, since nearly every nearby destination still reads as "overlapping" once already inside.
+## Before blocking, check whether the body is already overlapping the ghost layer at its *current*
+## position; if so and this move doesn't get closer to whatever it's overlapping, allow it anyway.
+##
+## Returns true when this call actually zeroed horizontal velocity for a real, non-escaping
+## overlap — decision 25 (2026-09-18): the caller ([method apply_horizontal_move_intent]) surfaces
+## this via [member _last_ghost_layer_blocked] so [LocomotionExecutor] can fold it into its own
+## blocked-detection, which otherwise never sees this query-only layer at all (`is_on_wall()` only
+## reports real physics-layer contact).
+func _clamp_velocity_to_ghost_fit(delta: float) -> bool:
+  var world := get_world_3d()
+  if world == null:
+    return false
+  var space_state := world.direct_space_state
+  if space_state == null:
+    return false
+  var radius := get_collision_capsule_radius()
+  var height := get_collision_capsule_height()
+  var self_rid := [get_rid()]
+  var next_pos := global_position + Vector3(velocity.x, 0.0, velocity.z) * delta
+  var blocked := _GhostObstacleQuery.capsule_overlaps_ghost_layer(
+    space_state, next_pos, radius, height, self_rid,
+  )
+  if not blocked:
+    return false
+  if _GhostObstacleQuery.escaping_overlap(space_state, global_position, next_pos, radius, height, self_rid):
+    return false
+  velocity.x = 0.0
+  velocity.z = 0.0
+  return true
 
 
 ## Snaps world XZ inside playfield AABB after movement (row 55 safety net).

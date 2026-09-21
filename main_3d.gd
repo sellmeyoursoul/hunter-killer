@@ -10,6 +10,7 @@ const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
 const _SpawnRandomizer := preload("res://environment/playfield_spawn_randomizer.gd")
 const _TopDownCamera := preload("res://environment/top_down_camera_control.gd")
+const _StaticObstacleCollision := preload("res://environment/static_obstacle_collision.gd")
 
 const _GRASSLANDS_SCENE := "res://assets/locations/grasslands/h-k-grasslands.blend"
 const _BOULDER_SCENE := "res://assets/environment/obstacle_boulder/h-k-boulder1.blend"
@@ -41,8 +42,17 @@ const _DEBUG_FORCE_EDGE_CHASE_SPAWN := false
 const _DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER := true
 
 const _REFUGE_CLUSTER_CENTER_FRAC := Vector2(0.5, 0.5)
-const _REFUGE_CLUSTER_SHRUB_COUNT := 10
-const _REFUGE_CLUSTER_RADIUS := 3.0
+## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 (2026-09-18): retuned from (10, 3.0) — direct probing
+## (`GhostObstacleQuery.sweep_capsule_along_segment` binary-searching each gap's worst-case
+## passable capsule radius) found the *original* ring's real gaps were sealed to nearly any size,
+## even a sliver capsule, at the old count/radius. Root cause wasn't gap math at all: `open_shrub_3d`'s
+## own mesh pivot sits well off its visual center (local AABB center ~(1.87, -, -1.02), not origin),
+## so placing instances by node position (not visual center) shifted every shrub's real mass the
+## same direction, sealing gaps on one side of the ring while widening them uselessly on the other
+## — see [method _spawn_open_shrub_refuge_cluster]'s compensating offset. With that fixed, this
+## radius/count clears a rabbit-radius capsule (~1.736) with real margin (probed worst-case ~2.12).
+const _REFUGE_CLUSTER_SHRUB_COUNT := 6
+const _REFUGE_CLUSTER_RADIUS := 7.5
 const _REFUGE_CLUSTER_GROWTH_RATE := 0.02
 const _REFUGE_CLUSTER_MAX_CALORIES := 2
 
@@ -467,9 +477,9 @@ func _default_creature_spawn_plan() -> Array[Dictionary]:
   var rabbit := load("res://creature/species/rabbit_archetype.tres") as CreatureDefinition
   if rabbit != null and rabbit.body_scene != null:
     out.append({"definition": rabbit, "body_scene": rabbit.body_scene, "count": 1, "player_controlled": true})
-  var fox := load("res://creature/species/fox_archetype.tres") as CreatureDefinition
-  if fox != null and fox.body_scene != null:
-    out.append({"definition": fox, "body_scene": fox.body_scene, "count": 1, "player_controlled": false})
+  var wolf := load("res://creature/species/wolf_archetype.tres") as CreatureDefinition
+  if wolf != null and wolf.body_scene != null:
+    out.append({"definition": wolf, "body_scene": wolf.body_scene, "count": 1, "player_controlled": false})
   return out
 
 
@@ -549,6 +559,14 @@ func _bake_playfield_navmesh() -> void:
   nm.agent_height = 2.0
   nm.cell_size = 0.25
   nm.cell_height = 0.15
+  ## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18): bake from world-static terrain (layer 1)
+  ## only. Object-scale obstacles (the query-only "ghost" layer, decision 16) must never carve a
+  ## permanent navmesh hole — per-species passability there is enforced live, by the motor's own
+  ## shape-cast/route-scan queries, not by the shared bake. Previously unset (defaulted to "all
+  ## layers"), which meant every `open_shrub_3d` MobBlocker (layer 8, now migrated off it) already
+  ## baked a hole for every creature regardless of species — the exact bug this doc's §1 opened
+  ## with, confirmed live in code, not just hypothetical.
+  nm.geometry_collision_mask = 1
   ## Map cell_height defaults to 0.25 and must match the baked mesh's or the engine logs
   ## "rasterization errors with navigation mesh edges" — that mismatch can corrupt the mesh
   ## along elevation changes (e.g. the valley depression), so align the map before baking.
@@ -903,6 +921,7 @@ func _spawn_open_shrub_refuge_cluster() -> void:
   if _open_shrub_scene == null:
     return
   var center := _Bounds3D.world_position_from_fraction(_playfield_bounds, _REFUGE_CLUSTER_CENTER_FRAC, 0.0)
+  var visual_offset := _open_shrub_visual_center_local_offset()
   for i in _REFUGE_CLUSTER_SHRUB_COUNT:
     var angle := TAU * float(i) / float(_REFUGE_CLUSTER_SHRUB_COUNT)
     var offset := Vector3(cos(angle), 0.0, sin(angle)) * _REFUGE_CLUSTER_RADIUS
@@ -916,7 +935,10 @@ func _spawn_open_shrub_refuge_cluster() -> void:
     o.set("growth_rate", _REFUGE_CLUSTER_GROWTH_RATE)
     o.set("max_calories", _REFUGE_CLUSTER_MAX_CALORIES)
     _food_root.add_child(o)
-    o.global_position = pos
+    # Places the shrub's real visual/collision mass on the ring, not its off-center node origin
+    # (see `_REFUGE_CLUSTER_RADIUS`'s own comment) — every instance shares the same pivot offset
+    # since none of them are rotated, so a single flat subtraction corrects all of them alike.
+    o.global_position = pos - visual_offset
     _spawn_existing_points.append(Vector2(pos.x, pos.z))
   _spawn_last_layout["open_shrub_refuge_cluster_center"] = _REFUGE_CLUSTER_CENTER_FRAC
   OLog.info(
@@ -925,6 +947,25 @@ func _spawn_open_shrub_refuge_cluster() -> void:
     true,
     "Main3D",
   )
+
+
+## `open_shrub_3d`'s mesh pivot isn't at its own visual center — measures the local-space offset
+## once (a temporary, un-parented-to-scene instance) so [method _spawn_open_shrub_refuge_cluster]
+## can place every ring instance's real mass, not its node origin, on the intended ring point.
+## Returns [constant Vector3.ZERO] if the scene or its visual can't be resolved (placement then
+## falls back to the old node-origin behavior rather than failing the whole spawn).
+func _open_shrub_visual_center_local_offset() -> Vector3:
+  if _open_shrub_scene == null:
+    return Vector3.ZERO
+  var probe := _open_shrub_scene.instantiate() as Node3D
+  if probe == null:
+    return Vector3.ZERO
+  add_child(probe)
+  var visual := probe.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var offset: Vector3 = aabb.get("center", Vector3.ZERO) if bool(aabb.get("valid", false)) else Vector3.ZERO
+  probe.free()
+  return offset
 
 
 func _validate_food_plant_kind_id(plant: Node) -> bool:

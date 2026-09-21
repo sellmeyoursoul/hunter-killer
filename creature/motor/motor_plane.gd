@@ -5,6 +5,7 @@ class_name MotorPlane
 
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
+const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
 
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
@@ -217,7 +218,40 @@ static func scale_creature_motor_v3_for_playfield(motor_v3: Dictionary, body: No
     main = body.get_tree().current_scene
   var playfield := playfield_size_for_body(body, main)
   var scale := motor_distance_scale_for_main(main, playfield)
-  return scale_motor_distance_params(motor_v3, scale)
+  var scaled := scale_motor_distance_params(motor_v3, scale)
+  return _apply_terrain_scaled_invariant_airborne_ticks(scaled, body, main)
+
+
+## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): the C10 airborne-invariant threshold
+## (`motor_invariant_max_airborne_ticks`) was a flat constant (45) sized for near-miss recoveries,
+## not for a genuine multi-meter fall — a wolf that legitimately walks off a real terrain cliff can
+## take far longer than that to reach the bottom, tripping the invariant as if it were a
+## stuck-under-geometry bug. Per-playfield at spawn time (this baked ground sampler already exists
+## for spawn placement — [PlayfieldGroundSampler]) rather than a single project-wide constant, so a
+## different playfield's terrain automatically gets a correctly-sized threshold with no manual
+## re-tuning. Only raises the threshold above the config default, never below it — a playfield with
+## no baked sampler (most tests, fixtures without a real [code]Main3D[/code]) or with no elevation
+## range at all keeps the default, unchanged behavior.
+static func _apply_terrain_scaled_invariant_airborne_ticks(
+  motor_v3: Dictionary, body: Node, main: Node,
+) -> Dictionary:
+  if main == null or not main.has_method(&"get_ground_sampler"):
+    return motor_v3
+  var sampler: Variant = main.call(&"get_ground_sampler")
+  if sampler == null or not (sampler as Object).has_method(&"is_valid") or not sampler.is_valid():
+    return motor_v3
+  var max_drop := float(sampler.max_elevation_range())
+  if max_drop <= 0.0:
+    return motor_v3
+  var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+  var grav_mul := 1.0
+  if body != null and body.has_method(&"get_gravity_multiplier"):
+    grav_mul = maxf(0.01, float(body.call(&"get_gravity_multiplier")))
+  var fall_ticks := _FallPhysics.ticks_to_fall(max_drop, gravity * grav_mul, Engine.get_physics_ticks_per_second())
+  var buffer_ticks := int(motor_v3.get("motor_invariant_airborne_buffer_ticks", 45))
+  var default_ticks := int(motor_v3.get("motor_invariant_max_airborne_ticks", 45))
+  motor_v3["motor_invariant_max_airborne_ticks"] = maxi(default_ticks, fall_ticks + buffer_ticks)
+  return motor_v3
 
 
 ## Motor distance keys that are tuned as fixed world-meter contracts (action ranges, arrival

@@ -100,6 +100,23 @@ func elevation_at_cardinal_probe(pos: Vector3, dir: Vector3, step: float) -> flo
   return sample_elevation(Vector2(probe.x, probe.z), pos.y)
 
 
+## Worst-case vertical drop (meters) anywhere in the baked grid — the highest sampled cell minus
+## the lowest. A conservative upper bound on any single fall a creature could take while staying
+## in bounds (real accessible falls are almost always shorter, since it assumes a body could reach
+## both extremes), used to size the C10 airborne-invariant threshold per playfield so a genuine
+## deep-terrain fall (PHYSICS_SQUEEZE.md §3 decision 30) doesn't get flagged as a stuck-under-
+## geometry bug. Returns 0.0 when unbaked/invalid or the grid is empty.
+func max_elevation_range() -> float:
+  if not is_valid() or _elevations.is_empty():
+    return 0.0
+  var lo := _elevations[0]
+  var hi := _elevations[0]
+  for e in _elevations:
+    lo = minf(lo, e)
+    hi = maxf(hi, e)
+  return hi - lo
+
+
 ## Normalized playfield fractions for herbivore and carnivore duel spawns on elevated rim.
 ## Params:
 ## - separation_min_frac: Minimum normalized-fraction separation between the two picks.

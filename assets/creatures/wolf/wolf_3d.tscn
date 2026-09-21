@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://d3s5j0m5r7wjq"]
+
+[ext_resource type="PackedScene" uid="uid://dptep1ibjjfy4" path="res://assets/creatures/wolf/wolf.blend" id="1_wolf_blend"]
+
+[node name="Wolf3D" type="Node3D"]
+
+[node name="WolfMesh" parent="." instance=ExtResource("1_wolf_blend")]
+transform = Transform3D(3, 0, 0, 0, 3, 0, 0, 0, 3, -2.387391, -2.855382, -14.272326)

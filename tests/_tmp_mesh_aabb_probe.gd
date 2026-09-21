@@ -9,6 +9,8 @@ func _init() -> void:
   get_root().add_child(holder)
   _probe_blend(holder, "fox", "res://assets/creatures/fox/fox.blend")
   _probe_blend(holder, "rabbit", "res://assets/creatures/rabbit/rabbit.blend")
+  _probe_blend(holder, "wolf", "res://assets/creatures/wolf/wolf.blend")
+  _probe_blend(holder, "wolf_3d", "res://assets/creatures/wolf/wolf_3d.tscn")
   _probe_scene(holder, "solid_shrub", "res://assets/plants/solid_shrub/solid_shrub_3d.tscn")
   _probe_scene(holder, "open_shrub", "res://assets/plants/open_shrub/open_shrub_3d.tscn")
   quit(0)

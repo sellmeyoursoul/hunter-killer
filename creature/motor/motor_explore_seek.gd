@@ -66,6 +66,15 @@ static func mint_explore_step(
       _remint_explore_dir(goal_kind, creature_pos, state, motor_v3, ctx, body)
       explore = (state["explore_dir"] as Vector3).normalized()
       waypoint = creature_pos + explore * reach
+  # §9 slice 6 (2026-09-18): don't mint a far bearing waypoint straight through a ghost-layer
+  # object the navmesh itself no longer encodes as solid — truncate to the real reachable point
+  # along that route, once at mint time (not every tick the latch holds, to avoid chasing a
+  # progressively-truncated target as the creature approaches).
+  if body != null:
+    waypoint = _planner_call(
+      "_route_scanned_endpoint",
+      [ctx, body, ctx.get("map_rid", RID()), creature_pos, waypoint],
+    )
   state["explore_waypoint"] = waypoint
   state["explore_waypoint_set"] = true
   state["step_goal"] = waypoint

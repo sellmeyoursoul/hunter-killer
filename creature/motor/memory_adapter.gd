@@ -538,11 +538,21 @@ func best_find_food_feasibility(
 
 
 ## §8.2 precise GPS seek — nearest remembered consumable bush outside live awareness.
+## PHYSICS_SQUEEZE.md §3 decision 31 (2026-09-21): [param excluded_instance_ids] lets a caller keep
+## a passibility-failed instance (see `_food_pursuit_exclusions`, already used for the live-food
+## branch) out of the pick here too — without it, a food memory that's been marked repeatedly
+## unreachable (e.g. sitting behind a real boulder) keeps winning "best" forever, since nothing
+## here previously read that signal. `apply_blocked_objective_resolution`'s `switch`/`seek`
+## resolution actions cleared the *current* step objective on a genuine dead end, but with no
+## exclusion here the very next tick's re-sync just re-picked the identical instance, undoing the
+## resolution — confirmed live: a rabbit stuck oscillating at a fixed ~16-unit distance from a
+## boulder-blocked precise food memory for 200+ ticks with zero net progress.
 func consult_precise_food(
   creature_pos: Vector3,
   motor_v3: Dictionary,
   food_split: Dictionary,
   now_ms: int,
+  excluded_instance_ids: Dictionary = {},
 ) -> Dictionary:
   var inactive := {
     "active": false,
@@ -559,6 +569,8 @@ func consult_precise_food(
   var best_d_sq := INF
   for iid in _beliefs.keys():
     if live_ids.has(iid):
+      continue
+    if excluded_instance_ids.has(int(iid)):
       continue
     var row: Dictionary = _beliefs[iid]
     if row.get("goal_kind", &"") != _GkReg.GK_FIND_FOOD:
@@ -654,12 +666,15 @@ func consult_moving_prey_food(
 
 
 ## §8.3 coarse path-in-direction — bearing only, not GPS to [code]last_world_pos[/code].
+## [param excluded_instance_ids]: see `consult_precise_food`'s matching param (PHYSICS_SQUEEZE.md
+## §3 decision 31) — same passibility-fail exclusion, same rationale.
 func consult_coarse_bearing(
   creature_pos: Vector3,
   motor_v3: Dictionary,
   food_split: Dictionary,
   incumbent_instance_id: int,
   now_ms: int,
+  excluded_instance_ids: Dictionary = {},
 ) -> Dictionary:
   var inactive := {
     "active": false,
@@ -674,6 +689,8 @@ func consult_coarse_bearing(
   var candidates: Array = []
   for iid in _beliefs.keys():
     if live_ids.has(iid):
+      continue
+    if excluded_instance_ids.has(int(iid)):
       continue
     var row: Dictionary = _beliefs[iid]
     if row.get("goal_kind", &"") != _GkReg.GK_FIND_FOOD:

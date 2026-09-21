@@ -5,9 +5,9 @@ const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 
 func _init() -> void:
   _probe_creature(
-    "fox",
+    "wolf",
     "res://creature/templates/creature_carnivore_kinematic_3d.tscn",
-    "res://creature/species/fox_archetype.tres",
+    "res://creature/species/wolf_archetype.tres",
   )
   _probe_creature(
     "rabbit",

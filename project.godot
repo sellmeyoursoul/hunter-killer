@@ -94,6 +94,7 @@ camera_pan_right={
 3d_physics/layer_2="player"
 3d_physics/layer_4="mob"
 3d_physics/layer_8="plant_mob_block"
+3d_physics/layer_16="obstacle_query_ghost"
 
 [physics]
 

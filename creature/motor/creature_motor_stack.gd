@@ -17,6 +17,7 @@ const _ReplayCapture := preload("res://creature/motor/motor_planner_replay_captu
 const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd")
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
+const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
 
@@ -75,7 +76,12 @@ const _INVARIANT_POS_HISTORY_LEN := 30
 const _INVARIANT_FLEE_WP_HISTORY_LEN := 20
 const _INVARIANT_STALL_MIN_DISP := 0.02
 const _INVARIANT_SETTLE_TICKS := 45
-const _INVARIANT_MAX_AIRBORNE_TICKS := 45
+## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): was a flat const — now reads
+## `motor_invariant_max_airborne_ticks` from `_motor_v3` (see [method
+## MotorPlane.scale_creature_motor_v3_for_playfield]), which `configure()` terrain-scales per
+## playfield at spawn time. Fallback (45) matches the pre-decision-30 constant for any caller whose
+## `_motor_v3` predates that key (fixtures built by hand rather than through `configure()`).
+const _INVARIANT_MAX_AIRBORNE_TICKS_DEFAULT := 45
 ## Rolling per-tick trace kept for every invariant trip's diagnostic dump (2026-09-04, C10 dig-in):
 ## `_trip_invariant` hard-quits the instant it fires, so without this the only evidence of a rare
 ## flake like the airborne one was a single tick's snapshot — no view of how it got there. 90 ticks
@@ -336,10 +342,13 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
         "geometry_probe": _airborne_geometry_probe(pos),
       }
     _invariant_airborne_ticks += 1
-    if _invariant_airborne_ticks > _INVARIANT_MAX_AIRBORNE_TICKS:
+    var max_airborne_ticks := int(
+      _motor_v3.get("motor_invariant_max_airborne_ticks", _INVARIANT_MAX_AIRBORNE_TICKS_DEFAULT)
+    )
+    if _invariant_airborne_ticks > max_airborne_ticks:
       _trip_invariant(
         label,
-        "airborne/off-floor for %d+ ticks (stuck-under-geometry, C10)" % _INVARIANT_MAX_AIRBORNE_TICKS,
+        "airborne/off-floor for %d+ ticks (stuck-under-geometry, C10)" % max_airborne_ticks,
         {
           "pos": pos,
           "velocity": velocity,
@@ -1220,8 +1229,13 @@ func _maybe_observe_shelter_opportunistically() -> void:
     return
   var pos := _body.global_position
   var probe_radius := float(_motor_v3.get("shelter_enclosure_probe_radius", 2.5))
-  var blocker_mask := int(_motor_v3.get("shelter_enclosure_blocker_mask", 8))
-  var frac := _ShelterProbe.enclosure_fraction(space, pos, probe_radius, blocker_mask)
+  var blocker_mask := int(_motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
+  ## Stage A (decision 13/33): self-radius shape-cast sweep, same as the active nomination path.
+  var agent_r := maxf(0.1, float(_body.call(&"get_collision_capsule_radius"))) if _body.has_method(&"get_collision_capsule_radius") else 0.35
+  var agent_h := maxf(0.2, float(_body.call(&"get_collision_capsule_height"))) if _body.has_method(&"get_collision_capsule_height") else 1.2
+  var frac := _ShelterProbe.enclosure_fraction(
+    space, pos, probe_radius, blocker_mask, 1.0, _ShelterProbe.RING_SAMPLES, [], agent_r, agent_h,
+  )
   if frac < float(_motor_v3.get("shelter_enclosure_detect_threshold", 0.5)):
     return
   var iid := _GoalBelief.shelter_cell_instance_id(pos, _motor_v3)

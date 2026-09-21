@@ -36,7 +36,7 @@ static func default_playfield_spawn_params() -> Dictionary:
     "locked_layout_path": "",
     "creatures": [
       {"archetype": "res://creature/species/rabbit_archetype.tres", "count": 1, "player_controlled": true},
-      {"archetype": "res://creature/species/fox_archetype.tres", "count": 1},
+      {"archetype": "res://creature/species/wolf_archetype.tres", "count": 1},
     ],
   }
 
@@ -474,7 +474,12 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## must outlive food's short TTL/precise-radius since Flight needs them around later).
     "shelter_probe_lookahead_dist": 3.0,
     "shelter_enclosure_probe_radius": 2.5,
-    "shelter_enclosure_blocker_mask": 8,
+    ## PHYSICS_SQUEEZE.md §3 decision 29 (2026-09-20): was 8 (`plant_mob_block`'s old real physics
+    ## layer) — stale since decision 25 migrated `open_shrub_3d`'s `MobBlocker` onto the
+    ## movement-inert ghost/query-only layer (`GhostObstacleQuery.GHOST_LAYER_MASK`). Nothing in the
+    ## project has been on layer 8 since; a shrub-only shelter candidate silently read as 0%
+    ## enclosed regardless of how many shrubs actually surrounded it.
+    "shelter_enclosure_blocker_mask": 16,
     "shelter_enclosure_detect_threshold": 0.5,
     "shelter_enclosure_confirm_threshold": 0.65,
     "shelter_eval_confirm_cycles": 5,
@@ -553,6 +558,19 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "move_blend_max_error_deg": 60.0,
     ## Legacy ratio vs V2 ~400 u/s @ 60 Hz; planner scales per tick as [code]max_speed × delta × (epsilon / 6.67)[/code].
     "motor_stuck_move_epsilon": 1.25,
+    ## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): C10 airborne-invariant threshold
+    ## (`creature_motor_stack.gd`'s `_trip_invariant` "stuck-under-geometry" check). This flat
+    ## default is what a fixture/test with no real baked playfield keeps — `MotorPlane.
+    ## scale_creature_motor_v3_for_playfield` overwrites it per-creature at spawn with
+    ## `ticks_to_fall(playfield's real worst-case elevation drop) + motor_invariant_airborne_buffer_ticks`
+    ## whenever a real `PlayfieldGroundSampler` is available, so a genuine multi-meter terrain fall
+    ## isn't misread as a stuck-under-geometry bug on a tall playfield, while a flat/small one keeps
+    ## this tight default.
+    "motor_invariant_max_airborne_ticks": 45,
+    ## Buffer added on top of the computed worst-case fall duration above — deliberately reusing the
+    ## *original* flat threshold's value as "how much slower than the theoretical minimum a real,
+    ## non-bugged fall is allowed to be" rather than inventing a new number.
+    "motor_invariant_airborne_buffer_ticks": 45,
     ## Playfield edge hug band for explore boundary scan ([code]PlayfieldClamp[/code] margins).
     "playfield_hug_band": 14.0,
     ## Unscaled world margin for rim detection when scaled [code]playfield_hug_band[/code] is too tight.

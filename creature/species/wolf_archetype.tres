@@ -11,13 +11,13 @@ acceleration = 28.0
 
 [resource]
 script = ExtResource("1_def")
-species_id = &"fox"
-display_name = "Fox"
-asset_pack_root = "res://assets/creatures/fox"
+species_id = &"wolf"
+display_name = "Wolf"
+asset_pack_root = "res://assets/creatures/wolf"
 feeding_mode = 1
 caloric_needs = 120
-creature_size = 2.0
-collision_capsule_radius = 0.7
-collision_capsule_height = 2.2
+creature_size = 6.0
+collision_capsule_radius = 7.0
+collision_capsule_height = 15.3
 locomotion_profile = SubResource("sub_loco")
 body_scene = ExtResource("3_body_scene")

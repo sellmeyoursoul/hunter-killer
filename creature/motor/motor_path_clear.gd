@@ -4,6 +4,7 @@ class_name MotorPathClear
 
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _NavHint := preload("res://environment/nav_path_hint.gd")
+const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 
 
 ## True when LoS to [param objective] passes the V3 occlusion threshold.
@@ -20,12 +21,20 @@ static func has_clear_los(
   return bool(los.get("line_of_sight_clear", false))
 
 
-## True when nothing on [param collision_mask] intercepts the straight segment [param from]→
-## [param to] — gates contact actions (EAT, future combat) so a target separated by a solid the
-## acting body can't physically pass (e.g. a species-only `MobBlocker`) can't be interacted with
-## just because it's within straight-line range. Pass the *acting* body's own `collision_mask` so
-## the check matches whatever layers actually stop that body's movement — a herbivore and a
-## carnivore standing at the same spot can get different answers for the same solid.
+## True when nothing on [param collision_mask] — real *or* the movement-inert ghost/query-only
+## layer ([GhostObstacleQuery]) — intercepts the straight segment [param from]→[param to] — gates
+## contact actions (EAT, future combat) so a target separated by a solid the acting body can't
+## physically pass (e.g. a species-only `MobBlocker` refuge wall) can't be interacted with just
+## because it's within straight-line range. Pass the *acting* body's own `collision_mask` so the
+## real-layer half of the check matches whatever layers actually stop that body's movement — a
+## herbivore and a carnivore standing at the same spot can get different answers for the same
+## solid. PHYSICS_SQUEEZE.md §3 decision 25/28 (2026-09-18): object-scale obstacles like
+## `open_shrub_3d`'s `MobBlocker` were migrated onto the ghost layer (decision 16/25) so they're
+## deliberately excluded from every body's real `collision_mask` — this check's original
+## real-mask-only raycast went stale the moment that migration landed, since it could no longer see
+## the very obstacles it exists to catch (live repro: a wolf standing outside a shrub refuge ring
+## reached "through" the wall and ate the sheltered rabbit). Checking the ghost layer too restores
+## the original guarantee without re-adding real collision response to query-only obstacles.
 static func has_clear_contact_path(
   space_state: PhysicsDirectSpaceState3D,
   from: Vector3,
@@ -42,7 +51,14 @@ static func has_clear_contact_path(
   for rid in exclude_rids:
     if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
       query.exclude.append(rid as RID)
-  return space_state.intersect_ray(query).is_empty()
+  if not space_state.intersect_ray(query).is_empty():
+    return false
+  var ghost_query := PhysicsRayQueryParameters3D.create(from, to)
+  ghost_query.collision_mask = _GhostObstacleQuery.GHOST_LAYER_MASK
+  for rid in exclude_rids:
+    if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
+      ghost_query.exclude.append(rid as RID)
+  return space_state.intersect_ray(ghost_query).is_empty()
 
 
 ## Resolves step objective — navmesh first waypoint when path exists, else direct objective.

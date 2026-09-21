@@ -27,9 +27,10 @@ const _PerimeterBoulders := preload("res://environment/playfield_perimeter_bould
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _SpawnRandomizer := preload("res://environment/playfield_spawn_randomizer.gd")
 const _TerrainTestMainStub := preload("res://tests/terrain_test_main_stub.gd")
+const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
 const _KinematicBody3DScr := preload("res://creature/capabilities/creature_kinematic_body_3d.gd")
 const _RabbitArchetypeRes := preload("res://creature/species/rabbit_archetype.tres")
-const _FoxArchetypeRes := preload("res://creature/species/fox_archetype.tres")
+const _WolfArchetypeRes := preload("res://creature/species/wolf_archetype.tres")
 const _EnvMerge := preload("res://environment/environment_movement_impact.gd")
 const _Footprint := preload("res://environment/environment_footprint_sampler.gd")
 const _LoS := preload("res://creature/motor/line_of_sight.gd")
@@ -39,6 +40,8 @@ const _ThreatSampleScr := preload("res://creature/motor/threat_sample.gd")
 const _MotorAction := preload("res://creature/motor/motor_action.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
+const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
+const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _MotorCadence := preload("res://creature/motor/motor_consideration_cadence.gd")
@@ -87,7 +90,7 @@ func _instantiate_carnivore_root() -> Node3D:
   var scene: PackedScene = load(_Carnivore3DScenePath) as PackedScene
   _assert(scene != null, "carnivore 3D template loads")
   var creature_root := scene.instantiate() as Node3D
-  creature_root.set("definition", _FoxArchetypeRes)
+  creature_root.set("definition", _WolfArchetypeRes)
   return creature_root
 
 func _setup_herbivore_body(body: CharacterBody3D) -> void:
@@ -141,6 +144,8 @@ func _run_all() -> void:
   _test_creature_motor_v3_merge_defaults()
   _test_creature_motor_v3_explore_inventory_defaults()
   _test_creature_pack_motor_overlays()
+  _test_wolf_archetype_scaled_3x_relative_to_fox()
+  await _test_wolf_body_collision_shape_not_offset_from_origin()
   _test_creature_motor_v3_pack_overlays()
   _test_creature_motor_v3_playfield_distance_scale()
   _test_locomotion_executor_turn_facing()
@@ -150,6 +155,8 @@ func _run_all() -> void:
   _test_motor_planner_overshoot_retains_locale_no_progress()
   _test_motor_planner_eat_uses_ultimate_not_step_goal()
   await _test_motor_planner_eat_blocked_by_solid_between()
+  await _test_motor_planner_eat_blocked_by_ghost_layer_solid_between()
+  await _test_creature_kinematic_body_real_mask_excludes_retired_diet_role_layer()
   _test_motor_planner_eat_orbit_break_after_revolutions()
   _test_motor_planner_eat_orbit_break_scales_with_turn_rate()
   await _test_motor_locale_approach_no_oscillation_smoke()
@@ -157,9 +164,11 @@ func _run_all() -> void:
   await _test_motor_pursuit_pinch_detour_smoke()
   _test_motor_planner_pursuit_detour_latch_mints_on_blocked_reeval()
   _test_motor_planner_pursuit_detour_sticky_live_refresh()
+  _test_motor_planner_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_pursuit_detour_skips_reeval_while_latched()
   _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
+  _test_motor_planner_memory_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_memory_pursuit_detour_gives_up_after_max_escalations()
   _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours()
@@ -260,9 +269,13 @@ func _run_all() -> void:
   _test_motor_explore_seek_mint_sets_explore_source()
   _test_motor_planner_find_food_understocked_sated_explore_first()
   _test_motor_planner_find_food_stocked_sated_memory_first()
+  _test_consult_precise_food_excludes_passibility_failed_instance()
+  _test_consult_coarse_bearing_excludes_passibility_failed_instance()
+  _test_sync_food_memory_objective_excludes_passibility_failed_precise_food()
   _test_motor_planner_select_action_returns_rest_for_goal_rest()
   _test_motor_planner_shelter_no_candidate_explore()
   await _test_shelter_enclosure_probe_ring_detects_blockers()
+  await _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap()
   await _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
@@ -363,6 +376,7 @@ func _run_all() -> void:
   await _test_shrub_mesh_collision_bake()
   await _test_creature_capsule_fits_visual_mesh()
   await _test_creature_3d_predation_contact()
+  _test_eat_range_scales_with_predator_body_size()
   _test_playfield_clamp()
   _test_playfield_bounds_3d_collision_only()
   _test_boulder_obstacle_collision_bake()
@@ -373,6 +387,10 @@ func _run_all() -> void:
   _test_spawn_randomizer_layout_lock_round_trip()
   await _test_playfield_prop_grounding_on_thick_floor()
   await _test_ground_sampler_center_lower_than_rim()
+  _test_fall_physics_ticks_to_fall_matches_kinematics()
+  await _test_ground_sampler_max_elevation_range_matches_real_terrain()
+  await _test_motor_plane_scales_invariant_airborne_ticks_from_terrain()
+  _test_motor_plane_leaves_invariant_ticks_unscaled_without_ground_sampler()
   await _test_duel_spawn_picker_avoids_depression()
   await _test_duel_spawn_picker_randomized_avoids_props()
   _test_creature_spawn_floor_settle()
@@ -399,6 +417,16 @@ func _run_all() -> void:
   _test_duel_spawn_facing_variance()
   _test_bundled_inference_helpers()
   _test_creature_kinematic_playfield_clamp_after_move()
+  await _test_ghost_obstacle_query_open_shrub_size_gated()
+  await _test_route_scanned_endpoint_truncates_blocked_target()
+  await _test_route_plausibility_scan_truncates_blocked_path()
+  await _test_apply_route_plausibility_scan_truncates_probe()
+  await _test_ghost_obstacle_query_escaping_overlap()
+  await _test_clamp_velocity_to_ghost_fit_escape_hatch()
+  await _test_locomotion_executor_reports_ghost_layer_block()
+  await _test_bake_playfield_navmesh_mask_excludes_ghost_layer()
+  await _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit()
+  await _test_shelter_enclosure_probe_detects_real_refuge_ring()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -621,9 +649,9 @@ func _test_creature_3d_predation_contact() -> void:
     "res://creature/templates/creature_carnivore_kinematic_3d.tscn",
   ) as PackedScene
   var rabbit_def: Resource = load("res://creature/species/rabbit_archetype.tres") as Resource
-  var fox_def: Resource = load("res://creature/species/fox_archetype.tres") as Resource
+  var wolf_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
   _assert(
-    herb_scene != null and carn_scene != null and rabbit_def != null and fox_def != null,
+    herb_scene != null and carn_scene != null and rabbit_def != null and wolf_def != null,
     "3D duel scenes and archetypes load for predation contact",
   )
   var floor_body := StaticBody3D.new()
@@ -639,7 +667,7 @@ func _test_creature_3d_predation_contact() -> void:
   var herb_root := herb_scene.instantiate() as Node3D
   herb_root.set("definition", rabbit_def)
   var carn_root := carn_scene.instantiate() as Node3D
-  carn_root.set("definition", fox_def)
+  carn_root.set("definition", wolf_def)
   var prey_body := herb_root.get_node("Body") as CharacterBody3D
   var pred_body := carn_root.get_node("Body") as CharacterBody3D
   prey_body.add_to_group(&"prey")
@@ -688,6 +716,44 @@ func _test_creature_3d_predation_contact() -> void:
   herb_root.queue_free()
   carn_root.queue_free()
   floor_body.queue_free()
+
+
+## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18): `eat_action_max_distance` is a
+## fixed 5m world-meter constant, measured center-to-center — fine while every predator's own body
+## was small relative to it, but a wolf's own live capsule radius (~7m post-decision-14 scaling)
+## now exceeds that flat constant outright. Live repro: 3 wolves visibly overlapping a rabbit,
+## never eating it. Fixed by adding each body's own live capsule radius as a reach bonus
+## (`_eat_reach_radius_bonus`) so the gate means "reach beyond simple contact," not "reach from body
+## center." This test proves both halves: the old flat gate really would have rejected a
+## wolf-vs-rabbit contact distance, and the fixed gate accepts it.
+func _test_eat_range_scales_with_predator_body_size() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var wolf := _spawn_carnivore_body(main, Vector3.ZERO)
+  var rabbit := _spawn_herbivore_body(main, Vector3.ZERO)
+  await physics_frame
+  var wolf_r: float = wolf.get_collision_capsule_radius()
+  var rabbit_r: float = rabbit.get_collision_capsule_radius()
+  # Capsules just touching — the closest a wolf and rabbit body visually "overlap" before this.
+  rabbit.global_position = Vector3(wolf_r + rabbit_r - 0.1, 1.0, 0.0)
+  wolf.global_position = Vector3.ZERO
+  var motor_v3 := _motor_v3_test_params()
+  var flat_max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var contact_dist := wolf.global_position.distance_to(rabbit.global_position)
+  _assert(
+    contact_dist > flat_max_dist,
+    "sanity check: wolf-vs-rabbit capsule contact distance exceeds the old flat eat range (%.2f > %.2f)"
+    % [contact_dist, flat_max_dist],
+  )
+  var within_range: bool = (_MotorPlanner as GDScript).call(
+    "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
+  )
+  _assert(
+    within_range,
+    "a wolf-scale predator's own body size extends its eat range past simple flat contact distance",
+  )
+  main.queue_free()
+
 
 func _test_creature_3d_template_scenes_load() -> void:
   _assert(ResourceLoader.exists("res://creature/templates/creature_herbivore_kinematic_3d.tscn"), "herbivore 3d template exists")
@@ -852,14 +918,85 @@ func _test_creature_pack_motor_overlays() -> void:
     str(rabbit_def.get("asset_pack_root")) == "res://assets/creatures/rabbit",
     "rabbit archetype points at rabbit pack",
   )
-  var fox_def: Resource = load("res://creature/species/fox_archetype.tres") as Resource
-  _assert(fox_def != null, "fox archetype loads")
+  var wolf_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
+  _assert(wolf_def != null, "wolf archetype loads")
   _assert(
-    str(fox_def.get("asset_pack_root")) == "res://assets/creatures/fox",
-    "fox archetype points at fox pack",
+    str(wolf_def.get("asset_pack_root")) == "res://assets/creatures/wolf",
+    "wolf archetype points at wolf pack",
   )
   _assert(str(rabbit_def.get("display_name")) == "Rabbit", "rabbit display_name for HUD")
-  _assert(str(fox_def.get("display_name")) == "Fox", "fox display_name for HUD")
+  _assert(str(wolf_def.get("display_name")) == "Wolf", "wolf display_name for HUD")
+
+## PHYSICS_SQUEEZE.md §3 decision 14 / §9 slice 4 (2026-09-18): the wolf archetype needs a genuine
+## size gap over fox to be a usable squeeze-mechanic test subject — model geometry and declared
+## profile both scaled ~3x. `wolf_3d.tscn` wraps `wolf.blend` (still the placeholder mesh shared
+## with fox at the raw geometry level) in a `Transform3D` scaled 3x, so the mesh-AABB-derived live
+## capsule radius (`apply_capsule_footprint_from_visual`) comes out ~3x fox's, not just the
+## declared `.tres` fallback fields used when no visual is mounted.
+func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
+  var wolf_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
+  _assert(wolf_def != null, "wolf archetype loads")
+  _assert(
+    float(wolf_def.get("creature_size")) > 2.5 * 2.0,
+    "wolf creature_size is roughly 3x fox's 2.0",
+  )
+  _assert(
+    float(wolf_def.get("collision_capsule_radius")) > 2.5 * 0.7,
+    "wolf declared capsule_radius is roughly 3x fox's declared 0.7",
+  )
+  var fox_aabb := _StaticObstacleCollision.world_mesh_aabb(
+    (load("res://assets/creatures/fox/fox.blend") as PackedScene).instantiate(),
+  )
+  var wolf_aabb := _StaticObstacleCollision.world_mesh_aabb(
+    (load("res://assets/creatures/wolf/wolf_3d.tscn") as PackedScene).instantiate(),
+  )
+  _assert(
+    bool(fox_aabb.get("valid", false)) and bool(wolf_aabb.get("valid", false)),
+    "fox and wolf visual meshes produce valid AABBs",
+  )
+  var ratio := float(wolf_aabb.get("xz_radius", 0.0)) / maxf(float(fox_aabb.get("xz_radius", 1.0)), 1e-6)
+  _assert(
+    ratio > 2.9 and ratio < 3.1,
+    "wolf_3d.tscn's mesh footprint is ~3x fox's raw mesh footprint (got %.3f)" % ratio,
+  )
+  # PHYSICS_SQUEEZE.md §3 decision 25 follow-up (2026-09-18): `wolf.blend`'s own mesh pivot isn't
+  # at its visual center (raw local AABB center ~(0.8, 0.95, 4.76), not origin) — the same class of
+  # off-center-pivot defect found on `open_shrub_3d` (decision 25 Tier 2's cluster-tuning fix), just
+  # smaller in absolute terms at fox scale. `wolf_3d.tscn`'s 3x scale wrapper tripled that offset to
+  # ~14 units in Z, which `apply_capsule_footprint_from_visual()` then read as the real capsule's
+  # center — badly decoupling the body's actual collision shape from `global_position` and driving
+  # a live spawn-placement bug (wolves spawning off-floor and free-falling under gravity for dozens
+  # of ticks, confirmed via manual playtest). Fixed by compensating the wrapper's own translation so
+  # the *scaled* mesh's center lands back at the wrapper's own origin, same fix shape as the shrub.
+  var wolf_center: Vector3 = wolf_aabb.get("center", Vector3.ONE)
+  _assert(
+    wolf_center.length() < 0.1,
+    "wolf_3d.tscn's scaled mesh is centered on its own node origin, not offset by the raw mesh's off-center pivot (got %s)"
+    % str(wolf_center),
+  )
+
+
+## End-to-end sibling of the AABB-centering check above: spawns a real wolf through the full
+## `CreatureRoot3D` mount pipeline and confirms `apply_capsule_footprint_from_visual()`'s resulting
+## `CollisionShape3D.position` — the thing that actually decoupled the wolf's real physics extent
+## from `global_position` and drove the live spawn-placement/free-fall bug — stays near zero, not
+## the ~14-unit Z offset the uncompensated wrapper produced.
+func _test_wolf_body_collision_shape_not_offset_from_origin() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var wolf := _spawn_carnivore_body(main, Vector3.ZERO)
+  await physics_frame
+  var col := wolf.get_node_or_null("CollisionShape3D") as CollisionShape3D
+  _assert(col != null, "wolf body has a CollisionShape3D")
+  if col != null:
+    _assert(
+      col.position.length() < 0.5,
+      "wolf's real CollisionShape3D sits near the body's own origin, not offset by the mesh's pivot (got %s)"
+      % str(col.position),
+    )
+  main.queue_free()
+  await process_frame
+
 
 func _test_creature_motor_v3_merge_defaults() -> void:
   var base := _Merge.default_root()
@@ -1559,6 +1696,94 @@ func _test_motor_planner_find_food_stocked_sated_memory_first() -> void:
   main.queue_free()
 
 
+## PHYSICS_SQUEEZE.md §3 decision 31 (2026-09-21): live repro was a rabbit stuck oscillating at a
+## fixed ~16-unit distance from a boulder-blocked precise food memory for 200+ ticks with zero net
+## progress — `apply_blocked_objective_resolution`'s switch/seek action cleared the step objective
+## on a genuine dead end, but `consult_precise_food` had no way to exclude that exact instance, so
+## the very next tick's re-sync just re-picked it right back. Direct API check: with no exclusion,
+## the nearer (blocked) instance wins as before; with it excluded (mirroring
+## `_food_pursuit_exclusions`'s already-shipped set for the live-food branch), the farther one wins.
+func _test_consult_precise_food_excludes_passibility_failed_instance() -> void:
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_precise_food_belief(8301, Vector3(0.0, 0.0, -10.0), now_ms)
+  adapter.seed_precise_food_belief(8302, Vector3(0.0, 0.0, -40.0), now_ms)
+  var motor_p := _motor_v3_test_params()
+  var picked_no_exclusion: Dictionary = adapter.consult_precise_food(Vector3.ZERO, motor_p, {}, now_ms)
+  _assert(
+    int(picked_no_exclusion.get("instance_id", 0)) == 8301,
+    "with no exclusion, the nearer instance wins (baseline, unchanged behavior)",
+  )
+  var picked_excluded: Dictionary = adapter.consult_precise_food(
+    Vector3.ZERO, motor_p, {}, now_ms, {8301: true}
+  )
+  _assert(
+    int(picked_excluded.get("instance_id", 0)) == 8302,
+    "excluding the nearer instance falls through to the next-best one",
+  )
+  var picked_all_excluded: Dictionary = adapter.consult_precise_food(
+    Vector3.ZERO, motor_p, {}, now_ms, {8301: true, 8302: true}
+  )
+  _assert(
+    not bool(picked_all_excluded.get("active", false)),
+    "excluding every candidate returns inactive rather than falling back to an excluded one",
+  )
+
+
+## Coarse sibling of the test directly above — same new `excluded_instance_ids` param, same rationale.
+func _test_consult_coarse_bearing_excludes_passibility_failed_instance() -> void:
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_coarse_food_belief(8311, Vector3(0.0, 0.0, -10.0), now_ms)
+  adapter.seed_coarse_food_belief(8312, Vector3(0.0, 0.0, -40.0), now_ms)
+  var motor_p := _motor_v3_test_params()
+  var picked_no_exclusion: Dictionary = adapter.consult_coarse_bearing(
+    Vector3.ZERO, motor_p, {}, 0, now_ms
+  )
+  _assert(
+    int(picked_no_exclusion.get("instance_id", 0)) == 8311,
+    "with no exclusion, the nearer coarse instance wins (baseline, unchanged behavior)",
+  )
+  var picked_excluded: Dictionary = adapter.consult_coarse_bearing(
+    Vector3.ZERO, motor_p, {}, 0, now_ms, {8311: true}
+  )
+  _assert(
+    int(picked_excluded.get("instance_id", 0)) == 8312,
+    "excluding the nearer coarse instance falls through to the next-best one",
+  )
+
+
+## End-to-end wiring check, closest to the actual live bug: once a precise food memory's
+## `passibility_fail_count` reaches `passibility_fail_switch_threshold` (the exact signal
+## `apply_blocked_objective_resolution` already writes on a genuine dead end),
+## `_sync_food_memory_objective` must stop re-picking that instance — with only one known food
+## memory and it excluded, this returns `false` (no active objective), letting the caller fall
+## through to generic explore instead of looping forever on an unreachable target.
+func _test_sync_food_memory_objective_excludes_passibility_failed_precise_food() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3.ZERO)
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  adapter.seed_precise_food_belief(8321, Vector3(0.0, 0.0, -10.0), now_ms)
+  var motor_v3 := _motor_v3_test_params()
+  var switch_thresh := int(motor_v3.get("passibility_fail_switch_threshold", 2))
+  for i in switch_thresh:
+    adapter.increment_passibility_fail(8321, now_ms)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 1.0)
+  var synced: bool = (_MotorPlanner as GDScript).call(
+    "_sync_food_memory_objective", ctx, state, body.global_position, motor_v3, RID(), 0.5,
+  )
+  _assert(not synced, "a fully passibility-failed precise food memory is not re-synced")
+  _assert(
+    int(state.get("step_instance_id", 0)) != 8321,
+    "the failed instance is not bound as the step objective",
+  )
+  main.queue_free()
+
+
 ## CLEANUP (2026-08-26): `select_action` previously had no branch for `GOAL_REST` at all — a
 ## winning REST cycle fell through to the generic `_at_arrival` -> `STAY` case, so `MotorAction.REST`
 ## (enum, action-name string, `rest_baseline_multiplier` calorie handling) was unreachable despite
@@ -1626,9 +1851,12 @@ func _test_motor_planner_shelter_no_candidate_explore() -> void:
   main.queue_free()
 
 
-## Builds a ring of collision_layer=8 (plant_mob_block) StaticBody3D boxes around [param center] —
-## same construction as the C18 EAT-blocker regression test, standing in for `open_shrub_3d`'s
-## `MobBlocker` refuge ring without needing the full scene.
+## Builds a ring of ghost/query-only-layer (`GhostObstacleQuery.GHOST_LAYER_MASK`) StaticBody3D
+## boxes around [param center], standing in for `open_shrub_3d`'s `MobBlocker` refuge ring without
+## needing the full scene. PHYSICS_SQUEEZE.md §3 decision 29 (2026-09-20): was collision_layer=8
+## (plant_mob_block's old real physics layer, same construction as the C18 EAT-blocker test) — moved
+## to the ghost layer to match where real shrub blockers actually live since decision 25's migration
+## and the live default `shelter_enclosure_blocker_mask` (also decision 29).
 func _shelter_test_blocker_ring(
   main: Node3D, center: Vector3, radius: float, count: int = 12,
 ) -> void:
@@ -1644,7 +1872,8 @@ func _shelter_test_blocker_ring(
     var col := CollisionShape3D.new()
     col.shape = box
     wall.add_child(col)
-    wall.collision_layer = 8
+    wall.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+    wall.collision_mask = 0
     main.add_child(wall)
     wall.global_position = center + Vector3(cos(ang), 1.0, sin(ang)) * radius
 
@@ -1656,11 +1885,50 @@ func _test_shelter_enclosure_probe_ring_detects_blockers() -> void:
   _shelter_test_blocker_ring(main, center, 2.0)
   await physics_frame
   var space := main.get_world_3d().direct_space_state
-  var frac_inside := _ShelterProbe.enclosure_fraction(space, center, 1.8, 8)
-  _assert(frac_inside >= 0.75, "ring of layer-8 blockers reads as highly enclosed (got %.2f)" % frac_inside)
+  var mask := _GhostObstacleQuery.GHOST_LAYER_MASK
+  var frac_inside := _ShelterProbe.enclosure_fraction(space, center, 1.8, mask)
+  _assert(frac_inside >= 0.75, "ring of ghost-layer blockers reads as highly enclosed (got %.2f)" % frac_inside)
   var open_point := Vector3(-50.0, 1.0, -50.0)
-  var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, 8)
+  var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, mask)
   _assert(is_equal_approx(frac_open, 0.0), "open point with no nearby geometry reads as unenclosed")
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): a bare ray probing a gap that's real geometry
+## but narrower than a body's own radius slips straight through and misreports "open" — exactly the
+## blind spot decision 25 found in the rabbit's own per-step passability experience. Builds two
+## walls flanking a 3.0-wide doorway centered on the sample-0 bearing (+X) and probes it with
+## `sample_count=1` so the single sample lands exactly on the gap: a zero-width ray (agent_radius
+## omitted) always reads it as open regardless of body size; a rabbit-scale capsule (radius well
+## under half the gap) also clears it; a wolf-scale capsule (radius well over half the gap) can't
+## fit and must read the same bearing as blocked.
+func _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var center := Vector3(30.0, 1.0, 30.0)
+  var probe_radius := 5.0
+  var gap_half_width := 1.5
+  for side in [-1.0, 1.0]:
+    var wall := StaticBody3D.new()
+    var box := BoxShape3D.new()
+    box.size = Vector3(0.6, 2.0, 4.0)
+    var col := CollisionShape3D.new()
+    col.shape = box
+    wall.add_child(col)
+    wall.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+    wall.collision_mask = 0
+    main.add_child(wall)
+    wall.global_position = center + Vector3(probe_radius, 1.0, side * (gap_half_width + 2.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var mask := _GhostObstacleQuery.GHOST_LAYER_MASK
+  var frac_ray := _ShelterProbe.enclosure_fraction(space, center, probe_radius, mask, 1.0, 1)
+  _assert(is_equal_approx(frac_ray, 0.0), "zero-width ray slips through the doorway regardless of body size")
+  var frac_rabbit := _ShelterProbe.enclosure_fraction(space, center, probe_radius, mask, 1.0, 1, [], 0.6, 1.2)
+  _assert(is_equal_approx(frac_rabbit, 0.0), "rabbit-scale capsule (radius < half the gap) clears the doorway")
+  var frac_wolf := _ShelterProbe.enclosure_fraction(space, center, probe_radius, mask, 1.0, 1, [], 2.5, 3.0)
+  _assert(is_equal_approx(frac_wolf, 1.0), "wolf-scale capsule (radius > half the gap) is blocked at the doorway a ray missed")
   main.queue_free()
   await process_frame
 
@@ -1800,15 +2068,22 @@ func _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient() -> voi
   var motor_v3 := _motor_v3_test_params()
   motor_v3["shelter_eval_confirm_cycles"] = 3
   motor_v3["shelter_eval_max_cycles"] = 4
-  ## Single blocker, not a ring — well under `shelter_enclosure_confirm_threshold`.
+  ## Single blocker, not a ring — well under `shelter_enclosure_confirm_threshold`. Ghost layer
+  ## (decision 29/33), matching the live `shelter_enclosure_blocker_mask` default. Placed at 2.3
+  ## (decision 33's self-radius shape-cast sweep now checks the occupant's own live capsule —
+  ## a live herbivore body's real radius is ~1.7, so the wall needs enough clearance from `anchor`
+  ## that the probing capsule doesn't already overlap it at the sweep's own origin) but still within
+  ## `shelter_enclosure_probe_radius`'s default 2.5, so exactly one of the 8 sampled bearings still
+  ## registers blocked.
   var col := CollisionShape3D.new()
   col.shape = BoxShape3D.new()
   (col.shape as BoxShape3D).size = Vector3(0.6, 2.0, 0.6)
   var wall := StaticBody3D.new()
   wall.add_child(col)
-  wall.collision_layer = 8
+  wall.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  wall.collision_mask = 0
   main.add_child(wall)
-  wall.global_position = anchor + Vector3(2.0, 0.0, 0.0)
+  wall.global_position = anchor + Vector3(2.3, 0.0, 0.0)
   await physics_frame
   var state := _MotorPlanner.new_state()
   state["step_source"] = &"precise"
@@ -4181,9 +4456,14 @@ func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
   main.queue_free()
 
 
-## C18 — a solid on the eater's own collision_mask between it and the target (e.g. a species-only
-## `MobBlocker` refuge wall the eater physically can't pass) must block EAT even when the target is
-## within straight-line eat_action_max_distance and facing is aligned.
+## C18 — a solid on the eater's own collision_mask between it and the target must block EAT even
+## when the target is within straight-line eat_action_max_distance and facing is aligned.
+## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): uses a real terrain-layer (1) blocker, not the
+## old species-only layer 8 — that diet-role mask bit was retired (nothing has been on it since
+## decision 25's ghost-layer migration; decision 28's ghost-layer raycast already covers the
+## `MobBlocker`-style case this test originally modeled, see the sibling test below). Layer 1 is
+## still in every creature's real `collision_mask`, so this keeps exercising the real-mask half of
+## `has_clear_contact_path` against something that's actually still solid to it.
 func _test_motor_planner_eat_blocked_by_solid_between() -> void:
   var motor_v3 := _motor_v3_test_params()
   var main := Node3D.new()
@@ -4224,16 +4504,15 @@ func _test_motor_planner_eat_blocked_by_solid_between() -> void:
   _assert(can_eat_clear, "C18: _can_eat_now true in range/facing with no blocker present")
   var act_clear := _MotorPlanner.select_action(ctx, state)
   _assert(act_clear == _MotorAction.EAT, "C18: select_action returns EAT with no blocker present")
-  ## Species-only blocker layer (8, in the carnivore's collision_mask=9 per
-  ## CreatureKinematicBody3D._apply_physics_layers) standing directly on the path to the target —
-  ## mirrors main_3d.gd's shrub-refuge `MobBlocker` (RT4).
+  ## Real terrain-layer (1) blocker standing directly on the path to the target — still in every
+  ## creature's real `collision_mask` post decision 33, unlike the retired diet-role layer 8.
   var wall := StaticBody3D.new()
   var box := BoxShape3D.new()
   box.size = Vector3(0.3, 2.0, 2.0)
   var col := CollisionShape3D.new()
   col.shape = box
   wall.add_child(col)
-  wall.collision_layer = 8
+  wall.collision_layer = 1
   main.add_child(wall)
   wall.global_position = Vector3(eat_max * 0.25, 2.0, 0.0)
   await physics_frame
@@ -4244,6 +4523,105 @@ func _test_motor_planner_eat_blocked_by_solid_between() -> void:
   _assert(not can_eat_blocked, "C18: _can_eat_now false when a solid blocks the eater's own mask")
   var act_blocked := _MotorPlanner.select_action(ctx, state)
   _assert(act_blocked != _MotorAction.EAT, "C18: select_action does not return EAT through a solid blocker")
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 28 (2026-09-18): C18's own wall test above uses a real terrain
+## layer (1) blocker, which stays in every creature's real `collision_mask` — it never exercised
+## the actual live bug. `open_shrub_3d`'s `MobBlocker` was migrated onto the movement-inert ghost/query-only
+## layer (`GhostObstacleQuery.GHOST_LAYER_MASK`, 16) as part of this same slice's Tier 1/2 work, and
+## since that layer is deliberately excluded from every body's real `collision_mask`, C18's original
+## raycast (`body.collision_mask` only) went stale the moment that migration landed — a wolf outside
+## a shrub refuge ring could "eat through" it. Live repro found via manual playtest: 3 wolves and a
+## rabbit sheltering in the debug refuge cluster (decision 25 Tier 2), one wolf reached the rabbit
+## from outside the ring. This mirrors that scenario with a ghost-layer wall directly on the path.
+func _test_motor_planner_eat_blocked_by_ghost_layer_solid_between() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = ultimate
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = 636364
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": false,
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "delta": delta,
+  }
+  var can_eat_clear: bool = (_MotorPlanner as GDScript).call(
+    "_can_eat_now", body, ultimate, state, motor_v3, delta, ctx
+  )
+  _assert(can_eat_clear, "ghost-layer C18: _can_eat_now true in range/facing with no blocker present")
+  # `open_shrub_3d`'s own MobBlocker shape: a StaticBody3D on the ghost layer (16), no real
+  # collision response (collision_mask=0), same as the live shrub refuge wall.
+  var ghost_wall := StaticBody3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(0.3, 2.0, 2.0)
+  var col := CollisionShape3D.new()
+  col.shape = box
+  ghost_wall.add_child(col)
+  ghost_wall.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  ghost_wall.collision_mask = 0
+  main.add_child(ghost_wall)
+  ghost_wall.global_position = Vector3(eat_max * 0.25, 2.0, 0.0)
+  await physics_frame
+  state["eat_orbit_turn_deg_accumulated"] = 0.0
+  var can_eat_blocked: bool = (_MotorPlanner as GDScript).call(
+    "_can_eat_now", body, ultimate, state, motor_v3, delta, ctx
+  )
+  _assert(
+    not can_eat_blocked,
+    "ghost-layer C18: _can_eat_now false when a ghost-layer solid (e.g. a shrub refuge MobBlocker) "
+    + "blocks the straight-line path, even though it's off the eater's own real collision_mask",
+  )
+  var act_blocked := _MotorPlanner.select_action(ctx, state)
+  _assert(
+    act_blocked != _MotorAction.EAT,
+    "ghost-layer C18: select_action does not return EAT through a ghost-layer blocker",
+  )
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): the carnivore's diet-role `+8` real
+## `collision_mask` bit is retired now that nothing is on real layer 8 and decision 28's ghost-layer
+## raycast already covers the case that bit used to gate. Both diet roles share the same real mask
+## (terrain only) — real-physics solidity no longer distinguishes predator/prey.
+func _test_creature_kinematic_body_real_mask_excludes_retired_diet_role_layer() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var herbivore := _spawn_herbivore_body(main, Vector3.ZERO)
+  var carnivore := _spawn_carnivore_body(main, Vector3(5.0, 0.0, 0.0))
+  _assert(
+    carnivore.collision_mask == 1,
+    "carnivore real collision_mask no longer includes the retired diet-role layer 8 (got %d)" % carnivore.collision_mask,
+  )
+  _assert(
+    herbivore.collision_mask == 1,
+    "herbivore real collision_mask unchanged, terrain only (got %d)" % herbivore.collision_mask,
+  )
   main.queue_free()
   await process_frame
 
@@ -4538,6 +4916,13 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
   var saw_seek_while_live := false
   var prey_base_z := prey_pos.z
   var stall := _MotorStallDetector.Tracker.new(30, 0.03)
+  # PHYSICS_SQUEEZE.md §3 decision 25 follow-up (2026-09-18): once the wolf-scale predator's own
+  # (now much larger) live capsule radius correctly extends its eat reach (`_eat_reach_radius_bonus`
+  # in motor_planner.gd), this fixture's synthetic prey (a bare instance id with no real body behind
+  # it, so `_try_complete_eat` no-ops forever) gets caught and the predator legitimately settles into
+  # EAT well before the 300-tick budget — that's success, not a stall, so the loop stops there rather
+  # than accumulating 100+ ticks of "already caught it" as if it were a trailing stall.
+  var eat_reached := false
   for tick_i in 300:
     # Rabbit wanders in place (bounded side-to-side drift) rather than sitting frozen — the
     # pinch detour must keep tracking a live, moving target, not just a static waypoint.
@@ -4560,12 +4945,18 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
     if stack.get_planner_step_source() == &"live":
       min_dist = minf(min_dist, body.global_position.distance_to(prey_pos))
       stall.sample(body.global_position)
+    if act == _MotorAction.EAT:
+      eat_reached = true
+      break
   var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
   _assert(
     min_dist < start_dist - 0.15 or min_dist <= eat_dist * 2.5,
     "pursuit pinch smoke: closes on moving prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
   )
-  _assert(turn_count >= 1, "pursuit pinch smoke: at least one align/detour turn")
+  _assert(
+    turn_count >= 1 or eat_reached,
+    "pursuit pinch smoke: at least one align/detour turn (or the chase concluded in EAT)",
+  )
   _assert(move_count >= 4, "pursuit pinch smoke: sustained forward progress (moves=%d)" % move_count)
   _assert(
     stack.get_planner_step_source() == &"live",
@@ -4574,7 +4965,7 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
   _assert(not saw_seek_while_live, "pursuit pinch smoke: no §9 seek while live prey visible")
   _assert(max_cblk <= 6, "pursuit pinch smoke: no blocked streak runaway (max_cblk=%d)" % max_cblk)
   _assert(
-    not stall.stalled(60),
+    eat_reached or not stall.stalled(60),
     "pursuit pinch smoke: no trailing-window stall/orbit while chasing moving prey (max_stall_streak=%d)"
     % stall.max_stall_streak,
   )
@@ -4679,6 +5070,67 @@ func _test_motor_planner_pursuit_detour_sticky_live_refresh() -> void:
   _assert(
     int(state.get("pursuit_detour_ticks_remaining", 0)) == 19,
     "sticky detour: maintain path decrements latch ticks",
+  )
+  main.queue_free()
+
+
+## PHYSICS_SQUEEZE.md §3 decision 32 (2026-09-21): live repro was a rabbit reaching within
+## centimeters of a frozen pursuit-detour waypoint (itself still ~14 units from the actual live-food
+## ultimate) and then visibly circling in place for the rest of the latch's ~32-tick duration,
+## since nothing here used to check arrival before re-holding the same frozen point. Sibling of the
+## sticky-refresh test above — same fixture shape, except the detour waypoint is placed essentially
+## on top of the body instead of 8 units away, so arrival should release the latch immediately
+## instead of holding it for the tick countdown regardless.
+func _test_motor_planner_pursuit_detour_releases_latch_on_arrival() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var detour_wp := Vector3(0.05, 1.0, 0.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
+  state["pursuit_detour_ticks_remaining"] = 20
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = 88070
+  state["prey_engagement_instance_id"] = 88070
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88070),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 3,
+    "delta": 1.0 / 60.0,
+    "refresh_step_objective": true,
+  }
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    motor_v3,
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    not bool(state.get("pursuit_detour_waypoint_set", false)),
+    "arriving at the frozen detour waypoint releases the latch instead of holding it for the full duration",
+  )
+  _assert(
+    not state.get("step_goal", Vector3.ZERO).is_equal_approx(detour_wp),
+    "released latch re-derives toward the live target instead of re-freezing the same already-reached point",
   )
   main.queue_free()
 
@@ -4829,6 +5281,54 @@ func _test_motor_planner_live_pursuit_blocked_seek_suppressed() -> void:
       )
     ),
     "ghost-only prey (no live ready food) does not suppress §9",
+  )
+  main.queue_free()
+
+
+## PHYSICS_SQUEEZE.md §3 decision 32 (2026-09-21): memory-pursuit sibling of
+## `_test_motor_planner_pursuit_detour_releases_latch_on_arrival` — same missing-arrival-check gap,
+## same fix, different step_source. Places the frozen detour waypoint essentially on top of the
+## body instead of the usual 8 units away, so arrival should release the latch immediately.
+func _test_motor_planner_memory_pursuit_detour_releases_latch_on_arrival() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var detour_wp := Vector3(0.05, 1.0, 0.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_source"] = &"memory_moving"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["memory_pursuit_detour_waypoint"] = detour_wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["memory_pursuit_detour_ticks_remaining"] = 20
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = 88071
+  state["prey_engagement_instance_id"] = 88071
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  var ctx := _planner_find_food_gate_ctx(body, _MemoryAdapter.new(), 1.0)
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective",
+    ctx,
+    state,
+    body.global_position,
+    motor_v3,
+    ctx["scan"],
+    RID(),
+    0.5,
+  )
+  _assert(
+    not bool(state.get("memory_pursuit_detour_waypoint_set", false)),
+    "arriving at the frozen memory-pursuit detour waypoint releases the latch instead of holding it",
+  )
+  _assert(
+    not state.get("step_goal", Vector3.ZERO).is_equal_approx(detour_wp),
+    "released memory-pursuit latch re-derives instead of re-freezing the same already-reached point",
   )
   main.queue_free()
 
@@ -5825,8 +6325,17 @@ func _test_motor_replay_fixture_drives_stack_from_capture() -> void:
     )[0] as Dictionary
   ).get("pos", Vector3.ZERO)
   var end_dist := positions[positions.size() - 1].distance_to(last_prey)
+  # PHYSICS_SQUEEZE.md §3 decision 25 follow-up (2026-09-18): this fixture's recorded start
+  # distance (~12) happens to sit right at a wolf-scale predator's own effective eat reach
+  # (`eat_action_max_distance` + its own live capsule radius, `_eat_reach_radius_bonus` in
+  # motor_planner.gd) — correct now that the gate accounts for the eater's real size (previously a
+  # flat 5m regardless of body size). A predator that's already within its own effective reach on
+  # frame one has nothing left to close; it settling in place (or drifting slightly with the
+  # recorded prey) is success, not a failed chase.
+  var self_radius: float = body.get_collision_capsule_radius()
+  var effective_eat_range := float(_motor_v3_test_params().get("eat_action_max_distance", 5.0)) + self_radius
   _assert(
-    end_dist < start_dist - 0.05,
+    end_dist < start_dist - 0.05 or start_dist <= effective_eat_range,
     "replay fixture: stack driven from capture closes on the captured prey trajectory (start=%.2f end=%.2f)"
     % [start_dist, end_dist],
   )
@@ -8365,6 +8874,98 @@ func _test_ground_sampler_center_lower_than_rim() -> void:
   )
   (pack.get("root") as Node3D).queue_free()
 
+
+## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): pure-math check for [FallPhysics.ticks_to_fall]
+## against known kinematics (d = 0.5*g*t^2) — the shared physics behind the C10 airborne-invariant's
+## terrain-scaled buffer (and, later, jump/fall-damage decisions).
+func _test_fall_physics_ticks_to_fall_matches_kinematics() -> void:
+  # 4.9m under 9.8 m/s^2 from rest takes exactly 1.0s -> 60 ticks at 60fps.
+  _assert(
+    _FallPhysics.ticks_to_fall(4.9, 9.8, 60.0) == 60,
+    "ticks_to_fall(4.9m, 9.8 g, 60fps) is exactly 60 ticks",
+  )
+  _assert(_FallPhysics.ticks_to_fall(0.0, 9.8, 60.0) == 0, "zero height needs zero fall ticks")
+  _assert(_FallPhysics.ticks_to_fall(4.9, 0.0, 60.0) == 0, "zero gravity is treated as no-fall, not divide-by-zero")
+  _assert(
+    _FallPhysics.ticks_to_fall(19.6, 9.8, 60.0) > _FallPhysics.ticks_to_fall(4.9, 9.8, 60.0),
+    "a taller fall takes more ticks than a shorter one",
+  )
+
+
+## `PlayfieldGroundSampler.max_elevation_range()` against the real grasslands terrain — the same
+## baked sampler `main_3d.gd` hands every creature at spawn. Confirms it reads a real, large
+## elevation spread (grasslands has a genuine multi-meter valley — see this decision's own C10 wolf
+## repro) rather than 0.0, and that it matches the highest-minus-lowest sampled cell directly.
+func _test_ground_sampler_max_elevation_range_matches_real_terrain() -> void:
+  var pack: Dictionary = await _grasslands_playfield_with_sampler()
+  var sampler: _GroundSampler = pack.get("sampler")
+  var lo := INF
+  var hi := -INF
+  for gy in range(sampler._grid_h):
+    for gx in range(sampler._grid_w):
+      var e: float = sampler._cell_elevation(gx, gy)
+      lo = minf(lo, e)
+      hi = maxf(hi, e)
+  var expected := hi - lo
+  var got := sampler.max_elevation_range()
+  _assert(
+    is_equal_approx(got, expected),
+    "max_elevation_range matches highest-minus-lowest sampled cell (got %.3f, want %.3f)" % [got, expected],
+  )
+  _assert(got > 3.0, "grasslands has a genuine multi-meter elevation spread (got %.3f)" % got)
+  (pack.get("root") as Node3D).queue_free()
+
+
+## End-to-end wiring check for the fix itself: with a real baked ground sampler behind a
+## [_TerrainTestMainStub], [MotorPlane.scale_creature_motor_v3_for_playfield] must raise
+## `motor_invariant_max_airborne_ticks` above the flat config default to
+## `ticks_to_fall(real terrain drop) + motor_invariant_airborne_buffer_ticks` — the actual
+## mechanism that stops a genuine cliff fall from tripping C10 as a false positive.
+func _test_motor_plane_scales_invariant_airborne_ticks_from_terrain() -> void:
+  var pack: Dictionary = await _grasslands_playfield_with_sampler()
+  var sampler: _GroundSampler = pack.get("sampler")
+  var main_stub := _TerrainTestMainStub.new()
+  root.add_child(main_stub)
+  main_stub.ground_sampler = sampler
+  var body := _spawn_carnivore_body(main_stub, Vector3.ZERO)
+  var motor_v3 := _Merge.default_creature_motor_v3_params()
+  var default_ticks := int(motor_v3.get("motor_invariant_max_airborne_ticks", 45))
+  var buffer_ticks := int(motor_v3.get("motor_invariant_airborne_buffer_ticks", 45))
+  var scaled := _MotorPlane.scale_creature_motor_v3_for_playfield(motor_v3, body, main_stub)
+  var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+  var expected_fall_ticks := _FallPhysics.ticks_to_fall(
+    sampler.max_elevation_range(), gravity * body.get_gravity_multiplier(), Engine.get_physics_ticks_per_second(),
+  )
+  var got := int(scaled.get("motor_invariant_max_airborne_ticks", 0))
+  _assert(
+    got == maxi(default_ticks, expected_fall_ticks + buffer_ticks),
+    "terrain-scaled invariant ticks matches ticks_to_fall(real drop) + buffer (got %d, want %d)"
+    % [got, maxi(default_ticks, expected_fall_ticks + buffer_ticks)],
+  )
+  _assert(got > default_ticks, "a real multi-meter playfield raises the threshold above the flat default")
+  (pack.get("root") as Node3D).queue_free()
+  main_stub.queue_free()
+  await process_frame
+
+
+## Without a real ground sampler (most fixtures/tests, and any `main` that doesn't expose
+## `get_ground_sampler()`), the terrain-scaling step must be a no-op — protects against a future
+## change accidentally making this unconditional and silently changing every other test's fixture
+## behavior.
+func _test_motor_plane_leaves_invariant_ticks_unscaled_without_ground_sampler() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3.ZERO)
+  var motor_v3 := _Merge.default_creature_motor_v3_params()
+  var default_ticks := int(motor_v3.get("motor_invariant_max_airborne_ticks", 45))
+  var scaled := _MotorPlane.scale_creature_motor_v3_for_playfield(motor_v3, body, main)
+  _assert(
+    int(scaled.get("motor_invariant_max_airborne_ticks", -1)) == default_ticks,
+    "no ground sampler on main leaves motor_invariant_max_airborne_ticks at the flat default",
+  )
+  main.queue_free()
+
+
 func _test_hud_resolves_3d_herbivore_motor_body() -> void:
   var hud_scene: PackedScene = load("res://hud.tscn") as PackedScene
   _assert(hud_scene != null, "hud scene loads for 3d herbivore vitals")
@@ -9174,6 +9775,600 @@ func _count_collision_shapes(body: StaticBody3D) -> int:
 
 func _await_shrub_collision_bake() -> void:
   await create_timer(0.05).timeout
+
+
+## PHYSICS_SQUEEZE.md decision 16/22 (2026-09-18, implementation slice 1): `open_shrub_3d`'s
+## `MobBlocker` moved off the old diet-role layer 8 onto the movement-inert "ghost" query-only
+## layer — real `move_and_slide` no longer resolves against it at all (every creature's real
+## `collision_mask` excludes it), so per-instance size fit is enforced entirely by the live
+## shape-cast query this test exercises directly, then end to end through the moving body.
+func _test_ghost_obstacle_query_open_shrub_size_gated() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(50.0, 1.0, 50.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var mob_blocker := shrub.get_node_or_null("MobBlocker") as StaticBody3D
+  _assert(
+    mob_blocker != null and mob_blocker.collision_layer == _GhostObstacleQuery.GHOST_LAYER_MASK,
+    "open shrub MobBlocker migrated to the ghost query-only layer, off the retired diet-role layer 8",
+  )
+  _assert(
+    mob_blocker.collision_mask == 0,
+    "open shrub MobBlocker is movement-inert (no real collision response of its own)",
+  )
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  _assert(bool(aabb.get("valid", false)), "open shrub mesh AABB valid for ghost-layer gate test")
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+  var xz_radius := float(aabb.get("xz_radius", 0.5))
+
+  # Read each body's *actual* live capsule radius (mesh-footprint-derived at spawn, not assumed
+  # from the archetype's raw export value) rather than hardcoding numbers this test would silently
+  # drift out of sync with.
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  wolf.apply_effective_creature_size(5.0)
+  await physics_frame
+  var rabbit_radius: float = rabbit.get_collision_capsule_radius()
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  _assert(
+    wolf_radius > rabbit_radius + 1.0,
+    "wolf-scaled capsule is meaningfully larger than the rabbit's for this test to discriminate",
+  )
+
+  # Test point just past the mesh boundary (relative to the mesh's own AABB center, which may not
+  # coincide with the node origin), with margin sized to the rabbit's own radius: far enough that
+  # the rabbit clears it, close enough that the wolf-scale capsule's reach still overlaps the mesh.
+  var edge_point := mesh_center + Vector3(xz_radius + rabbit_radius + 0.3, 0.0, 0.0)
+  var space_state := main.get_world_3d().direct_space_state
+  _assert(
+    not _GhostObstacleQuery.capsule_overlaps_ghost_layer(
+      space_state, edge_point, rabbit_radius, rabbit.get_collision_capsule_height()
+    ),
+    "rabbit-radius capsule clears the shrub's ghost-layer boundary",
+  )
+  _assert(
+    _GhostObstacleQuery.capsule_overlaps_ghost_layer(
+      space_state, edge_point, wolf_radius, wolf.get_collision_capsule_height()
+    ),
+    "wolf-scale capsule at the same point still overlaps the shrub's ghost-layer geometry",
+  )
+
+  # End to end: the same distinction enforced through the moving body's own pre-move gate
+  # (`CreatureKinematicBody3D._clamp_velocity_to_ghost_fit`), not just the bare primitive above.
+  rabbit.global_position = edge_point + Vector3(2.0, 0.0, 0.0)
+  wolf.global_position = edge_point + Vector3(2.0, 0.0, 0.0)
+  await physics_frame
+  rabbit.velocity = Vector3(-2.0, 0.0, 0.0)
+  rabbit.call("_clamp_velocity_to_ghost_fit", 1.0)
+  _assert(
+    not is_zero_approx(rabbit.velocity.x),
+    "rabbit-sized body's velocity is untouched when its next-step capsule fits",
+  )
+
+  wolf.velocity = Vector3(-2.0, 0.0, 0.0)
+  wolf.call("_clamp_velocity_to_ghost_fit", 1.0)
+  _assert(
+    is_zero_approx(wolf.velocity.x),
+    "oversized body's velocity is cancelled when its next-step capsule would overlap the ghost layer",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 / §9 slice 6 (2026-09-18): `_route_scanned_endpoint`
+## is the single-target sibling of `_apply_route_plausibility_scan` (that one truncates a *probe
+## dict*, for flee's discrete candidates) — this one truncates a single navigable point, reused by
+## `_mint_locale_search_waypoint`, explore's own waypoint mint, both pursuit-detour re-mints, and
+## the shelter precise-candidate probe (decision 21's other four mint sites, which slice 2 didn't
+## reach). Builds the navmesh path to the target itself and reuses the same scan.
+func _test_route_scanned_endpoint_truncates_blocked_target() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var fake_map_rid: RID = _MotorPathFixture.build_open(main).get("map_rid", RID())
+  # `build_open`'s own fixture floor spans world x/z 0..40 — the shrub and both probed points
+  # need to sit inside that so `NavigationServer3D.map_get_path` actually returns a real path
+  # (a target outside the baked floor just yields an empty/degenerate one).
+  var shrub_pos := Vector3(20.0, 1.0, 20.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+
+  var wolf := _spawn_carnivore_body(main, mesh_center + Vector3(-10.0, 0.0, 0.0))
+  await physics_frame
+  var ctx := {"space_state": main.get_world_3d().direct_space_state, "map_rid": fake_map_rid}
+
+  # Straight through the shrub's own center — a wolf-scale capsule cannot clear it.
+  var creature_pos := mesh_center + Vector3(-10.0, 0.0, 0.0)
+  var target := mesh_center + Vector3(10.0, 0.0, 0.0)
+  var scanned: Vector3 = (_MotorPlanner as GDScript).call(
+    "_route_scanned_endpoint", ctx, wolf, fake_map_rid, creature_pos, target
+  )
+  _assert(
+    scanned.distance_to(creature_pos) < creature_pos.distance_to(target) - 0.5,
+    "a wolf-scale target straight through a shrub gets truncated short of the raw target",
+  )
+
+  # A target well clear of the shrub (lateral offset, still inside the fixture floor) passes
+  # through unchanged.
+  var clear_target := creature_pos + Vector3(0.0, 0.0, 8.0)
+  var clear_scanned: Vector3 = (_MotorPlanner as GDScript).call(
+    "_route_scanned_endpoint", ctx, wolf, fake_map_rid, creature_pos, clear_target
+  )
+  _assert(
+    clear_scanned.distance_to(clear_target) < 0.5,
+    "a target with nothing in the way passes through _route_scanned_endpoint unchanged",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18, implementation slice 2): since the navmesh bake
+## excludes the ghost layer entirely (slice 1), a navmesh path through/past an object-scale
+## obstacle reads as fully open regardless of species — `RoutePlausibilityScan.scan_path` is what
+## actually finds the first point along such a path a given creature's own capsule can't clear.
+func _test_route_plausibility_scan_truncates_blocked_path() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(60.0, 1.0, 60.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  _assert(bool(aabb.get("valid", false)), "open shrub mesh AABB valid for route-scan test")
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+  var xz_radius := float(aabb.get("xz_radius", 0.5))
+
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  wolf.apply_effective_creature_size(5.0)
+  await physics_frame
+  var rabbit_radius: float = rabbit.get_collision_capsule_radius()
+  var rabbit_height: float = rabbit.get_collision_capsule_height()
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  var wolf_height: float = wolf.get_collision_capsule_height()
+  _assert(
+    wolf_radius > rabbit_radius + 1.0,
+    "wolf-scaled capsule is meaningfully larger than the rabbit's for this test to discriminate",
+  )
+
+  # A straight two-point "navmesh path" grazing past the shrub, offset laterally so the rabbit's
+  # own capsule clears the pass but the wolf's larger one still clips the shrub's real geometry —
+  # exactly what a bake-blind navmesh path straight past an object-scale obstacle looks like today.
+  var lateral := xz_radius + rabbit_radius + 0.3
+  var path := PackedVector3Array([
+    mesh_center + Vector3(-10.0, 0.0, lateral),
+    mesh_center + Vector3(10.0, 0.0, lateral),
+  ])
+  var full_len := path[0].distance_to(path[1])
+  var space_state := main.get_world_3d().direct_space_state
+
+  var rabbit_scan := _RouteScan.scan_path(space_state, path, rabbit_radius, rabbit_height, [rabbit.get_rid()])
+  _assert(
+    not bool(rabbit_scan.get("blocked", true)),
+    "rabbit-radius sweep along the graze path finds no blocker",
+  )
+  _assert(
+    is_equal_approx(float(rabbit_scan.get("reach", 0.0)), full_len),
+    "rabbit-radius sweep reaches the full path length when nothing blocks it",
+  )
+
+  var wolf_scan := _RouteScan.scan_path(space_state, path, wolf_radius, wolf_height, [wolf.get_rid()])
+  _assert(
+    bool(wolf_scan.get("blocked", false)),
+    "wolf-scale sweep along the same graze path is blocked by the shrub",
+  )
+  var wolf_reach := float(wolf_scan.get("reach", full_len))
+  _assert(
+    wolf_reach < full_len - 0.01,
+    "wolf-scale sweep's reach is truncated short of the full path length (got %.2f of %.2f)"
+    % [wolf_reach, full_len],
+  )
+  var wolf_scan_path: PackedVector3Array = wolf_scan.get("path", PackedVector3Array())
+  _assert(
+    wolf_scan_path.size() >= 2 and wolf_scan_path[wolf_scan_path.size() - 1].distance_to(
+      Vector3(wolf_scan.get("reach_point", Vector3.ZERO))
+    ) < 0.01,
+    "wolf-scale sweep's truncated path ends exactly at its own reach_point",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18, implementation slice 2): the wiring layer inside
+## `motor_planner.gd` — `_apply_route_plausibility_scan` — that runs the scan above against a
+## `_flee_candidate_probe`-shaped Dictionary and truncates it in place, so an oversized creature's
+## flee-candidate scoring never trusts a navmesh reach it can't actually walk.
+func _test_apply_route_plausibility_scan_truncates_probe() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(70.0, 1.0, 70.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+  var xz_radius := float(aabb.get("xz_radius", 0.5))
+
+  var wolf := _spawn_carnivore_body(main, mesh_center + Vector3(-10.0, 0.0, 0.0))
+  wolf.apply_effective_creature_size(5.0)
+  await physics_frame
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  var lateral := xz_radius + 0.3 * wolf_radius
+  var full_path := PackedVector3Array([
+    mesh_center + Vector3(-10.0, 0.0, lateral),
+    mesh_center + Vector3(10.0, 0.0, lateral),
+  ])
+  var full_reach := full_path[0].distance_to(full_path[1])
+  var probe := {
+    "reach": full_reach,
+    "endpoint": full_path[1],
+    "path": full_path,
+  }
+  var ctx := {"space_state": main.get_world_3d().direct_space_state}
+  var scanned: Dictionary = (_MotorPlanner as GDScript).call(
+    "_apply_route_plausibility_scan", probe, ctx, wolf
+  )
+  _assert(
+    float(scanned.get("reach", full_reach)) < full_reach - 0.01,
+    "oversized wolf's scanned probe reach is truncated below the raw navmesh reach",
+  )
+  var scanned_endpoint: Vector3 = scanned.get("endpoint", full_path[1])
+  _assert(
+    scanned_endpoint.distance_to(full_path[1]) > 0.01,
+    "oversized wolf's scanned probe endpoint moved back from the raw navmesh endpoint",
+  )
+
+  # No physics space available (e.g. a synthetic fixture) — probe passes through unchanged rather
+  # than erroring, matching every other space-optional check in this file.
+  var unscanned: Dictionary = (_MotorPlanner as GDScript).call(
+    "_apply_route_plausibility_scan", probe, {}, wolf
+  )
+  _assert(
+    is_equal_approx(float(unscanned.get("reach", 0.0)), full_reach),
+    "route scan is a no-op when ctx has no space_state",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §8e escape hatch (2026-09-18, added after a live repro: an herbivore got
+## permanently stuck against `open_shrub_3d` right after eating from it, once the shrub's
+## `MobBlocker` re-synced its collision to the depleted-visual mesh and ended up overlapping the
+## creature's own standing position). `GhostObstacleQuery.escaping_overlap` is the primitive that
+## lets a body already overlapping the ghost layer still move, as long as the move doesn't get it
+## closer to whatever it's overlapping — never blocking "getting out," only "getting further in."
+func _test_ghost_obstacle_query_escaping_overlap() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(80.0, 1.0, 80.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  _assert(bool(aabb.get("valid", false)), "open shrub mesh AABB valid for escape-hatch test")
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+
+  var space_state := main.get_world_3d().direct_space_state
+  var radius := 0.6
+  var height := 1.2
+  # A point at the shrub's own center is guaranteed to overlap any real mesh footprint there,
+  # regardless of the exact convex-hull geometry — simulates a creature that's ended up trapped
+  # inside/against the shrub's collision, however it got there.
+  var stuck_pos := mesh_center
+  _assert(
+    _GhostObstacleQuery.capsule_overlaps_ghost_layer(space_state, stuck_pos, radius, height),
+    "sanity check: the stuck position actually overlaps the shrub's ghost-layer geometry",
+  )
+
+  var away_pos := stuck_pos + Vector3(10.0, 0.0, 0.0)
+  _assert(
+    _GhostObstacleQuery.escaping_overlap(space_state, stuck_pos, away_pos, radius, height),
+    "a move that puts real distance between the body and the shrub counts as escaping",
+  )
+
+  var still_stuck_pos := stuck_pos + Vector3(0.001, 0.0, 0.0)
+  _assert(
+    _GhostObstacleQuery.escaping_overlap(space_state, stuck_pos, still_stuck_pos, radius, height),
+    "a negligible move (not meaningfully closer) is still treated as escaping, not penalized",
+  )
+
+  _assert(
+    _GhostObstacleQuery.escaping_overlap(space_state, stuck_pos, stuck_pos, radius, height),
+    "a zero-displacement move trivially satisfies 'not closer' too — harmless either way, but"
+    + " shouldn't itself be treated as 'still pressing in'",
+  )
+
+  var not_overlapping_pos := mesh_center + Vector3(500.0, 0.0, 0.0)
+  _assert(
+    not _GhostObstacleQuery.escaping_overlap(
+      space_state, not_overlapping_pos, not_overlapping_pos + Vector3(1.0, 0.0, 0.0), radius, height
+    ),
+    "escape hatch never engages when the body isn't currently overlapping anything",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §8e escape hatch, end to end through the real per-tick gate
+## (`CreatureKinematicBody3D._clamp_velocity_to_ghost_fit`) rather than the bare primitive above —
+## a body starting the tick already overlapping the shrub can still move away, but still can't be
+## driven further in.
+func _test_clamp_velocity_to_ghost_fit_escape_hatch() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(90.0, 1.0, 90.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+
+  var rabbit := _spawn_herbivore_body(main, mesh_center)
+  await physics_frame
+  # Confirm the repro precondition: standing at the shrub's own center really does overlap its
+  # ghost-layer geometry for a normal small-creature capsule.
+  var space_state := main.get_world_3d().direct_space_state
+  _assert(
+    _GhostObstacleQuery.capsule_overlaps_ghost_layer(
+      space_state, rabbit.global_position, rabbit.get_collision_capsule_radius(),
+      rabbit.get_collision_capsule_height(), [rabbit.get_rid()],
+    ),
+    "sanity check: a body placed at the shrub's own center starts overlapping its ghost geometry",
+  )
+
+  rabbit.velocity = Vector3(10.0, 0.0, 0.0)
+  rabbit.call("_clamp_velocity_to_ghost_fit", 1.0)
+  _assert(
+    not is_zero_approx(rabbit.velocity.x),
+    "a body already stuck against the shrub can still move away from it (escape hatch engages)",
+  )
+
+  rabbit.global_position = mesh_center
+  rabbit.velocity = Vector3(0.0, 0.0, 0.0)
+  rabbit.call("_clamp_velocity_to_ghost_fit", 1.0)
+  _assert(
+    is_zero_approx(rabbit.velocity.x) and is_zero_approx(rabbit.velocity.z),
+    "a body that isn't actually trying to move anywhere stays put, escape hatch or not",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 25 / §9 slice 5 (2026-09-18): a ghost-layer stop must be visible
+## as `ActionOutcome.blocked` — previously `_clamp_velocity_to_ghost_fit` silently zeroed velocity
+## with no signal reaching `LocomotionExecutor`'s blocked-detection (`is_on_wall()` only sees real
+## physics-layer contact), which is exactly what let the debug refuge cluster hard-stall a solo
+## rabbit (live repro, 2026-09-18) instead of triggering `apply_blocked_objective_resolution`.
+func _test_locomotion_executor_reports_ghost_layer_block() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(90.0, 1.0, 90.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+  var xz_radius := float(aabb.get("xz_radius", 1.5))
+
+  var wolf := _spawn_carnivore_body(main, mesh_center + Vector3(xz_radius + 20.0, 0.0, 0.0))
+  await physics_frame
+  # Start well clear of the shrub's ghost geometry (read the wolf's own live, mesh-derived radius
+  # rather than assuming a fixed size — matches this file's existing convention) then place it just
+  # outside contact range so the approach genuinely closes to a real ghost-layer stop.
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  wolf.global_position = mesh_center + Vector3(xz_radius + wolf_radius + 3.0, 0.0, 0.0)
+  wolf.last_move_direction = Vector3(-1.0, 0.0, 0.0)
+  await physics_frame
+  var motor_v3 := _motor_v3_test_params()
+
+  var outcome: _ActionOutcome = null
+  var blocked_seen := false
+  for _i in 60:
+    outcome = _LocomotionExecutor.apply_action(wolf, _MotorAction.MOVE_FORWARD, 1.0 / 60.0, motor_v3)
+    await physics_frame
+    if outcome != null and outcome.blocked:
+      blocked_seen = true
+      break
+  _assert(
+    blocked_seen,
+    "a wolf-scale capsule too big for the shrub's ghost geometry reports ActionOutcome.blocked",
+  )
+  _assert(
+    wolf.call("was_ghost_layer_blocked_last_move"),
+    "the body's own ghost-layer-blocked flag agrees with the outcome that surfaced it",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18): the shared navmesh bake must never include the
+## ghost query-only layer (or any retired diet-role layer) — confirmed live in code this session
+## that leaving `geometry_collision_mask` unset (Godot default: all layers) already baked a
+## permanent hole around every `open_shrub_3d` instance for every creature, species-blind, before
+## any of this doc's fixes existed.
+func _test_bake_playfield_navmesh_mask_excludes_ghost_layer() -> void:
+  var main_script := load("res://main_3d.gd") as Script
+  _assert(main_script != null, "main_3d.gd loads as a script for navmesh bake mask test")
+  # Deliberately never added to `root` — Main3D's own `_ready()` expects a full main_3d.tscn
+  # subtree (HUD, CameraRig, …) this narrow test has no need of; `_bake_playfield_navmesh` only
+  # needs `_playfield_root` set and works fine on an orphaned instance.
+  var main: Node3D = main_script.new()
+  # `playfield_root` itself must be inside the live SceneTree for `NavigationRegion3D`'s bake to
+  # parse geometry without erroring — parented under `root` directly, not under the orphaned
+  # `main`, so `main`'s own `_ready()` still never runs.
+  var playfield_root := Node3D.new()
+  root.add_child(playfield_root)
+  main.set("_playfield_root", playfield_root)
+  main.call("_bake_playfield_navmesh")
+  var region: NavigationRegion3D = main.get("_nav_region")
+  _assert(region != null, "navmesh bake creates a NavigationRegion3D")
+  var nm: NavigationMesh = region.navigation_mesh if region != null else null
+  _assert(nm != null, "navmesh bake assigns a NavigationMesh resource")
+  _assert(
+    nm != null and nm.geometry_collision_mask == 1,
+    "navmesh bakes from world-static terrain (layer 1) only, excluding every object-scale layer",
+  )
+  main.free()
+  playfield_root.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 / §9 slice 6 (2026-09-18): the debug refuge cluster's
+## real root cause wasn't gap-size math at all — `open_shrub_3d`'s mesh pivot sits well off its own
+## visual center, so placing every ring instance by node origin shifted their real mass the same
+## world direction, sealing gaps on one side while widening them uselessly on the other. Two things
+## verified here: (1) `_open_shrub_visual_center_local_offset()`'s compensation actually lands each
+## shrub's real visual mass on its intended ring point (not its node origin), and (2) the retuned
+## radius/count (7.5, 6 — from the original 3.0, 10) is genuinely passable to a real rabbit-scale
+## capsule at every gap, not just some.
+## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 follow-up (2026-09-18): widening `_REFUGE_CLUSTER_RADIUS`
+## to clear the rabbit (see the rabbit-passable assertion below) raises the obvious question of
+## whether it also widened the gaps enough for a wolf-radius capsule to slip through — a wider ring
+## isn't automatically a *safe* ring. It isn't: the wolf is stopped by whichever shrub's own convex
+## hull it meets, not by the ring's overall diameter, so this asserts a wolf-radius capsule stalls
+## early (near 0.0) in every gap sweep while the rabbit's clears every one fully (near 1.0). Live
+## probe at the current radius/count found the wolf hitting a shrub ~9-10% into each gap sweep.
+func _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit() -> void:
+  var main_script := load("res://main_3d.gd") as Script
+  var main: Node3D = main_script.new()
+  var food_root := Node3D.new()
+  root.add_child(food_root)
+  main.set("_food_root", food_root)
+  main.call("_spawn_open_shrub_refuge_cluster")
+  await process_frame
+  await process_frame
+  await process_frame
+
+  # `_REFUGE_CLUSTER_SHRUB_COUNT`/`_REFUGE_CLUSTER_RADIUS` are script constants, not properties —
+  # not readable via `.get()` on the instance, so mirrored here directly (matches main_3d.gd).
+  var shrub_count := 6
+  var cluster_radius := 7.5
+  _assert(
+    food_root.get_child_count() == shrub_count,
+    "refuge cluster spawns _REFUGE_CLUSTER_SHRUB_COUNT shrubs (got %d)" % food_root.get_child_count(),
+  )
+  # Fallback playfield-bounds center (`_Bounds3D.world_position_from_fraction` with an empty/invalid
+  # `_playfield_bounds`) is `Vector3(frac.x, 0, frac.y)` — `_REFUGE_CLUSTER_CENTER_FRAC` is (0.5, 0.5).
+  var expected_center := Vector3(0.5, 0.0, 0.5)
+  for child in food_root.get_children():
+    var visual := (child as Node3D).get_node_or_null("Visual/ReadyVisual") as Node3D
+    var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+    _assert(bool(aabb.get("valid", false)), "each ring shrub's visual produces a valid AABB")
+    var visual_center: Vector3 = aabb.get("center", Vector3.ZERO)
+    var dist_from_ring_center := Vector2(visual_center.x - expected_center.x, visual_center.z - expected_center.z).length()
+    _assert(
+      absf(dist_from_ring_center - cluster_radius) < 0.5,
+      "ring shrub's real visual mass (not node origin) sits at the intended ring radius (got %.2f, want ~%.2f)"
+      % [dist_from_ring_center, cluster_radius],
+    )
+
+  var rabbit := _spawn_herbivore_body(food_root, Vector3(1000.0, 1.0, 1000.0))
+  var wolf := _spawn_carnivore_body(food_root, Vector3(1000.0, 1.0, -1000.0))
+  await physics_frame
+  var rabbit_radius: float = rabbit.get_collision_capsule_radius()
+  var rabbit_height: float = rabbit.get_collision_capsule_height()
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  var wolf_height: float = wolf.get_collision_capsule_height()
+  var space_state := root.get_world_3d().direct_space_state
+  var worst_clear_frac := 1.0
+  var best_wolf_frac := 0.0
+  for i in shrub_count:
+    var bisector := TAU * (float(i) + 0.5) / float(shrub_count)
+    var dir := Vector3(cos(bisector), 0.0, sin(bisector))
+    var from := expected_center + dir * (cluster_radius + 10.0)
+    var to := expected_center - dir * (cluster_radius + 10.0)
+    var frac := _GhostObstacleQuery.sweep_capsule_along_segment(
+      space_state, from, to, rabbit_radius, rabbit_height,
+    )
+    worst_clear_frac = minf(worst_clear_frac, frac)
+    var wolf_frac := _GhostObstacleQuery.sweep_capsule_along_segment(
+      space_state, from, to, wolf_radius, wolf_height,
+    )
+    best_wolf_frac = maxf(best_wolf_frac, wolf_frac)
+  _assert(
+    worst_clear_frac > 0.999,
+    "a rabbit-radius capsule clears every gap around the retuned refuge ring (worst clear fraction=%.3f)"
+    % worst_clear_frac,
+  )
+  _assert(
+    best_wolf_frac < 0.5,
+    "a wolf-radius capsule stays blocked in every gap around the retuned refuge ring, so the wider "
+    + "ring didn't also become wolf-passable (best clear fraction=%.3f)" % best_wolf_frac,
+  )
+
+  main.free()
+  food_root.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 29 (2026-09-20): `ShelterEnclosureProbe.enclosure_fraction`'s
+## `shelter_enclosure_blocker_mask` config default was still 8 — `open_shrub_3d`'s `MobBlocker`'s
+## *old* real physics layer, before decision 25 migrated it onto the movement-inert ghost/query-only
+## layer. Nothing in the project has been on layer 8 since, so shelter nomination against a
+## shrub-only refuge silently read 0% enclosed no matter how many shrubs surrounded the point — a
+## live probe against the real retuned ring found exactly that (0.000 with the stale default,
+## 0.250 checking the actual ghost layer). This spawns the real cluster and asserts the *default
+## config* mask — not a hardcoded literal — reads real, non-zero enclosure at ring center.
+func _test_shelter_enclosure_probe_detects_real_refuge_ring() -> void:
+  var main_script := load("res://main_3d.gd") as Script
+  var main: Node3D = main_script.new()
+  var food_root := Node3D.new()
+  root.add_child(food_root)
+  main.set("_food_root", food_root)
+  main.call("_spawn_open_shrub_refuge_cluster")
+  await process_frame
+  await process_frame
+  await process_frame
+
+  var expected_center := Vector3(0.5, 0.0, 0.5)
+  var cluster_radius := 7.5
+  var space := root.get_world_3d().direct_space_state
+  var default_mask := int(_Merge.default_creature_motor_v3_params().get("shelter_enclosure_blocker_mask", 0))
+  var frac := _ShelterProbe.enclosure_fraction(space, expected_center, cluster_radius, default_mask)
+  _assert(
+    frac > 0.1,
+    (
+      "the live default shelter_enclosure_blocker_mask (%d) detects the real refuge ring as enclosed "
+      + "(got enclosure_fraction=%.3f, want >0.1 — 0.0 means it's still checking a retired real layer)"
+    ) % [default_mask, frac],
+  )
+
+  main.free()
+  food_root.queue_free()
+  await process_frame
+
 
 func _test_shrub_mesh_collision_bake() -> void:
   var main := Node3D.new()
