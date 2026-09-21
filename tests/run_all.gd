@@ -57,6 +57,8 @@ const _VisitedPath := preload("res://creature/motor/visited_path_memory.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBeliefMemoryScr := preload("res://creature/motor/goal_belief_memory.gd")
+const _ChokePointProbe := preload("res://creature/motor/choke_point_probe.gd")
+const _ChokePointTracker := preload("res://creature/motor/choke_point_tracker.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
@@ -303,6 +305,12 @@ func _run_all() -> void:
   _test_choke_point_belief_tiers_and_confirmation_refine()
   _test_choke_point_belief_decay_and_lru_overrides()
   _test_choke_point_registry_and_read_api()
+  await _test_choke_point_probe_measures_gap_width()
+  await _test_choke_point_tracker_confirms_only_real_passes()
+  _test_choke_point_adapter_merges_nearby_and_caps_rows()
+  await _test_choke_point_observe_ahead_noise_and_weight()
+  await _test_creature_motor_stack_records_choke_points_walking_through_gap()
+  await _test_creature_motor_stack_tick_reaches_choke_point_producer()
   _test_memory_adapter_shelter_observation_writes_observed_tier_not_active_for_flee()
   _test_memory_adapter_shelter_observation_never_downgrades_confirmed()
   _test_memory_adapter_shelter_selection_prefers_battle_tested_over_closer_confirmed()
@@ -2558,6 +2566,218 @@ func _test_choke_point_belief_decay_and_lru_overrides() -> void:
     not adapter2.consult_choke_point_beliefs(conf_mouth, motor_v3, start_ms + 2000).is_empty(),
     "confirmed choke row survives LRU cap eviction",
   )
+
+
+func _add_ghost_box(parent: Node3D, center: Vector3, size: Vector3) -> void:
+  var body := StaticBody3D.new()
+  var col := CollisionShape3D.new()
+  var box := BoxShape3D.new()
+  box.size = size
+  col.shape = box
+  body.add_child(col)
+  body.collision_layer = 16
+  body.collision_mask = 0
+  parent.add_child(body)
+  body.global_position = center
+
+
+## Two ghost walls forming a corridor of clear width [param gap] along Z (x = ±gap/2), spanning
+## z in [-5, 5] at y = 1.
+func _build_test_gap(parent: Node3D, gap: float) -> void:
+  var thick := 1.0
+  _add_ghost_box(parent, Vector3(-(gap * 0.5 + thick * 0.5), 1.0, 0.0), Vector3(thick, 4.0, 10.0))
+  _add_ghost_box(parent, Vector3(gap * 0.5 + thick * 0.5, 1.0, 0.0), Vector3(thick, 4.0, 10.0))
+
+
+func _test_choke_point_probe_measures_gap_width() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _build_test_gap(main, 3.0)
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var m := _ChokePointProbe.measure_width(space, Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0), 7.0)
+  _assert(bool(m["bounded"]), "both sides hit -> bounded")
+  _assert(absf(float(m["width"]) - 3.0) < 0.05, "measured width matches the real gap")
+  var open := _ChokePointProbe.measure_width(space, Vector3(30.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0), 7.0)
+  _assert(not bool(open["bounded"]), "open ground is not a gap")
+  ## A wall on only one side is not a gap either.
+  var one_side := _ChokePointProbe.measure_width(space, Vector3(-9.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0), 7.0)
+  _assert(not bool(one_side["bounded"]), "a single wall (one open side) is not a gap")
+  main.queue_free()
+
+
+func _walk_tracker(tracker: RefCounted, space: PhysicsDirectSpaceState3D, x: float, z0: float, z1: float) -> Array:
+  var events: Array = []
+  var step := 0.5 if z1 >= z0 else -0.5
+  var z := z0
+  while (step > 0.0 and z <= z1) or (step < 0.0 and z >= z1):
+    var ev: Dictionary = tracker.call(
+      "update", space, Vector3(x, 1.0, z), Vector3(0.0, 0.0, 1.0 if step > 0.0 else -1.0), 7.0, 3.5, 3
+    )
+    if not ev.is_empty():
+      events.append(ev)
+    z += step
+  return events
+
+
+## A stretch only becomes a confirmed choke point when the creature travelled *through* it —
+## poking in and backing out, or open-ground walking, must not.
+func _test_choke_point_tracker_confirms_only_real_passes() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _build_test_gap(main, 3.0)
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var through := _walk_tracker(_ChokePointTracker.new(), space, 0.0, -12.0, 12.0)
+  _assert(through.size() == 1, "walking through the gap yields exactly one confirmation")
+  if through.size() == 1:
+    _assert(absf(float(through[0]["width"]) - 3.0) < 0.05, "confirmation carries the measured opening width")
+    _assert(absf((through[0]["mouth"] as Vector3).z) <= 5.5, "mouth lies within the gap stretch")
+  var retreat := _ChokePointTracker.new()
+  var poke := _walk_tracker(retreat, space, 0.0, -12.0, -4.0)
+  poke.append_array(_walk_tracker(retreat, space, 0.0, -4.0, -12.0))
+  _assert(poke.is_empty(), "poking into the mouth and backing out is not a pass")
+  var open_walk := _walk_tracker(_ChokePointTracker.new(), space, 30.0, -12.0, 12.0)
+  _assert(open_walk.is_empty(), "walking open ground confirms nothing")
+  main.queue_free()
+
+
+## Sightings of one gap land at slightly different points and must update one row; the row count is
+## capped so remote sightings can't crowd out other memory, but measured (confirmed) rows are never
+## evicted to make room.
+func _test_choke_point_adapter_merges_nearby_and_caps_rows() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["choke_max_rows"] = 2
+  var now_ms := 1_000_000
+  adapter.record_choke_point_confirmation(Vector3(10.0, 1.0, 0.0), 3.0, motor_v3, now_ms, 3.0)
+  adapter.record_choke_point_observation(Vector3(11.0, 1.0, 0.0), 9.0, 0.9, motor_v3, now_ms + 1, 3.0)
+  var rows := adapter.consult_choke_point_beliefs(Vector3(10.0, 1.0, 0.0), motor_v3, now_ms + 1)
+  _assert(rows.size() == 1, "a sighting within the merge radius updates the existing row")
+  _assert(rows[0]["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED, "and cannot downgrade it")
+  adapter.record_choke_point_observation(Vector3(50.0, 1.0, 0.0), 4.0, 0.5, motor_v3, now_ms + 2, 3.0)
+  adapter.record_choke_point_observation(Vector3(90.0, 1.0, 0.0), 4.0, 0.5, motor_v3, now_ms + 3, 3.0)
+  rows = adapter.consult_choke_point_beliefs(Vector3(10.0, 1.0, 0.0), motor_v3, now_ms + 3)
+  _assert(rows.size() == 2, "row count is capped at choke_max_rows")
+  var has_confirmed := false
+  for r in rows:
+    if r["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED:
+      has_confirmed = true
+  _assert(has_confirmed, "eviction takes the oldest observed row, never the confirmed one")
+  adapter.record_choke_point_confirmation(Vector3(90.0, 1.0, 0.0), 4.0, motor_v3, now_ms + 4, 3.0)
+  ## Cap is full of confirmed rows: a further new observation is refused rather than evicting truth.
+  adapter.record_choke_point_observation(Vector3(200.0, 1.0, 0.0), 4.0, 0.5, motor_v3, now_ms + 5, 3.0)
+  rows = adapter.consult_choke_point_beliefs(Vector3(10.0, 1.0, 0.0), motor_v3, now_ms + 5)
+  _assert(rows.size() == 2, "a new observation is refused when every row is confirmed")
+
+
+func _test_choke_point_observe_ahead_noise_and_weight() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _build_test_gap(main, 3.0)
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["choke_observe_noise_frac_v1"] = 0.0
+  motor_v3["choke_observe_noise_frac_v10"] = 0.0
+  motor_v3["choke_observe_noise_frac_v25"] = 0.0
+  var seen := _ChokePointProbe.observe_ahead(
+    space, Vector3(0.0, 1.0, -8.0), Vector3(0.0, 0.0, 1.0), 6.0, 6.0, 7.0, 10, motor_v3
+  )
+  _assert(not seen.is_empty(), "a bounded gap ahead is sighted")
+  _assert(absf(float(seen.get("est_width", 0.0)) - 3.0) < 0.05, "zero noise: estimate equals the true width")
+  var far_w := float(seen.get("weight", 0.0))
+  var near := _ChokePointProbe.observe_ahead(
+    space, Vector3(0.0, 1.0, -8.0), Vector3(0.0, 0.0, 1.0), 3.0, 6.0, 7.0, 10, motor_v3
+  )
+  _assert(float(near.get("weight", 0.0)) > far_w, "a nearer look is trusted more than a farther one")
+  _assert(
+    _ChokePointProbe.observe_ahead(space, Vector3(30.0, 1.0, -8.0), Vector3(0.0, 0.0, 1.0), 6.0, 6.0, 7.0, 10, motor_v3).is_empty(),
+    "open ground ahead yields no sighting",
+  )
+  var noisy := _motor_v3_test_params()
+  _assert(
+    _ChokePointProbe.observe_noise_frac(1, noisy) > _ChokePointProbe.observe_noise_frac(25, noisy),
+    "low observation stat is noisier than high",
+  )
+  main.queue_free()
+
+
+## End to end through the real stack hook: a body walking through a gap ends up with a confirmed
+## choke row holding the measured opening, and remote sightings never exceed the row cap.
+func _test_creature_motor_stack_records_choke_points_walking_through_gap() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -20.0))
+  var radius := float(body.call(&"get_collision_capsule_radius"))
+  var gap := radius * 4.0
+  _build_test_gap(main, gap)
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  await physics_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3: Dictionary = stack.get("_motor_v3")
+  var interval := int(motor_v3.get("choke_probe_interval_ticks", 3))
+  var outcome := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.MOVE_FORWARD)
+  var tick := interval
+  var z := -20.0
+  while z <= 20.0:
+    body.global_position = Vector3(0.0, 1.0, z)
+    stack.set("_physics_tick_count", tick)
+    stack.call("_update_choke_point_producers", outcome)
+    tick += interval
+    z += 0.5
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var rows := adapter.consult_choke_point_beliefs(Vector3(0.0, 1.0, 0.0), motor_v3, Time.get_ticks_msec())
+  var confirmed_width := -1.0
+  for r in rows:
+    if r["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED:
+      confirmed_width = float(r["opening_width"])
+  _assert(confirmed_width > 0.0, "walking through the gap produced a confirmed choke row")
+  _assert(absf(confirmed_width - gap) < 0.1, "the confirmed row holds the real geometric opening")
+  _assert(rows.size() <= int(motor_v3.get("choke_max_rows", 8)), "row cap respected")
+  ## Not moving forward -> no producer activity.
+  var before := rows.size()
+  var idle := _ActionOutcome.new(Vector3.ZERO, false, 0.0, _MotorAction.STAY)
+  body.global_position = Vector3(300.0, 1.0, 0.0)
+  stack.call("_update_choke_point_producers", idle)
+  _assert(
+    adapter.consult_choke_point_beliefs(Vector3(0.0, 1.0, 0.0), motor_v3, Time.get_ticks_msec()).size() == before,
+    "idle ticks record nothing",
+  )
+  main.queue_free()
+
+
+## The producer must actually be reached from `CreatureMotorStack.tick` (the method-level test above
+## calls the hook directly): a body driven by real ticks toward remembered food, with a gap ahead,
+## picks up a choke-point sighting.
+func _test_creature_motor_stack_tick_reaches_choke_point_producer() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -8.0))
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  var radius := float(body.call(&"get_collision_capsule_radius"))
+  _build_test_gap(main, radius * 4.0)
+  await physics_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.seed_precise_food_belief_for_test(88101, Vector3(0.0, 1.0, 40.0), Time.get_ticks_msec())
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var motor_v3: Dictionary = stack.get("_motor_v3")
+  var saw_row := false
+  var saw_forward := false
+  for _i in 240:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    if int(outcome.action) == _MotorAction.MOVE_FORWARD:
+      saw_forward = true
+    if not adapter.consult_choke_point_beliefs(body.global_position, motor_v3, Time.get_ticks_msec()).is_empty():
+      saw_row = true
+      break
+  _assert(saw_forward, "precondition: the stack emitted MOVE_FORWARD while approaching the gap")
+  _assert(saw_row, "stack.tick reaches the choke-point producer and records a sighting")
+  main.queue_free()
 
 
 func _test_choke_point_registry_and_read_api() -> void:

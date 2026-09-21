@@ -18,6 +18,8 @@ const _ThreatDisposition := preload("res://creature/motor/threat_disposition.gd"
 const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
+const _ChokeProbe := preload("res://creature/motor/choke_point_probe.gd")
+const _ChokeTracker := preload("res://creature/motor/choke_point_tracker.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
 
@@ -33,6 +35,8 @@ var _consideration_interval: int = 8
 var _ticks_since_consideration: int = 0
 var _active_goals: Array = []
 var _incumbent: Dictionary = {}
+## Choke-point producer state (PHYSICS_SQUEEZE.md decision 19) — see `_update_choke_point_producers`.
+var _choke_tracker: RefCounted = _ChokeTracker.new()
 var _flight_fast_path_active: bool = false
 var _safety_met: bool = false
 var _threat_samples: Array = []
@@ -259,6 +263,7 @@ func tick(delta: float) -> _ActionOutcome:
     and not bool(_planner_state.get("shelter_eval_active", false))
   ):
     _maybe_observe_shelter_opportunistically()
+  _update_choke_point_producers(outcome)
   if outcome != null and not outcome.blocked and int(outcome.action) == _MotorAction.MOVE_FORWARD:
     if _memory_adapter != null:
       _memory_adapter.clear_dead_end_near(_body.global_position, _motor_v3)
@@ -280,6 +285,60 @@ func tick(delta: float) -> _ActionOutcome:
   if _debug_assert_motor_invariants:
     _assert_motor_invariants(action, outcome)
   return outcome
+
+
+## Choke-point belief producer (PHYSICS_SQUEEZE.md decision 19). While moving forward, every
+## `choke_probe_interval_ticks`: (1) feed [ChokePointTracker] — a stretch the creature was bounded
+## through on both sides and actually travelled out of becomes a `confirmed` row holding the real
+## measured opening; (2) take one remote look `choke_observe_lookahead_factor` x radius ahead and, if
+## a bounded gap is there, record a noisy `observed` row. Thresholds scale off the creature's own
+## capsule so a wolf and a rabbit each notice gaps relevant to their own size. Only sampled while
+## moving so a resting creature neither confirms nor spams sightings; the tracker resets on any
+## non-forward tick so a stop mid-gap can't be mistaken for a pass.
+func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
+  if _memory_adapter == null or _body == null or not is_instance_valid(_body):
+    return
+  var moving := outcome != null and int(outcome.action) == _MotorAction.MOVE_FORWARD
+  if not moving:
+    _choke_tracker.call("reset")
+    return
+  var interval := maxi(1, int(_motor_v3.get("choke_probe_interval_ticks", 3)))
+  if _physics_tick_count % interval != 0:
+    return
+  var radius := float(_body.call(&"get_collision_capsule_radius")) if _body.has_method(&"get_collision_capsule_radius") else 0.0
+  if radius <= 0.0:
+    return
+  var space := _body.get_world_3d().direct_space_state
+  if space == null:
+    return
+  var heading: Vector3 = _body.get("last_move_direction")
+  var diameter := radius * 2.0
+  var max_half := diameter * float(_motor_v3.get("choke_detect_width_factor", 4.0)) * 0.5
+  var exclude := [_body.get_rid()]
+  var now_ms := Time.get_ticks_msec()
+  var merge_radius := diameter * float(_motor_v3.get("choke_merge_radius_factor", 1.0))
+  var pos := _body.global_position
+  var passed: Dictionary = _choke_tracker.call(
+    "update", space, pos, heading, max_half,
+    diameter * float(_motor_v3.get("choke_pass_min_travel_factor", 1.0)),
+    int(_motor_v3.get("choke_exit_samples", 3)), exclude,
+  )
+  if not passed.is_empty():
+    _memory_adapter.record_choke_point_confirmation(
+      passed["mouth"], float(passed["width"]), _motor_v3, now_ms, merge_radius
+    )
+  var stat_obs := 10
+  var def_v: Variant = _body.get("definition")
+  if def_v is _CreatureDefinition:
+    stat_obs = int((def_v as _CreatureDefinition).stat_observation)
+  var lookahead := radius * float(_motor_v3.get("choke_observe_lookahead_factor", 6.0))
+  var seen: Dictionary = _ChokeProbe.observe_ahead(
+    space, pos, heading, lookahead, lookahead, max_half, stat_obs, _motor_v3, exclude
+  )
+  if not seen.is_empty():
+    _memory_adapter.record_choke_point_observation(
+      seen["mouth"], float(seen["est_width"]), float(seen["weight"]), _motor_v3, now_ms, merge_radius
+    )
 
 
 ## TEMP-DEBUG (CLEANUP C9/C10): fail-fast the instant a known bug signature reproduces, with the

@@ -409,30 +409,44 @@ func shelter_confidence_score(creature_pos: Vector3, motor_v3: Dictionary, now_m
 
 
 ## Records a noisy, distance/angle-estimated choke-point sighting — see
-## [method GoalBeliefMemory.upsert_choke_point_observation]. Keyed by the mouth's grid cell so
-## repeated glances at one gap collapse onto one row.
+## [method GoalBeliefMemory.upsert_choke_point_observation]. Sightings within [param merge_radius]
+## of an existing choke row update that row instead of minting a new one (`<= 0` reads the
+## `choke_merge_radius` config); a new row is refused when `choke_max_rows` are all confirmed.
 func record_choke_point_observation(
   mouth: Vector3,
   est_opening_width: float,
   observation_weight: float,
   motor_v3: Dictionary,
   now_ms: int,
+  merge_radius: float = -1.0,
 ) -> void:
-  var iid := _GoalBelief.choke_cell_instance_id(mouth, motor_v3)
+  var iid := _choke_iid_for(mouth, motor_v3, merge_radius)
+  if not _GoalBelief.make_room_for_choke_row(_beliefs, int(motor_v3.get("choke_max_rows", 8)), iid):
+    return
   _GoalBelief.upsert_choke_point_observation(_beliefs, iid, mouth, now_ms, est_opening_width, observation_weight)
 
 
 ## Records a confirmed choke point: a creature actually passed through and
 ## [param measured_opening_width] is the real geometric opening — see
-## [method GoalBeliefMemory.upsert_choke_point_confirmation].
+## [method GoalBeliefMemory.upsert_choke_point_confirmation]. Same merge/cap rules as
+## [method record_choke_point_observation] (a confirmation may evict the oldest observed row).
 func record_choke_point_confirmation(
   mouth: Vector3,
   measured_opening_width: float,
   motor_v3: Dictionary,
   now_ms: int,
+  merge_radius: float = -1.0,
 ) -> void:
-  var iid := _GoalBelief.choke_cell_instance_id(mouth, motor_v3)
+  var iid := _choke_iid_for(mouth, motor_v3, merge_radius)
+  if not _GoalBelief.make_room_for_choke_row(_beliefs, int(motor_v3.get("choke_max_rows", 8)), iid):
+    return
   _GoalBelief.upsert_choke_point_confirmation(_beliefs, iid, mouth, now_ms, measured_opening_width)
+
+
+func _choke_iid_for(mouth: Vector3, motor_v3: Dictionary, merge_radius: float) -> int:
+  var radius := merge_radius if merge_radius > 0.0 else float(motor_v3.get("choke_merge_radius", 3.0))
+  var near := _GoalBelief.find_choke_row_near(_beliefs, mouth, radius)
+  return near if near != 0 else _GoalBelief.choke_cell_instance_id(mouth, motor_v3)
 
 
 ## Every live choke-point belief within decay range, nearest first — the read API for flee-bias

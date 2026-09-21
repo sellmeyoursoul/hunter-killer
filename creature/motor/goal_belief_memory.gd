@@ -339,12 +339,59 @@ static func upgrade_confirmed_shelter_to_battle_tested(
   beliefs[best_iid] = upgraded
 
 
-## Synthetic per-cell instance id for a choke-point mouth — same grid-cell hashing as
-## [method shelter_cell_instance_id] but a distinct hash namespace, so a squeeze mouth and a shelter
-## anchor sharing a cell (decision 19: a shelter's enclosure mouth is a squeeze belief) stay two rows.
-static func choke_cell_instance_id(mouth: Vector3, motor_v3: Dictionary) -> int:
-  var idx := _GoalSource.grid_indices_for_anchor(mouth, motor_v3)
-  return hash([&"choke_point", idx.x, idx.y])
+## Synthetic instance id for a choke-point mouth: an exact-position hash (centimeter quantized),
+## in a namespace distinct from shelter's so a squeeze mouth and a shelter anchor at the same spot
+## stay two rows (decision 19: a shelter's enclosure mouth is a squeeze belief). Deliberately *not*
+## the coarse coverage-grid cell shelter uses — that cell is far wider than the gaps in a shrub ring
+## and would collapse them all into one row. Nearby sightings of one gap are merged by
+## [method find_choke_row_near] instead, before this id is ever minted.
+static func choke_cell_instance_id(mouth: Vector3, _motor_v3: Dictionary = {}) -> int:
+  return hash([&"choke_point", int(roundf(mouth.x * 100.0)), int(roundf(mouth.z * 100.0))])
+
+
+## Existing choke-point row whose mouth is within [param radius] of [param mouth] (nearest wins),
+## or 0. Lets repeated sightings/passes of one physical gap — which land at slightly different
+## points — update one row instead of minting a row per sample.
+static func find_choke_row_near(beliefs: Dictionary, mouth: Vector3, radius: float) -> int:
+  var best := 0
+  var best_d := INF
+  for iid in beliefs.keys():
+    var row: Dictionary = beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_CHOKE_POINT:
+      continue
+    var d := mouth.distance_to(_read_pos_v3(row.get("last_world_pos", Vector3.ZERO)))
+    if d <= radius and d < best_d:
+      best_d = d
+      best = int(iid)
+  return best
+
+
+## Makes room for a new choke-point row under [param max_rows]: true when there is already room (or
+## [param existing_iid] is being updated in place); otherwise evicts the oldest `observed` row and
+## returns true, or returns false when every row is `confirmed` (never evict measured truth). Keeps
+## a spray of remote sightings from crowding food/shelter memory out of the shared LRU cap.
+static func make_room_for_choke_row(beliefs: Dictionary, max_rows: int, existing_iid: int) -> bool:
+  if existing_iid != 0 and beliefs.has(existing_iid):
+    return true
+  var count := 0
+  var oldest_iid := 0
+  var oldest_ms := 2147483647
+  for iid in beliefs.keys():
+    var row: Dictionary = beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_CHOKE_POINT:
+      continue
+    count += 1
+    if row.get("choke_tier", &"") == CHOKE_TIER_OBSERVED:
+      var ms := int(row.get("last_observed_ms", 0))
+      if ms < oldest_ms:
+        oldest_ms = ms
+        oldest_iid = int(iid)
+  if count < max_rows:
+    return true
+  if oldest_iid == 0:
+    return false
+  beliefs.erase(oldest_iid)
+  return true
 
 
 ## Configured weight for [param choke_tier] (`choke_confidence_observed`/`_confirmed` off

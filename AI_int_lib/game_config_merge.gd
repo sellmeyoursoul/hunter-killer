@@ -537,6 +537,24 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## (a measured width is durable); `observed` rows use the generic goal_memory_* decay.
     "choke_confidence_observed": 0.3,
     "choke_confidence_confirmed": 0.7,
+    ## Choke-point *producer* (ChokePointProbe/ChokePointTracker, wired in CreatureMotorStack): a gap
+    ## is "bounded on both sides within `choke_detect_width_factor` x the creature's own diameter".
+    ## Sampled every `choke_probe_interval_ticks`; a stretch ends after `choke_exit_samples` clear
+    ## samples and counts as passed if the exit is >= `choke_pass_min_travel_factor` x diameter from
+    ## the entry. Remote `observed` looks are `choke_observe_lookahead_factor` x radius ahead, noised
+    ## by observation stat. Rows within `choke_merge_radius_factor` x diameter merge; at most
+    ## `choke_max_rows` rows so sightings can't crowd out food memory. All untuned.
+    "choke_detect_width_factor": 4.0,
+    "choke_probe_interval_ticks": 3,
+    "choke_exit_samples": 3,
+    "choke_pass_min_travel_factor": 1.0,
+    "choke_observe_lookahead_factor": 6.0,
+    "choke_merge_radius_factor": 1.0,
+    "choke_merge_radius": 3.0,
+    "choke_max_rows": 8,
+    "choke_observe_noise_frac_v1": 0.4,
+    "choke_observe_noise_frac_v10": 0.15,
+    "choke_observe_noise_frac_v25": 0.03,
     "goal_memory_ttl_sec_choke_point": 300.0,
     "goal_memory_precise_radius_choke_point": 2400.0,
     "goal_memory_forget_radius_choke_point": 2400.0,
