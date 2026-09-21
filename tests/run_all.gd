@@ -218,6 +218,7 @@ func _run_all() -> void:
   _test_locomotion_executor_continuous_forward_speed_scales_with_alignment()
   _test_body_no_distance_calorie_burn()
   _test_motor_goal_hub_starvation_eat_only()
+  await _test_awareness_overlay_keeps_last_zone_when_round_inactive()
   await _test_motor_planner_note_outcome_sawtooth_block_accumulates_on_live_source()
   _test_motor_goal_hub_incumbent_bonus_stops_near_tie_flip_flop()
   _test_motor_goal_hub_urgency_eat_preserve_band()
@@ -7756,6 +7757,20 @@ func _test_motor_planner_note_outcome_sawtooth_block_accumulates_on_live_source(
   _motor_planner_note_outcome(state, body, progress, motor_v3, 99, Vector3(0.0, 1.0, 0.0), false)
   _assert(int(state.get("consecutive_blocked", -1)) == 0, "a real step toward the goal still resets the blocked count")
   main.queue_free()
+
+
+## The F9 awareness overlay must survive the round ending (no active duel/playing state) so the
+## per-creature zone color can still be used to identify creatures after a failure.
+func _test_awareness_overlay_keeps_last_zone_when_round_inactive() -> void:
+  var overlay := (load("res://creature/awareness_debug_overlay_3d.gd") as GDScript).new() as Node3D
+  root.add_child(overlay)
+  await process_frame
+  var mesh_inst := overlay.get("_mesh_inst") as MeshInstance3D
+  mesh_inst.mesh = BoxMesh.new()
+  overlay.set("_dev_toggle", true)
+  overlay.call("_rebuild_draw")
+  _assert(mesh_inst.mesh != null, "awareness zone stays drawn when the round is no longer active")
+  overlay.queue_free()
 
 
 ## 2026-09-21 open-field flip-flop regression: sated `find_food` (0.157) vs a far, non-closing wolf's

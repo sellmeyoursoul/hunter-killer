@@ -166,8 +166,10 @@ func _rebuild_draw() -> void:
     return
   var ad := get_node_or_null("/root/AiDriver")
   if not _awareness_debug_allowed(ad):
-    _mesh_inst.mesh = null
-    _clear_markers()
+    ## Round over (or not started): leave the last drawn zone up instead of clearing it, so after a
+    ## failure the per-creature color still identifies which creature is which. Nothing stale can
+    ## outlive this — the next round spawns fresh bodies (and overlays), and toggling the overlay
+    ## off clears it via `_process`.
     return
   var par := get_parent()
   var motor: Dictionary = _motor_params_for_parent(ad, par)
