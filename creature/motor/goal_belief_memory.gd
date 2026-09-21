@@ -16,6 +16,14 @@ const SHELTER_TIER_CONFIRMED := &"confirmed"
 const SHELTER_TIER_BATTLE_TESTED := &"battle_tested"
 const SHELTER_TIER_FAILED := &"failed"
 
+## Squeeze/choke-point belief tiers (`choke_tier` field) — PHYSICS_SQUEEZE.md decision 19. Two tiers,
+## not shelter's three: a gap's width is a physical fact, so walking through it is already ground
+## truth and no adversarial "battle-tested" validation adds anything. `CHOKE_TIER_OBSERVED`: a
+## distance/angle-estimated, noisy guess at the opening width. `CHOKE_TIER_CONFIRMED`: a creature
+## actually passed through and the real geometric opening was measured (independent of who passed).
+const CHOKE_TIER_OBSERVED := &"observed"
+const CHOKE_TIER_CONFIRMED := &"confirmed"
+
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
@@ -331,6 +339,109 @@ static func upgrade_confirmed_shelter_to_battle_tested(
   beliefs[best_iid] = upgraded
 
 
+## Synthetic per-cell instance id for a choke-point mouth — same grid-cell hashing as
+## [method shelter_cell_instance_id] but a distinct hash namespace, so a squeeze mouth and a shelter
+## anchor sharing a cell (decision 19: a shelter's enclosure mouth is a squeeze belief) stay two rows.
+static func choke_cell_instance_id(mouth: Vector3, motor_v3: Dictionary) -> int:
+  var idx := _GoalSource.grid_indices_for_anchor(mouth, motor_v3)
+  return hash([&"choke_point", idx.x, idx.y])
+
+
+## Configured weight for [param choke_tier] (`choke_confidence_observed`/`_confirmed` off
+## [param motor_v3]); unrecognized/empty is 0. Mirrors [method shelter_tier_weight]'s shape so the
+## eventual flee-bias term (decision 20) can treat both belief types uniformly.
+static func choke_tier_weight(choke_tier: StringName, motor_v3: Dictionary) -> float:
+  match choke_tier:
+    CHOKE_TIER_OBSERVED:
+      return float(motor_v3.get("choke_confidence_observed", 0.3))
+    CHOKE_TIER_CONFIRMED:
+      return float(motor_v3.get("choke_confidence_confirmed", 0.7))
+    _:
+      return 0.0
+
+
+## Upsert one passive/estimated choke-point sighting. [param est_opening_width] is the noisy,
+## distance/angle-degraded guess; [param observation_weight] (0..1) is how much that guess should be
+## trusted at observation time. Never overwrites a `CHOKE_TIER_CONFIRMED` row (measured truth
+## outranks any later glance). A newer observation replaces an older `observed` one only when it is
+## at least as trustworthy, so a lucky close-up isn't clobbered by a later far-off squint.
+static func upsert_choke_point_observation(
+  beliefs: Dictionary,
+  instance_id: int,
+  mouth: Vector3,
+  now_ms: int,
+  est_opening_width: float,
+  observation_weight: float,
+) -> void:
+  if instance_id == 0:
+    return
+  var prior: Dictionary = beliefs.get(instance_id, {}) as Dictionary
+  var weight := clampf(observation_weight, 0.0, 1.0)
+  if prior.get("choke_tier", &"") == CHOKE_TIER_CONFIRMED:
+    return
+  if not prior.is_empty() and weight < float(prior.get("choke_observation_weight", 0.0)):
+    ## Keep the better estimate, but still count this as a sighting for TTL purposes.
+    prior["last_observed_ms"] = now_ms
+    beliefs[instance_id] = prior
+    return
+  beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_CHOKE_POINT,
+    "tier": TIER_PRECISE,
+    "last_world_pos": mouth,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": true,
+    "is_moving": false,
+    "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": 0,
+    "last_passibility_fail_ms": 0,
+    "choke_tier": CHOKE_TIER_OBSERVED,
+    "choke_opening_width": maxf(est_opening_width, 0.0),
+    "choke_observation_weight": weight,
+    "choke_confirm_count": 0,
+  }
+
+
+## Upsert a choke-point confirmation: a creature actually passed through and
+## [param measured_opening_width] is the real geometric opening (not the passer's own radius —
+## decision 19's 2026-09-18 revision). A second confirmation, by any creature, measures the same
+## physical fact, so it refines a running mean rather than ratcheting or overwriting (§8f).
+static func upsert_choke_point_confirmation(
+  beliefs: Dictionary,
+  instance_id: int,
+  mouth: Vector3,
+  now_ms: int,
+  measured_opening_width: float,
+) -> void:
+  if instance_id == 0:
+    return
+  var prior: Dictionary = beliefs.get(instance_id, {}) as Dictionary
+  var width := maxf(measured_opening_width, 0.0)
+  var count := 1
+  if prior.get("choke_tier", &"") == CHOKE_TIER_CONFIRMED:
+    count = int(prior.get("choke_confirm_count", 1)) + 1
+    var prior_w := float(prior.get("choke_opening_width", width))
+    width = prior_w + (width - prior_w) / float(count)
+  beliefs[instance_id] = {
+    "instance_id": instance_id,
+    "goal_kind": _GkReg.GK_CHOKE_POINT,
+    "tier": TIER_PRECISE,
+    "last_world_pos": mouth,
+    "last_observed_ms": now_ms,
+    "coarse_entered_ms": 0,
+    "consumable_now": true,
+    "is_moving": false,
+    "last_velocity": Vector3.ZERO,
+    "passibility_fail_count": int(prior.get("passibility_fail_count", 0)),
+    "last_passibility_fail_ms": int(prior.get("last_passibility_fail_ms", 0)),
+    "choke_tier": CHOKE_TIER_CONFIRMED,
+    "choke_opening_width": width,
+    "choke_observation_weight": 1.0,
+    "choke_confirm_count": count,
+  }
+
+
 ## Upsert beliefs for bushes seen this tick; returns updated belief table.
 static func sync_from_scene(
   beliefs: Dictionary,
@@ -535,22 +646,38 @@ static func maintain(
   var shelter_precise_r := float(motor_p.get("goal_memory_precise_radius_shelter", precise_r))
   var shelter_forget_r := float(motor_p.get("goal_memory_forget_radius_shelter", forget_r))
   var shelter_ttl_ms := int(float(motor_p.get("goal_memory_ttl_sec_shelter", motor_p.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
+  ## Confirmed choke points are a durable physical fact (decision 19) — generous `_choke_point`
+  ## overrides, falling back to the generic keys when unset. `observed` choke rows are a noisy
+  ## guess and just use the generic decay like any other row.
+  var choke_precise_r := float(motor_p.get("goal_memory_precise_radius_choke_point", precise_r))
+  var choke_forget_r := float(motor_p.get("goal_memory_forget_radius_choke_point", forget_r))
+  var choke_ttl_ms := int(float(motor_p.get("goal_memory_ttl_sec_choke_point", motor_p.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
   var to_erase: Array = []
   for iid in beliefs.keys():
     var row: Dictionary = beliefs[iid]
     var is_shelter: bool = row.get("goal_kind", &"") == _GkReg.GK_SHELTER
+    var is_choke_confirmed: bool = (
+      row.get("goal_kind", &"") == _GkReg.GK_CHOKE_POINT
+      and row.get("choke_tier", &"") == CHOKE_TIER_CONFIRMED
+    )
     var last_pos: Vector3 = _read_pos_v3(row.get("last_world_pos", Vector3.ZERO))
     var dist := creature_pos.distance_to(last_pos)
-    if dist > (shelter_forget_r if is_shelter else forget_r):
+    var row_forget_r := shelter_forget_r if is_shelter else (choke_forget_r if is_choke_confirmed else forget_r)
+    if dist > row_forget_r:
       to_erase.append(iid)
       continue
     var last_obs := int(row.get("last_observed_ms", 0))
-    var ttl_ms := shelter_ttl_ms if is_shelter else (mover_ttl_ms if bool(row.get("is_moving", false)) else global_ttl_ms)
+    var ttl_ms := (
+      shelter_ttl_ms if is_shelter
+      else (choke_ttl_ms if is_choke_confirmed
+      else (mover_ttl_ms if bool(row.get("is_moving", false)) else global_ttl_ms))
+    )
     if now_ms - last_obs > ttl_ms:
       to_erase.append(iid)
       continue
     var tier: StringName = row.get("tier", TIER_PRECISE)
-    if tier == TIER_PRECISE and dist > (shelter_precise_r if is_shelter else precise_r):
+    var row_precise_r := shelter_precise_r if is_shelter else (choke_precise_r if is_choke_confirmed else precise_r)
+    if tier == TIER_PRECISE and dist > row_precise_r:
       row["tier"] = TIER_COARSE
       row["coarse_entered_ms"] = now_ms
       beliefs[iid] = row
@@ -571,6 +698,9 @@ static func maintain(
       ## would make a confirmed shelter the de facto first LRU-eviction candidate. Exempt (still
       ## subject to TTL/forget-radius eviction above).
       if row2.get("goal_kind", &"") == _GkReg.GK_SHELTER and bool(row2.get("fit_confirmed", false)):
+        continue
+      ## Same reasoning for a confirmed choke point: hard-won, rarely re-observed.
+      if row2.get("goal_kind", &"") == _GkReg.GK_CHOKE_POINT and row2.get("choke_tier", &"") == CHOKE_TIER_CONFIRMED:
         continue
       var observed := int(row2.get("last_observed_ms", 0))
       var iid_int := int(iid2)

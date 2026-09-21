@@ -5,6 +5,7 @@ extends Object
 const GK_FIND_FOOD := &"find_food"
 const GK_AVOID_HOSTILES := &"avoid_hostiles"
 const GK_SHELTER := &"shelter"
+const GK_CHOKE_POINT := &"choke_point"
 const GK_FIND_MATE := &"find_mate"
 
 const PARENT_FIND_FOOD := &"find_food"
@@ -23,7 +24,7 @@ const _VALID_PARENT_TIER2: Array[StringName] = [
 
 
 static func core_goal_kinds() -> Array:
-  return [GK_FIND_FOOD, GK_AVOID_HOSTILES, GK_SHELTER, GK_FIND_MATE]
+  return [GK_FIND_FOOD, GK_AVOID_HOSTILES, GK_SHELTER, GK_CHOKE_POINT, GK_FIND_MATE]
 
 
 static func _core_catalog_entries() -> Dictionary:
@@ -42,6 +43,13 @@ static func _core_catalog_entries() -> Dictionary:
       "parent_tier2": PARENT_AVOID_HOSTILES,
       "salient_writes": false,
       "context_overlay": &"squeeze_fingerprint",
+    },
+    ## Not a goal of its own (PHYSICS_SQUEEZE.md decision 19) — a belief-only kind consulted as an
+    ## input inside flee/avoid scoring, so it rides the same Tier-2 parent as shelter.
+    GK_CHOKE_POINT: {
+      "parent_tier2": PARENT_AVOID_HOSTILES,
+      "salient_writes": false,
+      "context_overlay": &"",
     },
     GK_FIND_MATE: {
       "parent_tier2": PARENT_FIND_MATE,

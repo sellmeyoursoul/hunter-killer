@@ -174,6 +174,8 @@ func _run_all() -> void:
   _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours()
   _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
   _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ()
+  _test_motor_planner_live_locale_handoff_lost_food_not_repicked_from_memory()
+  _test_motor_planner_handoff_exclusion_cooldown_expires()
   # STUCK-RABBIT FIX (2026-09-16) — live-vs-locale handoff defaults to live, two survival exceptions
   _test_motor_planner_live_locale_handoff_prefers_close_affordable_live_over_richer_locale()
   _test_motor_planner_live_locale_handoff_net_loss_prefers_locale()
@@ -295,6 +297,9 @@ func _run_all() -> void:
   _test_creature_motor_stack_shelter_feasibility_reflects_confirmed_belief()
   _test_memory_adapter_shelter_belief_ttl_uses_shelter_specific_keys()
   _test_memory_adapter_shelter_belief_survives_lru_cap()
+  _test_choke_point_belief_tiers_and_confirmation_refine()
+  _test_choke_point_belief_decay_and_lru_overrides()
+  _test_choke_point_registry_and_read_api()
   _test_memory_adapter_shelter_observation_writes_observed_tier_not_active_for_flee()
   _test_memory_adapter_shelter_observation_never_downgrades_confirmed()
   _test_memory_adapter_shelter_selection_prefers_battle_tested_over_closer_confirmed()
@@ -2463,6 +2468,127 @@ func _test_memory_adapter_shelter_belief_survives_lru_cap() -> void:
   _assert(
     adapter.consult_shelter_beliefs(shelter_anchor, motor_v3, now_ms + 1000 + max_entries + 5).get("active", false),
     "confirmed shelter belief survives LRU cap eviction despite stale last_observed_ms",
+  )
+
+
+## §9 slice 8 (decision 19): choke-point belief tiers. Observed never clobbers confirmed, a
+## less-trustworthy observation never displaces a better one, and repeated confirmations refine a
+## running mean of the *geometric* opening width rather than ratcheting or overwriting (§8f).
+func _test_choke_point_belief_tiers_and_confirmation_refine() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var mouth := Vector3(30.0, 1.0, 30.0)
+  var now_ms := 1_000_000
+  adapter.record_choke_point_observation(mouth, 3.0, 0.8, motor_v3, now_ms)
+  var rows := adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms)
+  _assert(rows.size() == 1, "one observed choke row after one observation")
+  _assert(rows[0]["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_OBSERVED, "first sighting is observed tier")
+  _assert(is_equal_approx(float(rows[0]["opening_width"]), 3.0), "observed stores the estimated width")
+  ## A worse (farther/more oblique) squint must not replace the better estimate.
+  adapter.record_choke_point_observation(mouth, 9.0, 0.2, motor_v3, now_ms + 100)
+  rows = adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 100)
+  _assert(is_equal_approx(float(rows[0]["opening_width"]), 3.0), "lower-weight observation keeps the better estimate")
+  ## First confirmation replaces the guess with measured truth.
+  adapter.record_choke_point_confirmation(mouth, 2.0, motor_v3, now_ms + 200)
+  rows = adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 200)
+  _assert(rows.size() == 1, "confirmation upgrades the same row (same mouth cell), not a second one")
+  _assert(rows[0]["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED, "confirmation sets confirmed tier")
+  _assert(is_equal_approx(float(rows[0]["opening_width"]), 2.0), "confirmed stores the measured width")
+  ## Later observation cannot downgrade confirmed truth.
+  adapter.record_choke_point_observation(mouth, 8.0, 1.0, motor_v3, now_ms + 300)
+  rows = adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 300)
+  _assert(rows[0]["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED, "observation never downgrades confirmed")
+  _assert(is_equal_approx(float(rows[0]["opening_width"]), 2.0), "observation never overwrites confirmed width")
+  ## Second confirmation (another creature, slightly different measurement) refines, not ratchets.
+  adapter.record_choke_point_confirmation(mouth, 2.2, motor_v3, now_ms + 400)
+  rows = adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 400)
+  _assert(is_equal_approx(float(rows[0]["opening_width"]), 2.1), "second confirmation refines toward the running mean")
+  _assert(
+    float(rows[0]["weight"]) > _GoalBeliefMemoryScr.choke_tier_weight(_GoalBeliefMemoryScr.CHOKE_TIER_OBSERVED, motor_v3),
+    "confirmed outweighs observed",
+  )
+  _assert(is_equal_approx(_GoalBeliefMemoryScr.choke_tier_weight(&"bogus", motor_v3), 0.0), "unknown tier has no weight")
+  ## A different cell is a different row — no recorded topology between mouths.
+  adapter.record_choke_point_confirmation(Vector3(400.0, 1.0, 400.0), 5.0, motor_v3, now_ms + 500)
+  _assert(
+    adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 500).size() == 2,
+    "distinct mouths are stored independently",
+  )
+  ## A choke row must not collide with a shelter row anchored in the same cell.
+  adapter.record_shelter_evaluation(_GoalBeliefMemoryScr.shelter_cell_instance_id(mouth, motor_v3), mouth, true, 0.9, now_ms)
+  _assert(
+    adapter.consult_choke_point_beliefs(mouth, motor_v3, now_ms + 500).size() == 2,
+    "shelter row in the same cell doesn't alias a choke row",
+  )
+
+
+## Decay: confirmed choke rows use the `_choke_point` overrides (durable), observed rows use the
+## generic short decay; confirmed rows are exempt from LRU eviction.
+func _test_choke_point_belief_decay_and_lru_overrides() -> void:
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["goal_memory_ttl_sec"] = 10.0
+  motor_v3["goal_memory_ttl_sec_choke_point"] = 300.0
+  var start_ms := 2_000_000
+  var obs_mouth := Vector3(10.0, 1.0, 10.0)
+  var conf_mouth := Vector3(200.0, 1.0, 200.0)
+  adapter.record_choke_point_observation(obs_mouth, 3.0, 0.5, motor_v3, start_ms)
+  adapter.record_choke_point_confirmation(conf_mouth, 2.5, motor_v3, start_ms)
+  var here := Vector3(100.0, 1.0, 100.0)
+  adapter.maintain_beliefs(here, start_ms + 20_000, motor_v3)
+  var rows := adapter.consult_choke_point_beliefs(here, motor_v3, start_ms + 20_000)
+  _assert(rows.size() == 1, "observed row expires on generic TTL while confirmed survives")
+  _assert(rows[0]["tier"] == _GoalBeliefMemoryScr.CHOKE_TIER_CONFIRMED, "the survivor is the confirmed row")
+  adapter.maintain_beliefs(here, start_ms + 301_000, motor_v3)
+  _assert(
+    adapter.consult_choke_point_beliefs(here, motor_v3, start_ms + 301_000).is_empty(),
+    "confirmed row evicted once the choke-point TTL elapses",
+  )
+  ## LRU: a confirmed row survives the cap despite a stale last_observed_ms.
+  var adapter2 := _MemoryAdapter.new()
+  var max_entries := int(motor_v3.get("goal_memory_max_entries", 25))
+  adapter2.record_choke_point_confirmation(conf_mouth, 2.5, motor_v3, start_ms)
+  for i in max_entries + 5:
+    adapter2.seed_precise_food_belief(2000 + i, Vector3(float(i), 1.0, 0.0), start_ms + 1000 + i)
+  adapter2.maintain_beliefs(conf_mouth, start_ms + 2000, motor_v3)
+  _assert(
+    not adapter2.consult_choke_point_beliefs(conf_mouth, motor_v3, start_ms + 2000).is_empty(),
+    "confirmed choke row survives LRU cap eviction",
+  )
+
+
+func _test_choke_point_registry_and_read_api() -> void:
+  _assert(_GkReg.GK_CHOKE_POINT in _GkReg.core_goal_kinds(), "GK_CHOKE_POINT is a core goal kind")
+  var catalog := _GkReg.goal_kind_catalog_for_pack("")
+  _assert(
+    _GkReg.parent_tier2_for_goal_kind(_GkReg.GK_CHOKE_POINT, catalog) == &"avoid_hostiles",
+    "choke point rides the avoid_hostiles parent like shelter",
+  )
+  _assert(
+    not _GkReg.salient_writes_enabled(_GkReg.GK_CHOKE_POINT, catalog),
+    "choke point is belief-only — no salient replay writes",
+  )
+  var adapter := _MemoryAdapter.new()
+  var motor_v3 := _motor_v3_test_params()
+  var now_ms := 3_000_000
+  var far := Vector3(500.0, 1.0, 0.0)
+  var near := Vector3(50.0, 1.0, 0.0)
+  adapter.record_choke_point_confirmation(far, 4.0, motor_v3, now_ms)
+  adapter.record_choke_point_observation(near, 2.0, 1.0, motor_v3, now_ms)
+  var rows := adapter.consult_choke_point_beliefs(Vector3.ZERO, motor_v3, now_ms)
+  _assert(rows.size() == 2, "read API returns every in-range row")
+  _assert(
+    float(rows[0]["distance"]) < float(rows[1]["distance"]) and rows[0]["pos"] == near,
+    "read API sorts nearest first",
+  )
+  ## A choke row is invisible to the shelter consult and to the shelter confidence sum.
+  _assert(
+    not adapter.consult_shelter_beliefs(Vector3.ZERO, motor_v3, now_ms).get("active", false),
+    "choke rows never satisfy the shelter consult",
+  )
+  _assert(
+    is_equal_approx(adapter.shelter_confidence_score(Vector3.ZERO, motor_v3, now_ms), 0.0),
+    "choke rows contribute nothing to shelter_map_confidence",
   )
 
 
@@ -5552,6 +5678,81 @@ func _test_motor_planner_live_locale_handoff_same_kind_prefers_live() -> void:
   )
   _assert(int(state.get("step_instance_id", 0)) == 88101, "handoff binds live instance")
   main.queue_free()
+
+
+## 2026-09-21 valley-dither regression: a live food that loses the live-vs-locale calorie handoff
+## must not be re-picked from *memory* on the next tick. Before the fix the creature turned toward
+## locale, the food left the forward-only awareness cone, and the precise tier (which has no calorie
+## check) re-bound the same food — ping-ponging between the two targets for 200+ ticks until the
+## silent-stall invariant tripped.
+func _test_motor_planner_live_locale_handoff_lost_food_not_repicked_from_memory() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.current_calories = 2.0
+  var stack := _motor_stack_test_configure(body)
+  stack.seed_locale_prior_for_test(7, 7, 1.0)
+  var motor_v3 := _motor_v3_test_params()
+  var food_iid := 88201
+  var live_entry := {
+    "pos": Vector3(-40.0, 1.0, 0.0),
+    "instance_id": food_iid,
+    "stimulus_kind_id": &"shrub_low",
+    "kind_yield": 0.1,
+    "consumable_now": true,
+    "is_moving": false,
+  }
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 0.05)
+  ctx["refresh_step_objective"] = true
+  ## Tick 1: the food is live and visible — the calorie handoff sends the creature to locale.
+  ctx["scan"] = {
+    "food_split": {"ready": [live_entry], "unready": []},
+    "threat_samples": [],
+    "food_map_confidence": 1.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective", ctx, state, body.global_position, motor_v3, ctx["scan"], RID(), 0.5,
+  )
+  _assert(state.get("step_source", &"") == &"locale", "precondition: live food loses the handoff to locale")
+  ## The creature turns away, the food leaves awareness, but it is still remembered (precise).
+  adapter.seed_precise_food_belief(food_iid, live_entry["pos"], Time.get_ticks_msec())
+  ctx["scan"] = _motor_stack_empty_food_scan()
+  state["step_goal_set"] = false
+  state["step_source"] = &""
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective", ctx, state, body.global_position, motor_v3, ctx["scan"], RID(), 0.5,
+  )
+  _assert(
+    int(state.get("step_instance_id", 0)) != food_iid and state.get("step_source", &"") != &"precise",
+    "food that just lost the live-vs-locale handoff is not re-bound from precise memory",
+  )
+  main.queue_free()
+
+
+## The handoff exclusion is a cooldown, not a permanent blacklist: it decays and stops excluding.
+func _test_motor_planner_handoff_exclusion_cooldown_expires() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["live_locale_handoff_exclusion_ticks"] = 2
+  var state := _MotorPlanner.new_state()
+  var iid := 88202
+  (_MotorPlanner as GDScript).call(
+    "_hold_live_food_lost_to_locale", state, {"instance_id": iid}, motor_v3
+  )
+  var ctx := {"memory_adapter": null}
+  var held: Dictionary = (_MotorPlanner as GDScript).call("_food_pursuit_exclusions", ctx, state, motor_v3)
+  _assert(held.has(iid), "food is excluded right after losing the handoff")
+  for _i in 3:
+    (_MotorPlanner as GDScript).call("_tick_handoff_exclusion_cooldown", state)
+  var after: Dictionary = (_MotorPlanner as GDScript).call("_food_pursuit_exclusions", ctx, state, motor_v3)
+  _assert(not after.has(iid), "handoff exclusion decays after its cooldown window")
+  ## A live food with no instance id (nothing to key an exclusion on) must not set one.
+  var state2 := _MotorPlanner.new_state()
+  (_MotorPlanner as GDScript).call("_hold_live_food_lost_to_locale", state2, {}, motor_v3)
+  _assert(int(state2.get("handoff_excluded_instance_id", -1)) == 0, "no instance id -> no exclusion")
 
 
 func _test_motor_planner_live_locale_handoff_richer_locale_when_kinds_differ() -> void:

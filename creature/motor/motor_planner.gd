@@ -108,6 +108,11 @@ static func new_state() -> Dictionary:
     ## `_clear_prey_race_tracking` re-arming on whatever's selected next.
     "prey_race_excluded_instance_id": 0,
     "prey_race_excluded_ticks_remaining": 0,
+    ## Live-vs-locale handoff hysteresis (see `_hold_live_food_lost_to_locale`) — the live food
+    ## instance that just lost the calorie handoff to a locale target, held out of every food
+    ## consult for a cooldown so the memory tier can't immediately re-pick it.
+    "handoff_excluded_instance_id": 0,
+    "handoff_excluded_ticks_remaining": 0,
     "flee_waypoint": Vector3.ZERO,
     ## See `step_goal_set` — this is the field whose sentinel collision caused C9's 7th-fix bug.
     "flee_waypoint_set": false,
@@ -1202,6 +1207,9 @@ static func _food_pursuit_exclusions(ctx: Dictionary, state: Dictionary, motor_v
   var race_iid := int(state.get("prey_race_excluded_instance_id", 0))
   if race_iid != 0 and int(state.get("prey_race_excluded_ticks_remaining", 0)) > 0:
     excluded[race_iid] = true
+  var handoff_iid := int(state.get("handoff_excluded_instance_id", 0))
+  if handoff_iid != 0 and int(state.get("handoff_excluded_ticks_remaining", 0)) > 0:
+    excluded[handoff_iid] = true
   var adapter: RefCounted = ctx.get("memory_adapter")
   if adapter == null or not adapter.has_method(&"get_beliefs"):
     return excluded
@@ -1214,6 +1222,38 @@ static func _food_pursuit_exclusions(ctx: Dictionary, state: Dictionary, motor_v
     if int((row as Dictionary).get("passibility_fail_count", 0)) >= switch_thresh:
       excluded[int(iid)] = true
   return excluded
+
+
+## Live-vs-locale handoff hysteresis (2026-09-21, rabbit dithering in the valley for 200+ ticks):
+## `_live_vs_locale_handoff_prefers_live` runs its calorie economics only while a food is *live*.
+## Once it picks the locale target the creature turns away, the food leaves the (forward-only)
+## awareness cone, and `_sync_food_memory_objective`'s precise tier — which has no such economics
+## check — re-picks the very same food from memory, turning the creature straight back. Neither
+## choice ever removed the condition that triggered the other, so it ping-ponged forever. Holding
+## the losing instance out of every food consult (via `_food_pursuit_exclusions`) for a cooldown
+## lets the locale choice actually be walked. Decayed once per tick by
+## `_tick_handoff_exclusion_cooldown`.
+static func _hold_live_food_lost_to_locale(
+  state: Dictionary, live_food: Dictionary, motor_v3: Dictionary,
+) -> void:
+  var iid := int(live_food.get("instance_id", 0))
+  if iid == 0:
+    return
+  state["handoff_excluded_instance_id"] = iid
+  state["handoff_excluded_ticks_remaining"] = int(
+    motor_v3.get("live_locale_handoff_exclusion_ticks", 240)
+  )
+
+
+static func _tick_handoff_exclusion_cooldown(state: Dictionary) -> void:
+  var remaining := int(state.get("handoff_excluded_ticks_remaining", 0))
+  if remaining <= 0:
+    state["handoff_excluded_instance_id"] = 0
+    return
+  remaining -= 1
+  state["handoff_excluded_ticks_remaining"] = remaining
+  if remaining <= 0:
+    state["handoff_excluded_instance_id"] = 0
 
 
 static func _derive_find_food_step_objective(
@@ -1257,6 +1297,7 @@ static func _derive_find_food_step_objective(
           food, locale_candidate, adapter, motor_v3, creature_pos, ctx.get("body"),
           ctx.get("traits", {})
         ):
+          _hold_live_food_lost_to_locale(state, food, motor_v3)
           _apply_locale_food_objective(
             state, locale_candidate, creature_pos, map_rid, agent_r
           )
@@ -2451,6 +2492,7 @@ static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> b
 ## wins"). A single stretch of open ground (no detours minted) still gets the full latch duration.
 static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> void:
   _tick_prey_race_exclusion_cooldown(state)
+  _tick_handoff_exclusion_cooldown(state)
   if not _prey_engagement_latch_valid(state):
     return
   var scan: Dictionary = ctx.get("scan", {})

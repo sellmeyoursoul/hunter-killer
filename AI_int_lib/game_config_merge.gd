@@ -517,11 +517,24 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "prey_race_giveup_ticks_at_stat_25": 22.19,
     "prey_race_not_closing_epsilon": 0.05,
     "prey_race_exclusion_cooldown_ticks": 60,
+    ## Ticks a live food that lost the live-vs-locale calorie handoff stays excluded from every food
+    ## consult (see `motor_planner.gd::_hold_live_food_lost_to_locale`) — long enough to walk to the
+    ## locale target instead of turning back to the remembered copy of the food it just rejected.
+    "live_locale_handoff_exclusion_ticks": 240,
     "goal_inventory_min_shelter": 1.0,
     "goal_shelter_explore_floor": 0.25,
     "goal_memory_ttl_sec_shelter": 300.0,
     "goal_memory_precise_radius_shelter": 2400.0,
     "goal_memory_forget_radius_shelter": 2400.0,
+    ## GK_CHOKE_POINT belief (PHYSICS_SQUEEZE.md decision 19/§9 slice 8). Tier weights mirror the
+    ## shelter_confidence_* trio but only two tiers exist (a gap's width is a physical fact, so
+    ## there's no battle-tested). The `_choke_point` decay overrides apply to *confirmed* rows only
+    ## (a measured width is durable); `observed` rows use the generic goal_memory_* decay.
+    "choke_confidence_observed": 0.3,
+    "choke_confidence_confirmed": 0.7,
+    "goal_memory_ttl_sec_choke_point": 300.0,
+    "goal_memory_precise_radius_choke_point": 2400.0,
+    "goal_memory_forget_radius_choke_point": 2400.0,
     "dead_end_memory_ttl_sec": 15.0,
     "dead_end_memory_max_entries": 12,
     "dead_end_match_radius": 52.0,

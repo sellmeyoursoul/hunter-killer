@@ -408,6 +408,67 @@ func shelter_confidence_score(creature_pos: Vector3, motor_v3: Dictionary, now_m
   return total
 
 
+## Records a noisy, distance/angle-estimated choke-point sighting — see
+## [method GoalBeliefMemory.upsert_choke_point_observation]. Keyed by the mouth's grid cell so
+## repeated glances at one gap collapse onto one row.
+func record_choke_point_observation(
+  mouth: Vector3,
+  est_opening_width: float,
+  observation_weight: float,
+  motor_v3: Dictionary,
+  now_ms: int,
+) -> void:
+  var iid := _GoalBelief.choke_cell_instance_id(mouth, motor_v3)
+  _GoalBelief.upsert_choke_point_observation(_beliefs, iid, mouth, now_ms, est_opening_width, observation_weight)
+
+
+## Records a confirmed choke point: a creature actually passed through and
+## [param measured_opening_width] is the real geometric opening — see
+## [method GoalBeliefMemory.upsert_choke_point_confirmation].
+func record_choke_point_confirmation(
+  mouth: Vector3,
+  measured_opening_width: float,
+  motor_v3: Dictionary,
+  now_ms: int,
+) -> void:
+  var iid := _GoalBelief.choke_cell_instance_id(mouth, motor_v3)
+  _GoalBelief.upsert_choke_point_confirmation(_beliefs, iid, mouth, now_ms, measured_opening_width)
+
+
+## Every live choke-point belief within decay range, nearest first — the read API for flee-bias
+## scoring (slice 9). Each entry: `{instance_id, pos, tier, opening_width, weight, distance}`.
+## Unlike [method consult_shelter_beliefs] this returns all rows (observed included, weight
+## distinguishes them) since decision 20 scores every candidate in radius rather than picking one.
+func consult_choke_point_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> Array:
+  var generic_forget_r := float(motor_v3.get("goal_memory_forget_radius", 2400.0))
+  var generic_ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec", 45.0)) * 1000.0)
+  var conf_forget_r := float(motor_v3.get("goal_memory_forget_radius_choke_point", generic_forget_r))
+  var conf_ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec_choke_point", motor_v3.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
+  var out: Array = []
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_CHOKE_POINT:
+      continue
+    var tier: StringName = row.get("choke_tier", &"")
+    var confirmed := tier == _GoalBelief.CHOKE_TIER_CONFIRMED
+    var pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    var dist := creature_pos.distance_to(pos)
+    if dist > (conf_forget_r if confirmed else generic_forget_r):
+      continue
+    if now_ms - int(row.get("last_observed_ms", 0)) > (conf_ttl_ms if confirmed else generic_ttl_ms):
+      continue
+    out.append({
+      "instance_id": int(iid),
+      "pos": pos,
+      "tier": tier,
+      "opening_width": float(row.get("choke_opening_width", 0.0)),
+      "weight": _GoalBelief.choke_tier_weight(tier, motor_v3) * float(row.get("choke_observation_weight", 1.0)),
+      "distance": dist,
+    })
+  out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["distance"]) < float(b["distance"]))
+  return out
+
+
 ## Injects [code]kind_yield[/code] on live food entries from kind profile consult.
 func enrich_food_split_with_kind_yield(food_split: Dictionary, motor_v3: Dictionary) -> Dictionary:
   var out := food_split.duplicate(true)
