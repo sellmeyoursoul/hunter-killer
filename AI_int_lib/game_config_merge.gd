@@ -385,6 +385,17 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     ## safe and reachable" narrowly beat "merely open ground" without overriding the give-up
     ## escalation's own boxed-in handling.
     "flee_shelter_bias_bonus": 0.15,
+    ## Flee-candidate scoring, decision 20 (FleeCandidateScoring): every candidate (open bearings and
+    ## shelter/choke beliefs) gets `race_term = clamp(margin, +-cap) * gain` (fraction of flee distance;
+    ## margin is the scale-free ratio (d_threat - d_self) / (d_threat + d_self), so cap 0.5 = threat 3x farther);
+    ## a belief's own bonus (`flee_shelter_bias_bonus` / `flee_choke_bias_bonus`, x tier weight x
+    ## proximity) is additionally gated 0..1 by the race. Beliefs within `flee_belief_radius_factor` x
+    ## the flee distance enter the pool, nearest `flee_belief_max_candidates` only. Untuned.
+    "flee_race_margin_cap": 0.5,
+    "flee_race_margin_gain": 0.6,
+    "flee_choke_bias_bonus": 0.15,
+    "flee_belief_radius_factor": 1.0,
+    "flee_belief_max_candidates": 4,
   }
 
 

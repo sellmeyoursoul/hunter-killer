@@ -379,6 +379,41 @@ func consult_shelter_beliefs(creature_pos: Vector3, motor_v3: Dictionary, now_ms
   return {"active": true, "pos": best_pos, "instance_id": best_iid, "source": &"shelter_precise"}
 
 
+## Every confirmed-or-better shelter belief within decay range, as
+## `{instance_id, pos, weight}` ([code]weight[/code] = `shelter_tier_weight`) — the list form of
+## [method consult_shelter_beliefs] for flee's widened candidate pool (decision 20): flee scores every
+## belief in its radius through one common function instead of receiving a single pre-picked nearest.
+## Same eligibility filters as the single-row consult (`observed` never qualifies).
+func consult_shelter_belief_candidates(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> Array:
+  var precise_r := float(motor_v3.get("goal_memory_precise_radius_shelter", motor_v3.get("goal_memory_precise_radius", 1000.0)))
+  var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
+  var ttl_ms := int(float(motor_v3.get("goal_memory_ttl_sec_shelter", motor_v3.get("goal_memory_ttl_sec", 45.0))) * 1000.0)
+  var out: Array = []
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    var shelter_tier: StringName = row.get("shelter_tier", &"")
+    if (
+      row.get("goal_kind", &"") != _GkReg.GK_SHELTER
+      or (
+        shelter_tier != _GoalBelief.SHELTER_TIER_CONFIRMED
+        and shelter_tier != _GoalBelief.SHELTER_TIER_BATTLE_TESTED
+      )
+    ):
+      continue
+    var pos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    var dist := creature_pos.distance_to(pos)
+    if dist > precise_r or dist > forget_r:
+      continue
+    if now_ms - int(row.get("last_observed_ms", 0)) > ttl_ms:
+      continue
+    out.append({
+      "instance_id": int(iid),
+      "pos": pos,
+      "weight": _GoalBelief.shelter_tier_weight(shelter_tier, motor_v3),
+    })
+  return out
+
+
 ## Shelter feasibility — confirmed-or-better belief present or [code]0.0[/code] (replaces the
 ## [code]creature_motor_stack.gd[/code] hardcoded stub, §6.4).
 func best_shelter_feasibility(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> float:

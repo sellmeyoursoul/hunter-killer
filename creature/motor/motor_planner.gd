@@ -11,6 +11,7 @@ const _PathClear := preload("res://creature/motor/motor_path_clear.gd")
 const _BlockedApproach := preload("res://creature/motor/blocked_approach_memory.gd")
 const _BlockedObjective := preload("res://creature/motor/blocked_objective_resolver.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
+const _FleeScoring := preload("res://creature/motor/flee_candidate_scoring.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _ExploreSeek := preload("res://creature/motor/motor_explore_seek.gd")
@@ -2920,63 +2921,51 @@ static func _mint_flee_waypoint(
     var base_dir := to_wp.normalized()
     var flee_dist := to_wp.length()
 
-    # RANDOMTESTS RT4 Slice 2 (2026-08-26): bias candidate selection toward a confirmed shelter
-    # belief, when one is known and roughly in range, on top of the pure reach-scoring below.
-    # `consult_shelter_beliefs` already picks the *nearest* confirmed shelter across all belief
-    # rows, so multi-shelter selection is handled upstream — this only ever sees a single
-    # candidate. The bonus is added as a 7th candidate direction, scaled down linearly with
-    # distance (near-full bonus close by, near-zero approaching `goal_memory_forget_radius_shelter`)
-    # so a known-but-distant shelter can't out-compete much-closer open ground. Deliberately doesn't
-    # touch `best_reach`/`final_reach` themselves (tracked separately as the true, unbiased reach)
-    # so the give-up escalation and `reach_known` boxed-in handling below stay exactly as tuned by
-    # RT1/C9/C16/C17 — the bonus only ever influences *which* direction wins, never whether the
-    # creature is treated as cornered.
-    var shelter_dir := Vector3.ZERO
-    var shelter_bias_reach := 0.0
-    var shelter_active := false
-    var adapter: RefCounted = ctx.get("memory_adapter")
-    if adapter != null and adapter.has_method(&"consult_shelter_beliefs"):
-      var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
-      var shelter: Dictionary = adapter.consult_shelter_beliefs(creature_pos, motor_v3, now_ms)
-      if bool(shelter.get("active", false)):
-        var shelter_pos: Vector3 = shelter.get("pos", Vector3.ZERO)
-        var to_shelter := Vector3(shelter_pos.x - creature_pos.x, 0.0, shelter_pos.z - creature_pos.z)
-        var shelter_dist := to_shelter.length()
-        if shelter_dist > 1e-6:
-          shelter_dir = to_shelter / shelter_dist
-          var forget_r := float(motor_v3.get("goal_memory_forget_radius_shelter", motor_v3.get("goal_memory_forget_radius", 2400.0)))
-          var proximity := 1.0 - clampf(shelter_dist / maxf(forget_r, 1.0), 0.0, 1.0)
-          var bonus_frac := float(motor_v3.get("flee_shelter_bias_bonus", 0.15)) * proximity
-          shelter_bias_reach = flee_dist * bonus_frac
-          shelter_active = true
-
-    var candidate_dirs: Array = []
+    # Candidate pool (decision 20, §9 slice 9): the 6 open bearings plus every shelter/choke belief in
+    # the flee radius (nearest few), all scored through one common function — reach + a race-margin
+    # term for every candidate, plus each belief's own bonus gated by the race. Supersedes RANDOMTESTS
+    # RT4 Slice 2's single pre-picked nearest shelter appended as a 7th direction. As before, only
+    # `effective` is biased — `best_reach`/`final_reach` stay the true, unbiased reach so the give-up
+    # escalation and `reach_known` boxed-in handling below stay exactly as tuned by RT1/C9/C16/C17.
+    var threat_pts: Array = _FleeScoring.threat_positions(ctx.get("threat_samples", []), creature_pos)
+    var candidates: Array = []
     for i in range(6):
-      candidate_dirs.append(base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i)))
-    if shelter_active:
-      candidate_dirs.append(shelter_dir)
+      candidates.append({
+        "dir": base_dir.rotated(Vector3.UP, deg_to_rad(60.0 * i)),
+        "dist": flee_dist,
+        "bonus": 0.0,
+        "belief": false,
+      })
+    candidates.append_array(_flee_belief_candidates(ctx, body, creature_pos, flee_dist, motor_v3))
 
     var best_dir := base_dir
     var best_reach := -1.0
-    var best_effective := -1.0
+    var best_effective := -INF
     var best_endpoint := creature_pos
     var best_path := PackedVector3Array()
     var best_clear_dir := Vector3.ZERO
     var best_clear_reach := -1.0
-    var best_clear_effective := -1.0
+    var best_clear_effective := -INF
     var best_clear_endpoint := creature_pos
     var best_clear_path := PackedVector3Array()
     var found_clear := false
-    for i in range(candidate_dirs.size()):
-      var candidate_dir: Vector3 = candidate_dirs[i]
+    for cand_v in candidates:
+      var cand: Dictionary = cand_v
+      var candidate_dir: Vector3 = cand["dir"]
+      var cand_dist := float(cand["dist"])
       var probe := _apply_route_plausibility_scan(
-        _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist), ctx, body,
+        _flee_candidate_probe(map_rid, creature_pos, candidate_dir, cand_dist), ctx, body,
       )
       var reach := float(probe.get("reach", 0.0))
+      if bool(cand["belief"]):
+        # A belief candidate is probed only out to the belief itself (so the waypoint can land on
+        # it), which would make its raw reach tiny next to an open bearing's. Score the fraction of
+        # that trip actually reachable as an equivalent full flee distance instead.
+        reach = flee_dist * clampf(reach / maxf(cand_dist, 1e-6), 0.0, 1.0)
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
-      var is_shelter_candidate := shelter_active and i == candidate_dirs.size() - 1
-      var effective := reach + (shelter_bias_reach if is_shelter_candidate else 0.0)
+      var margin := _FleeScoring.race_margin(creature_pos, endpoint, threat_pts)
+      var effective := _FleeScoring.effective(reach, flee_dist, margin, float(cand["bonus"]), motor_v3)
       if effective > best_effective:
         best_effective = effective
         best_reach = reach
@@ -3182,6 +3171,69 @@ static func _threat_world_pos(sample: Dictionary, creature_pos: Vector3) -> Vect
     return sample["world_pos_3d"]
   var wp: Vector2 = sample.get("world_pos", Vector2.ZERO)
   return Vector3(wp.x, creature_pos.y, wp.y)
+
+
+## Shelter/choke-point belief candidates for [method _mint_flee_waypoint]'s widened pool (decision 20):
+## each is `{dir, dist, bonus, belief}` — a bearing straight at the belief, probed only out to the
+## belief itself so the waypoint can land on it, with `bonus` = the configured belief bonus x tier
+## weight x proximity (fraction of flee distance). Only beliefs within `flee_belief_radius_factor` x
+## [param flee_dist] enter, nearest `flee_belief_max_candidates` kept, and ones the creature is
+## already standing on are skipped. Choke points additionally pass `FleeCandidateScoring.choke_useful`
+## (creature fits, every considered threat is known not to) — otherwise they are just open ground.
+static func _flee_belief_candidates(
+  ctx: Dictionary,
+  body: CharacterBody3D,
+  creature_pos: Vector3,
+  flee_dist: float,
+  motor_v3: Dictionary,
+) -> Array:
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null:
+    return []
+  var now_ms := int(ctx.get("now_ms", Time.get_ticks_msec()))
+  var radius := flee_dist * float(motor_v3.get("flee_belief_radius_factor", 1.0))
+  var min_dist := float(motor_v3.get("arrival_tolerance", 5.0))
+  var raw: Array = []
+  if adapter.has_method(&"consult_shelter_belief_candidates"):
+    var shelter_bonus := float(motor_v3.get("flee_shelter_bias_bonus", 0.15))
+    for row_v in adapter.consult_shelter_belief_candidates(creature_pos, motor_v3, now_ms):
+      var row: Dictionary = row_v
+      raw.append({"pos": row["pos"], "bonus": shelter_bonus * float(row["weight"])})
+  if adapter.has_method(&"consult_choke_point_beliefs"):
+    var own_diameter := 0.0
+    if body != null and body.has_method(&"get_collision_capsule_radius"):
+      own_diameter = float(body.call(&"get_collision_capsule_radius")) * 2.0
+    var threat_diameters: Array = []
+    for s_v in ctx.get("threat_samples", []):
+      if typeof(s_v) == TYPE_DICTIONARY and bool((s_v as Dictionary).get("in_awareness", false)):
+        threat_diameters.append(_FleeScoring.threat_capsule_radius(s_v) * 2.0)
+    var choke_bonus := float(motor_v3.get("flee_choke_bias_bonus", 0.15))
+    for row_v in adapter.consult_choke_point_beliefs(creature_pos, motor_v3, now_ms):
+      var row: Dictionary = row_v
+      if not _FleeScoring.choke_useful(float(row["opening_width"]), own_diameter, threat_diameters):
+        continue
+      raw.append({"pos": row["pos"], "bonus": choke_bonus * float(row["weight"])})
+  var scored: Array = []
+  for entry_v in raw:
+    var entry: Dictionary = entry_v
+    var pos: Vector3 = entry["pos"]
+    var to_belief := Vector3(pos.x - creature_pos.x, 0.0, pos.z - creature_pos.z)
+    var dist := to_belief.length()
+    if dist <= min_dist or dist > radius:
+      continue
+    var proximity := 1.0 - clampf(dist / maxf(radius, 1.0), 0.0, 1.0)
+    scored.append({
+      "dir": to_belief / dist,
+      "dist": minf(dist, flee_dist),
+      "bonus": float(entry["bonus"]) * proximity,
+      "belief": true,
+      "_sort": dist,
+    })
+  scored.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["_sort"]) < float(b["_sort"]))
+  var cap := maxi(0, int(motor_v3.get("flee_belief_max_candidates", 4)))
+  if scored.size() > cap:
+    scored = scored.slice(0, cap)
+  return scored
 
 
 ## Multi-threat flee bearing ([CM_V3_MULTI_MOBS.md]

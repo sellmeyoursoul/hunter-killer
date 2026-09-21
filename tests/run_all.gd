@@ -58,6 +58,7 @@ const _StatMath := preload("res://creature/stat_math.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBeliefMemoryScr := preload("res://creature/motor/goal_belief_memory.gd")
 const _ChokePointProbe := preload("res://creature/motor/choke_point_probe.gd")
+const _FleeScoring := preload("res://creature/motor/flee_candidate_scoring.gd")
 const _ChokePointTracker := preload("res://creature/motor/choke_point_tracker.gd")
 const _KindProfile := preload("res://creature/motor/kind_profile_memory.gd")
 const _DeadEndMem := preload("res://creature/motor/dead_end_memory.gd")
@@ -246,6 +247,10 @@ func _run_all() -> void:
   _test_motor_planner_flee_objective_smoothing_dampens_bearing_swing()
   _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter()
   _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief()
+  _test_flee_candidate_scoring_math()
+  _test_motor_planner_flee_ignores_shelter_behind_the_threat()
+  _test_motor_planner_flee_pool_prefers_shelter_it_reaches_first()
+  _test_motor_planner_flee_choke_belief_needs_fit_gate()
   _test_waypoint_chain_simplify_drops_collinear_points()
   _test_waypoint_chain_simplify_keeps_real_bends()
   _test_waypoint_chain_advance_steps_hop_by_hop()
@@ -8620,6 +8625,137 @@ func _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter() 
     to_wp.normalized().dot(to_shelter.normalized()) > 0.99,
     "flee waypoint biases toward a confirmed nearby shelter belief",
   )
+  main.queue_free()
+
+
+## Decision 20 scoring math: worst-case (not summed) margin across threats, a monotone bonus curve
+## (zero at a dead heat, negative when clearly losing), and choke usefulness needs "I fit, every
+## considered threat is known not to".
+func _test_flee_candidate_scoring_math() -> void:
+  var me := Vector3.ZERO
+  var point := Vector3(10.0, 0.0, 0.0)
+  var far_threat := Vector3(-30.0, 0.0, 0.0)
+  var near_threat := Vector3(12.0, 0.0, 0.0)
+  var m_far := _FleeScoring.race_margin(me, point, [far_threat])
+  var m_near := _FleeScoring.race_margin(me, point, [near_threat])
+  _assert(m_far > 0.0 and m_near < 0.0, "margin is positive when I get there first, negative when the threat does")
+  _assert(
+    is_equal_approx(_FleeScoring.race_margin(me, point, [far_threat, near_threat]), m_near),
+    "multiple threats aggregate by the worst margin, not a sum or average",
+  )
+  _assert(is_equal_approx(_FleeScoring.race_margin(me, point, []), 0.0), "no threats: neutral")
+  _assert(
+    is_equal_approx(_FleeScoring.race_margin(me, Vector3(10.0, 0.0, 0.0), [Vector3(10.0, 0.0, 0.0)]), -1.0),
+    "threat already at the point: margin -1",
+  )
+  var motor_v3 := _motor_v3_test_params()
+  var t_win := _FleeScoring.race_term(0.5, motor_v3)
+  var t_toss := _FleeScoring.race_term(0.0, motor_v3)
+  var t_lose := _FleeScoring.race_term(-0.5, motor_v3)
+  _assert(t_win > t_toss and is_equal_approx(t_toss, 0.0) and t_lose < 0.0, "race term: bonus, zero at a dead heat, penalty when losing")
+  _assert(is_equal_approx(_FleeScoring.race_term(1.0, motor_v3), t_win), "race term saturates at the cap")
+  _assert(
+    _FleeScoring.belief_race_factor(0.5, motor_v3) > _FleeScoring.belief_race_factor(0.0, motor_v3)
+    and is_equal_approx(_FleeScoring.belief_race_factor(-0.5, motor_v3), 0.0),
+    "a belief's own bonus is gated by the race (full when winning, zero when clearly losing)",
+  )
+  _assert(_FleeScoring.choke_useful(3.0, 2.0, [8.0]), "I fit and the threat doesn't: useful")
+  _assert(not _FleeScoring.choke_useful(3.0, 2.0, [3.0]), "a threat that also fits makes it just open ground")
+  _assert(not _FleeScoring.choke_useful(1.5, 2.0, [8.0]), "too narrow for me: not useful")
+  _assert(not _FleeScoring.choke_useful(3.0, 2.0, [0.0]), "threat of unknown size: no protective claim")
+  _assert(not _FleeScoring.choke_useful(3.0, 2.0, []), "no threat sizes at all: not useful")
+  _assert(not _FleeScoring.choke_useful(3.0, 2.0, [8.0, 3.0]), "worst threat governs: one that fits disqualifies")
+  _assert(
+    is_equal_approx(_FleeScoring.effective(100.0, 100.0, 0.0, 0.0, motor_v3), 100.0),
+    "an open bearing at a dead heat scores its plain reach",
+  )
+
+
+func _flee_belief_test_setup(main: Node3D, threat_pos: Vector3, threat_radius: float = -1.0) -> Dictionary:
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  var threat := _flight_test_threat_at(threat_pos, absf(threat_pos.x) + absf(threat_pos.z))
+  if threat_radius >= 0.0:
+    threat["capsule_radius"] = threat_radius
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  var adapter := _MemoryAdapter.new()
+  ctx["memory_adapter"] = adapter
+  return {"body": body, "motor_v3": motor_v3, "ctx": ctx, "adapter": adapter}
+
+
+func _flee_wp_dot_toward(setup: Dictionary, target: Vector3) -> float:
+  var body: CharacterBody3D = setup["body"]
+  var wp: Vector3 = (_MotorPlanner as GDScript).call(
+    "_mint_flee_waypoint", setup["ctx"], _MotorPlanner.new_state(), body, setup["motor_v3"]
+  )
+  var to_wp := Vector3(wp.x - body.global_position.x, 0.0, wp.z - body.global_position.z)
+  var to_t := Vector3(target.x - body.global_position.x, 0.0, target.z - body.global_position.z)
+  return to_wp.normalized().dot(to_t.normalized())
+
+
+## The bug the widened pool + race margin fixes: a confirmed shelter sitting *behind* the threat used
+## to win purely on its flat bias bonus (every bearing ties on reach with no navmesh), sending the
+## creature straight at its pursuer. With the race margin it scores below open ground.
+func _test_motor_planner_flee_ignores_shelter_behind_the_threat() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-12.0, 1.0, 0.0))
+  var shelter_pos := Vector3(-30.0, 1.0, 0.0)
+  setup["adapter"].record_shelter_evaluation(556, shelter_pos, true, 0.9, int(setup["ctx"]["now_ms"]))
+  _assert(
+    _flee_wp_dot_toward(setup, shelter_pos) < 0.0,
+    "flee does not run through the threat toward a shelter on its far side",
+  )
+  main.queue_free()
+
+
+## Widened pool: with several shelter beliefs known, flee scores all of them (not just the nearest)
+## and the one it can actually reach first — on the side away from the threat — wins.
+func _test_motor_planner_flee_pool_prefers_shelter_it_reaches_first() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  var now_ms := int(setup["ctx"]["now_ms"])
+  ## Both shelters are equidistant from the creature; only the one on the far side from the threat
+  ## is one it gets to first.
+  var safe_shelter := Vector3(6.0, 1.0, 12.0)
+  var risky_shelter := Vector3(-6.0, 1.0, 12.0)
+  setup["adapter"].record_shelter_evaluation(557, risky_shelter, true, 0.9, now_ms)
+  setup["adapter"].record_shelter_evaluation(558, safe_shelter, true, 0.9, now_ms)
+  _assert(
+    _flee_wp_dot_toward(setup, safe_shelter) > 0.99,
+    "flee picks the shelter it reaches first among several in the pool",
+  )
+  main.queue_free()
+
+
+## Choke beliefs enter the pool only when "I fit and the threat doesn't": a gap between my diameter
+## and the threat's is worth fleeing to; one the threat also fits, or a threat of unknown size, is not.
+func _test_motor_planner_flee_choke_belief_needs_fit_gate() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var probe_body := _spawn_herbivore_body(main, Vector3(500.0, 1.0, 500.0))
+  var own_diameter := float(probe_body.call(&"get_collision_capsule_radius")) * 2.0
+  probe_body.queue_free()
+  var width := own_diameter * 1.5
+  var choke_pos := Vector3(0.0, 1.0, 14.0)
+  ## Threat far larger than the gap: the choke is a real refuge -> chosen.
+  var big := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 4.0)
+  big["adapter"].record_choke_point_confirmation(choke_pos, width, big["motor_v3"], int(big["ctx"]["now_ms"]))
+  _assert(_flee_wp_dot_toward(big, choke_pos) > 0.99, "a choke I fit and the threat doesn't attracts flee")
+  ## Threat that also fits: just open ground -> not chosen (waypoint stays straight away).
+  var small := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 0.25)
+  small["adapter"].record_choke_point_confirmation(choke_pos, width, small["motor_v3"], int(small["ctx"]["now_ms"]))
+  _assert(_flee_wp_dot_toward(small, choke_pos) < 0.5, "a choke the threat also fits through does not attract flee")
+  ## Threat of unknown size: no protective claim -> not chosen.
+  var unknown := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  unknown["adapter"].record_choke_point_confirmation(choke_pos, width, unknown["motor_v3"], int(unknown["ctx"]["now_ms"]))
+  _assert(_flee_wp_dot_toward(unknown, choke_pos) < 0.5, "a threat of unknown size disqualifies a choke candidate")
+  ## Too narrow for me: not chosen even against a big threat.
+  var narrow := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 4.0)
+  narrow["adapter"].record_choke_point_confirmation(choke_pos, own_diameter * 0.5, narrow["motor_v3"], int(narrow["ctx"]["now_ms"]))
+  _assert(_flee_wp_dot_toward(narrow, choke_pos) < 0.5, "a gap too narrow for me is not a refuge")
   main.queue_free()
 
 
