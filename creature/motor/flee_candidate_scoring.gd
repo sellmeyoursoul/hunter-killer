@@ -44,6 +44,21 @@ static func threat_capsule_radius(sample: Dictionary) -> float:
   return 0.0
 
 
+## Threat's body height, or 0.0 when unknown — same source precedence as `threat_capsule_radius`
+## (test hook via `capsule_height`, else the live body behind `instance_id`). Used alongside the
+## radius wherever a threat's capsule needs to be shape-cast (decision 23, §9 slice 10).
+static func threat_capsule_height(sample: Dictionary) -> float:
+  if sample.has("capsule_height"):
+    return maxf(0.0, float(sample["capsule_height"]))
+  var iid := int(sample.get("instance_id", 0))
+  if iid == 0:
+    return 0.0
+  var node := instance_from_id(iid)
+  if node != null and node.has_method(&"get_collision_capsule_height"):
+    return maxf(0.0, float(node.call(&"get_collision_capsule_height")))
+  return 0.0
+
+
 static func _flat_dist(a: Vector3, b: Vector3) -> float:
   return Vector2(a.x - b.x, a.z - b.z).length()
 

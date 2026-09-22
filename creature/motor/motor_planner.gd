@@ -2786,22 +2786,29 @@ static func _apply_route_plausibility_scan(
   probe: Dictionary,
   ctx: Dictionary,
   body: CharacterBody3D,
+  threat_radius: float = -1.0,
+  threat_height: float = -1.0,
 ) -> Dictionary:
   var path: PackedVector3Array = probe.get("path", PackedVector3Array())
   if path.size() < 2 or body == null:
+    probe["detour_forcing"] = false
     return probe
   var space_state: PhysicsDirectSpaceState3D = ctx.get("space_state")
   if space_state == null:
+    probe["detour_forcing"] = false
     return probe
   var scan := _RouteScan.scan_path(
     space_state, path, _agent_radius(body), _agent_height(body), [body.get_rid()],
+    threat_radius, threat_height,
   )
   if not bool(scan.get("blocked", false)):
+    probe["detour_forcing"] = bool(scan.get("detour_forcing", false))
     return probe
   return {
     "reach": float(scan.get("reach", 0.0)),
     "endpoint": scan.get("reach_point", probe.get("endpoint", Vector3.ZERO)),
     "path": scan.get("path", path),
+    "detour_forcing": bool(scan.get("detour_forcing", false)),
   }
 
 
@@ -2864,6 +2871,41 @@ static func _flee_endpoint_is_dead_end(
   if adapter == null or not adapter.has_method(&"is_waypoint_dead_end"):
     return false
   return adapter.is_waypoint_dead_end(creature_pos, endpoint, _GkReg.GK_AVOID_HOSTILES, motor_v3)
+
+
+## Decision 23 (§9 slice 10): the single threat capsule to shape-cast a candidate flee route's
+## objects against for the live detour-forcing bonus (and Stage B's shelter fit-gate, below) — the
+## *smallest* known radius among every in-awareness threat. Smallest, not largest: a smaller
+## capsule fits through more gaps than a larger one, so it's simultaneously the *hardest* threat to
+## force into a detour (a gap that stops the smallest stops every larger one too, but not the
+## reverse) and the *easiest* to breach a shelter with (same reasoning, Stage B below) — matching
+## `_FleeScoring.choke_useful`'s actual semantics (`opening_width < d` required for *every* threat
+## diameter `d`, which is equivalent to checking only the smallest). Any in-awareness threat of
+## unknown size makes the claim unverifiable for the whole set — same "no protective claim without
+## a size to compare" principle — so `known` comes back false; `any_threat` distinguishes that from
+## "no threat at all" for callers (like Stage B) that treat the two differently: no threat to test
+## against is permissive (nothing to gate), an unknown-sized one present is not (can't certify
+## safety either way, so assume unsafe).
+static func _flee_relevant_threat_capsule(ctx: Dictionary) -> Dictionary:
+  var best_r := INF
+  var best_h := 0.0
+  var saw_any := false
+  for s_v in ctx.get("threat_samples", []):
+    if typeof(s_v) != TYPE_DICTIONARY:
+      continue
+    var sample: Dictionary = s_v
+    if not bool(sample.get("in_awareness", false)):
+      continue
+    saw_any = true
+    var r := _FleeScoring.threat_capsule_radius(sample)
+    if r <= 0.0:
+      return {"known": false, "any_threat": true, "radius": 0.0, "height": 0.0}
+    if r < best_r:
+      best_r = r
+      best_h = _FleeScoring.threat_capsule_height(sample)
+  if not saw_any or not is_finite(best_r) or best_r <= 0.0:
+    return {"known": false, "any_threat": saw_any, "radius": 0.0, "height": 0.0}
+  return {"known": true, "any_threat": true, "radius": best_r, "height": best_h}
 
 
 static func _mint_flee_waypoint(
@@ -2983,6 +3025,14 @@ static func _mint_flee_waypoint(
     # `effective` is biased — `best_reach`/`final_reach` stay the true, unbiased reach so the give-up
     # escalation and `reach_known` boxed-in handling below stay exactly as tuned by RT1/C9/C16/C17.
     var threat_pts: Array = _FleeScoring.threat_positions(ctx.get("threat_samples", []), creature_pos)
+    # Decision 23 (§9 slice 10): one shape-cast-worthy threat capsule for this whole mint — every
+    # candidate's route gets a second, threat-radius pass over the same ghost-layer objects the
+    # self-radius scan already checks, live, no belief storage (see `_flee_relevant_threat_capsule`).
+    var threat_capsule := _flee_relevant_threat_capsule(ctx)
+    var detour_threat_radius := (
+      float(threat_capsule.get("radius", 0.0)) if bool(threat_capsule.get("known", false)) else -1.0
+    )
+    var detour_threat_height := float(threat_capsule.get("height", 0.0))
     var candidates: Array = []
     for i in range(6):
       candidates.append({
@@ -3014,6 +3064,7 @@ static func _mint_flee_waypoint(
       var cand_dist := float(cand["dist"])
       var probe := _apply_route_plausibility_scan(
         _flee_candidate_probe(map_rid, creature_pos, candidate_dir, cand_dist), ctx, body,
+        detour_threat_radius, detour_threat_height,
       )
       var reach := float(probe.get("reach", 0.0))
       if bool(cand["belief"]):
@@ -3024,7 +3075,14 @@ static func _mint_flee_waypoint(
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
       var margin := _FleeScoring.race_margin(creature_pos, endpoint, threat_pts)
-      var effective := _FleeScoring.effective(reach, flee_dist, margin, float(cand["bonus"]), motor_v3)
+      # Decision 23: a route with at least one object this creature fits through but the threat
+      # doesn't earns an additive detour-forcing bonus on top of whatever bonus this candidate
+      # already carries (0.0 for a plain open bearing) — same race-gated shape as the belief
+      # bonuses, since forcing a detour is only actually valuable while the race is still winnable.
+      var cand_bonus := float(cand["bonus"])
+      if bool(probe.get("detour_forcing", false)):
+        cand_bonus += float(motor_v3.get("flee_detour_forcing_bonus", 0.15))
+      var effective := _FleeScoring.effective(reach, flee_dist, margin, cand_bonus, motor_v3)
       if bool(cand.get("incumbent", false)):
         effective *= 1.0 + maxf(0.0, float(motor_v3.get("flee_incumbent_bearing_bonus", 0.25)))
       if effective > best_effective:
@@ -3266,6 +3324,46 @@ static func _threat_world_pos(sample: Dictionary, creature_pos: Vector3) -> Vect
   return Vector3(wp.x, creature_pos.y, wp.y)
 
 
+## Stage B fit-gate (decision 13's addendum, §9 slice 10): true when [param pos] (a shelter belief's
+## own location) has no breach wide enough for the worst-case in-awareness threat to enter through —
+## same `ShelterEnclosureProbe.enclosure_fraction` ring-sweep primitive Stage A already uses for
+## nomination, just parameterized by the threat's radius instead of the occupant's own. A boolean
+## hard gate, not a score: decision 13's own framing is "even one shrub big enough for the threat to
+## enter makes the shelter an unsuitable candidate," not merely a worse one.
+## Worst case = the *smallest* known in-awareness threat radius, per `_flee_relevant_threat_capsule`
+## (easiest to breach a boundary with — a gap that lets the smallest threat in already disqualifies
+## the shelter for that threat regardless of what a larger one could or couldn't also fit through);
+## any in-awareness threat of unknown size fails the gate outright (same "no protective claim
+## without a size to compare" principle as `_FleeScoring.choke_useful`). No physics space, or no
+## threat at all to gate against, passes permissively (matches every other space-optional check in
+## this file; Stage B is only ever invoked mid-flee, where a threat is always actually present).
+## [param sample_count] defaults to the same ring density Stage A nomination uses
+## ([constant ShelterEnclosureProbe.RING_SAMPLES]); exposed as a param (mirroring
+## [method ShelterEnclosureProbe.enclosure_fraction]'s own) so a test can isolate a single known
+## bearing instead of needing a full 8-direction enclosure built just to exercise this gate.
+static func _shelter_candidate_passes_stage_b(
+  ctx: Dictionary,
+  pos: Vector3,
+  motor_v3: Dictionary,
+  sample_count: int = _ShelterProbe.RING_SAMPLES,
+) -> bool:
+  var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
+  if space == null:
+    return true
+  var threat_capsule := _flee_relevant_threat_capsule(ctx)
+  if not bool(threat_capsule.get("any_threat", false)):
+    return true
+  if not bool(threat_capsule.get("known", false)):
+    return false
+  var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
+  var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
+  var frac := _ShelterProbe.enclosure_fraction(
+    space, pos, probe_radius, blocker_mask, 1.0, sample_count, [],
+    float(threat_capsule.get("radius", 0.0)), float(threat_capsule.get("height", 0.0)),
+  )
+  return frac >= 1.0 - 1e-6
+
+
 ## Shelter/choke-point belief candidates for [method _mint_flee_waypoint]'s widened pool (decision 20):
 ## each is `{dir, dist, bonus, belief}` — a bearing straight at the belief, probed only out to the
 ## belief itself so the waypoint can land on it, with `bonus` = the configured belief bonus x tier
@@ -3291,6 +3389,11 @@ static func _flee_belief_candidates(
     var shelter_bonus := float(motor_v3.get("flee_shelter_bias_bonus", 0.15))
     for row_v in adapter.consult_shelter_belief_candidates(creature_pos, motor_v3, now_ms):
       var row: Dictionary = row_v
+      # Stage B fit-gate (decision 13's addendum, §9 slice 10): a candidate shelter with even one
+      # threat-sized breach anywhere on its boundary is not a safe hiding spot, full stop — hard
+      # disqualify from the pool entirely, not a lower score.
+      if not _shelter_candidate_passes_stage_b(ctx, row["pos"], motor_v3):
+        continue
       raw.append({"pos": row["pos"], "bonus": shelter_bonus * float(row["weight"])})
   if adapter.has_method(&"consult_choke_point_beliefs"):
     var own_diameter := 0.0

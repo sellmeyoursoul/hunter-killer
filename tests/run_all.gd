@@ -293,6 +293,7 @@ func _run_all() -> void:
   _test_motor_planner_shelter_no_candidate_explore()
   await _test_shelter_enclosure_probe_ring_detects_blockers()
   await _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap()
+  await _test_motor_planner_flee_shelter_stage_b_disqualifies_breachable_shelter()
   await _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
@@ -446,6 +447,7 @@ func _run_all() -> void:
   await _test_ghost_obstacle_query_open_shrub_size_gated()
   await _test_route_scanned_endpoint_truncates_blocked_target()
   await _test_route_plausibility_scan_truncates_blocked_path()
+  await _test_route_plausibility_scan_detour_forcing_flag()
   await _test_apply_route_plausibility_scan_truncates_probe()
   await _test_ghost_obstacle_query_escaping_overlap()
   await _test_clamp_velocity_to_ghost_fit_escape_hatch()
@@ -2062,6 +2064,86 @@ func _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap() -> void:
   _assert(is_equal_approx(frac_rabbit, 0.0), "rabbit-scale capsule (radius < half the gap) clears the doorway")
   var frac_wolf := _ShelterProbe.enclosure_fraction(space, center, probe_radius, mask, 1.0, 1, [], 2.5, 3.0)
   _assert(is_equal_approx(frac_wolf, 1.0), "wolf-scale capsule (radius > half the gap) is blocked at the doorway a ray missed")
+  main.queue_free()
+  await process_frame
+
+
+## Stage B fit-gate (decision 13's addendum, §9 slice 10): a shelter candidate with even one
+## threat-sized breach is disqualified outright, not merely down-scored. Reuses the exact
+## controlled-doorway geometry directly above, called through `_shelter_candidate_passes_stage_b`
+## with `sample_count=1` so the single ring sample lands exactly on the known doorway bearing.
+func _test_motor_planner_flee_shelter_stage_b_disqualifies_breachable_shelter() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var center := Vector3(40.0, 1.0, 40.0)
+  var probe_radius := 5.0
+  var gap_half_width := 1.5
+  for side in [-1.0, 1.0]:
+    var wall := StaticBody3D.new()
+    var box := BoxShape3D.new()
+    box.size = Vector3(0.6, 2.0, 4.0)
+    var col := CollisionShape3D.new()
+    col.shape = box
+    wall.add_child(col)
+    wall.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+    wall.collision_mask = 0
+    main.add_child(wall)
+    wall.global_position = center + Vector3(probe_radius, 1.0, side * (gap_half_width + 2.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["shelter_enclosure_probe_radius"] = probe_radius
+
+  ## No in-awareness threat at all -> nothing to gate against, permissive (Stage B only ever runs
+  ## mid-flee in practice, where a threat is always actually present).
+  var ctx_no_threat := {"space_state": space, "threat_samples": []}
+  _assert(
+    bool((_MotorPlanner as GDScript).call(
+      "_shelter_candidate_passes_stage_b", ctx_no_threat, center, motor_v3, 1
+    )),
+    "with no in-awareness threat, Stage B has nothing to gate against and passes permissively",
+  )
+
+  ## An unknown-sized threat can't be certified safe or unsafe -> disqualify, same "no protective
+  ## claim without a size to compare" principle as FleeCandidateScoring.choke_useful.
+  var unknown_threat := {"in_awareness": true, "instance_id": 0}
+  var ctx_unknown := {"space_state": space, "threat_samples": [unknown_threat]}
+  _assert(
+    not bool((_MotorPlanner as GDScript).call(
+      "_shelter_candidate_passes_stage_b", ctx_unknown, center, motor_v3, 1
+    )),
+    "an in-awareness threat of unknown size disqualifies the candidate rather than guessing safe",
+  )
+
+  ## A wolf-scale threat can't fit the doorway -> the boundary holds -> Stage B passes.
+  var wolf_threat := {"in_awareness": true, "capsule_radius": 2.5, "capsule_height": 3.0}
+  var ctx_wolf := {"space_state": space, "threat_samples": [wolf_threat]}
+  _assert(
+    bool((_MotorPlanner as GDScript).call("_shelter_candidate_passes_stage_b", ctx_wolf, center, motor_v3, 1)),
+    "a threat too large to fit the doorway leaves the candidate shelter safe",
+  )
+
+  ## A rabbit-scale threat fits straight through the same doorway -> real breach -> hard disqualify.
+  var rabbit_threat := {"in_awareness": true, "capsule_radius": 0.6, "capsule_height": 1.2}
+  var ctx_rabbit := {"space_state": space, "threat_samples": [rabbit_threat]}
+  _assert(
+    not bool((_MotorPlanner as GDScript).call(
+      "_shelter_candidate_passes_stage_b", ctx_rabbit, center, motor_v3, 1
+    )),
+    "a threat small enough to fit the doorway disqualifies the candidate outright",
+  )
+
+  ## Mixed threats: the *smaller* rabbit-scale threat is what determines the worst case even with a
+  ## wolf also in awareness — proves the smallest-known-radius selection, not just a lucky
+  ## single-threat pass-through.
+  var ctx_mixed := {"space_state": space, "threat_samples": [wolf_threat, rabbit_threat]}
+  _assert(
+    not bool((_MotorPlanner as GDScript).call(
+      "_shelter_candidate_passes_stage_b", ctx_mixed, center, motor_v3, 1
+    )),
+    "the smallest in-awareness threat drives the gate even when a larger one is also present",
+  )
+
   main.queue_free()
   await process_frame
 
@@ -8729,6 +8811,11 @@ func _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter() 
   var shelter_pos := Vector3(0.0, 1.0, 6.0)
   adapter.record_shelter_evaluation(555, shelter_pos, true, 0.9, now_ms)
   ctx["memory_adapter"] = adapter
+  ## §9 slice 10's Stage B fit-gate hard-disqualifies a shelter belief with no real enclosing
+  ## geometry around it (an unbounded "breach" everywhere) — this test isolates the belief
+  ## scoring/selection layer, not Stage B's geometry gate, so it opts out the same way every other
+  ## space-optional check in this file does: no physics space, permissive.
+  ctx["space_state"] = null
   var state := _MotorPlanner.new_state()
   var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
   var to_wp := Vector3(wp.x - body.global_position.x, 0.0, wp.z - body.global_position.z)
@@ -8790,6 +8877,14 @@ func _test_motor_planner_flee_shelter_belief_exempt_from_dead_end_check() -> voi
   var motor_v3: Dictionary = ctx["motor_v3"]
   var adapter := _MemoryAdapter.new()
   ctx["memory_adapter"] = adapter
+  ## §9 slice 10's Stage B fit-gate would otherwise hard-disqualify this shelter belief itself (no
+  ## real enclosing geometry around it in this fixture, an unbounded "breach") before the dead-end
+  ## exemption under test ever gets a chance to matter — opt out, same as every other space-optional
+  ## check in this file. Without this, the shelter's own bearing happening to coincide with the
+  ## open-bearing-0 direction here would make the assertion pass for an unrelated reason (the plain
+  ## open bearing falling back through the unconditional tier once dead-end-avoided) rather than
+  ## actually exercising decision 11's exemption.
+  ctx["space_state"] = null
   var shelter_pos := Vector3(0.0, 1.0, 6.0)
   adapter.record_shelter_evaluation(559, shelter_pos, true, 0.9, Time.get_ticks_msec())
   ## Mark the shelter's own bearing as a dead end — must not disqualify the shelter candidate.
@@ -8945,6 +9040,10 @@ func _test_motor_planner_flee_pool_prefers_shelter_it_reaches_first() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  ## Same Stage B opt-out as `_test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter`
+  ## — no real enclosing geometry around either shelter here, and this test is about the pool's
+  ## selection logic (which reachable candidate wins), not Stage B's geometry gate.
+  setup["ctx"]["space_state"] = null
   var now_ms := int(setup["ctx"]["now_ms"])
   ## Both shelters are equidistant from the creature; only the one on the far side from the threat
   ## is one it gets to first.
@@ -10870,6 +10969,72 @@ func _test_route_plausibility_scan_truncates_blocked_path() -> void:
       Vector3(wolf_scan.get("reach_point", Vector3.ZERO))
     ) < 0.01,
     "wolf-scale sweep's truncated path ends exactly at its own reach_point",
+  )
+
+  main.queue_free()
+  await process_frame
+
+
+## PHYSICS_SQUEEZE.md §3 decision 23 (§9 slice 10): a shrub the fleeing creature fits past but its
+## pursuer doesn't is a live detour-forcing object — reuses the exact graze-past-shrub geometry
+## above (rabbit clears fully, wolf doesn't) to prove `scan_path`'s new `threat_radius` param finds
+## exactly that condition, and only that condition.
+func _test_route_plausibility_scan_detour_forcing_flag() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shrub_pos := Vector3(65.0, 1.0, 65.0)
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = shrub_pos
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var aabb := _StaticObstacleCollision.world_mesh_aabb(visual)
+  var mesh_center: Vector3 = aabb.get("center", shrub_pos)
+  var xz_radius := float(aabb.get("xz_radius", 0.5))
+
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  wolf.apply_effective_creature_size(5.0)
+  await physics_frame
+  var rabbit_radius: float = rabbit.get_collision_capsule_radius()
+  var rabbit_height: float = rabbit.get_collision_capsule_height()
+  var wolf_radius: float = wolf.get_collision_capsule_radius()
+  var wolf_height: float = wolf.get_collision_capsule_height()
+
+  var lateral := xz_radius + rabbit_radius + 0.3
+  var path := PackedVector3Array([
+    mesh_center + Vector3(-10.0, 0.0, lateral),
+    mesh_center + Vector3(10.0, 0.0, lateral),
+  ])
+  var space_state := main.get_world_3d().direct_space_state
+
+  var forcing_scan := _RouteScan.scan_path(
+    space_state, path, rabbit_radius, rabbit_height, [rabbit.get_rid()], wolf_radius, wolf_height,
+  )
+  _assert(
+    not bool(forcing_scan.get("blocked", true)),
+    "precondition: the rabbit-radius sweep itself still clears the graze path fully",
+  )
+  _assert(
+    bool(forcing_scan.get("detour_forcing", false)),
+    "a threat-radius sweep over the same path the self-radius sweep clears finds the wolf blocked -> detour_forcing",
+  )
+
+  var no_threat_scan := _RouteScan.scan_path(
+    space_state, path, rabbit_radius, rabbit_height, [rabbit.get_rid()],
+  )
+  _assert(
+    not bool(no_threat_scan.get("detour_forcing", false)),
+    "detour_forcing defaults to false when no threat_radius is given (every non-avoid_hostiles caller)",
+  )
+
+  var same_size_scan := _RouteScan.scan_path(
+    space_state, path, rabbit_radius, rabbit_height, [rabbit.get_rid()], rabbit_radius, rabbit_height,
+  )
+  _assert(
+    not bool(same_size_scan.get("detour_forcing", false)),
+    "a threat the same size as the fleeing creature clears the same path too -> no detour forced",
   )
 
   main.queue_free()

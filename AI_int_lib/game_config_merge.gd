@@ -397,6 +397,11 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "flee_belief_radius_factor": 1.0,
     "flee_belief_max_candidates": 4,
     "flee_incumbent_bearing_bonus": 0.25,
+    ## §9 slice 10, decision 23: additive bonus (same race-gated shape as the belief bonuses above)
+    ## when a candidate route's route-plausibility scan finds at least one ghost-layer object this
+    ## creature fits through but the currently-relevant threat doesn't (`RoutePlausibilityScan`'s
+    ## `detour_forcing` flag). Live-computed every mint, no belief storage. Untuned.
+    "flee_detour_forcing_bonus": 0.15,
   }
 
 
