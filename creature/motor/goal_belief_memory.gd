@@ -179,8 +179,19 @@ static func _upsert_row(
     row["consumable_now"] = consumable_now
     row["is_moving"] = is_moving
     row["last_velocity"] = velocity
-    row["passibility_fail_count"] = 0
-    row["last_passibility_fail_ms"] = 0
+    ## Decision 42 (2026-09-22, stuck-rabbit): do NOT reset passibility_fail_count /
+    ## last_passibility_fail_ms here for a stationary instance. This branch runs on every routine
+    ## re-observation (`sync_after_scan`, every tick the food is still visible) — for a
+    ## continuously-visible, continuously-blocked stationary food, that wiped the failure count
+    ## clean before decision 31's exclusion threshold could ever be reached, defeating the
+    ## exclusion for exactly the case it exists to catch (confirmed live: a rabbit pinned on the
+    ## same unreachable shrub for 200+ ticks, alternating detour sides forever). A moving target's
+    ## failure history is tied to wherever it was standing when it failed, not wherever it is now,
+    ## so it still resets on every observation — moving prey pursuit has its own separate
+    ## detour/give-up path anyway (`should_suppress_live_pursuit_blocked_resolution`).
+    if is_moving:
+      row["passibility_fail_count"] = 0
+      row["last_passibility_fail_ms"] = 0
   beliefs[instance_id] = row
 
 

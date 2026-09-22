@@ -286,6 +286,7 @@ func _run_all() -> void:
   _test_motor_planner_find_food_stocked_sated_memory_first()
   _test_consult_precise_food_excludes_passibility_failed_instance()
   _test_consult_coarse_bearing_excludes_passibility_failed_instance()
+  _test_sync_after_scan_preserves_passibility_fail_count_for_stationary_food()
   _test_sync_food_memory_objective_excludes_passibility_failed_precise_food()
   _test_sync_food_memory_objective_skips_dead_end_locale_anchor()
   _test_motor_planner_select_action_returns_rest_for_goal_rest()
@@ -1775,6 +1776,68 @@ func _test_consult_coarse_bearing_excludes_passibility_failed_instance() -> void
   _assert(
     int(picked_excluded.get("instance_id", 0)) == 8312,
     "excluding the nearer coarse instance falls through to the next-best one",
+  )
+
+
+## Decision 42 (2026-09-22, stuck-rabbit): a continuously-visible, continuously-blocked *live*
+## food target could never reach `passibility_fail_switch_threshold` — every routine re-observation
+## (`sync_after_scan`, which runs every tick the food stays in awareness) wiped `passibility_fail_count`
+## back to 0 via `_upsert_row`'s unconditional reset, undoing `increment_passibility_fail` before a
+## second failure could ever accumulate. Live repro: a rabbit alternating between two blocked detour
+## bearings around the same shrub for 200+ ticks, `passibility_fail_count` never rising above 1.
+func _test_sync_after_scan_preserves_passibility_fail_count_for_stationary_food() -> void:
+  var adapter := _MemoryAdapter.new()
+  var now_ms := Time.get_ticks_msec()
+  var iid := 8340
+  var entry := {
+    "pos": Vector3(5.0, 1.0, 5.0),
+    "instance_id": iid,
+    "stimulus_kind_id": &"shrub_berries",
+    "consumable_now": true,
+    "is_moving": false,
+  }
+  var food_split := {"ready": [entry], "unready": []}
+  ## Tick 1: first sighting seeds the belief row.
+  adapter.sync_after_scan(food_split, [], now_ms)
+  ## First blocked-pursuit give-up.
+  adapter.increment_passibility_fail(iid, now_ms)
+  _assert(
+    int(adapter.get_beliefs().get(iid, {}).get("passibility_fail_count", 0)) == 1,
+    "precondition: the first failure is recorded",
+  )
+  ## The food is still live and visible — a routine re-observation must not erase that failure.
+  adapter.sync_after_scan(food_split, [], now_ms)
+  _assert(
+    int(adapter.get_beliefs().get(iid, {}).get("passibility_fail_count", 0)) == 1,
+    "a routine re-observation of a still-visible stationary food does not reset its failure count",
+  )
+  ## Second blocked-pursuit give-up reaches the default switch threshold (2).
+  adapter.increment_passibility_fail(iid, now_ms)
+  adapter.sync_after_scan(food_split, [], now_ms)
+  var motor_v3 := _motor_v3_test_params()
+  var switch_thresh := int(motor_v3.get("passibility_fail_switch_threshold", 2))
+  _assert(
+    int(adapter.get_beliefs().get(iid, {}).get("passibility_fail_count", 0)) >= switch_thresh,
+    "two failures survive repeated re-observation and reach the exclusion threshold",
+  )
+  ## Sanity: a *moving* target's failure count still resets on every re-observation — its detour
+  ## machinery is separate (see `should_suppress_live_pursuit_blocked_resolution`) and its failure
+  ## history is tied to a position it's no longer standing at.
+  var moving_iid := 8341
+  var moving_entry := {
+    "pos": Vector3(5.0, 1.0, 5.0),
+    "instance_id": moving_iid,
+    "stimulus_kind_id": &"prey",
+    "consumable_now": true,
+    "is_moving": true,
+  }
+  var moving_split := {"ready": [moving_entry], "unready": []}
+  adapter.sync_after_scan(moving_split, [], now_ms)
+  adapter.increment_passibility_fail(moving_iid, now_ms)
+  adapter.sync_after_scan(moving_split, [], now_ms)
+  _assert(
+    int(adapter.get_beliefs().get(moving_iid, {}).get("passibility_fail_count", 0)) == 0,
+    "a moving target's failure count still resets on routine re-observation",
   )
 
 
