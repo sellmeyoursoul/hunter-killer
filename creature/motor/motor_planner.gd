@@ -1312,12 +1312,16 @@ static func _derive_find_food_step_objective(
           food, locale_candidate, adapter, motor_v3, creature_pos, ctx.get("body"),
           ctx.get("traits", {})
         ):
-          _hold_live_food_lost_to_locale(state, food, motor_v3)
-          _apply_locale_food_objective(
-            state, locale_candidate, creature_pos, map_rid, agent_r
-          )
-          _store_food_inventory_step_mode(ctx, state, motor_v3)
-          return
+          ## Decision 41 (2026-09-22, stuck-rabbit): only hold the live target and hand off once
+          ## the locale objective is actually committed — a dead-end locale anchor must fall
+          ## through to the live pursuit below instead, not get held against a target we then
+          ## refuse to walk toward.
+          if _apply_locale_food_objective(
+            ctx, state, locale_candidate, creature_pos, map_rid, agent_r, motor_v3
+          ):
+            _hold_live_food_lost_to_locale(state, food, motor_v3)
+            _store_food_inventory_step_mode(ctx, state, motor_v3)
+            return
     _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
     _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
     _store_food_inventory_step_mode(ctx, state, motor_v3)
@@ -1657,22 +1661,37 @@ static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = 
     state["locale_search_ticks_remaining"] = int(motor_v3.get("locale_search_ticks", 240))
 
 
-## Apply a locale memory-tier seek objective (anchor + nav substep).
+## Apply a locale memory-tier seek objective (anchor + nav substep). Returns `false` without
+## committing when the resolved point is a known dead end (decision 41, PHYSICS_SQUEEZE.md §3,
+## 2026-09-22 stuck-rabbit) — `consult_locale_seek` has no per-instance exclusion (it's a hotspot
+## centroid, not a tracked food instance) and locale objectives always carry `step_instance_id = 0`,
+## so `apply_blocked_objective_resolution`'s `increment_passibility_fail` call is a silent no-op
+## for this tier; the shared dead-end check (decision 21) is the only signal left that can stop a
+## permanently-unreachable locale anchor from being re-picked identically forever.
 static func _apply_locale_food_objective(
+  ctx: Dictionary,
   state: Dictionary,
   locale: Dictionary,
   creature_pos: Vector3,
   map_rid: RID,
   agent_r: float,
-) -> void:
-  if state.get("step_source", &"") != &"locale":
-    _reset_locale_progress_state(state)
+  motor_v3: Dictionary,
+) -> bool:
   var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
   var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, anchor, agent_r)
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
+    if adapter.is_waypoint_dead_end(
+      creature_pos, resolved, state.get("goal_kind", _GkReg.GK_FIND_FOOD), motor_v3
+    ):
+      return false
+  if state.get("step_source", &"") != &"locale":
+    _reset_locale_progress_state(state)
   _assign_resolved_step_goal(state, anchor, resolved)
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = locale.get("stimulus_kind_id", &"")
   state["step_source"] = &"locale"
+  return true
 
 
 ## Clears the bounded nearby-search window (2026-09-13 stuck-rabbit fix) — a live target winning
@@ -2676,8 +2695,10 @@ static func _sync_food_memory_objective(
   var locale: Dictionary = adapter.consult_locale_seek(creature_pos, motor_v3, env_grid, motor_ctx)
   var on_cd := _locale_anchor_on_arrival_cooldown(state, locale.get("anchor", Vector3.ZERO))
   if bool(locale.get("active", false)) and not on_cd:
-    _apply_locale_food_objective(state, locale, creature_pos, map_rid, agent_r)
-    return true
+    if _apply_locale_food_objective(
+      ctx, state, locale, creature_pos, map_rid, agent_r, motor_v3
+    ):
+      return true
   return false
 
 

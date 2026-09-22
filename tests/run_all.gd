@@ -287,6 +287,7 @@ func _run_all() -> void:
   _test_consult_precise_food_excludes_passibility_failed_instance()
   _test_consult_coarse_bearing_excludes_passibility_failed_instance()
   _test_sync_food_memory_objective_excludes_passibility_failed_precise_food()
+  _test_sync_food_memory_objective_skips_dead_end_locale_anchor()
   _test_motor_planner_select_action_returns_rest_for_goal_rest()
   _test_motor_planner_shelter_no_candidate_explore()
   await _test_shelter_enclosure_probe_ring_detects_blockers()
@@ -1804,6 +1805,51 @@ func _test_sync_food_memory_objective_excludes_passibility_failed_precise_food()
   _assert(
     int(state.get("step_instance_id", 0)) != 8321,
     "the failed instance is not bound as the step objective",
+  )
+  main.queue_free()
+
+
+## Decision 41 (2026-09-22, live report: "rabbit hit the western wall... seemed stuck", traced to
+## a *different* creature permanently parked on a locale target) — `consult_locale_seek` returns a
+## hotspot centroid, not a tracked food instance, so it has no per-instance exclusion the way
+## precise/coarse memory got in decision 31 above; and a locale-sourced objective always mints with
+## `step_instance_id = 0`, so `apply_blocked_objective_resolution`'s passibility-fail counter is a
+## silent no-op for it too. The shared dead-end check (decision 21) is the only signal left that
+## can stop a permanently-unreachable locale anchor from being re-picked identically forever —
+## `_sync_food_memory_objective` must decline to commit to one already marked blocked.
+func _test_sync_food_memory_objective_skips_dead_end_locale_anchor() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var adapter := _MemoryAdapter.new()
+  adapter.seed_locale_prior_for_test(0, 0, 1.0)
+  var motor_v3 := _motor_v3_test_params()
+  var creature_pos := body.global_position
+  var ctx := _planner_find_food_gate_ctx(body, adapter, 1.0)
+  ## Baseline: with nothing marked blocked, the locale anchor is adopted normally.
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var applied: bool = (_MotorPlanner as GDScript).call(
+    "_sync_food_memory_objective", ctx, state, creature_pos, motor_v3, RID(), 0.5,
+  )
+  _assert(applied, "precondition: the locale anchor is adopted when nothing marks it a dead end")
+  _assert(
+    str(state.get("step_source", &"")) == "locale",
+    "precondition: the objective actually committed to the locale tier",
+  )
+  var anchor: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  ## Mark that exact anchor a dead end, approached from the same bearing the creature used — the
+  ## same shape `apply_blocked_objective_resolution` writes after a real blocked approach.
+  var approach := Vector3(anchor.x - creature_pos.x, 0.0, anchor.z - creature_pos.z).normalized()
+  adapter.record_dead_end_mark(anchor, approach, _GkReg.GK_FIND_FOOD, 0, Time.get_ticks_msec())
+  var state2 := _MotorPlanner.new_state()
+  state2["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var applied2: bool = (_MotorPlanner as GDScript).call(
+    "_sync_food_memory_objective", ctx, state2, creature_pos, motor_v3, RID(), 0.5,
+  )
+  _assert(
+    not applied2 and not bool(state2.get("step_goal_set", false)),
+    "a locale anchor already marked a dead end is not re-committed — falls through instead",
   )
   main.queue_free()
 
