@@ -248,6 +248,9 @@ func _run_all() -> void:
   _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter()
   _test_motor_planner_flight_flee_waypoint_unbiased_without_shelter_belief()
   _test_flee_candidate_scoring_math()
+  _test_motor_planner_flee_avoids_marked_dead_end_bearing()
+  _test_motor_planner_flee_shelter_belief_exempt_from_dead_end_check()
+  _test_motor_planner_flee_incumbent_bearing_resists_near_tied_flip()
   _test_motor_planner_flee_ignores_shelter_behind_the_threat()
   _test_motor_planner_flee_pool_prefers_shelter_it_reaches_first()
   _test_motor_planner_flee_choke_belief_needs_fit_gate()
@@ -8631,6 +8634,123 @@ func _test_motor_planner_flight_flee_waypoint_biases_toward_confirmed_shelter() 
 ## Decision 20 scoring math: worst-case (not summed) margin across threats, a monotone bonus curve
 ## (zero at a dead heat, negative when clearly losing), and choke usefulness needs "I fit, every
 ## considered threat is known not to".
+## Decision 21's dead-end check, wired into flee 2026-09-22: an open bearing landing on a marked
+## dead end (recorded by `apply_blocked_objective_resolution` from an earlier boulder-pinch block)
+## must not win the "clear" tier over a direction that isn't a known dead end — matching what
+## explore/locale already did, per decision 21's own audit note that flee was left unwired.
+func _test_motor_planner_flee_avoids_marked_dead_end_bearing() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  ## Threat due south -> away-from-threat base_dir is +Z (north); candidate at i=0 is exactly north.
+  var threat := _flight_test_threat_at(Vector3(0.0, 1.0, -12.0), 12.0)
+  var ctx := _flight_test_planner_ctx(body, _motor_v3_test_params(), main, threat, true, true)
+  var motor_v3: Dictionary = ctx["motor_v3"]
+  ## Small flee distance so the candidate endpoint (== flee_dist north) lands within
+  ## `dead_end_match_radius` (52) of a mark recorded at the creature's own position — matches the
+  ## live report's scale (a boxed-in rabbit's flee_dist was ~16, well under match radius too).
+  motor_v3["awareness_radius"] = 30.0
+  var adapter := _MemoryAdapter.new()
+  ctx["memory_adapter"] = adapter
+  ## Mark the north bearing (i=0, straight toward the away-from-threat direction) as a dead end at
+  ## the creature's own current position — exactly the shape `record_dead_end_mark` writes after a
+  ## real block.
+  adapter.record_dead_end_mark(
+    body.global_position, Vector3(0.0, 0.0, 1.0), _GkReg.GK_AVOID_HOSTILES, 0, Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var to_wp := Vector3(wp.x, 0.0, wp.z).normalized()
+  _assert(
+    to_wp.dot(Vector3(0.0, 0.0, 1.0)) < 0.9,
+    "flee does not mint straight into a bearing already marked as a dead end",
+  )
+  main.queue_free()
+
+
+## The dead-end exclusion above must never apply to a shelter/choke belief candidate — decision 11:
+## being a geometric dead end is exactly what makes a shelter valuable, not a liability.
+func _test_motor_planner_flee_shelter_belief_exempt_from_dead_end_check() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var threat := _flight_test_threat_at(Vector3(0.0, 1.0, -12.0), 12.0)
+  var ctx := _flight_test_planner_ctx(body, _motor_v3_test_params(), main, threat, true, true)
+  var motor_v3: Dictionary = ctx["motor_v3"]
+  var adapter := _MemoryAdapter.new()
+  ctx["memory_adapter"] = adapter
+  var shelter_pos := Vector3(0.0, 1.0, 6.0)
+  adapter.record_shelter_evaluation(559, shelter_pos, true, 0.9, Time.get_ticks_msec())
+  ## Mark the shelter's own bearing as a dead end — must not disqualify the shelter candidate.
+  adapter.record_dead_end_mark(
+    body.global_position, shelter_pos.normalized(), _GkReg.GK_AVOID_HOSTILES, 0, Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var to_wp := Vector3(wp.x, 0.0, wp.z)
+  var to_shelter := Vector3(shelter_pos.x, 0.0, shelter_pos.z)
+  _assert(
+    to_wp.normalized().dot(to_shelter.normalized()) > 0.99,
+    "a dead-end mark over a shelter's own bearing does not disqualify the shelter candidate",
+  )
+  main.queue_free()
+
+
+## Incumbent-bearing hysteresis (2026-09-22): a previously-minted flee direction must not lose to a
+## barely-better challenger purely because the threat's live position shifted a hair between remints
+## — the race-margin-driven flip the western-wall/two-boulder live report showed. A clearly stronger
+## challenger (large margin) still wins.
+func _flee_incumbent_test_mint(
+  main: Node3D, threat1_x: float, threat2_x: float, bonus: float
+) -> Dictionary:
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["flee_incumbent_bearing_bonus"] = bonus
+  ## No navmesh in this fixture -> every open bearing probes the same raw reach, so only the race
+  ## margin (and the incumbent bonus) can differ candidates' `effective` — isolates the mechanism.
+  var threat := _flight_test_threat_at(Vector3(threat1_x, 1.0, -12.0), 12.0)
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+  ctx["memory_adapter"] = _MemoryAdapter.new()
+  var state := _MotorPlanner.new_state()
+  var wp1: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  ## Move the threat sideways a modest amount between remints — a real but small perturbation, not a
+  ## reversal of who's winning the race.
+  var nudged := _flight_test_threat_at(Vector3(threat2_x, 1.0, -12.0), 12.0)
+  ctx["threat_samples"] = [nudged]
+  ctx["scan"] = {"food_split": {"ready": [], "unready": []}, "threat_samples": [nudged]}
+  var wp2: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  body.get_parent().remove_child(body)
+  body.queue_free()
+  return {
+    "dot": Vector3(wp1.x, 0.0, wp1.z).normalized().dot(Vector3(wp2.x, 0.0, wp2.z).normalized()),
+  }
+
+
+## Incumbent-bearing hysteresis (2026-09-22): a previously-minted flee direction must not lose to a
+## barely-better challenger purely because the threat's live position shifted a little between
+## remints — the race-margin-driven flip the western-wall/two-boulder live report showed. Proven by
+## contrast rather than a fixed threshold on one run (this scenario's margins are inherently tiny —
+## a 500-unit flee distance against a 12-unit-radius threat, matching the report's own boxed-in
+## scale): the SAME perturbation must swing the bearing measurably more with the bonus disabled than
+## with it at its configured default.
+func _test_motor_planner_flee_incumbent_bearing_resists_near_tied_flip() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var with_bonus := _flee_incumbent_test_mint(main, 0.0, 20.0, 0.25)
+  var without_bonus := _flee_incumbent_test_mint(main, 0.0, 20.0, 0.0)
+  _assert(
+    float(with_bonus["dot"]) > float(without_bonus["dot"]) + 0.01,
+    "the incumbent bonus holds the bearing measurably closer than with it disabled, same perturbation",
+  )
+  _assert(float(with_bonus["dot"]) > 0.99, "with the bonus at its default, a modest threat shift does not flip the held bearing")
+  main.queue_free()
+
+
+
+
 func _test_flee_candidate_scoring_math() -> void:
   var me := Vector3.ZERO
   var point := Vector3(10.0, 0.0, 0.0)

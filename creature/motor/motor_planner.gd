@@ -2828,6 +2828,23 @@ static func _flee_has_visible_threat(ctx: Dictionary) -> bool:
   return false
 
 
+## True when [param endpoint] matches a remembered avoid_hostiles dead-end mark (decision 21's
+## shared subroutine, wired here 2026-09-22 — this was one of the five mint sites decision 21 named
+## but never actually got wired). Belief candidates (shelter/choke) are deliberately never checked
+## against this by the caller — decision 11: being a geometric dead end is exactly what makes a
+## shelter candidate valuable, not a liability, so it must never be excluded here.
+static func _flee_endpoint_is_dead_end(
+  ctx: Dictionary,
+  creature_pos: Vector3,
+  endpoint: Vector3,
+  motor_v3: Dictionary,
+) -> bool:
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter == null or not adapter.has_method(&"is_waypoint_dead_end"):
+    return false
+  return adapter.is_waypoint_dead_end(creature_pos, endpoint, _GkReg.GK_AVOID_HOSTILES, motor_v3)
+
+
 static func _mint_flee_waypoint(
   ctx: Dictionary,
   state: Dictionary,
@@ -2921,6 +2938,23 @@ static func _mint_flee_waypoint(
     var base_dir := to_wp.normalized()
     var flee_dist := to_wp.length()
 
+    # Incumbent-bearing hysteresis (2026-09-22, live report: rabbit boxed by a wall + two boulders
+    # alternated between two near-tied candidate bearings tick after tick with no net progress).
+    # Before slice 9, ranking among the 6 open bearings depended only on navmesh reach — stable
+    # unless geometry itself changed. The race-margin term now varies with the threat's live
+    # position, so two near-tied bearings can swap the winner between remints even when nothing
+    # geometric changed. Re-evaluate the currently-held direction as one more candidate and give it
+    # a bonus (mirrors `MotorGoalHub.apply_incumbent_bonus`'s shape) so a challenger has to clearly
+    # beat it, not just edge it out on this tick's slightly different threat position.
+    var prior_flee_dir := Vector3.ZERO
+    var has_prior_flee_dir := false
+    if bool(state.get("flee_waypoint_set", false)):
+      var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
+      var to_prior := Vector3(prior_wp.x - creature_pos.x, 0.0, prior_wp.z - creature_pos.z)
+      if to_prior.length_squared() > 1e-8:
+        prior_flee_dir = to_prior.normalized()
+        has_prior_flee_dir = true
+
     # Candidate pool (decision 20, §9 slice 9): the 6 open bearings plus every shelter/choke belief in
     # the flee radius (nearest few), all scored through one common function — reach + a race-margin
     # term for every candidate, plus each belief's own bonus gated by the race. Supersedes RANDOMTESTS
@@ -2937,6 +2971,10 @@ static func _mint_flee_waypoint(
         "belief": false,
       })
     candidates.append_array(_flee_belief_candidates(ctx, body, creature_pos, flee_dist, motor_v3))
+    if has_prior_flee_dir:
+      candidates.append({
+        "dir": prior_flee_dir, "dist": flee_dist, "bonus": 0.0, "belief": false, "incumbent": true,
+      })
 
     var best_dir := base_dir
     var best_reach := -1.0
@@ -2966,17 +3004,30 @@ static func _mint_flee_waypoint(
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
       var margin := _FleeScoring.race_margin(creature_pos, endpoint, threat_pts)
       var effective := _FleeScoring.effective(reach, flee_dist, margin, float(cand["bonus"]), motor_v3)
+      if bool(cand.get("incumbent", false)):
+        effective *= 1.0 + maxf(0.0, float(motor_v3.get("flee_incumbent_bearing_bonus", 0.25)))
       if effective > best_effective:
         best_effective = effective
         best_reach = reach
         best_dir = candidate_dir
         best_endpoint = endpoint
         best_path = cand_path
-      var avoided := false
-      for avoid_v in avoid_dirs:
-        if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
+      # A known dead end disqualifies an open bearing from the "clear" tier exactly like a recent
+      # backtrack does (decision 21) — never for a belief candidate (decision 11). The unconditional
+      # `best_*` tier above stays untouched, so RT1's "nothing viable anywhere" fallback still holds.
+      var avoided := (not bool(cand["belief"])) and _flee_endpoint_is_dead_end(ctx, creature_pos, endpoint, motor_v3)
+      if bool(cand.get("incumbent", false)):
+        # The incumbent candidate is deliberately exempt from the *recent-mint-history* half of
+        # backtrack avoidance — "I already tried this a moment ago" is exactly the wrong reason to
+        # abandon the plan I'm still actively executing. It still respects a genuinely fresh physical
+        # block (`blocked_dir`) against that same direction.
+        if blocked_dir.length_squared() > 1e-12 and _BlockedApproach.is_backtrack_step(candidate_dir, blocked_dir, backtrack_dot):
           avoided = true
-          break
+      else:
+        for avoid_v in avoid_dirs:
+          if _BlockedApproach.is_backtrack_step(candidate_dir, avoid_v as Vector3, backtrack_dot):
+            avoided = true
+            break
       if not avoided and effective > best_clear_effective:
         best_clear_effective = effective
         best_clear_reach = reach
@@ -3004,6 +3055,14 @@ static func _mint_flee_waypoint(
       var scan_best_reach := final_reach
       var scan_best_endpoint := final_endpoint
       var scan_best_path := final_path
+      # Same dead-end exclusion as the main sweep, decision 21 — tracked as a separate "clear" tier
+      # so a boxed-in creature still gets its full-circle escalation if every direction happens to
+      # be a marked dead end (matches RT1's "hold rather than silently default to iteration order").
+      var scan_best_clear_dir := final_dir
+      var scan_best_clear_reach := final_reach
+      var scan_best_clear_endpoint := final_endpoint
+      var scan_best_clear_path := final_path
+      var scan_found_clear := false
       for i in range(scan_n):
         var ang := TAU * float(i) / float(scan_n)
         var candidate_dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
@@ -3011,12 +3070,25 @@ static func _mint_flee_waypoint(
           _flee_candidate_probe(map_rid, creature_pos, candidate_dir, flee_dist), ctx, body,
         )
         var reach := float(probe.get("reach", 0.0))
+        var endpoint: Vector3 = probe.get("endpoint", creature_pos)
         if reach > scan_best_reach:
           scan_best_reach = reach
           scan_best_dir = candidate_dir
-          scan_best_endpoint = probe.get("endpoint", creature_pos)
+          scan_best_endpoint = endpoint
           scan_best_path = probe.get("path", PackedVector3Array())
-      if scan_best_reach > final_reach:
+        if not _flee_endpoint_is_dead_end(ctx, creature_pos, endpoint, motor_v3) and reach > scan_best_clear_reach:
+          scan_best_clear_reach = reach
+          scan_best_clear_dir = candidate_dir
+          scan_best_clear_endpoint = endpoint
+          scan_best_clear_path = probe.get("path", PackedVector3Array())
+          scan_found_clear = true
+      if scan_found_clear and scan_best_clear_reach > final_reach:
+        final_dir = scan_best_clear_dir
+        state["flee_give_up_active"] = true
+        final_reach = scan_best_clear_reach
+        final_endpoint = scan_best_clear_endpoint
+        final_path = scan_best_clear_path
+      elif scan_best_reach > final_reach:
         final_dir = scan_best_dir
         state["flee_give_up_active"] = true
         final_reach = scan_best_reach

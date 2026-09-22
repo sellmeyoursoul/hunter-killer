@@ -396,6 +396,7 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "flee_choke_bias_bonus": 0.15,
     "flee_belief_radius_factor": 1.0,
     "flee_belief_max_candidates": 4,
+    "flee_incumbent_bearing_bonus": 0.25,
   }
 
 
