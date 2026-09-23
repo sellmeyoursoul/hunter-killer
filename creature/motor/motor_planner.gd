@@ -1717,13 +1717,27 @@ static func _mint_locale_search_waypoint(
 ) -> void:
   var anchor: Vector3 = state.get("locale_search_anchor", Vector3.ZERO)
   var radius := float(motor_v3.get("locale_search_radius", 12.0))
-  var angle := randf() * TAU
-  var dist := randf_range(radius * 0.4, radius)
-  var raw := anchor + Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
-  # §9 slice 6 (2026-09-18): don't commit to a random search point a ghost-layer object actually
-  # sits between here and — truncate to the real reachable point along that route first.
-  var scanned := _route_scanned_endpoint(ctx, ctx.get("body"), map_rid, creature_pos, raw)
-  var resolved := _PathClear.resolve_step_objective(map_rid, creature_pos, scanned, agent_r)
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  ## §4k review (2026-09-23): decision 21's last unwired mint site. A random search point has no
+  ## natural fallback the way a scored candidate list does, so re-roll a bounded few times when the
+  ## pick lands on a known dead end rather than skipping the check entirely — the window is
+  ## transient and self-corrects next tick regardless, so this only needs to bias away, not
+  ## guarantee avoidance.
+  var resolved := Vector3.ZERO
+  var attempts := maxi(1, int(motor_v3.get("locale_search_dead_end_reroll_attempts", 4)))
+  for _i in attempts:
+    var angle := randf() * TAU
+    var dist := randf_range(radius * 0.4, radius)
+    var raw := anchor + Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
+    # §9 slice 6 (2026-09-18): don't commit to a random search point a ghost-layer object actually
+    # sits between here and — truncate to the real reachable point along that route first.
+    var scanned := _route_scanned_endpoint(ctx, ctx.get("body"), map_rid, creature_pos, raw)
+    resolved = _PathClear.resolve_step_objective(map_rid, creature_pos, scanned, agent_r)
+    var is_dead_end := false
+    if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
+      is_dead_end = adapter.is_waypoint_dead_end(creature_pos, resolved, _GkReg.GK_FIND_FOOD, motor_v3)
+    if not is_dead_end:
+      break
   state["step_goal"] = resolved
   state["step_goal_set"] = true
   state["step_ultimate_pos"] = Vector3.ZERO
@@ -1898,6 +1912,17 @@ static func _try_nominate_shelter_candidate(
   var iid := _shelter_candidate_instance_id(probe_center, motor_v3)
   var adapter: RefCounted = ctx.get("memory_adapter")
   if adapter != null and adapter.has_method(&"shelter_candidate_recently_failed") and adapter.shelter_candidate_recently_failed(iid):
+    state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
+    return false
+  ## §4k review (2026-09-23): decision 21's last-of-five unwired mint site. `recently_failed` above
+  ## catches *this exact belief instance* having already failed its own enclosure evaluation; this
+  ## catches the broader "this spot is a known physical dead end for any reason" fact (e.g. a
+  ## blocked approach recorded while pursuing a different goal at the same spot) — narrower and
+  ## wider checks, not duplicates.
+  if (
+    adapter != null and adapter.has_method(&"is_waypoint_dead_end")
+    and adapter.is_waypoint_dead_end(creature_pos, probe_center, _GkReg.GK_SHELTER, motor_v3)
+  ):
     state["shelter_probe_cooldown_cycles"] = int(motor_v3.get("shelter_probe_retry_cooldown_cycles", 2))
     return false
   state["shelter_candidate_anchor"] = probe_center
@@ -2269,6 +2294,16 @@ static func _remint_alternate_memory_pursuit_detour(
   # don't commit to a fresh alternate-side pick a ghost-layer object sits between here and.
   wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
+  ## §4k review (2026-09-23): same dead-end wiring as `_remint_alternate_pursuit_detour` — don't
+  ## commit an escalation slot to a spot already known to fail.
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if (
+    adapter != null and adapter.has_method(&"is_waypoint_dead_end")
+    and adapter.is_waypoint_dead_end(creature_pos, wp, _GkReg.GK_FIND_FOOD, motor_v3)
+  ):
+    _clear_memory_pursuit_detour_latch(state)
+    state["consecutive_blocked"] = 0
+    return
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["memory_pursuit_detour_waypoint"] = wp
   state["memory_pursuit_detour_waypoint_set"] = true
@@ -2374,6 +2409,19 @@ static func _remint_alternate_pursuit_detour(
   # don't commit to one a ghost-layer object actually sits between here and.
   wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
+  ## §4k review (2026-09-23): decision 21 named the C1 pursuit-detour latch as one of five mint
+  ## sites the shared dead-end check needed wiring into; it never was. A ±60° alternate landing on
+  ## a spot already marked a dead end shouldn't eat an escalation slot pretending it might work —
+  ## treat it exactly like running out of escalations (give up, let one blocked-resolution tick
+  ## through) rather than committing to a point already known to fail.
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if (
+    adapter != null and adapter.has_method(&"is_waypoint_dead_end")
+    and adapter.is_waypoint_dead_end(creature_pos, wp, _GkReg.GK_FIND_FOOD, motor_v3)
+  ):
+    _clear_pursuit_detour_latch(state)
+    state["pursuit_detour_gave_up"] = true
+    return
   var latch_ticks := maxi(1, int(motor_v3.get("pursuit_detour_latch_ticks", 32)))
   state["pursuit_detour_waypoint"] = wp
   state["pursuit_detour_waypoint_set"] = true

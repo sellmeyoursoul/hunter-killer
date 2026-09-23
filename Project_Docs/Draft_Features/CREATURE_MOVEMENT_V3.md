@@ -581,7 +581,7 @@ Legacy ASCII for **blocked-primary** and **seek** branches — invoked from §3.
 
 **Resolved — geographic retention (B):** TTL expiry first (`dead_end_memory_ttl_sec`); at cap (`dead_end_memory_max_entries`), evict **oldest `recorded_ms`** (LRU). No `merge_use_count` — consult frequency does not affect eviction.
 
-**Resolved — instance passibility (C):** On `_goal_belief` row — `passibility_fail_count` (int, default 0), `last_passibility_fail_ms` (int). Increment on failed approach / shelter probe / passibility contradiction; **clear** on live re-awareness ([CREATURE_MEMORY.md §5.4](CREATURE_MEMORY.md)). §9 favors **switch** when `passibility_fail_count ≥ passibility_fail_switch_threshold` (ship default **2**). Row fields expire with belief TTL (`goal_memory_ttl_sec`) or clear on re-awareness — whichever comes first.
+**Resolved — instance passibility (C):** On `_goal_belief` row — `passibility_fail_count` (int, default 0), `last_passibility_fail_ms` (int). Increment on failed approach / shelter probe / passibility contradiction; **not** cleared on live re-awareness for a stationary instance — corrected 2026-09-22 ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md) decision 42, [CREATURE_MOVEMENT_V3_CLEANUP.md C23](CREATURE_MOVEMENT_V3_CLEANUP.md#c23)): a continuously-visible, continuously-blocked target could never reach the switch threshold if routine re-observation wiped the count every tick. Still cleared on re-sync for a moving target ([CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)). §9 favors **switch** when `passibility_fail_count ≥ passibility_fail_switch_threshold` (ship default **2**). Row fields expire with belief TTL (`goal_memory_ttl_sec`) only, for a stationary instance.
 
 **Resolved — phasing:** **6c** ships **A only** — Movement Weighing “known dead-ends?” branch treats as **no** (no geographic consult). **6d** wires **B + C** via memory adapter (§8.4). Geographic marks are **memory tier**, not planner-only ephemeral state.
 
@@ -1506,7 +1506,7 @@ Re-sync updates **`last_world_pos`**, **`consumable_now`**, **`last_velocity`**,
 
 | Event | Write target |
 |-------|--------------|
-| Live sighting / re-awareness | `_goal_belief` sync (position / `consumable_now` only); clear `passibility_fail_count` on matching `instance_id` |
+| Live sighting / re-awareness | `_goal_belief` sync (position / `consumable_now` only); `passibility_fail_count` cleared only for a *moving* instance (2026-09-22 correction — see [CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md)) |
 | Kind observation | `record_observation(topic_id, stimulus_kind_id, value)` per [CREATURE_MEMORY.md §5.7](CREATURE_MEMORY.md) learn-topic registry |
 | Consumption / salient outcome | `goal_source_memory.try_salient_write` (unchanged) + EAT → `nutrition_yield` observation |
 | Clear-path fail / blocked MOVE | `_dead_end_marks_by_body` append (§3 **B**) |

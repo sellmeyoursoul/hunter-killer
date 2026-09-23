@@ -170,9 +170,11 @@ func _run_all() -> void:
   _test_motor_planner_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_pursuit_detour_skips_reeval_while_latched()
   _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
+  _test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
   _test_motor_planner_memory_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block()
+  _test_motor_planner_memory_pursuit_detour_gives_up_on_dead_end_alternate()
   _test_motor_planner_memory_pursuit_detour_gives_up_after_max_escalations()
   _test_motor_planner_memory_pursuit_engagement_latch_decays_with_detours()
   _test_motor_planner_live_locale_handoff_same_kind_prefers_live()
@@ -296,6 +298,7 @@ func _run_all() -> void:
   await _test_motor_planner_flee_shelter_stage_b_disqualifies_breachable_shelter()
   await _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
+  await _test_motor_planner_shelter_candidate_nomination_skips_dead_end()
   await _test_motor_planner_shelter_eval_confirm_cycle_progression()
   await _test_motor_planner_shelter_eval_fails_when_enclosure_insufficient()
   await _test_motor_planner_select_action_shelter_arrival_is_wait()
@@ -374,6 +377,7 @@ func _run_all() -> void:
   await _test_motor_planner_blocked_food_excluded_from_reselection()
   await _test_motor_planner_live_food_awareness_grace_holds_through_transient_dropout()
   _test_motor_planner_locale_empty_arrival_starts_search()
+  _test_motor_planner_locale_search_waypoint_rerolls_dead_end()
   await _test_motor_planner_locale_search_giveup_invalidates_belief()
   await _test_motor_planner_locale_handoff_respects_arrival_cooldown()
   _test_awareness_scan_best_ready_food_target_excludes_ids()
@@ -2229,6 +2233,47 @@ func _test_motor_planner_shelter_candidate_nomination_binds_precise() -> void:
   _assert(int(state.get("step_instance_id", 0)) != 0, "candidate nomination assigns a synthetic instance id")
   var anchor: Vector3 = state.get("shelter_candidate_anchor", Vector3.ZERO)
   _assert(anchor.distance_to(probe_center) < 0.5, "candidate anchor lands near the probed ring center")
+  main.queue_free()
+  await process_frame
+
+
+## §4k review (2026-09-23): decision 21's last-of-five unwired mint site. An otherwise-qualifying
+## enclosure (passes Stage A) must still be rejected when its own probe point is already marked a
+## known dead end for GK_SHELTER — same geometry as the passing case directly above, plus a
+## pre-recorded mark at the exact probed point.
+func _test_motor_planner_shelter_candidate_nomination_skips_dead_end() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  var lookahead := float(motor_v3.get("shelter_probe_lookahead_dist", 3.0))
+  var probe_center := Vector3(lookahead, 1.0, 0.0)
+  _shelter_test_blocker_ring(main, probe_center, 2.0)
+  await physics_frame
+  var adapter := _MemoryAdapter.new()
+  adapter.record_dead_end_mark(
+    probe_center, Vector3(1.0, 0.0, 0.0), _GkReg.GK_SHELTER, 0, Time.get_ticks_msec()
+  )
+  var state := _MotorPlanner.new_state()
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "scan": _motor_stack_empty_food_scan(),
+    "threat_samples": [],
+    "memory_adapter": adapter,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+    "space_state": main.get_world_3d().direct_space_state,
+    "map_rid": RID(),
+    "refresh_step_objective": true,
+  }
+  (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_SHELTER)
+  _assert(
+    str(state.get("step_source", &"")) != "precise",
+    "a candidate probed exactly on a known dead end is not nominated",
+  )
   main.queue_free()
   await process_frame
 
@@ -4626,6 +4671,46 @@ func _test_motor_planner_locale_empty_arrival_starts_search() -> void:
   _assert(not bool(state.get("step_goal_set", false)), "step objective is cleared alongside it")
 
 
+## §4k review (2026-09-23): decision 21's last-of-five unwired mint site. A random search point has
+## no scored-candidate fallback the way flee/explore do, so it re-rolls a bounded few times instead
+## — same RNG seed reproduces the same first pick in both runs, so marking that exact first pick a
+## dead end before the second run forces it into a reroll and the two runs must diverge.
+func _test_motor_planner_locale_search_waypoint_rerolls_dead_end() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var motor_v3 := _motor_v3_test_params()
+  var anchor := body.global_position
+  var ctx := {"body": body, "map_rid": RID(), "space_state": null}
+
+  seed(918273)
+  var baseline_state := _MotorPlanner.new_state()
+  baseline_state["locale_search_anchor"] = anchor
+  (_MotorPlanner as GDScript).call(
+    "_mint_locale_search_waypoint", ctx, baseline_state, body.global_position, motor_v3, RID(), 0.5,
+  )
+  var first_pick: Vector3 = baseline_state.get("step_goal", Vector3.ZERO)
+
+  var adapter := _MemoryAdapter.new()
+  var approach := Vector3(first_pick.x - anchor.x, 0.0, first_pick.z - anchor.z).normalized()
+  adapter.record_dead_end_mark(first_pick, approach, _GkReg.GK_FIND_FOOD, 0, Time.get_ticks_msec())
+  ctx["memory_adapter"] = adapter
+
+  seed(918273)
+  var rerolled_state := _MotorPlanner.new_state()
+  rerolled_state["locale_search_anchor"] = anchor
+  (_MotorPlanner as GDScript).call(
+    "_mint_locale_search_waypoint", ctx, rerolled_state, body.global_position, motor_v3, RID(), 0.5,
+  )
+  var second_pick: Vector3 = rerolled_state.get("step_goal", Vector3.ZERO)
+  _assert(
+    second_pick.distance_to(first_pick) > 0.5,
+    "a random locale-search pick landing on a known dead end is rerolled to a different point",
+  )
+  randomize()  # restore natural RNG state for every test that runs after this one.
+  main.queue_free()
+
+
 ## 2026-09-13 stuck-rabbit fix: once the search budget runs out with nothing found, the locale
 ## belief for that cell is hard-invalidated (not left to `notify_locale_food_arrival_empty`'s
 ## asymptotic per-visit erosion, which never actually reaches zero on its own).
@@ -5795,6 +5880,71 @@ func _test_motor_planner_pursuit_detour_alternate_on_persistent_block() -> void:
   main.queue_free()
 
 
+## §4k review (2026-09-23): decision 21 named the C1 pursuit-detour latch as one of five mint
+## sites the shared dead-end check needed wiring into; it never was until now. When the ±60°
+## alternate this function is about to commit to lands on a spot already marked a dead end, it
+## must give up immediately (same as exhausting both escalations) instead of committing an
+## escalation slot to a point already known to fail.
+func _test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
+  state["pursuit_detour_ticks_remaining"] = 24
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88063
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["consecutive_blocked"] = 3
+  var adapter := _MemoryAdapter.new()
+  ## Pre-mark exactly where the first (`alt_flip=false`) escalation's +60° alternate would land —
+  ## same math `_remint_alternate_pursuit_detour` itself uses (to_latched direction rotated +60°,
+  ## at the latched distance).
+  var to_latched := Vector3(detour_wp.x - body.global_position.x, 0.0, detour_wp.z - body.global_position.z)
+  var alt_dir := to_latched.normalized().rotated(Vector3.UP, deg_to_rad(60.0))
+  var expected_alt_wp := body.global_position + alt_dir * maxf(to_latched.length(), 3.0)
+  adapter.record_dead_end_mark(
+    expected_alt_wp, alt_dir, _GkReg.GK_FIND_FOOD, 0, Time.get_ticks_msec()
+  )
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88063),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+    "memory_adapter": adapter,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    not bool(state.get("pursuit_detour_waypoint_set", false)),
+    "a dead-end alternate is not committed — the latch is cleared instead",
+  )
+  _assert(
+    bool(state.get("pursuit_detour_gave_up", false)),
+    "landing on a known dead end gives up immediately, same as exhausting both escalations",
+  )
+  main.queue_free()
+
+
 func _test_motor_planner_live_pursuit_blocked_seek_suppressed() -> void:
   var main := Node3D.new()
   root.add_child(main)
@@ -5947,6 +6097,67 @@ func _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block() -
   _assert(
     int(state.get("memory_pursuit_detour_count", 0)) == 1,
     "alternate memory remint counts the detour for engagement-latch decay",
+  )
+  main.queue_free()
+
+
+## §4k review (2026-09-23): the `memory_moving` sibling of
+## `_test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate` — same dead-end wiring, same
+## expectation.
+func _test_motor_planner_memory_pursuit_detour_gives_up_on_dead_end_alternate() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"memory_moving"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["memory_pursuit_detour_waypoint"] = detour_wp
+  state["memory_pursuit_detour_waypoint_set"] = true
+  state["memory_pursuit_detour_ticks_remaining"] = 24
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88071
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["memory_pursuit_detour_count"] = 0
+  state["consecutive_blocked"] = 3
+  var adapter := _MemoryAdapter.new()
+  var to_latched := Vector3(detour_wp.x - body.global_position.x, 0.0, detour_wp.z - body.global_position.z)
+  var alt_dir := to_latched.normalized().rotated(Vector3.UP, deg_to_rad(60.0))
+  var expected_alt_wp := body.global_position + alt_dir * maxf(to_latched.length(), 3.0)
+  adapter.record_dead_end_mark(
+    expected_alt_wp, alt_dir, _GkReg.GK_FIND_FOOD, 0, Time.get_ticks_msec()
+  )
+  var ctx := {
+    "body": body,
+    "scan": _motor_stack_empty_food_scan(),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+    "memory_adapter": adapter,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+  _assert(
+    not bool(state.get("memory_pursuit_detour_waypoint_set", false)),
+    "a dead-end alternate is not committed for memory pursuit either — the latch is cleared",
+  )
+  _assert(
+    int(state.get("consecutive_blocked", -1)) == 0,
+    "giving up on a dead-end alternate resets consecutive_blocked, same as the max-escalations path",
   )
   main.queue_free()
 

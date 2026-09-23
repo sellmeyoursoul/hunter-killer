@@ -597,6 +597,9 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## `_mint_locale_search_waypoint` in motor_planner.gd.
     "locale_search_ticks": 240,
     "locale_search_radius": 12.0,
+    ## §4k review (2026-09-23): a random locale-search waypoint re-rolls up to this many times
+    ## before accepting a known-dead-end pick — see `_mint_locale_search_waypoint`.
+    "locale_search_dead_end_reroll_attempts": 4,
     "approach_overshoot_guard_move_steps": 2,
     ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
     ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of

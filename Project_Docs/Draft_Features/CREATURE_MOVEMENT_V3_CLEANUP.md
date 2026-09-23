@@ -47,6 +47,9 @@ When an item is **done**, move acceptance criteria into V3 (or archive note) and
 | [C18](#c18-eat-completes-through-a-solid-the-eater-physically-cant-pass-straight-line-range-only-no-reachabilityocclusion-check) | EAT completes through a solid the eater physically can't pass (straight-line range only, no reachability/occlusion check) | `done` | unassigned |
 | [C19](#c19-motoractionrest-unreachable-from-select_action-a-winning-rest-cycle-reads-as-stay) | `MotorAction.REST` unreachable from `select_action` — a winning REST cycle read as `STAY` | `done` | unassigned |
 | [C20](#c20-live-vs-locale-food-handoff-had-no-distance-awareness-rabbit-stuck-right-outside-a-shrub-cluster) | Live-vs-locale food handoff had no distance awareness — rabbit stuck right outside a shrub cluster | `done` | unassigned |
+| [C21](#c21-live-food-pursuit-permanently-stuck-against-a-two-boulder-pinch-awareness-cone-dropout-starved-the-pursuit-detour-latch) | Live food pursuit permanently stuck against a two-boulder pinch (awareness-cone dropout starved the pursuit-detour latch) | `done` | unassigned |
+| [C22](#c22-resting-creature-never-forms-a-shelter-belief-rest-missing-from-the-opportunistic-observation-gate) | Resting creature never forms a shelter belief (`REST` missing from the opportunistic-observation gate) | `done` | unassigned |
+| [C23](#c23-stuck-target-detectionexclusion-review-decision-21s-mint-site-audit-finally-closed-two-mechanisms-found-not-to-be-duplicates-after-all) | Stuck-target detection/exclusion review: decision 21's mint-site audit finally closed, two mechanisms found not to be duplicates | `done` | unassigned |
 
 **Shared slice:** C1 and C2 are the same failure family — a **fixed `step_goal` with poor approach geometry** and **no progress escalation**. They ship in **one slice** (`post-6d-approach-geometry`) via a shared executor foundation, with goal-specific tails. See [Shared implementation plan (C1 + C2)](#shared-implementation-plan-c1--c2).
 
@@ -1242,6 +1245,43 @@ Added `MotorAction.REST` to the action check at `creature_motor_stack.gd:242-253
 
 - New test `_test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation`: drives a real `CreatureMotorStack.tick()` loop for a fully-fed, unthreatened herbivore until it naturally settles into `REST` (safety accumulates over `safety_time` consideration cycles, matching production cadence), then builds a real enclosing blocker ring around wherever it actually landed (`GOAL_REST` holds current position, so it's stationary), ticks a few more times, and asserts `shelter_confidence_score` at that position is now nonzero.
 - Full headless suite: 3 consecutive runs — only the same pre-existing `slot >= slot_max` ObjectDB flake, no new failures.
+
+---
+
+## C23 — Stuck-target detection/exclusion review: decision 21's mint-site audit finally closed, two mechanisms found not to be duplicates after all
+
+**Status:** `done`
+**Slice:** unassigned — a design/audit review requested by the user (2026-09-22) after three separate live "rabbit stuck" reports landed in one session ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md) decisions 40/41/42), each a variant of "a safeguard exists but gets undone the same tick it fires."
+**Evidence:** none new — this is a synthesis of decisions 40 (flee never consulted the shared dead-end check), 41 (a locale food memory anchor re-picked itself forever, no exclusion mechanism reaches this tier), and 42 (a live food's own passibility-fail count got wiped by routine re-observation before the exclusion threshold could be reached). No two of the three shared a root cause; all three shared a shape.
+
+### What the review found
+
+At least five separate mechanisms currently decide "is this specific point/instance not worth pursuing right now," built at different times under live-bug pressure rather than as one design:
+
+1. **Dead-end marks** ([CREATURE_MEMORY.md §5.6](CREATURE_MEMORY.md), `dead_end_memory.gd`) — position + approach-heading keyed, 15s TTL, capped at 12, belief-overlap override. The only mechanism with a real forget-and-retry story.
+2. **Passibility-fail count** ([CREATURE_MEMORY.md §5.5](CREATURE_MEMORY.md), a field on food belief rows) — instance-keyed, food-goal-only, feeds both a hard exclusion threshold and `BlockedObjectiveResolver`'s soft persist-score math. No decay of its own besides the belief row's own eviction (decision 42 fixed a bug where routine re-observation wiped it).
+3. **Live-locale handoff exclusion** (`motor_planner.gd`, ephemeral `state`) — instance-keyed, fixed 240-tick countdown, built for decision 35's dither fix.
+4. **Locale arrival cooldown** (`motor_planner.gd`, ephemeral `state`) — single-slot position match, no heading, fixed 300-tick countdown, built for the 2026-07-17 "empty arrival re-picked immediately" fix (CLEANUP C2 family).
+5. **Pursuit-detour latch/escalation** (`_maybe_mint_pursuit_detour_latch`/`_remint_alternate_pursuit_detour` + `memory_moving` sibling, C1 above) — not a memory at all; a bounded ticks-and-escalation-tier steering tactic that, on giving up, is what actually *triggers* #1/#2's writes via a one-shot unlock of `apply_blocked_objective_resolution` (normally suppressed for live pursuit).
+
+Decision 21 ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md)) named five mint sites needing to consult #1 back on 2026-09-17 and flagged the actual wiring as "an audit/wiring task." It was still incomplete a week later: only `_mint_flee_waypoint` (decision 40) and explore's own mint had it. The other three — #5's pursuit-detour re-mint, `_mint_locale_search_waypoint`, and shelter's precise-candidate probe (`_try_nominate_shelter_candidate`) — consulted nothing. That gap, not a storage-model gap, is what let the same shape of bug recur three times: the data was fine, a mint site just didn't check it.
+
+**First pass at consolidating #3/#4 into #1/#2 was wrong, caught before implementing.** `record_dead_end_mark` requires a nonzero approach heading — it is inherently direction-sensitive ("blocked walking up to this spot from that angle"). The locale-arrival cooldown (#4) is direction-*independent* ("this exact spot had no food, no matter the approach") — forcing it into dead-end marks would have reopened decision 35/CLEANUP-C2's original dither by only excluding a re-approach from the same angle. The handoff exclusion (#3) means "I chose not to pursue this, temporarily," not "I physically couldn't reach this" (#2) — and since decision 42 correctly made #2 stop resetting on re-observation, reusing #2 for #3 would make the handoff exclusion *permanent* instead of a 240-tick hold, a real regression. **Conclusion: #3 and #4 are not the same concern as #1/#2 and are not being merged.** They're documented here as a legitimate fourth concern (temporary revisit/reconsideration cooldown, direction-independent, no shared decay mechanism) rather than left as undocumented drift.
+
+### Fix (this pass — closing the wiring gap only, scope decided with the user)
+
+Wired the shared dead-end check (`MemoryAdapter.is_waypoint_dead_end`) into the three remaining decision-21 sites, plus the `memory_moving` pursuit-detour sibling found while wiring #5 (not separately named by decision 21, same shape/same risk):
+- `_remint_alternate_pursuit_detour` / `_remint_alternate_memory_pursuit_detour`: a ±60° alternate landing on a known dead end now gives up immediately (same as exhausting both escalations) instead of committing an escalation slot to a point already known to fail.
+- `_mint_locale_search_waypoint`: re-rolls up to `locale_search_dead_end_reroll_attempts` (default 4) fresh random points when the pick lands on a known dead end, instead of committing blind — bounded, not a scored-candidate fallback like flee/explore have, since a single random point has no natural alternative to fall back to.
+- `_try_nominate_shelter_candidate`: a probe point already marked a dead end is skipped (same cooldown path as a failed enclosure check), alongside the pre-existing but narrower `shelter_candidate_recently_failed` (that one checks whether *this exact belief instance* already failed its own evaluation; this checks the broader "this spot is a known physical dead end for any reason").
+
+Not done this pass, by explicit scope decision: merging #3/#4 into #1/#2 (see above — would be a correctness regression, not a simplification), and a full redesign into one unified storage/policy table (higher effort/risk, not chosen).
+
+### Verification
+
+- 5 new tests: `_test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate`, `_test_motor_planner_memory_pursuit_detour_gives_up_on_dead_end_alternate`, `_test_motor_planner_locale_search_waypoint_rerolls_dead_end` (same-seed RNG replay: the first random pick is marked a dead end, forcing the second identically-seeded run to diverge), `_test_motor_planner_shelter_candidate_nomination_skips_dead_end`.
+- Validity-checked: each of the four new guards disabled independently — each failed only its own test(s), nothing else. Restored, full suite clean.
+- Full headless suite: 2 consecutive runs, only the pre-existing `_test_creature_motor_stack_blocked_memory_writes` failure and the two known SCRIPT ERRORs, no new failures.
 
 ---
 

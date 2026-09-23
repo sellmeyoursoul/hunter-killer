@@ -299,6 +299,8 @@ Drop candidate waypoint **W** when ∃ mark with `distance(W, world_pos) ≤ dea
 
 **Phasing:** **V3 6c** — store unused; Movement Weighing branch treats as **no**. **V3 6d** — full read/write via memory adapter.
 
+**Related but distinct (2026-09-23, [CREATURE_MOVEMENT_V3_CLEANUP.md C23](CREATURE_MOVEMENT_V3_CLEANUP.md#c23)):** two ephemeral (`state`-dict, not memory-adapter) cooldowns exist that look dead-end-shaped but are deliberately **not** merged into `_dead_end_marks` — the live-locale food handoff exclusion (`handoff_excluded_instance_id`, instance-keyed, 240-tick countdown, `live_locale_handoff_exclusion_ticks`) means "chose not to pursue this, temporarily," not "physically can't reach this," and the locale-arrival cooldown (`locale_arrival_clear_anchor`, single-slot position match, no heading, 300-tick countdown, `locale_revisit_cooldown_ticks`) is direction-*independent* ("empty no matter the approach angle") where a dead-end mark is inherently direction-sensitive. Forcing either into this section's shape would have reopened the bugs they were built to fix. Documented here so they aren't mistaken for undocumented drift; not modeled as their own numbered subsection since neither is a memory-adapter-backed belief.
+
 ### 5.7 `_kind_profile` — stimulus-type beliefs (V3 resolved)
 
 **Purpose:** Remember **what kind of thing** is worth how much — generalized across instances. Example: “apple trees yield more than strawberry plants”; “lions are scarier than wolves.” Distinct from **`_goal_belief`** (§5.5 — **where** is that tree) and **`LocalePriorMap`** (§14 — did foraging **here** work). Extensible to future facets (e.g. **`weapon_efficacy`** after combat) without a new memory architecture.
@@ -448,7 +450,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 | Write event | Storage (this doc) |
 |-------------|-------------------|
-| Live sighting / re-awareness | **`_goal_belief` sync** (position / `consumable_now`); clear **`passibility_fail_count`** |
+| Live sighting / re-awareness | **`_goal_belief` sync** (position / `consumable_now`); **`passibility_fail_count`** is **not** cleared here for a stationary instance — corrected 2026-09-22 ([PHYSICS_SQUEEZE.md](../Draft_Features/PHYSICS_SQUEEZE.md) decision 42, [CREATURE_MOVEMENT_V3_CLEANUP.md C23](CREATURE_MOVEMENT_V3_CLEANUP.md#c23)): a continuously-visible, continuously-blocked target could never reach `passibility_fail_switch_threshold` if routine re-observation wiped the count every tick. Still cleared on re-sync for a *moving* target (its failure history belongs to a position it's no longer at) |
 | Kind observation | **`record_observation`** → **`_kind_profile`** (**§5.7**) |
 | Salient outcome | **`goal_source_memory.try_salient_write`** (**§14.4**) — may fan out with kind observation on same episode (EAT) |
 | Clear-path fail / blocked MOVE | **`_dead_end_marks_by_body` append** (**§5.6**) |
