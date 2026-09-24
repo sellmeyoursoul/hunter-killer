@@ -605,6 +605,62 @@ func invalidate_locale_belief_near(anchor: Vector3, motor_p: Dictionary) -> void
     _rows.erase(key)
 
 
+## Pure read (no `last_used_time` bump, no eviction) of usable `avoid_hostiles` locale cells for the
+## flee pool: one `{cell_x, cell_y, weight}` per grid cell, `weight` = the cell's best
+## `stored_strength` clamped to [0, 1] across modality rows. Rows with non-positive `stored_strength`
+## or `success_delta` (failure-eroded / never-successful) are not usable and are skipped, as are rows
+## idle longer than the limit [method _evict_if_needed] would apply ([method idle_limit_for_row]) —
+## eviction only runs inside a salient write, so without this a stale row could be offered long past
+## its lifetime (decision 44 follow-up G). [param now] is wall-clock seconds
+## (`Time.get_ticks_msec() / 1000.0`, the clock `last_used_time` is stamped with); negative = read the
+## clock now. Example: `avoid_hostiles_cells(motor_v3, Time.get_ticks_msec() / 1000.0)`.
+func avoid_hostiles_cells(motor_p: Dictionary = {}, now: float = -1.0) -> Array:
+  var now_sec := now if now >= 0.0 else Time.get_ticks_msec() / 1000.0
+  var by_cell: Dictionary = {}
+  for key in _rows.keys():
+    var row: Dictionary = _rows[key]
+    if row.get("goal_kind") != _GkReg.GK_AVOID_HOSTILES:
+      continue
+    var strength := float(row.get("stored_strength", 0.0))
+    if strength <= 0.0 or float(row.get("success_delta", 0.0)) <= 0.0:
+      continue
+    if now_sec - float(row.get("last_used_time", now_sec)) > idle_limit_for_row(row, motor_p):
+      continue
+    var cx := int(row.get("cell_x", 0))
+    var cy := int(row.get("cell_y", 0))
+    var cell_key := Vector2i(cx, cy)
+    var weight := clampf(strength, 0.0, 1.0)
+    if not by_cell.has(cell_key) or weight > float(by_cell[cell_key]["weight"]):
+      by_cell[cell_key] = {"cell_x": cx, "cell_y": cy, "weight": weight}
+  return by_cell.values()
+
+
+## Snapshot of the locale row for [param goal_kind] at [param anchor]'s grid cell (telemetry only):
+## `{found, cell_x, cell_y, attempt_count, stored_strength, success_delta}`. When several modality
+## rows share the cell, the one with the most attempts is reported. `found` is false (counters 0)
+## when no row exists — e.g. the write was refused (rate limit, out-of-bounds anchor). Pure read.
+## Example: `locale_row_stats_at(GK_AVOID_HOSTILES, exit_pos, motor_v3)`.
+func locale_row_stats_at(goal_kind: StringName, anchor: Vector3, motor_p: Dictionary) -> Dictionary:
+  var cell := grid_indices_for_anchor(anchor, motor_p)
+  var out := {
+    "found": false, "cell_x": cell.x, "cell_y": cell.y,
+    "attempt_count": 0, "stored_strength": 0.0, "success_delta": 0.0,
+  }
+  for key in _rows.keys():
+    var row: Dictionary = _rows[key]
+    if row.get("goal_kind") != goal_kind:
+      continue
+    if int(row.get("cell_x", 0)) != cell.x or int(row.get("cell_y", 0)) != cell.y:
+      continue
+    if bool(out["found"]) and int(row.get("attempt_count", 0)) <= int(out["attempt_count"]):
+      continue
+    out["found"] = true
+    out["attempt_count"] = int(row.get("attempt_count", 0))
+    out["stored_strength"] = float(row.get("stored_strength", 0.0))
+    out["success_delta"] = float(row.get("success_delta", 0.0))
+  return out
+
+
 func clear_salient_continuation() -> void:
   _last_salient_tier2 = &""
   _last_salient_goal_kind = &""
@@ -617,16 +673,31 @@ func reset() -> void:
   clear_salient_continuation()
 
 
+## Idle lifetime (seconds) of one locale [param row] — the single source of truth shared by
+## [method _evict_if_needed] (which erases rows past it) and [method avoid_hostiles_cells] (which
+## skips them without mutating). Limit = base + (attempts − 1) × `locale_prior_idle_evict_per_attempt_sec`,
+## where base is `locale_prior_idle_evict_avoid_hostiles_sec` (default 300) for `GK_AVOID_HOSTILES`
+## rows (rare-escape cadence) and `locale_prior_idle_evict_base_sec` (default 10) for every other kind.
+## Example: an avoid_hostiles row with 3 attempts at defaults -> 300 + 2 × 1 = 302 s.
+static func idle_limit_for_row(row: Dictionary, motor_p: Dictionary) -> float:
+  var per_attempt := float(motor_p.get("locale_prior_idle_evict_per_attempt_sec", 1.0))
+  var row_base := (
+    float(motor_p.get("locale_prior_idle_evict_avoid_hostiles_sec", 300.0))
+    if row.get("goal_kind") == _GkReg.GK_AVOID_HOSTILES
+    else float(motor_p.get("locale_prior_idle_evict_base_sec", 10.0))
+  )
+  return row_base + float(maxi(0, int(row.get("attempt_count", 0)) - 1)) * per_attempt
+
+
+## Drops rows idle longer than [method idle_limit_for_row], then trims to `locale_prior_max_buckets`
+## (highest idle_age / attempts first). [param now] is wall-clock seconds
+## (`Time.get_ticks_msec() / 1000.0`, the same clock `last_used_time` is stamped with).
 func _evict_if_needed(motor_p: Dictionary, now: float) -> void:
   var max_buckets := int(motor_p.get("locale_prior_max_buckets", 100))
-  var base_idle := float(motor_p.get("locale_prior_idle_evict_base_sec", 10.0))
-  var per_attempt := float(motor_p.get("locale_prior_idle_evict_per_attempt_sec", 1.0))
   var keys := _rows.keys()
   for key in keys:
     var row: Dictionary = _rows[key]
-    var attempts := int(row.get("attempt_count", 0))
-    var idle_limit := base_idle + float(maxi(0, attempts - 1)) * per_attempt
-    if now - float(row.get("last_used_time", now)) > idle_limit:
+    if now - float(row.get("last_used_time", now)) > idle_limit_for_row(row, motor_p):
       _rows.erase(key)
   while _rows.size() > max_buckets:
     var worst_key := ""

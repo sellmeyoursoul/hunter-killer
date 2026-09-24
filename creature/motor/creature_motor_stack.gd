@@ -22,6 +22,8 @@ const _ChokeProbe := preload("res://creature/motor/choke_point_probe.gd")
 const _ChokeTracker := preload("res://creature/motor/choke_point_tracker.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _StatMath := preload("res://creature/stat_math.gd")
+const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 
 
 var _body: CharacterBody3D
@@ -67,6 +69,13 @@ var _last_outcome: _ActionOutcome
 var _last_planner_ctx: Dictionary = {}
 var _benign_episode_pending: bool = false
 var _was_flight_fast_path: bool = false
+## Re-acquisition failure proxy (decision 44 follow-up C): the last Flight exit's anchor (body
+## position at `flight_just_exited`) and wall-clock time. Consumed (cleared) by the next
+## `flight_just_entered` that either fires the FAILURE write or finds the window expired — one
+## failure per exit at most. Reset in [method configure].
+var _flight_exit_anchor: Vector3 = Vector3.ZERO
+var _flight_exit_ms: int = 0
+var _has_flight_exit_anchor: bool = false
 
 ## TEMP-DEBUG (CLEANUP C9/C10 fail-fast harness): live invariant checks at the end of every
 ## [method tick] — flags known bug signatures (stuck-under-geometry, flee-waypoint loop, silent
@@ -140,6 +149,9 @@ func configure(
   _threat_samples_window = []
   _benign_episode_pending = false
   _was_flight_fast_path = false
+  _flight_exit_anchor = Vector3.ZERO
+  _flight_exit_ms = 0
+  _has_flight_exit_anchor = false
   _planner_state = _MotorPlanner.new_state()
   _threat_samples_test_override = false
   _use_scan_test_override = false
@@ -179,8 +191,11 @@ func tick(delta: float) -> _ActionOutcome:
   var flight_just_entered := _flight_fast_path_active and not _was_flight_fast_path
   var flight_just_exited := not _flight_fast_path_active and _was_flight_fast_path
   ctx["flight_just_entered"] = flight_just_entered
+  if flight_just_entered:
+    _on_flight_entered()
   if flight_just_exited:
     (_MotorPlanner as GDScript).call("clear_flee_waypoint_latch", _planner_state)
+    _on_flight_exited()
   _update_threat_disposition(ctx)
   ctx["threat_disposition_mod"] = _threat_disposition_mod()
   ctx["safety_met"] = _safety_met
@@ -618,6 +633,10 @@ func get_planner_blocked_objective_action() -> StringName:
 
 
 ## Read-only motor planner snapshot for duel debug HUD ([code]motor_planner_debug_hud.gd[/code]).
+## Flee-memory fields (decision 44 follow-up F): `flee_pick_kind` / `flee_pick_effective` (last flee
+## mint's winning candidate kind + score, see `MotorPlanner._mint_flee_waypoint`),
+## `avoid_hostiles_cell_count` (usable avoid_hostiles locale cells; -1 unless telemetry is on and
+## goal_kind is avoid_hostiles) and `flee_memory_debug` (the toggle itself, for the explore log).
 func get_debug_snapshot() -> Dictionary:
   var ps := _planner_state.duplicate(true)
   var step_goal: Vector3 = ps.get("step_goal", Vector3.ZERO)
@@ -648,7 +667,17 @@ func get_debug_snapshot() -> Dictionary:
   var eat_gate := {}
   if str(ps.get("goal_kind", "")) == str(_GkReg.GK_FIND_FOOD):
     eat_gate = _MotorPlanner.debug_eat_gate_snapshot(_last_planner_ctx, ps, step_goal, _motor_v3)
+  ## Decision 44 follow-up F: `ahc` walks the locale rows, so only while flee-memory telemetry is on
+  ## and the creature is fleeing (the only lines that print it); -1 = not computed.
+  var flee_mem_dbg := _flee_memory_log_enabled()
+  var ahc := -1
+  if flee_mem_dbg and _memory_adapter != null and str(ps.get("goal_kind", "")) == str(_GkReg.GK_AVOID_HOSTILES):
+    ahc = _memory_adapter.avoid_hostiles_cell_count(_motor_v3)
   return {
+    "flee_memory_debug": flee_mem_dbg,
+    "flee_pick_kind": str(ps.get("flee_pick_kind", "")),
+    "flee_pick_effective": float(ps.get("flee_pick_effective", 0.0)),
+    "avoid_hostiles_cell_count": ahc,
     "action": action_label,
     "blocked": blocked,
     "calorie_ratio": _calorie_ratio(),
@@ -965,16 +994,98 @@ func _update_safety_on_consideration() -> void:
   else:
     _safety_cycles += 1
   _threat_seen_since_safety_check = false
-  var was_safety_met := _safety_met
   _safety_met = _safety_cycles >= required
-  ## A real danger window just cleared (false -> true, not merely "still safe") — if that happened
-  ## while at/near a confirmed shelter, it's now known-good, not just observationally confirmed.
-  ## `awareness_radius` (the same signal `_threat_seen_since_safety_check` already gates on — no
-  ## extra jeopardy-proximity check) is close enough to count per 2026-09-11 design review.
-  if _safety_met and not was_safety_met and _memory_adapter != null and _body != null:
-    _memory_adapter.notify_safety_recovered_near_shelter(
-      _body.global_position, _motor_v3, Time.get_ticks_msec(),
+  ## The shelter `battle_tested` trigger no longer lives on this bare `safety_met` false -> true
+  ## edge (it fired without any real threat ever closing in). It moved to `flight_just_exited` —
+  ## see [method _on_flight_exited] (PHYSICS_SQUEEZE.md §3 decision 9 / §4e, 2026-09-17).
+
+
+## Runs once on the `flight_just_exited` tick — an acute-threat Flight episode was latched and has
+## just been released after `safety_met` (the single "jeopardy cleared / pursuit ended" event).
+## Two memory outcomes hang off it, both keyed to the body's position at exit:
+## 1. shelter belief (observed or confirmed) at/near here becomes `battle_tested`
+##    (PHYSICS_SQUEEZE.md §3 decision 9 / §4e);
+## 2. an `avoid_hostiles` locale-prior SUCCESS row is written at the exit cell
+##    (CREATURE_MEMORY §2.1.2/§14.2). The goal table is empty during Flight (see
+##    `MotorGoalHub.build_eligible_goals`), so no Avoid -> Find-food flip can occur mid-episode.
+## Also arms the re-acquisition failure proxy: the exit position/time become the anchor that
+## [method _on_flight_entered] checks on the next Flight entry (decision 44 follow-up C). With
+## `flee_memory_debug_log` on, logs one `FleeMem exit` line ([method _flee_memory_log_enabled]).
+func _on_flight_exited() -> void:
+  if _memory_adapter == null or _body == null:
+    return
+  var exit_pos := _body.global_position
+  var now_ms := Time.get_ticks_msec()
+  var promoted_iid := _memory_adapter.notify_flight_escaped_near_shelter(exit_pos, _motor_v3, now_ms)
+  var wrote := _memory_adapter.notify_flight_escape_outcome(exit_pos, _motor_v3, _resolve_environment_grid())
+  _flight_exit_anchor = exit_pos
+  _flight_exit_ms = now_ms
+  _has_flight_exit_anchor = true
+  if _flee_memory_log_enabled():
+    var stats := _memory_adapter.avoid_hostiles_row_stats_at(exit_pos, _motor_v3)
+    _OLogSafe.info(
+      "FleeMem exit id=%s cell=(%d,%d) wrote=%d att=%d str=%.3f sd=%+.3f shelter=%s ahc=%d" % [
+        _creature_log_label(),
+        int(stats["cell_x"]),
+        int(stats["cell_y"]),
+        1 if wrote else 0,
+        int(stats["attempt_count"]),
+        float(stats["stored_strength"]),
+        float(stats["success_delta"]),
+        str(promoted_iid) if promoted_iid != 0 else "none",
+        _memory_adapter.avoid_hostiles_cell_count(_motor_v3),
+      ],
+      false,
+      "FleeMemory",
     )
+
+
+## Runs once on the `flight_just_entered` tick — re-acquisition failure proxy (decision 44
+## follow-up C, 2026-09-24). If the previous Flight exit was at most `flee_reacquire_window_sec`
+## (default 25, wall-clock — same clock as the rest of the stack, so a paused game still counts
+## the time) ago AND the creature is within one coverage cell (`coverage_cell_from_motor`) of that
+## exit anchor, the escape evidently didn't shake the pursuer: write `TIER_FAILURE` on the anchor's
+## cell ([method MemoryAdapter.notify_flight_reacquired]). The anchor is consumed when it fires or
+## when the window has expired, so each exit yields at most one failure; a re-entry inside the
+## window but farther away keeps the anchor (a later nearby re-entry in the window can still fire).
+func _on_flight_entered() -> void:
+  if _memory_adapter == null or _body == null or not _has_flight_exit_anchor:
+    return
+  var now_ms := Time.get_ticks_msec()
+  var elapsed_sec := float(now_ms - _flight_exit_ms) / 1000.0
+  if elapsed_sec > float(_motor_v3.get("flee_reacquire_window_sec", 25.0)):
+    _has_flight_exit_anchor = false
+    return
+  var pos := _body.global_position
+  var dist := Vector2(pos.x - _flight_exit_anchor.x, pos.z - _flight_exit_anchor.z).length()
+  if dist > _GoalSource.coverage_cell_from_motor(_motor_v3):
+    return
+  _has_flight_exit_anchor = false
+  var wrote := _memory_adapter.notify_flight_reacquired(_flight_exit_anchor, _motor_v3, _resolve_environment_grid())
+  if _flee_memory_log_enabled():
+    var stats := _memory_adapter.avoid_hostiles_row_stats_at(_flight_exit_anchor, _motor_v3)
+    _OLogSafe.info(
+      "FleeMem reacq id=%s cell=(%d,%d) dt=%.1fs wrote=%d att=%d str=%.3f sd=%+.3f ahc=%d" % [
+        _creature_log_label(),
+        int(stats["cell_x"]),
+        int(stats["cell_y"]),
+        elapsed_sec,
+        1 if wrote else 0,
+        int(stats["attempt_count"]),
+        float(stats["stored_strength"]),
+        float(stats["success_delta"]),
+        _memory_adapter.avoid_hostiles_cell_count(_motor_v3),
+      ],
+      false,
+      "FleeMemory",
+    )
+
+
+## True when flee-memory telemetry should be emitted: debug builds with `creature_motor_v3`
+## `flee_memory_debug_log` on (default true while decision 44 is smoke-tested). Gates the rare
+## `FleeMem exit` / `FleeMem reacq` OLog lines and the `fk=`/`ahc=` explore-log fields.
+func _flee_memory_log_enabled() -> bool:
+  return OS.is_debug_build() and bool(_motor_v3.get("flee_memory_debug_log", true))
 
 
 func _build_context() -> Dictionary:

@@ -9,6 +9,11 @@ class_name FleeCandidateScoring
 ## deliberately deferred refinement — no speed/cornering yet). Multiple threats aggregate by the
 ## *worst* (most dangerous) margin, not a sum or average: being caught by any one pursuer is the
 ## failure condition.
+##
+## A separation term (decision 44 follow-up A, 2026-09-24) sits beside the race margin: the race
+## margin is distance-free (a near endpoint the threat is slightly farther from scores well even if
+## it brings the creature closer to the threat than it stands now), so every candidate also scores
+## how much farther from its nearest threat it ends up — see [method separation_gain].
 
 ## Horizontal (XZ) threat positions for every `in_awareness` sample. Samples carry either
 ## `world_pos_3d` or the legacy 2D `world_pos`.
@@ -114,14 +119,55 @@ static func choke_useful(opening_width: float, own_diameter: float, threat_diame
   return true
 
 
+## Distance from [param point] to the *nearest* threat in [param threat_pts] (horizontal), or INF
+## with no threats. Nearest (min), not an average — decision 20's worst-case rule: the closest
+## pursuer is the one that catches you.
+static func min_threat_dist(point: Vector3, threat_pts: Array) -> float:
+  var best := INF
+  for t_v in threat_pts:
+    best = minf(best, _flat_dist(t_v as Vector3, point))
+  return best
+
+
+## Separation gained at [param endpoint] relative to standing at [param creature_pos] (decision 44
+## follow-up A, 2026-09-24): `(min_threat_dist(endpoint) − min_threat_dist(creature_pos)) / norm_dist`,
+## clamped to [-1, 1]. Positive = the endpoint leaves the creature farther from its nearest threat
+## than it is now; negative = it ends *closer* (walking toward the pursuer). [param norm_dist] is the
+## flee distance for open/incumbent/locale candidates, and the candidate's own probed distance for
+## shelter/choke beliefs (the same "equivalent full flee distance" rescale their reach gets). Returns
+## 0.0 with no threats or a degenerate [param norm_dist].
+## Example: creature 60u from the threat, endpoint 48u from it, norm 150 -> (48 − 60) / 150 = −0.08.
+static func separation_gain(creature_pos: Vector3, endpoint: Vector3, threat_pts: Array, norm_dist: float) -> float:
+  if threat_pts.is_empty() or norm_dist <= 1e-6:
+    return 0.0
+  var gained := min_threat_dist(endpoint, threat_pts) - min_threat_dist(creature_pos, threat_pts)
+  return clampf(gained / norm_dist, -1.0, 1.0)
+
+
+## Shelter exception to the separation term: true when the creature believes it wins the race to
+## the shelter endpoint (worst-case race margin strictly > 0, i.e. `belief_race_factor` above its
+## 0.5 toss-up value). Such a shelter is scored as a full escape (separation credited as 1.0 — the
+## value a straight-away open bearing earns) instead of by the distance it leaves to the threat:
+## once inside a refuge the creature reaches first, remaining distance to the pursuer is not what
+## keeps it safe. Merely zeroing the term would still leave every won shelter `gain × flee_dist`
+## behind straight-away open ground. Choke points do NOT get this exception.
+static func shelter_race_won(margin: float) -> bool:
+  return margin > 0.0
+
+
 ## Final candidate score in distance units: measured reach plus `flee_dist ×` (race term + the
-## belief's own bonus gated by the race). Open bearings pass `belief_bonus_frac = 0`.
+## belief's own bonus gated by the race + `flee_separation_gain × separation`). Open bearings pass
+## `belief_bonus_frac = 0`. [param separation] comes from [method separation_gain] (or 1.0 for a
+## shelter the creature wins the race to, [method shelter_race_won]); default 0.0 keeps the
+## pre-separation score for callers that don't supply it.
 static func effective(
   reach: float,
   flee_dist: float,
   margin: float,
   belief_bonus_frac: float,
   motor_v3: Dictionary,
+  separation: float = 0.0,
 ) -> float:
   var bonus := belief_bonus_frac * belief_race_factor(margin, motor_v3) if belief_bonus_frac > 0.0 else 0.0
-  return reach + flee_dist * (race_term(margin, motor_v3) + bonus)
+  var sep_term := float(motor_v3.get("flee_separation_gain", 0.25)) * separation
+  return reach + flee_dist * (race_term(margin, motor_v3) + bonus + sep_term)

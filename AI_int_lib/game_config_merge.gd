@@ -193,6 +193,10 @@ static func creature_motor_spine() -> Dictionary:
     "locale_prior_max_buckets": 100,
     "locale_prior_idle_evict_base_sec": 10.0,
     "locale_prior_idle_evict_per_attempt_sec": 1.0,
+    # avoid_hostiles rows record rare Flight escapes (minutes apart), not per-meal foraging, so they
+    # get their own much longer idle base (wall-clock seconds, like the sibling keys; 5 min).
+    # Per-attempt bonus is shared with find_food (locale_prior_idle_evict_per_attempt_sec).
+    "locale_prior_idle_evict_avoid_hostiles_sec": 300.0,
     "salient_write_max_per_sec": 100.0,
     "escape_reversal_window_sec": 1.0,
     "tactic_squeeze_clearance": 28.0,
@@ -396,12 +400,44 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "flee_choke_bias_bonus": 0.15,
     "flee_belief_radius_factor": 1.0,
     "flee_belief_max_candidates": 4,
+    ## Third belief kind in the flee pool (CREATURE_MEMORY §14.2/§14.3 Option A): remembered
+    ## `avoid_hostiles` locale cells (a spot the creature previously escaped from a real Flight
+    ## episode at). Deliberately SMALLER than the shelter/choke bonuses above — a locale cell is only
+    ## "I got away near here once": no verified geometry, blind to the current threat's size. Same
+    ## bonus shape (x row weight x proximity, gated 0..1 by the race margin); locale candidates only
+    ## fill whatever `flee_belief_max_candidates` slots shelter/choke candidates leave unused.
+    "flee_locale_bias_bonus": 0.05,
     "flee_incumbent_bearing_bonus": 0.25,
     ## §9 slice 10, decision 23: additive bonus (same race-gated shape as the belief bonuses above)
     ## when a candidate route's route-plausibility scan finds at least one ghost-layer object this
     ## creature fits through but the currently-relevant threat doesn't (`RoutePlausibilityScan`'s
     ## `detour_forcing` flag). Live-computed every mint, no belief storage. Untuned.
     "flee_detour_forcing_bonus": 0.15,
+    ## Decision 44 follow-up A (2026-09-24): separation term — every flee candidate additionally
+    ## scores `flee_separation_gain x separation x flee_dist`, where separation = (distance from the
+    ## endpoint to the NEAREST threat - that distance from where the creature stands now) / flee_dist
+    ## (shelter/choke: / their own probed distance, mirroring their reach rescale), clamped +-1.
+    ## Ending closer to the threat than now is penalised; a shelter the creature wins the race to
+    ## (margin > 0) is credited 1.0 instead. 0.25 = each unit of separation gained is worth a quarter
+    ## unit of reachable travel: large enough that a straight-away open bearing (separation ~ 1)
+    ## beats a candidate that ends closer to the threat (e.g. the 2026-09-24 repro: -0.08) by
+    ## ~0.27 x flee_dist on this term alone, small enough that a choke point ~14u off-axis
+    ## (separation ~0.4 after rescale) still wins its existing decision-20 test (limit ~0.33).
+    "flee_separation_gain": 0.25,
+    ## Decision 44 follow-up C (2026-09-24): re-acquisition failure proxy window (wall-clock
+    ## seconds, same clock as the rest of the stack — pausing does not stop it). A new acute Flight
+    ## episode starting within this long after a Flight exit, within one coverage cell of that exit
+    ## anchor, writes an avoid_hostiles FAILURE on the anchor's cell. 25 s: well above the
+    ## `safety_time`-driven exit latency plus a predator's typical re-approach from the edge of
+    ## awareness (a few seconds), well below the 300 s row lifetime, so only a pursuer that is
+    ## plainly still around counts as "the escape didn't work".
+    "flee_reacquire_window_sec": 25.0,
+    ## Decision 44 follow-up F: flee-memory telemetry toggle (debug builds only). When on:
+    ## one OLog info line per Flight exit (exit cell, write result, row stats, promoted shelter)
+    ## and per re-acquisition failure write, plus ` fk=<pick kind> ahc=<usable avoid_hostiles cells>`
+    ## on `motor_explore_tick.log` lines whose gk is avoid_hostiles. Default ON while decision 44 is
+    ## being smoke-tested — flip to false (user://game_config.json creature_motor_v3) afterwards.
+    "flee_memory_debug_log": true,
   }
 
 
@@ -655,6 +691,14 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "food_yield_estimate_noise_frac_v10": 0.15,
     "food_yield_estimate_noise_frac_v25": 0.03,
     "locale_prior_ewma_alpha": 0.15,
+    ## Locale-prior idle eviction (GoalSourceMemoryStore.idle_limit_for_row) — the V3 stack passes
+    ## THIS dict to `try_salient_write`, so these must live here, not only in the V2
+    ## `creature_motor_spine()` (decision 44 follow-up D, 2026-09-24; same values as V2). Wall-clock
+    ## seconds. avoid_hostiles rows record rare Flight escapes (minutes apart), so they get their
+    ## own much longer base; the per-attempt bonus is shared.
+    "locale_prior_idle_evict_base_sec": 10.0,
+    "locale_prior_idle_evict_per_attempt_sec": 1.0,
+    "locale_prior_idle_evict_avoid_hostiles_sec": 300.0,
     "unknown_kind_multiplier": 1.0,
     "believed_goal_hotspot_near_radius": 250.0,
     "believed_goal_seek_escalate_radius": 1000.0,
@@ -673,35 +717,10 @@ static func merge_creature_motor_v3_pack_overlay(motor_v3: Dictionary, pack_root
   return _merge_dict_shallow(motor_v3, over)
 
 
-## Defaults for [code]inference_client[/code]; empty [code]INFERENCE_BASE_URL[/code] means AI cannot arm until set.
-static func default_inference_client() -> Dictionary:
-  return {
-    "INFERENCE_BASE_URL": "",
-    "COMPLETIONS_PATH": "/v1/completions",
-    "CHAT_COMPLETIONS_PATH": "/v1/chat/completions",
-    "MODEL_ID": "",
-    "API_KEY": "",
-    "HTTP_TIMEOUT_MS": 8000,
-    "INFERENCE_PERIOD_MS": 250,
-    "MAX_OUTPUT_TOKENS": 48,
-    "LLAMA_COMPLETION_GRAMMAR_ENABLED": true,
-    "TEMPERATURE": 0.0,
-    "INFERENCE_AUTO_START_ENABLED": false,
-    "BUNDLE_ROOT_OVERRIDE": "",
-    "BUNDLED_SERVER_EXE": "",
-    "BUNDLED_MODEL_GGUF": "",
-    "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
-    "INFERENCE_PROBE_PATH": "/health",
-    "INFERENCE_START_TIMEOUT_MS": 300000,
-    "BUNDLED_SERVER_ATTACH_CONSOLE": true,
-  }
-
-
 ## Full default root object (before reading the file).
 static func default_root() -> Dictionary:
   return {
     "logging_params": default_logging_params(),
-    "inference_client": default_inference_client(),
     "perception": default_perception_params(),
     "creature_motor": default_creature_motor_params(),
     "creature_motor_v3": default_creature_motor_v3_params(),
@@ -725,8 +744,6 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
   var r := defaults_root.duplicate(true)
   if file_root.has("logging_params"):
     r["logging_params"] = _merge_dict_shallow(r["logging_params"], file_root["logging_params"])
-  if file_root.has("inference_client"):
-    r["inference_client"] = _merge_dict_shallow(r["inference_client"], file_root["inference_client"])
   if file_root.has("perception"):
     r["perception"] = _merge_dict_shallow(r["perception"], file_root["perception"])
   if file_root.has("creature_motor"):

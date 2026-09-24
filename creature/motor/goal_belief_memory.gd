@@ -8,9 +8,9 @@ const TIER_COARSE := &"COARSE"
 ## PRECISE/COARSE `tier` above, which is about staleness/promotion, not shelter quality).
 ## `SHELTER_TIER_OBSERVED`: a passive/opportunistic enclosure probe cleared the threshold once,
 ## with no deliberate STAY-evaluate confirm cycle. `SHELTER_TIER_CONFIRMED`: the full multi-cycle
-## STAY-evaluate passed. `SHELTER_TIER_BATTLE_TESTED`: the creature was actually near this
-## confirmed shelter when a real threat's danger window cleared (survived while sheltering here) —
-## "known safety," not just "looks safe."
+## STAY-evaluate passed. `SHELTER_TIER_BATTLE_TESTED`: an acute Flight episode ended with the
+## creature at/near this observed-or-confirmed shelter (survived a real chase here; promoted on
+## `flight_just_exited`, PHYSICS_SQUEEZE decision 9/44) — "known safety," not just "looks safe."
 const SHELTER_TIER_OBSERVED := &"observed"
 const SHELTER_TIER_CONFIRMED := &"confirmed"
 const SHELTER_TIER_BATTLE_TESTED := &"battle_tested"
@@ -321,33 +321,48 @@ static func upsert_shelter_observation(
   }
 
 
-## Upgrades the nearest `SHELTER_TIER_CONFIRMED` belief within [param upgrade_radius] of
-## [param creature_pos] to `SHELTER_TIER_BATTLE_TESTED` — called on the tick a creature's own
-## threat-free streak (`safety_met`) first goes true, i.e. "a real danger window just cleared
-## while I was here." A no-op when nothing confirmed is that close (most safety recoveries happen
-## nowhere near a known shelter — this only fires for the ones that do) or already battle-tested.
-static func upgrade_confirmed_shelter_to_battle_tested(
+## Promotes the nearest `SHELTER_TIER_OBSERVED` or `SHELTER_TIER_CONFIRMED` belief within
+## [param upgrade_radius] of [param creature_pos] straight to `SHELTER_TIER_BATTLE_TESTED` — called
+## on the tick a real acute-threat Flight episode ends (`flight_just_exited`), i.e. "a genuine
+## chase-then-escape just resolved while I was here" (PHYSICS_SQUEEZE.md §3 decision 9 / §4e).
+## Strictly stronger evidence than a STAY-evaluate confirm, so an `observed` row need not pass
+## through `confirmed` first. Only the *nearest non-`failed`* shelter within the radius is
+## considered: if that one is already battle-tested this is a no-op (the escape is credited to it,
+## not passed on to a farther row). Also a no-op when no non-failed shelter is that close (most
+## flights end nowhere near a known shelter); `failed` rows are never promoted. On promotion the row
+## also gets `fit_confirmed = true` (it just sheltered this creature for real — keeps it exempt from
+## [method maintain]'s LRU cap eviction and from `MemoryAdapter.shelter_candidate_recently_failed`),
+## while `shelter_fail_count` is deliberately KEPT (history, e.g. a different-sized predator that
+## breached it before — decision 44 follow-up E). [param beliefs] is mutated in place.
+## Returns the promoted instance id, or 0 when nothing was promoted.
+## Example: `var iid := upgrade_shelter_to_battle_tested(b, pos, now, 5.0)`.
+static func upgrade_shelter_to_battle_tested(
   beliefs: Dictionary,
   creature_pos: Vector3,
   now_ms: int,
   upgrade_radius: float,
-) -> void:
+) -> int:
   var best_iid := 0
   var best_d_sq := INF
   for iid in beliefs.keys():
     var row: Dictionary = beliefs[iid]
-    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or row.get("shelter_tier", &"") != SHELTER_TIER_CONFIRMED:
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER or row.get("shelter_tier", &"") == SHELTER_TIER_FAILED:
       continue
     var d_sq := creature_pos.distance_squared_to(_read_pos_v3(row.get("last_world_pos", Vector3.ZERO)))
     if d_sq <= upgrade_radius * upgrade_radius and d_sq < best_d_sq:
       best_d_sq = d_sq
       best_iid = int(iid)
   if best_iid == 0:
-    return
+    return 0
   var upgraded: Dictionary = beliefs[best_iid]
+  var tier: StringName = upgraded.get("shelter_tier", &"")
+  if tier != SHELTER_TIER_OBSERVED and tier != SHELTER_TIER_CONFIRMED:
+    return 0
   upgraded["shelter_tier"] = SHELTER_TIER_BATTLE_TESTED
+  upgraded["fit_confirmed"] = true
   upgraded["last_observed_ms"] = now_ms
   beliefs[best_iid] = upgraded
+  return best_iid
 
 
 ## Synthetic instance id for a choke-point mouth: an exact-position hash (centimeter quantized),

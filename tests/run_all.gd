@@ -2,7 +2,6 @@
 extends SceneTree
 
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
-const _Tokens := preload("res://AI_int_lib/ai_action_tokens.gd")
 const _Wire := preload("res://AI_int_lib/perception_wire.gd")
 const _Sampling := preload("res://AI_int_lib/perception_sampling.gd")
 const _Risk := preload("res://AI_int_lib/perception_risk_hints.gd")
@@ -171,6 +170,7 @@ func _run_all() -> void:
   _test_motor_planner_pursuit_detour_skips_reeval_while_latched()
   _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate()
+  await _test_motor_planner_pursuit_detour_prefers_straight_line_when_it_reaches_farther()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
   _test_motor_planner_memory_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block()
@@ -235,10 +235,13 @@ func _run_all() -> void:
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
-  _test_creature_motor_stack_safety_recovery_upgrades_nearby_confirmed_shelter()
+  _test_creature_motor_stack_bare_safety_recovery_does_not_promote_shelter_or_write_locale()
+  _test_creature_motor_stack_flight_exit_promotes_nearby_shelter_from_observed_and_confirmed()
+  _test_creature_motor_stack_flight_exit_writes_one_avoid_hostiles_locale_row_per_episode()
   _test_creature_motor_stack_consideration_advances()
   _test_motor_planner_path_clearance_gated_by_cadence()
   _test_motor_planner_avoid_hostiles_refresh_on_consideration_only()
+  _test_motor_planner_avoid_hostiles_blocked_seek_holds_explore_no_sawtooth()
   # §12.2 post-6d P4 — Flight flee waypoint latch + entry telemetry
   _test_motor_planner_flight_close_range_forward_egress()
   _test_motor_planner_flight_flee_waypoint_orbit_stable()
@@ -256,6 +259,26 @@ func _run_all() -> void:
   _test_motor_planner_flee_ignores_shelter_behind_the_threat()
   _test_motor_planner_flee_pool_prefers_shelter_it_reaches_first()
   _test_motor_planner_flee_choke_belief_needs_fit_gate()
+  _test_flee_locale_bias_bonus_default_is_smaller_than_shelter_and_choke()
+  _test_flee_locale_candidates_add_race_gated_bonus_from_avoid_hostiles_rows()
+  _test_flee_locale_candidate_ahead_loses_to_open_ground_and_behind_threat_does_not_win()
+  _test_flee_locale_candidates_only_fill_cap_slots_left_by_shelter_and_choke()
+  _test_locale_avoid_hostiles_row_outlives_find_food_row_at_default_idle_evict()
+  _test_flee_locale_candidate_at_dead_end_is_excluded_unless_shelter_counts()
+  _test_flee_locale_dead_end_exclusion_does_not_consume_cap_slot()
+  _test_flee_shelter_candidate_stays_exempt_but_choke_is_excluded_at_dead_end()
+  _test_flee_choke_candidate_at_dead_end_rescued_only_by_nearby_shelter()
+  # PHYSICS_SQUEEZE decision 44 follow-ups A/C/E/F/G (2026-09-24)
+  _test_flee_separation_gain_math()
+  _test_flee_locale_repro_no_longer_ends_closer_to_threat()
+  _test_flee_locale_sideways_and_toward_threat_cells_lose_to_open_ground()
+  _test_flee_locale_straight_ahead_cell_scored_with_true_reach()
+  _test_flee_shelter_race_won_exempt_from_separation_penalty_but_lost_race_is_not()
+  _test_avoid_hostiles_cells_skips_rows_idle_past_eviction_limit()
+  _test_flight_exit_shelter_promotion_sets_fit_confirmed_keeps_fail_count()
+  _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_anchor()
+  _test_flee_pick_kind_telemetry_and_explore_log_suffix()
+  _test_decision44_smoke_layout_pins_all_object_sets()
   _test_waypoint_chain_simplify_drops_collinear_points()
   _test_waypoint_chain_simplify_keeps_real_bends()
   _test_waypoint_chain_advance_steps_hop_by_hop()
@@ -389,7 +412,6 @@ func _run_all() -> void:
   _test_escape_reversal_suppression()
   _test_load_merged_config_repo_fallback()
   _test_hunter_killer_debug_project_settings()
-  _test_tokens()
   _test_perception_snippet()
   _test_perception_sampling()
   _test_perception_risk_hints()
@@ -444,9 +466,7 @@ func _run_all() -> void:
   _test_blocked_approach_memory()
   _test_seek_wall_filter_and_backtrack()
   _test_motor_plane_yaw_from_facing()
-  _test_ai_driver_helpers()
   _test_duel_spawn_facing_variance()
-  _test_bundled_inference_helpers()
   _test_creature_kinematic_playfield_clamp_after_move()
   await _test_ghost_obstacle_query_open_shrub_size_gated()
   await _test_route_scanned_endpoint_truncates_blocked_target()
@@ -459,6 +479,7 @@ func _run_all() -> void:
   await _test_bake_playfield_navmesh_mask_excludes_ghost_layer()
   await _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit()
   await _test_shelter_enclosure_probe_detects_real_refuge_ring()
+  await _test_repro_rabbit_cornered_north_wall_live_pursuit()
   if _failures > 0:
     push_error("tests/run_all.gd: %d assertion(s) failed." % _failures)
 
@@ -504,55 +525,6 @@ func _test_ai_driver_creature_registry() -> void:
   _assert((d.get("_registered_creatures") as Array).is_empty(), "registry cleared")
   d.call("set_duel_round_active", false)
   n.queue_free()
-  d.free()
-
-func _test_ai_driver_helpers() -> void:
-  var AD := load("res://AI_int_lib/ai_driver.gd") as Script
-  _assert(Callable(AD, &"should_apply_response_id").call(7, 7), "latest-enqueued response applies")
-  _assert(not Callable(AD, &"should_apply_response_id").call(6, 7), "older response is stale")
-  var d: Node = AD.new() as Node
-  _assert(d.call("get_armed_handshake_user") == "ARMED", "armed handshake literal")
-  _assert(Callable(AD, &"http_request_result_label").call(HTTPRequest.RESULT_CANT_CONNECT) == "CANT_CONNECT", "HTTP label")
-  _assert(
-    Callable(AD, &"extract_openai_chat_choice_text").call(
-      {
-        "choices": [{"message": {"content": [{"type": "text", "text": "LEFT"}]}}],
-      },
-    )
-    == "LEFT",
-    "OpenAI array-shaped message.content",
-  )
-  _assert(
-    Callable(AD, &"extract_openai_chat_choice_text").call(
-      {"choices": [{"message": {"content": "RIGHT"}, "text": ""}]},
-    )
-    == "RIGHT",
-    "string message.content",
-  )
-  _assert(
-    Callable(AD, &"extract_openai_chat_choice_text").call({"choices": [{"text": "legacy DOWN"}]}) == "legacy DOWN",
-    "legacy choices[0].text fallback",
-  )
-  _assert(
-    Callable(AD, &"extract_openai_chat_choice_text").call(
-      {
-        "choices": [{"message": {"content": [{"type": "output_text", "text": "UP"}]}}],
-      },
-    )
-    == "UP",
-    "OpenAI output_text content block (llama-server)",
-  )
-  _assert(
-    Callable(AD, &"extract_openai_completion_choice_text").call({"choices": [{"text": "LEFT"}]}) == "LEFT",
-    "OpenAI /v1/completions choices[0].text",
-  )
-  _assert(
-    Callable(AD, &"extract_openai_completion_choice_text").call({"choices": [{}]}) == "",
-    "empty completion text",
-  )
-  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(1)).contains("START"), "gbnf ARMED")
-  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(2)).contains("RIGHT"), "gbnf PLAYING")
-  _assert(str(Callable(AD, &"gbnf_for_completion_state_enum").call(0)).is_empty(), "gbnf IDLE empty")
   d.free()
 
 func _test_blocked_approach_memory() -> void:
@@ -653,16 +625,6 @@ func _test_interior_boulder_spawn_scale() -> void:
   )
   rock.queue_free()
 
-
-func _test_bundled_inference_helpers() -> void:
-  var BN := load("res://AI_int_lib/bundled_inference_launcher.gd") as Script
-  var ic_off := {"INFERENCE_AUTO_START_ENABLED": false}
-  _assert(not Callable(BN, &"should_attempt_auto_start").call(ic_off, "http://127.0.0.1:8080"), "auto-start off")
-  var ic_on := {"INFERENCE_AUTO_START_ENABLED": true}
-  _assert(Callable(BN, &"should_attempt_auto_start").call(ic_on, "http://127.0.0.1:8080"), "loopback + auto")
-  _assert(not Callable(BN, &"should_attempt_auto_start").call(ic_on, "https://api.example.com"), "remote URL no spawn")
-  _assert(Callable(BN, &"port_from_base_url").call("http://127.0.0.1:9090/") == 9090, "port parse")
-  _assert(Callable(BN, &"port_from_base_url").call("http://127.0.0.1") == 8080, "default port when omitted")
 
 func _test_calorie_drain_movement_formula() -> void:
   ## Same formula as [code]Player._apply_calorie_drain_and_starvation[/code] / [code]Mob._apply_calorie_burn[/code].
@@ -3118,8 +3080,8 @@ func _test_memory_adapter_shelter_selection_prefers_battle_tested_over_closer_co
   var far_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(far_battle_tested_anchor, motor_v3)
   adapter.record_shelter_evaluation(near_iid, near_confirmed_anchor, true, 0.9, now_ms)
   adapter.record_shelter_evaluation(far_iid, far_battle_tested_anchor, true, 0.9, now_ms)
-  ## Promote the far one to battle-tested by simulating a safety recovery while standing there.
-  adapter.notify_safety_recovered_near_shelter(far_battle_tested_anchor, motor_v3, now_ms + 1000)
+  ## Promote the far one to battle-tested by simulating a Flight exit while standing there.
+  adapter.notify_flight_escaped_near_shelter(far_battle_tested_anchor, motor_v3, now_ms + 1000)
   var picked := adapter.consult_shelter_beliefs(creature_pos, motor_v3, now_ms + 1000)
   _assert(picked.get("active", false), "a shelter is picked")
   _assert(
@@ -4020,12 +3982,6 @@ func _test_creature_motor_stack_memory_eat_locale_write() -> void:
   stack.notify_food_consumption_outcome(anchor, false)
   var store: RefCounted = stack.get_memory_adapter().get_locale_store()
   _assert(store._rows.size() >= 1, "EAT outcome writes locale row on stack adapter store")
-  if _ai_driver_can_instantiate():
-    var ad: Node = _ai_driver_script().new()
-    var bid := body.get_instance_id()
-    ad.set("_goal_source_memory_by_body", {})
-    _assert(not (ad.get("_goal_source_memory_by_body") as Dictionary).has(bid), "ai_driver locale store unused by stack write")
-    ad.free()
   main.queue_free()
 
 
@@ -5941,6 +5897,133 @@ func _test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate() -> void
   _assert(
     bool(state.get("pursuit_detour_gave_up", false)),
     "landing on a known dead end gives up immediately, same as exhausting both escalations",
+  )
+  main.queue_free()
+
+
+## C1 reopened fix regression (2026-09-24, §4k "both stuck" repro follow-up): confirms
+## `_remint_alternate_pursuit_detour` actually prefers a straight-to-prey candidate over its
+## blind ±60° rotation when the straight line reaches farther on a real baked navmesh — the exact
+## comparison this session's fix added (see that function's own "C1 reopen" comment). Builds a
+## small custom navmesh cut into two disconnected islands by a full-width wall at z≈2: the south
+## island holds the pursuer and the live prey's `ultimate` position (due east, z=0, never crossing
+## the wall); the pursuer's own +60° rotated bearing (from a latched detour waypoint due north)
+## points into the north island, entirely unreachable from the south — so
+## `NavigationServer3D.map_get_path` snaps that candidate's path to the wall's near edge, clamping
+## its `reach` well short of the straight line's full, unobstructed distance (validated directly
+## against `_flee_candidate_probe` via a throwaway probe script before writing this fixture: rotated
+## reach ~7.1 vs straight reach ~20.0 on this exact geometry). Pre-fix, this function only ever
+## considered the rotated bearing and would commit to a waypoint pinned against that wall
+## regardless; post-fix it should pick the open straight line and land the new detour waypoint on
+## the prey instead. Validity-checked red/green against a temporarily-reverted
+## `_remint_alternate_pursuit_detour` (see CREATURE_MOVEMENT_V3_CLEANUP.md C1).
+func _test_motor_planner_pursuit_detour_prefers_straight_line_when_it_reaches_farther() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+
+  var nav_region := NavigationRegion3D.new()
+  nav_region.name = "NavRegion"
+  main.add_child(nav_region)
+
+  var floor_body := StaticBody3D.new()
+  floor_body.name = "Floor"
+  floor_body.collision_layer = 1
+  var floor_shape := BoxShape3D.new()
+  floor_shape.size = Vector3(60.0, 0.2, 60.0)
+  var floor_col := CollisionShape3D.new()
+  floor_col.shape = floor_shape
+  floor_body.add_child(floor_col)
+  floor_body.position = Vector3(10.0, -0.1, -2.5)
+  nav_region.add_child(floor_body)
+
+  # Full-width wall at z≈2 (wider than the floor) cuts the navmesh into two disconnected islands.
+  # Creature at origin, latched detour waypoint due north at z=8 → to_latched dir (0,0,1) rotated
+  # +60° about +Y → (0.866, 0, 0.5) → the rotated candidate (mint_dist 8) lands at (6.9282, *, 4.0),
+  # in the north island. The straight-to-prey candidate stays at z=0, south of this wall, so it's
+  # never affected.
+  var wall := StaticBody3D.new()
+  wall.name = "RotatedBearingWall"
+  wall.collision_layer = 1
+  var wall_shape := BoxShape3D.new()
+  wall_shape.size = Vector3(60.0, 2.0, 0.4)
+  var wall_col := CollisionShape3D.new()
+  wall_col.shape = wall_shape
+  wall.add_child(wall_col)
+  wall.position = Vector3(10.0, 1.0, 2.0)
+  nav_region.add_child(wall)
+
+  var nm := NavigationMesh.new()
+  nm.agent_radius = 0.25
+  nm.agent_height = 2.0
+  nm.cell_size = 0.25
+  nm.cell_height = 0.25
+  nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+  nm.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN
+  nm.geometry_collision_mask = 1
+  nav_region.navigation_mesh = nm
+  nav_region.bake_navigation_mesh()
+  var map_rid := nav_region.get_navigation_map()
+  NavigationServer3D.map_set_active(map_rid, true)
+  NavigationServer3D.map_set_cell_height(map_rid, 0.25)
+
+  var creature_pos := Vector3(0.0, 1.0, 0.0)
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  for _nav_i in 30:
+    await physics_frame
+    if NavigationServer3D.map_get_path(map_rid, creature_pos, prey_pos, true).size() >= 2:
+      break
+
+  var body := _spawn_carnivore_body(main, creature_pos)
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+
+  var detour_wp := Vector3(0.0, 1.0, 8.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
+  state["pursuit_detour_ticks_remaining"] = 24
+  state["pursuit_detour_alt_flip"] = false
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88064
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88064),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": map_rid,
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+  }
+  (_MotorPlanner as GDScript).call(
+    "apply_immediate_blocked_path_reevaluation",
+    ctx,
+    state,
+    body,
+    motor_v3,
+  )
+
+  var new_wp: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  _assert(
+    new_wp.distance_to(prey_pos) < 2.0,
+    (
+      "straight-to-prey candidate wins on a real navmesh: new waypoint lands near the prey (got %s)"
+      % new_wp
+    ),
+  )
+  _assert(
+    new_wp.z < 1.0,
+    (
+      "straight-to-prey candidate wins: new waypoint stays south of the disconnecting wall, "
+      + "not snapped against it on the blocked rotated bearing (got %s)"
+    ) % new_wp,
   )
   main.queue_free()
 
@@ -8625,16 +8708,40 @@ func _test_creature_motor_stack_tick_valid_action() -> void:
   _assert(body.current_calories < before, "stack tick debits calories")
   main.queue_free()
 
-## 2026-09-11 shelter-tier design review: the tick a creature's own threat-free streak
-## (`safety_met`) first goes true — not merely "still safe," the actual false->true transition —
-## upgrades a nearby confirmed shelter to battle-tested. Drives `_update_safety_on_consideration`
-## directly (bypassing full `tick()`'s live awareness scan) so the transition is exercised without
-## needing a real threat fixture.
-func _test_creature_motor_stack_safety_recovery_upgrades_nearby_confirmed_shelter() -> void:
+## Arms `stack` so its next `tick()` is the `flight_just_exited` tick: a Flight episode latched
+## (`_flight_fast_path_latched`/`_active`/`_was_...` all true) with the threat-free streak already at
+## `safety_time`, so `_update_flight_fast_path` releases it (`active = not safety_met`) this tick.
+## No live threat fixture needed — the scene has no threats, so nothing re-latches the episode.
+func _arm_stack_flight_exit_next_tick(stack: CreatureMotorStack) -> void:
+  var required := maxi(1, int(_motor_v3_test_params().get("safety_time", 5)))
+  stack.set("_safety_cycles", required)
+  stack.set("_safety_met", true)
+  stack.set("_flight_fast_path_latched", true)
+  stack.set("_flight_fast_path_active", true)
+  stack.set("_was_flight_fast_path", true)
+
+
+## Locale rows currently stored for `goal_kind` on `stack`'s memory adapter.
+func _stack_locale_rows_for(stack: CreatureMotorStack, goal_kind: StringName) -> Array:
+  var out: Array = []
+  var store: Object = stack.get_memory_adapter().get_locale_store()
+  for key in store._rows.keys():
+    var row: Dictionary = store._rows[key]
+    if row.get("goal_kind") == goal_kind:
+      out.append(row)
+  return out
+
+
+## Shelter `battle_tested` promotion + avoid_hostiles locale write moved off the bare `safety_met`
+## false->true edge (2026-09-11 trigger, retired per PHYSICS_SQUEEZE.md §3 decision 9 / §4e) onto
+## `flight_just_exited`. A safety streak completing with NO latched Flight episode must therefore do
+## neither: a nearby confirmed shelter stays merely `confirmed` and no locale row appears.
+func _test_creature_motor_stack_bare_safety_recovery_does_not_promote_shelter_or_write_locale() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
   var stack := _motor_stack_test_configure(body)
+  stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
   var motor_v3 := _motor_v3_test_params()
   var anchor := body.global_position
   var iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
@@ -8643,15 +8750,95 @@ func _test_creature_motor_stack_safety_recovery_upgrades_nearby_confirmed_shelte
   for _i in required:
     stack.call("_update_safety_on_consideration")
   _assert(stack.is_safety_met(), "safety_met goes true after a full threat-free window")
+  stack.tick(1.0 / 60.0)
   var now_ms := Time.get_ticks_msec()
-  var picked := stack.get_memory_adapter().consult_shelter_beliefs(anchor, motor_v3, now_ms)
-  _assert(picked.get("active", false), "the shelter belief is still active after the upgrade")
   _assert(
     is_equal_approx(
       stack.get_memory_adapter().shelter_confidence_score(anchor, motor_v3, now_ms),
-      float(motor_v3.get("shelter_confidence_battle_tested", 1.0)),
+      float(motor_v3.get("shelter_confidence_confirmed", 0.6)),
     ),
-    "safety recovering near the confirmed shelter upgraded it to the battle-tested weight",
+    "a bare safety_met edge (no Flight episode) leaves the confirmed shelter confirmed",
+  )
+  _assert(
+    _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES).is_empty(),
+    "a bare safety_met edge (no Flight episode) writes no avoid_hostiles locale row",
+  )
+  main.queue_free()
+
+
+## `flight_just_exited` near a shelter promotes it straight to battle-tested from EITHER `observed`
+## or `confirmed` (decision 9), but only when the exit point is within `arrival_tolerance` of it.
+func _test_creature_motor_stack_flight_exit_promotes_nearby_shelter_from_observed_and_confirmed() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var battle_w := float(motor_v3.get("shelter_confidence_battle_tested", 1.0))
+  var main := Node3D.new()
+  root.add_child(main)
+  for from_tier in [&"observed", &"confirmed"]:
+    var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+    var stack := _motor_stack_test_configure(body)
+    stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+    var anchor := body.global_position
+    var iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+    var adapter := stack.get_memory_adapter()
+    if from_tier == &"observed":
+      adapter.record_shelter_observation(iid, anchor, 0.7, Time.get_ticks_msec())
+    else:
+      adapter.record_shelter_evaluation(iid, anchor, true, 0.9, Time.get_ticks_msec())
+    var before := adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec())
+    _assert(before < battle_w, "%s shelter starts below the battle-tested weight" % from_tier)
+    _arm_stack_flight_exit_next_tick(stack)
+    stack.tick(1.0 / 60.0)
+    _assert(
+      is_equal_approx(adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec()), battle_w),
+      "flight_just_exited at an %s shelter promotes it to battle-tested" % from_tier,
+    )
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  ## A shelter well outside `arrival_tolerance` of the exit point is left alone.
+  var far_body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+  var far_stack := _motor_stack_test_configure(far_body)
+  far_stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+  var far_anchor := Vector3(300.0, 1.0, 300.0)
+  var far_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(far_anchor, motor_v3)
+  far_stack.get_memory_adapter().record_shelter_evaluation(far_iid, far_anchor, true, 0.9, Time.get_ticks_msec())
+  _arm_stack_flight_exit_next_tick(far_stack)
+  far_stack.tick(1.0 / 60.0)
+  _assert(
+    is_equal_approx(
+      far_stack.get_memory_adapter().shelter_confidence_score(far_anchor, motor_v3, Time.get_ticks_msec()),
+      float(motor_v3.get("shelter_confidence_confirmed", 0.6)),
+    ),
+    "flight_just_exited far from a shelter does not promote it",
+  )
+  main.queue_free()
+
+
+## `flight_just_exited` writes exactly one `avoid_hostiles` locale row at the exit cell — modality
+## `flee_retreat`, SUCCESS reward — and a second consecutive episode is NOT blocked by the
+## same-goal continuation guard (`notify_flight_escape_outcome` clears it, mirroring
+## `notify_food_consumption_outcome`): the same row's attempt/success counts accumulate.
+func _test_creature_motor_stack_flight_exit_writes_one_avoid_hostiles_locale_row_per_episode() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+  var stack := _motor_stack_test_configure(body)
+  stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+  _arm_stack_flight_exit_next_tick(stack)
+  stack.tick(1.0 / 60.0)
+  var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+  _assert(rows.size() == 1, "one Flight exit writes exactly one avoid_hostiles row")
+  if rows.size() == 1:
+    var row: Dictionary = rows[0]
+    _assert(int(row.get("cell_x", -1)) == 0 and int(row.get("cell_y", -1)) == 0, "row anchors at the body's exit cell")
+    _assert(row.get("modality_tag", &"") == &"flee_retreat", "default modality is flee_retreat")
+    _assert(int(row.get("attempt_count", 0)) == 1 and int(row.get("success_count", 0)) == 1, "first episode records one SUCCESS attempt")
+    _assert(float(row.get("success_delta", 0.0)) > 0.0 and float(row.get("stored_strength", 0.0)) > 0.0, "SUCCESS reward gives positive delta and strength")
+  _arm_stack_flight_exit_next_tick(stack)
+  stack.tick(1.0 / 60.0)
+  rows = _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+  _assert(
+    rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 2 and int(rows[0].get("success_count", 0)) == 2,
+    "a second consecutive Flight episode is not blocked by the continuation guard",
   )
   main.queue_free()
 
@@ -8762,6 +8949,73 @@ func _test_motor_planner_avoid_hostiles_refresh_on_consideration_only() -> void:
   _assert(
     state.get("step_goal", Vector3.ZERO).distance_to(first_goal) > 1.0,
     "flee step_goal refreshes on consideration tick",
+  )
+  main.queue_free()
+
+
+## CLEANUP C44 (2026-09-23, east-wall spinning repro): `apply_blocked_objective_resolution`'s §9
+## SEEK fallback (`_seed_explore_after_seek`) clears `step_goal_set` and latches
+## `step_source = "explore"` after `dead_end_record_min_blocked_ticks` consecutive blocked ticks —
+## before the fix, `GK_AVOID_HOSTILES`'s `_sync_step_objective` arm ignored that seed entirely and
+## unconditionally re-derived `_flee_objective()` on the very next tick (`_flee_objective` has no
+## obstacle awareness, so a still-visible threat reproduces the identical wall-blocked bearing),
+## clobbering `step_source` back to `"live"` before the seed ever produced an escape waypoint —
+## an exact sawtooth (live -> blocked -> explore-seeded -> clobbered -> live -> ...) that never
+## converged. Mirrors `_test_motor_planner_explore_seek_seeds_waypoint`'s direct-seed pattern (that
+## one covers GK_FIND_FOOD's already-correct handling of the same seed).
+func _test_motor_planner_avoid_hostiles_blocked_seek_holds_explore_no_sawtooth() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  body.last_move_direction = Vector3(0.0, 0.0, -1.0)
+  var threat := _ThreatSampleScr.make(Vector2(0.0, 10.0), 10.0, true)
+  threat["world_pos_3d"] = Vector3(0.0, 1.0, 10.0)
+  threat["in_awareness"] = true
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_AVOID_HOSTILES
+  # Same wall-blocked live flee objective `apply_blocked_objective_resolution` would have been
+  # re-deriving every tick pre-fix — held here so seeding it below is a faithful stand-in for the
+  # real escalation path without needing actual navmesh/wall collision setup.
+  state["step_goal"] = Vector3(0.0, 1.0, -40.0)
+  state["step_goal_set"] = true
+  state["step_source"] = &"live"
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "motor_v3": motor_v3,
+    "refresh_step_objective": false,
+    "threat_samples": [threat],
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": [threat]},
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "environment_grid": null,
+  }
+  (_MotorPlanner as GDScript).call("_seed_explore_after_seek", state, ctx)
+  _assert(state.get("step_source", &"") == &"explore", "seed leaves step_source latched to explore")
+  _assert(not bool(state.get("step_goal_set", false)), "seed clears step_goal_set for a fresh mint")
+  var held_explore_ticks := 0
+  for tick_i in 6:
+    ctx["physics_tick"] = tick_i + 2
+    (_MotorPlanner as GDScript).call("_sync_step_objective", ctx, state, _GkReg.GK_AVOID_HOSTILES)
+    if state.get("step_source", &"") == &"explore":
+      held_explore_ticks += 1
+  _assert(
+    held_explore_ticks == 6,
+    (
+      "GK_AVOID_HOSTILES holds the seeded explore step_source across repeated non-consideration "
+      + "ticks instead of sawtoothing back to live (held %d/6)" % held_explore_ticks
+    ),
+  )
+  _assert(
+    bool(state.get("step_goal_set", false))
+    and (state.get("step_goal", Vector3.ZERO) as Vector3).length_squared() > 1e-4,
+    "GK_AVOID_HOSTILES explore latch actually mints a real escape waypoint, not just holding empty",
   )
   main.queue_free()
 
@@ -9295,6 +9549,689 @@ func _test_motor_planner_flee_choke_belief_needs_fit_gate() -> void:
   var narrow := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 4.0)
   narrow["adapter"].record_choke_point_confirmation(choke_pos, own_diameter * 0.5, narrow["motor_v3"], int(narrow["ctx"]["now_ms"]))
   _assert(_flee_wp_dot_toward(narrow, choke_pos) < 0.5, "a gap too narrow for me is not a refuge")
+  main.queue_free()
+
+
+## Seeds one positive-strength `avoid_hostiles` locale row at grid cell ([param cx], [param cy]) on
+## [param adapter]'s store — the shape `try_salient_write` leaves after a SUCCESS flee_retreat write.
+func _seed_avoid_hostiles_locale_row(
+  adapter: RefCounted, cx: int, cy: int, strength: float = 1.0, success_delta: float = 0.5
+) -> void:
+  adapter.get_locale_store()._rows["test_avoid:%d:%d" % [cx, cy]] = {
+    "goal_kind": _GkReg.GK_AVOID_HOSTILES,
+    "context_hash": 1000 + cx * 100 + cy,
+    "modality_tag": &"flee_retreat",
+    "pole_facet_tag": &"individual",
+    "cell_x": cx,
+    "cell_y": cy,
+    "attempt_count": 3,
+    "success_count": 3,
+    "success_delta": success_delta,
+    "stored_strength": strength,
+    "last_used_time": Time.get_ticks_msec() / 1000.0,
+  }
+
+
+## Config ordering: the locale bonus is deliberately smaller than both verified-geometry bonuses
+## (locale cells have no verified geometry and are blind to threat size) yet still positive.
+func _test_flee_locale_bias_bonus_default_is_smaller_than_shelter_and_choke() -> void:
+  var p := _Merge.default_creature_motor_v3_params()
+  var locale_b := float(p.get("flee_locale_bias_bonus", -1.0))
+  _assert(locale_b > 0.0, "flee_locale_bias_bonus has a positive default")
+  _assert(locale_b < float(p.get("flee_shelter_bias_bonus", 0.0)), "locale bonus < shelter bonus")
+  _assert(locale_b < float(p.get("flee_choke_bias_bonus", 0.0)), "locale bonus < choke bonus")
+
+
+## The reader emits belief-shaped candidates from avoid_hostiles rows: position = cell centre
+## `(cell + 0.5) * coverage_cell` at the creature's height, bonus = `flee_locale_bias_bonus` x row
+## weight x proximity, `belief: true`. Non-positive-strength/failed rows and find_food rows are ignored,
+## and with no rows the pool is exactly what it was before (empty).
+func _test_flee_locale_candidates_add_race_gated_bonus_from_avoid_hostiles_rows() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  var adapter: RefCounted = setup["adapter"]
+  var body: CharacterBody3D = setup["body"]
+  var motor_v3: Dictionary = setup["motor_v3"]
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+  var pos := body.global_position
+  var no_rows: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, pos, flee_dist, motor_v3)
+  _assert(no_rows.is_empty(), "no locale rows: flee belief pool is unchanged (empty)")
+  _seed_avoid_hostiles_locale_row(adapter, 0, 1, 0.8)
+  _seed_avoid_hostiles_locale_row(adapter, 1, 0, 0.0)
+  _seed_avoid_hostiles_locale_row(adapter, 2, 0, 0.9, -0.2)
+  adapter.seed_locale_prior_for_test(1, 1, 1.0)
+  var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, pos, flee_dist, motor_v3)
+  _assert(cands.size() == 1, "only the positive-strength avoid_hostiles cell becomes a candidate")
+  if cands.size() == 1:
+    var cell_size := 52.0
+    var centre := Vector3(0.5 * cell_size, pos.y, 1.5 * cell_size)
+    var to_centre := Vector3(centre.x - pos.x, 0.0, centre.z - pos.z)
+    var cand: Dictionary = cands[0]
+    _assert(bool(cand["belief"]), "locale candidate is a belief-shaped candidate")
+    _assert((cand["dir"] as Vector3).dot(to_centre.normalized()) > 0.9999, "candidate bearing points at the cell centre")
+    var expected_bonus := (
+      float(motor_v3["flee_locale_bias_bonus"]) * 0.8 * (1.0 - to_centre.length() / flee_dist)
+    )
+    _assert(is_equal_approx(float(cand["bonus"]), expected_bonus), "bonus = locale bonus x row weight x proximity")
+  main.queue_free()
+
+
+## Decision 44 follow-up A (2026-09-24) replaced the old "a strong locale cell ahead attracts the
+## flee waypoint" expectation: that pull came from rescaling the locale cell's short reach to the
+## full flee distance — the same mechanism that pulled flee toward the predator in the repro. Locale
+## cells are now scored with their TRUE reach, so on unobstructed ground (no navmesh here: every open
+## bearing reaches the full flee distance) the cell is still a pool candidate but open ground wins.
+## The same cell BEHIND the threat still never wins (waypoint identical to the no-row one).
+func _test_flee_locale_candidate_ahead_loses_to_open_ground_and_behind_threat_does_not_win() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  ## Threat west of the creature -> away = +X; locale cell (0,1) centre (26, 78) is ahead/away side.
+  var ahead := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  var centre := Vector3(26.0, 1.0, 78.0)
+  _seed_avoid_hostiles_locale_row(ahead["adapter"], 0, 1, 1.0)
+  var body: CharacterBody3D = ahead["body"]
+  var flee_dist := float((ahead["motor_v3"] as Dictionary).get("awareness_radius", 500.0))
+  var cands: Array = (_MotorPlanner as GDScript).call(
+    "_flee_belief_candidates", ahead["ctx"], body, body.global_position, flee_dist, ahead["motor_v3"]
+  )
+  _assert(cands.size() == 1 and cands[0].get("kind") == &"locale", "the ahead cell is still a locale pool candidate")
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ahead["ctx"], state, body, ahead["motor_v3"])
+  _assert(state.get("flee_pick_kind") == &"open", "unobstructed open ground outscores a true-reach locale cell")
+  _assert(Vector3(wp.x, 0.0, wp.z).normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99, "waypoint runs straight away")
+  _assert(
+    _flee_wp_dot_toward(ahead, centre) < 0.995,
+    "the waypoint no longer bends toward the remembered cell centre",
+  )
+  ## Threat on the far side of cell (0,0) (centre (26, 26)) from the creature at the origin.
+  var behind := _flee_belief_test_setup(main, Vector3(40.0, 1.0, 40.0))
+  var behind_control := _flee_belief_test_setup(main, Vector3(40.0, 1.0, 40.0))
+  _seed_avoid_hostiles_locale_row(behind["adapter"], 0, 0, 1.0)
+  var wp_with: Vector3 = (_MotorPlanner as GDScript).call(
+    "_mint_flee_waypoint", behind["ctx"], _MotorPlanner.new_state(), behind["body"], behind["motor_v3"]
+  )
+  var wp_without: Vector3 = (_MotorPlanner as GDScript).call(
+    "_mint_flee_waypoint", behind_control["ctx"], _MotorPlanner.new_state(), behind_control["body"], behind_control["motor_v3"]
+  )
+  _assert(
+    wp_with.is_equal_approx(wp_without),
+    "a locale cell behind the threat (losing race) does not beat open ground",
+  )
+  main.queue_free()
+
+
+## Shared `flee_belief_max_candidates` cap: locale cells only fill slots shelter/choke candidates
+## leave unused, so a verified refuge is never crowded out by an unverified locale cell.
+func _test_flee_locale_candidates_only_fill_cap_slots_left_by_shelter_and_choke() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  var adapter: RefCounted = setup["adapter"]
+  var body: CharacterBody3D = setup["body"]
+  var motor_v3: Dictionary = setup["motor_v3"]
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  adapter.record_shelter_evaluation(561, Vector3(6.0, 1.0, 12.0), true, 0.9, int(ctx["now_ms"]))
+  _seed_avoid_hostiles_locale_row(adapter, 0, 1, 1.0)
+  var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+  motor_v3["flee_belief_max_candidates"] = 1
+  var capped: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+  _assert(capped.size() == 1, "cap of 1 is filled by the shelter; locale cell gets no slot")
+  motor_v3["flee_belief_max_candidates"] = 2
+  var roomy: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+  _assert(roomy.size() == 2, "a spare slot admits the locale candidate after the shelter")
+  main.queue_free()
+
+
+## Own idle-eviction timeout: at default config an avoid_hostiles row idle 60s survives
+## (`locale_prior_idle_evict_avoid_hostiles_sec` = 300) while an equally idle find_food row is evicted;
+## find_food timing itself is unchanged (10s base + 1s per attempt beyond the first). Uses the V3
+## params (decision 44 follow-up D): the V3 stack passes `creature_motor_v3` to `try_salient_write`,
+## so the evict keys must be present there, not only in the V2 spine.
+func _test_locale_avoid_hostiles_row_outlives_find_food_row_at_default_idle_evict() -> void:
+  var motor_p := _motor_v3_test_params()
+  _assert(
+    motor_p.has("locale_prior_idle_evict_base_sec")
+    and motor_p.has("locale_prior_idle_evict_per_attempt_sec")
+    and motor_p.has("locale_prior_idle_evict_avoid_hostiles_sec"),
+    "the locale idle-evict trio is present in the V3 defaults (not just a fallback literal)",
+  )
+  _assert(
+    float(motor_p.get("locale_prior_idle_evict_avoid_hostiles_sec", 0.0)) > 100.0,
+    "avoid_hostiles idle-evict default is >> the 10s find_food base",
+  )
+  var adapter := _MemoryAdapter.new()
+  var store: RefCounted = adapter.get_locale_store()
+  var now := Time.get_ticks_msec() / 1000.0
+  _seed_avoid_hostiles_locale_row(adapter, 0, 1)
+  var food_row := {
+    "goal_kind": _GkReg.GK_FIND_FOOD, "attempt_count": 3, "last_used_time": now - 60.0,
+  }
+  store._rows["test_food:idle60"] = food_row
+  store._rows["test_food:idle11"] = {
+    "goal_kind": _GkReg.GK_FIND_FOOD, "attempt_count": 3, "last_used_time": now - 11.0,
+  }
+  store._rows["test_food:idle13"] = {
+    "goal_kind": _GkReg.GK_FIND_FOOD, "attempt_count": 3, "last_used_time": now - 13.0,
+  }
+  (store._rows["test_avoid:0:1"] as Dictionary)["last_used_time"] = now - 60.0
+  store.call("_evict_if_needed", motor_p, now)
+  _assert(store._rows.has("test_avoid:0:1"), "avoid_hostiles row idle 60s survives eviction")
+  _assert(not store._rows.has("test_food:idle60"), "equally idle find_food row is evicted")
+  _assert(store._rows.has("test_food:idle11"), "find_food row idle 11s (limit 12s at 3 attempts) is kept")
+  _assert(not store._rows.has("test_food:idle13"), "find_food row idle 13s (limit 12s at 3 attempts) is evicted")
+  (store._rows["test_avoid:0:1"] as Dictionary)["last_used_time"] = now - 400.0
+  store.call("_evict_if_needed", motor_p, now)
+  _assert(not store._rows.has("test_avoid:0:1"), "avoid_hostiles row idle past its own limit is still evicted")
+
+
+## Marks a dead end for `avoid_hostiles` at [param at], approached from the origin creature.
+func _mark_flee_dead_end_at(adapter: RefCounted, creature_pos: Vector3, at: Vector3, now_ms: int) -> void:
+  adapter.record_dead_end_mark(at, Vector3(at.x - creature_pos.x, 0.0, at.z - creature_pos.z), _GkReg.GK_AVOID_HOSTILES, 1, now_ms)
+
+
+## Locale flee candidates at a known dead end are excluded; a nearby (non-failed) shelter belief
+## rescues them; a choke belief alone and a failed shelter do not.
+func _test_flee_locale_candidate_at_dead_end_is_excluded_unless_shelter_counts() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var now_ms := 0
+  var cell_centre := Vector3(26.0, 1.0, 78.0)
+  var results: Array = []
+  for variant in ["none", "dead_end", "dead_end_shelter", "dead_end_choke", "dead_end_failed_shelter"]:
+    var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), 8.0)
+    var adapter: RefCounted = setup["adapter"]
+    var body: CharacterBody3D = setup["body"]
+    var motor_v3: Dictionary = setup["motor_v3"]
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    now_ms = int(ctx["now_ms"])
+    _seed_avoid_hostiles_locale_row(adapter, 0, 1, 1.0)
+    if variant != "none":
+      _mark_flee_dead_end_at(adapter, body.global_position, cell_centre, now_ms)
+    if variant == "dead_end_shelter":
+      adapter.record_shelter_observation(601, cell_centre + Vector3(10.0, 0.0, 0.0), 0.9, now_ms)
+    elif variant == "dead_end_choke":
+      adapter.record_choke_point_confirmation(cell_centre + Vector3(5.0, 0.0, 0.0), 3.0, motor_v3, now_ms)
+    elif variant == "dead_end_failed_shelter":
+      adapter.record_shelter_evaluation(602, cell_centre + Vector3(10.0, 0.0, 0.0), false, 0.1, now_ms)
+    var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+    var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+    var locale_count := 0
+    for c_v in cands:
+      var to_c: Vector3 = (c_v as Dictionary)["dir"]
+      if to_c.dot(Vector3(cell_centre.x, 0.0, cell_centre.z).normalized()) > 0.999:
+        locale_count += 1
+    results.append(locale_count)
+  _assert(results[0] == 1, "control: locale candidate present with no dead-end mark")
+  _assert(results[1] == 0, "locale candidate at a marked dead end is excluded")
+  _assert(results[2] == 1, "a nearby observed shelter belief rescues a dead-end locale candidate")
+  _assert(results[3] == 0, "a nearby choke belief alone does NOT rescue a dead-end locale candidate")
+  _assert(results[4] == 0, "a failed shelter belief does NOT rescue a dead-end locale candidate")
+  main.queue_free()
+
+
+## An excluded dead-end locale candidate is dropped before the cap slice, so it never eats a
+## `flee_belief_max_candidates` slot: with cap 1 the next (non-dead-end) cell is kept instead.
+func _test_flee_locale_dead_end_exclusion_does_not_consume_cap_slot() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), 8.0)
+  var adapter: RefCounted = setup["adapter"]
+  var body: CharacterBody3D = setup["body"]
+  var motor_v3: Dictionary = setup["motor_v3"]
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  motor_v3["flee_belief_max_candidates"] = 1
+  ## (0,1) centre (26,78) is nearest and dead-ended; (2,1) centre (130,78) is >52 away from the mark.
+  _seed_avoid_hostiles_locale_row(adapter, 0, 1, 1.0)
+  _seed_avoid_hostiles_locale_row(adapter, 2, 1, 1.0)
+  _mark_flee_dead_end_at(adapter, body.global_position, Vector3(26.0, 1.0, 78.0), int(ctx["now_ms"]))
+  var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+  var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+  _assert(cands.size() == 1, "cap 1 still yields one locale candidate after the dead-end one is excluded")
+  if cands.size() == 1:
+    var want := Vector3(130.0, 0.0, 78.0).normalized()
+    _assert((cands[0]["dir"] as Vector3).dot(want) > 0.999, "the surviving candidate is the non-dead-end cell")
+  main.queue_free()
+
+
+## Kinds (`shelter` / `choke` / `locale`) present in a `_flee_belief_candidates` result, as a count
+## per kind — lets the dead-end tests below ask "is the choke still in the pool" by kind.
+func _flee_candidate_kind_counts(cands: Array) -> Dictionary:
+  var out := {}
+  for c_v in cands:
+    var k: StringName = (c_v as Dictionary).get("kind", &"")
+    out[k] = int(out.get(k, 0)) + 1
+  return out
+
+
+## Decision 11 guard + decision 44 follow-up B (2026-09-24): a shelter candidate is never
+## dead-end-filtered (a geometric dead end is what makes a shelter valuable), but a choke candidate
+## at an avoid_hostiles dead end is now excluded — same shelter-only rescue as locale cells (tested
+## in `_test_flee_choke_candidate_at_dead_end_rescued_only_by_nearby_shelter`). Shelter and choke
+## are set up in separate fixtures so the shelter can't rescue the choke here.
+func _test_flee_shelter_candidate_stays_exempt_but_choke_is_excluded_at_dead_end() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var probe_body := _spawn_herbivore_body(main, Vector3(500.0, 1.0, 500.0))
+  var own_diameter := float(probe_body.call(&"get_collision_capsule_radius")) * 2.0
+  probe_body.queue_free()
+  var shelter_pos := Vector3(6.0, 1.0, 12.0)
+  var choke_pos := Vector3(0.0, 1.0, 14.0)
+  for kind in [&"shelter", &"choke"]:
+    var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 4.0)
+    var adapter: RefCounted = setup["adapter"]
+    var body: CharacterBody3D = setup["body"]
+    var motor_v3: Dictionary = setup["motor_v3"]
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    var now_ms := int(ctx["now_ms"])
+    var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+    var pos := shelter_pos if kind == &"shelter" else choke_pos
+    if kind == &"shelter":
+      adapter.record_shelter_evaluation(603, shelter_pos, true, 0.9, now_ms)
+    else:
+      adapter.record_choke_point_confirmation(choke_pos, own_diameter * 1.5, motor_v3, now_ms)
+    var before := _flee_candidate_kind_counts(
+      (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+    )
+    _mark_flee_dead_end_at(adapter, body.global_position, pos, now_ms)
+    var after := _flee_candidate_kind_counts(
+      (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+    )
+    _assert(int(before.get(kind, 0)) == 1, "control: the %s enters the pool with no dead-end mark" % kind)
+    if kind == &"shelter":
+      _assert(int(after.get(kind, 0)) == 1, "a dead-end mark on a shelter does not remove it (decision 11)")
+    else:
+      _assert(int(after.get(kind, 0)) == 0, "a choke at a marked dead end is excluded (follow-up B)")
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Decision 44 follow-up B: a dead-end choke is rescued by a nearby non-failed shelter belief (same
+## rule as locale cells), not by another choke; and an excluded choke never consumes a
+## `flee_belief_max_candidates` slot — with cap 1, a second, non-dead-end choke takes it.
+func _test_flee_choke_candidate_at_dead_end_rescued_only_by_nearby_shelter() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var probe_body := _spawn_herbivore_body(main, Vector3(500.0, 1.0, 500.0))
+  var own_diameter := float(probe_body.call(&"get_collision_capsule_radius")) * 2.0
+  probe_body.queue_free()
+  var choke_pos := Vector3(0.0, 1.0, 14.0)
+  ## > 52 (dead_end_match_radius) from the mark at choke_pos, and off its approach heading.
+  var far_choke := Vector3(60.0, 1.0, 30.0)
+  var results := {}
+  for variant in ["rescued_by_shelter", "other_choke_only", "cap_slot"]:
+    var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0), own_diameter * 4.0)
+    var adapter: RefCounted = setup["adapter"]
+    var body: CharacterBody3D = setup["body"]
+    var motor_v3: Dictionary = setup["motor_v3"]
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    var now_ms := int(ctx["now_ms"])
+    var flee_dist := float(motor_v3.get("awareness_radius", 500.0))
+    adapter.record_choke_point_confirmation(choke_pos, own_diameter * 1.5, motor_v3, now_ms)
+    _mark_flee_dead_end_at(adapter, body.global_position, choke_pos, now_ms)
+    if variant == "rescued_by_shelter":
+      ## Observed shelter 10u from the mouth: not a pool candidate (observed never is), but it counts.
+      adapter.record_shelter_observation(611, choke_pos + Vector3(10.0, 0.0, 0.0), 0.9, now_ms)
+    else:
+      adapter.record_choke_point_confirmation(far_choke, own_diameter * 1.5, motor_v3, now_ms)
+    if variant == "cap_slot":
+      motor_v3["flee_belief_max_candidates"] = 1
+    var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, flee_dist, motor_v3)
+    var near_count := 0
+    var far_count := 0
+    for c_v in cands:
+      var dir: Vector3 = (c_v as Dictionary)["dir"]
+      if dir.dot(Vector3(choke_pos.x, 0.0, choke_pos.z).normalized()) > 0.999:
+        near_count += 1
+      elif dir.dot(Vector3(far_choke.x, 0.0, far_choke.z).normalized()) > 0.999:
+        far_count += 1
+    results[variant] = [near_count, far_count, cands.size()]
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  _assert(results["rescued_by_shelter"][0] == 1, "a nearby observed shelter rescues a dead-end choke")
+  _assert(results["other_choke_only"][0] == 0, "another choke belief does NOT rescue a dead-end choke")
+  _assert(results["other_choke_only"][1] == 1, "the non-dead-end choke is unaffected")
+  _assert(
+    results["cap_slot"][2] == 1 and results["cap_slot"][1] == 1,
+    "with cap 1 the excluded dead-end choke leaves the slot to the other choke",
+  )
+  main.queue_free()
+
+
+## Decision 44 follow-up A: separation math. `separation_gain` is positive when the endpoint ends
+## farther from the NEAREST threat than the creature stands now, negative when closer, 0 with no
+## threats, clamped to [-1, 1]; `effective` ranks equal-reach/equal-margin endpoints by it (the
+## open-bearing "farther-from-threat endpoint beats the nearer one" rule); the shelter exception
+## predicate is "race won" (margin > 0).
+func _test_flee_separation_gain_math() -> void:
+  var me := Vector3.ZERO
+  var threat := Vector3(-60.0, 0.0, 0.0)
+  var far_threat := Vector3(0.0, 0.0, 500.0)
+  var away := _FleeScoring.separation_gain(me, Vector3(150.0, 0.0, 0.0), [threat], 150.0)
+  var toward := _FleeScoring.separation_gain(me, Vector3(-12.0, 0.0, 0.0), [threat], 150.0)
+  _assert(is_equal_approx(away, 1.0), "straight away by the full flee distance: separation +1")
+  _assert(toward < 0.0, "an endpoint closer to the threat than now: negative separation")
+  _assert(
+    is_equal_approx(_FleeScoring.separation_gain(me, Vector3(-12.0, 0.0, 0.0), [threat, far_threat], 150.0), toward),
+    "the nearest threat governs (worst case), not the sum or average",
+  )
+  _assert(is_equal_approx(_FleeScoring.separation_gain(me, Vector3(9.0, 0.0, 0.0), [], 150.0), 0.0), "no threats: 0")
+  _assert(
+    is_equal_approx(_FleeScoring.separation_gain(me, Vector3(-59.0, 0.0, 0.0), [threat], 10.0), -1.0),
+    "clamped to -1",
+  )
+  var motor_v3 := _motor_v3_test_params()
+  _assert(float(motor_v3.get("flee_separation_gain", 0.0)) > 0.0, "flee_separation_gain has a positive default")
+  var farther := _FleeScoring.effective(150.0, 150.0, 0.1, 0.0, motor_v3, 0.9)
+  var nearer := _FleeScoring.effective(150.0, 150.0, 0.1, 0.0, motor_v3, 0.3)
+  var closer_than_now := _FleeScoring.effective(150.0, 150.0, 0.1, 0.0, motor_v3, -0.2)
+  var neutral := _FleeScoring.effective(150.0, 150.0, 0.1, 0.0, motor_v3, 0.0)
+  _assert(farther > nearer, "same reach and margin: the endpoint farther from the threat scores higher")
+  _assert(closer_than_now < neutral, "ending closer to the threat than now is penalised")
+  _assert(_FleeScoring.shelter_race_won(0.01) and not _FleeScoring.shelter_race_won(0.0), "race won means margin > 0")
+
+
+## Decision 44 follow-up A repro (2026-09-24): creature (40,40), threat (-20,40), avoid_hostiles
+## row at cell (0,0) whose centre (26,26) is 19.8u away and 135° off the away bearing. Before the fix
+## the waypoint landed ON the cell centre, 48.1u from the threat vs 60u at the start, even with
+## `flee_locale_bias_bonus` = 0. Now the flee waypoint never ends closer to the threat than the
+## creature started, with the bonus at 0 or at its default.
+func _test_flee_locale_repro_no_longer_ends_closer_to_threat() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var creature := Vector3(40.0, 1.0, 40.0)
+  var threat_pos := Vector3(-20.0, 1.0, 40.0)
+  for bonus in [0.0, 0.05]:
+    var body := _spawn_herbivore_body(main, creature)
+    body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+    var motor_v3 := _motor_v3_test_params()
+    motor_v3["awareness_radius"] = 150.0
+    motor_v3["flee_locale_bias_bonus"] = bonus
+    var threat := _flight_test_threat_at(threat_pos, 60.0)
+    var ctx := _flight_test_planner_ctx(body, motor_v3, main, threat, true, true)
+    ctx["space_state"] = null
+    var adapter := _MemoryAdapter.new()
+    ctx["memory_adapter"] = adapter
+    _seed_avoid_hostiles_locale_row(adapter, 0, 0, 0.35, 0.15)
+    var state := _MotorPlanner.new_state()
+    var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+    var end_to_threat := Vector2(wp.x - threat_pos.x, wp.z - threat_pos.z).length()
+    _assert(end_to_threat >= 60.0 - 1e-3, "bonus %.2f: flee waypoint does not end closer to the threat than the start" % bonus)
+    _assert(state.get("flee_pick_kind") == &"open", "bonus %.2f: open ground wins over the remembered cell" % bonus)
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Decision 44 follow-up A: a sideways locale cell (in the away half-plane, true reach 82u) and a
+## toward-threat cell (behind the creature relative to the away bearing) both lose to open ground.
+## The toward-threat cell never even enters the pool (half-plane filter), and neither does the
+## creature's own / an adjacent cell within one coverage cell.
+func _test_flee_locale_sideways_and_toward_threat_cells_lose_to_open_ground() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  ## Threat 60u west of the origin creature -> away = +X. Cells: (0,1) centre (26,78) sideways;
+  ## (-1,0) centre (-26,26) toward the threat; (0,0) centre (26,26) is 36.8u away (< one 52u cell).
+  var cases := {"sideways": Vector2i(0, 1), "toward": Vector2i(-1, 0), "adjacent": Vector2i(0, 0)}
+  for label in cases.keys():
+    var setup := _flee_belief_test_setup(main, Vector3(-60.0, 1.0, 0.0))
+    var motor_v3: Dictionary = setup["motor_v3"]
+    motor_v3["awareness_radius"] = 150.0
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    var body: CharacterBody3D = setup["body"]
+    var cell: Vector2i = cases[label]
+    _seed_avoid_hostiles_locale_row(setup["adapter"], cell.x, cell.y, 1.0)
+    var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, 150.0, motor_v3)
+    if label == "sideways":
+      _assert(cands.size() == 1, "the sideways cell is a pool candidate")
+    else:
+      _assert(cands.is_empty(), "the %s cell is filtered out of the pool" % label)
+    var state := _MotorPlanner.new_state()
+    var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+    _assert(state.get("flee_pick_kind") == &"open", "%s cell loses to open ground" % label)
+    _assert(Vector3(wp.x, 0.0, wp.z).normalized().dot(Vector3(1.0, 0.0, 0.0)) > 0.99, "%s: waypoint runs straight away" % label)
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Decision 44 follow-up A(3a): a locale cell is scored with its TRUE reach. Cell (1,0) centre
+## (78,26) sits straight ahead (78u, flee distance 150) of a creature at (0,26) fleeing a threat 60u
+## west: rescaled to the full flee distance (the old rule) it would tie the straight open bearing on
+## reach and separation and win on race margin + bonus; with its true reach it loses to open ground.
+func _test_flee_locale_straight_ahead_cell_scored_with_true_reach() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 26.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["awareness_radius"] = 150.0
+  var ctx := _flight_test_planner_ctx(body, motor_v3, main, _flight_test_threat_at(Vector3(-60.0, 1.0, 26.0), 60.0), true, true)
+  ctx["space_state"] = null
+  var adapter := _MemoryAdapter.new()
+  ctx["memory_adapter"] = adapter
+  _seed_avoid_hostiles_locale_row(adapter, 1, 0, 1.0)
+  var cands: Array = (_MotorPlanner as GDScript).call("_flee_belief_candidates", ctx, body, body.global_position, 150.0, motor_v3)
+  _assert(cands.size() == 1, "control: the straight-ahead cell is a pool candidate")
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  _assert(state.get("flee_pick_kind") == &"open", "a 78u locale cell loses to the 150u open bearing on true reach")
+  _assert(wp.x > 140.0, "the waypoint goes the full flee distance, not to the cell centre")
+  main.queue_free()
+
+
+## Decision 44 follow-up A shelter exception: a confirmed shelter the creature wins the race to
+## (margin > 0) is still chosen even though it ends slightly CLOSER to the threat (17.9u vs 20u now).
+## The same shelter with the race lost (threat moved so it gets there first) is not — there it gets
+## the separation penalty like any other candidate. The lost-race case amplifies the shelter bonus
+## (0.6) so it would win on bonus alone without the separation term.
+func _test_flee_shelter_race_won_exempt_from_separation_penalty_but_lost_race_is_not() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var shelter_pos := Vector3(-4.0, 1.0, 8.0)
+  for variant in ["won", "lost"]:
+    var threat_pos := Vector3(-20.0, 1.0, 0.0) if variant == "won" else Vector3(-10.0, 1.0, 12.0)
+    var setup := _flee_belief_test_setup(main, threat_pos)
+    var motor_v3: Dictionary = setup["motor_v3"]
+    motor_v3["awareness_radius"] = 150.0
+    if variant == "lost":
+      motor_v3["flee_shelter_bias_bonus"] = 0.6
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    var body: CharacterBody3D = setup["body"]
+    setup["adapter"].record_shelter_evaluation(620, shelter_pos, true, 0.9, int(ctx["now_ms"]))
+    var margin := _FleeScoring.race_margin(body.global_position, shelter_pos, [threat_pos])
+    var start_d := Vector2(threat_pos.x, threat_pos.z).length()
+    var end_d := Vector2(shelter_pos.x - threat_pos.x, shelter_pos.z - threat_pos.z).length()
+    var state := _MotorPlanner.new_state()
+    (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+    if variant == "won":
+      _assert(margin > 0.0 and end_d < start_d, "fixture: race won, shelter ends slightly closer to the threat")
+      _assert(state.get("flee_pick_kind") == &"shelter", "a won-race shelter is chosen despite ending closer")
+    else:
+      _assert(margin < 0.0, "fixture: race lost")
+      _assert(state.get("flee_pick_kind") != &"shelter", "a lost-race shelter is not chosen (separation penalty applies)")
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Decision 44 follow-up G: `avoid_hostiles_cells()` is a pure read that skips rows idle past the
+## same limit `_evict_if_needed` would apply — a 400 s-idle row (limit 300 + 2 = 302 s at 3
+## attempts) is not offered even though no eviction has run, while a 60 s-idle row is; the stale row
+## is NOT erased by the read.
+func _test_avoid_hostiles_cells_skips_rows_idle_past_eviction_limit() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var adapter := _MemoryAdapter.new()
+  var store: RefCounted = adapter.get_locale_store()
+  var now := Time.get_ticks_msec() / 1000.0
+  _seed_avoid_hostiles_locale_row(adapter, 0, 1, 1.0)
+  _seed_avoid_hostiles_locale_row(adapter, 2, 1, 1.0)
+  (store._rows["test_avoid:0:1"] as Dictionary)["last_used_time"] = now - 400.0
+  (store._rows["test_avoid:2:1"] as Dictionary)["last_used_time"] = now - 60.0
+  var cells: Array = store.avoid_hostiles_cells(motor_v3, now)
+  _assert(cells.size() == 1 and int(cells[0]["cell_x"]) == 2, "only the 60 s-idle row is offered")
+  _assert(store._rows.has("test_avoid:0:1"), "the read does not evict the stale row")
+  _assert(
+    adapter.consult_flee_locale_candidates(Vector3.ZERO, motor_v3, now).size() == 1,
+    "the adapter consult applies the same idle filter",
+  )
+  _assert(
+    is_equal_approx(_GoalMem.idle_limit_for_row(store._rows["test_avoid:0:1"], motor_v3), 302.0),
+    "shared idle limit: 300 base + (3 - 1) x 1 per attempt",
+  )
+
+
+## Decision 44 follow-up E: flight-exit promotion of an `observed` shelter that carries an old fail
+## count -> `battle_tested` with `fit_confirmed` true and the fail count KEPT; it is not treated as
+## recently failed, is nominated for flee, and survives `maintain`'s LRU cap eviction even as the
+## oldest row. If the nearest non-failed shelter is already battle_tested, nothing is promoted.
+func _test_flight_exit_shelter_promotion_sets_fit_confirmed_keeps_fail_count() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var adapter := _MemoryAdapter.new()
+  var pos := Vector3(10.0, 1.0, 10.0)
+  var iid := 701
+  ## Two failed STAY-evaluates, then a passive sighting reopens it as `observed` (fail count kept).
+  adapter.record_shelter_evaluation(iid, pos, false, 0.2, 100)
+  adapter.record_shelter_evaluation(iid, pos, false, 0.2, 200)
+  adapter.record_shelter_observation(iid, pos, 0.7, 300)
+  var promoted := adapter.notify_flight_escaped_near_shelter(pos, motor_v3, 1000)
+  var row: Dictionary = adapter.get_beliefs()[iid]
+  _assert(promoted == iid, "the promoted instance id is returned")
+  _assert(row.get("shelter_tier") == _GoalBeliefMemoryScr.SHELTER_TIER_BATTLE_TESTED, "observed -> battle_tested")
+  _assert(bool(row.get("fit_confirmed", false)), "promotion sets fit_confirmed")
+  _assert(int(row.get("shelter_fail_count", 0)) == 2, "promotion keeps the old shelter_fail_count")
+  _assert(not adapter.shelter_candidate_recently_failed(iid), "a battle_tested row is not 'recently failed'")
+  var nominated := false
+  for c_v in adapter.consult_shelter_belief_candidates(Vector3.ZERO, motor_v3, 1000):
+    if int((c_v as Dictionary).get("instance_id", 0)) == iid:
+      nominated = true
+  _assert(nominated, "the battle_tested shelter is nominated as a flee candidate")
+  ## Cap eviction: a newer food row competes for a 1-entry cap; the older battle_tested shelter stays.
+  var beliefs := adapter.get_beliefs()
+  beliefs[902] = {
+    "instance_id": 902, "goal_kind": _GkReg.GK_FIND_FOOD, "tier": _GoalBeliefMemoryScr.TIER_PRECISE,
+    "last_world_pos": Vector3(12.0, 1.0, 10.0), "last_observed_ms": 2000, "is_moving": false,
+  }
+  var cap_params := motor_v3.duplicate()
+  cap_params["goal_memory_max_entries"] = 1
+  cap_params["goal_memory_ttl_sec"] = 10000.0
+  var kept: Dictionary = _GoalBeliefMemoryScr.maintain(beliefs, Vector3(10.0, 1.0, 10.0), 2000, cap_params)
+  _assert(kept.has(iid) and not kept.has(902), "the battle_tested shelter survives LRU cap eviction")
+  ## Nearest already battle_tested: no-op, the next-nearest observed row is NOT promoted instead.
+  var adapter2 := _MemoryAdapter.new()
+  adapter2.record_shelter_evaluation(711, pos, true, 0.9, 100)
+  adapter2.notify_flight_escaped_near_shelter(pos, motor_v3, 200)
+  adapter2.record_shelter_observation(712, pos + Vector3(3.0, 0.0, 0.0), 0.7, 300)
+  var second := adapter2.notify_flight_escaped_near_shelter(pos, motor_v3, 400)
+  _assert(second == 0, "nearest shelter already battle_tested: nothing promoted")
+  _assert(
+    adapter2.get_beliefs()[712].get("shelter_tier") == _GoalBeliefMemoryScr.SHELTER_TIER_OBSERVED,
+    "the farther observed shelter stays observed",
+  )
+
+
+## Arms `stack` so its next tick is a `flight_just_entered` tick (latched Flight, safety not met,
+## not in Flight last tick) — the mirror of `_arm_stack_flight_exit_next_tick`.
+func _arm_stack_flight_entry_next_tick(stack: CreatureMotorStack) -> void:
+  stack.set("_safety_cycles", 0)
+  stack.set("_safety_met", false)
+  stack.set("_flight_fast_path_latched", true)
+  stack.set("_flight_fast_path_active", false)
+  stack.set("_was_flight_fast_path", false)
+
+
+## Decision 44 follow-up C: re-acquisition failure proxy. After a Flight exit (one SUCCESS), a new
+## Flight entry inside `flee_reacquire_window_sec` and within one coverage cell of the exit anchor
+## writes one FAILURE on that cell — after which `success_delta` is -0.0225 (<= 0) and the cell drops
+## out of the flee pool. Outside the window, or far from the anchor, nothing is written; and a second
+## entry after the failure fired writes nothing more (one failure per exit).
+func _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_anchor() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  for variant in ["near_in_window", "outside_window", "far_from_anchor"]:
+    var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+    var stack := _motor_stack_test_configure(body)
+    stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+    stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+    _arm_stack_flight_exit_next_tick(stack)
+    stack.tick(1.0 / 60.0)
+    var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+    _assert(rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 1, "%s: exit wrote one SUCCESS" % variant)
+    if variant == "outside_window":
+      stack.set("_flight_exit_ms", Time.get_ticks_msec() - 30000)
+    elif variant == "far_from_anchor":
+      body.global_position = Vector3(200.0, 1.0, 4.0)
+    _arm_stack_flight_entry_next_tick(stack)
+    stack.tick(1.0 / 60.0)
+    _assert(stack.is_flight_fast_path_active(), "%s: fixture entered Flight" % variant)
+    rows = _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+    var row: Dictionary = rows[0] if rows.size() == 1 else {}
+    if variant == "near_in_window":
+      _assert(int(row.get("attempt_count", 0)) == 2 and int(row.get("success_count", 0)) == 1, "re-entry near the anchor in the window writes one FAILURE")
+      _assert(is_equal_approx(float(row.get("success_delta", 1.0)), -0.0225), "SUCCESS then FAILURE: success_delta = -0.0225")
+      _assert(
+        stack.get_memory_adapter().get_locale_store().avoid_hostiles_cells(_motor_v3_test_params()).is_empty(),
+        "the failed cell drops out of the flee pool",
+      )
+      _arm_stack_flight_entry_next_tick(stack)
+      stack.tick(1.0 / 60.0)
+      rows = _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+      _assert(int(rows[0].get("attempt_count", 0)) == 2, "a second entry after the same exit writes nothing more")
+    else:
+      _assert(int(row.get("attempt_count", 0)) == 1, "%s: no FAILURE written" % variant)
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Decision 44 live-smoke layout guard: `spawn_layout_decision44_smoke.json` must pin every object
+## set with exactly the counts `main_3d.gd` expects (`_INTERIOR_BOULDER_COUNT` 18,
+## `_SOLID_SHRUB_COUNT` 3, `_OPEN_SHRUB_COUNT` 2) — `locked_fraction_list` silently falls back to
+## random placement for a set with the wrong count — plus both creature slots.
+func _test_decision44_smoke_layout_pins_all_object_sets() -> void:
+  var path := "res://spawn_layout_decision44_smoke.json"
+  _assert(FileAccess.file_exists(path), "decision 44 smoke layout file exists")
+  var layout := _SpawnRandomizer.parse_layout(FileAccess.get_file_as_string(path))
+  _assert(_SpawnRandomizer.locked_fraction_list(layout, "interior_boulders", 18).size() == 18, "18 interior boulders pinned")
+  _assert(_SpawnRandomizer.locked_fraction_list(layout, "solid_shrubs", 3).size() == 3, "3 solid shrubs pinned")
+  _assert(_SpawnRandomizer.locked_fraction_list(layout, "open_shrubs", 2).size() == 2, "2 open shrubs pinned")
+  _assert(
+    _SpawnRandomizer.locked_fraction(layout, "creature_0") != null
+    and _SpawnRandomizer.locked_fraction(layout, "creature_1") != null,
+    "both duel creatures pinned",
+  )
+
+
+## Decision 44 follow-up F: flee-pick telemetry. `_mint_flee_waypoint` stores the winning kind in
+## `flee_pick_kind`, the explore-log line carries ` fk=<kind> ahc=<n>` only on avoid_hostiles lines
+## with the toggle on, and `flee_memory_debug_log` defaults to true.
+func _test_flee_pick_kind_telemetry_and_explore_log_suffix() -> void:
+  _assert(bool(_Merge.default_creature_motor_v3_params().get("flee_memory_debug_log", false)), "flee_memory_debug_log defaults on")
+  var main := Node3D.new()
+  root.add_child(main)
+  var setup := _flee_belief_test_setup(main, Vector3(-14.0, 1.0, 0.0))
+  var state := _MotorPlanner.new_state()
+  (_MotorPlanner as GDScript).call("_mint_flee_waypoint", setup["ctx"], state, setup["body"], setup["motor_v3"])
+  _assert(state.get("flee_pick_kind") == &"open", "open-ground pick is labelled open")
+  _assert(float(state.get("flee_pick_effective", 0.0)) > 0.0, "the pick's effective score is recorded")
+  var snap := {"goal_kind": "avoid_hostiles", "flee_memory_debug": true, "flee_pick_kind": "locale", "avoid_hostiles_cell_count": 2}
+  var line := _ExploreLog.format_explore_tick_line(snap, "rabbit")
+  _assert(line.ends_with(" fk=locale ahc=2"), "avoid_hostiles explore line ends with fk/ahc")
+  snap["flee_memory_debug"] = false
+  _assert(not _ExploreLog.format_explore_tick_line(snap, "rabbit").contains("fk="), "toggle off: no fk field")
+  snap["flee_memory_debug"] = true
+  snap["goal_kind"] = "find_food"
+  _assert(not _ExploreLog.format_explore_tick_line(snap, "rabbit").contains("fk="), "non-flee lines carry no fk field")
   main.queue_free()
 
 
@@ -10358,9 +11295,9 @@ func _test_line_of_sight_wall_occlusion() -> void:
 
 func _test_load_merged_config_repo_fallback() -> void:
   var res: Dictionary = _Merge.load_merged_config("user://__does_not_exist_merged_test__.json")
+  _assert(str(res.get("diagnostic", "x")).is_empty(), "missing user file over repo template has no diagnostic")
   var merged: Dictionary = res["merged"]
-  var ic: Dictionary = merged["inference_client"]
-  _assert(str(ic.get("INFERENCE_BASE_URL", "")).begins_with("http"), "merged config pulls inference URL from repo template")
+  _assert(typeof(merged.get("perception", null)) == TYPE_DICTIONARY, "merged config repo-fallback still has perception section")
 
 func _test_locale_prior_escalate_seek() -> void:
   var motor_p := _Merge.creature_motor_spine()
@@ -10398,7 +11335,6 @@ func _test_merge_defaults_and_override() -> void:
   var base := _Merge.default_root()
   var file_root := {
     "logging_params": {"LOG_LEVEL": "Debug"},
-    "inference_client": {"INFERENCE_BASE_URL": "http://x"},
     "perception": {"SNAPSHOT_PHYSICS_STRIDE": 3},
     "creature_motor": {"mode": "llm"},
     "playfield_spawn": {"seed": 777},
@@ -10406,7 +11342,6 @@ func _test_merge_defaults_and_override() -> void:
   var merged: Dictionary = _Merge.merge_root(base, file_root)
   _assert(merged["logging_params"]["LOG_LEVEL"] == "Debug", "merge logging_params.LOG_LEVEL")
   _assert(merged["logging_params"]["MAX_LINES_PER_PROCESS"] == 128, "merge logging_params keeps default key")
-  _assert(merged["inference_client"]["INFERENCE_BASE_URL"] == "http://x", "merge inference_client url")
   _assert(merged["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 3, "merge perception stride")
   _assert(int(merged["playfield_spawn"].get("seed", 0)) == 777, "merge playfield_spawn.seed override")
   _assert(
@@ -11697,34 +12632,6 @@ func _test_creature_capsule_fits_visual_mesh() -> void:
     creature_root.queue_free()
   main.queue_free()
 
-func _test_tokens() -> void:
-  _assert(_Tokens.normalize_completion_token("  left\nnoise") == "LEFT", "token first line")
-  _assert(_Tokens.normalize_completion_token("START") == "START", "START")
-  _assert(_Tokens.normalize_completion_token("I'll go UP now") == "UP", "prose contains UP word")
-  _assert(_Tokens.normalize_completion_token("<|im_end|> LEFT") == "LEFT", "strip span then direction")
-  _assert(_Tokens.normalize_completion_token("xyzzy") == "noop", "unknown → noop")
-  _assert(_Tokens.normalize_completion_token("") == "noop", "empty → noop")
-  _assert(
-    _Tokens.normalize_completion_token_armed_handshake("Okay.\nSTART") == "START",
-    "handshake finds START on a later line"
-  )
-  _assert(
-    _Tokens.normalize_completion_token_armed_handshake("Sure, START") == "START",
-    "handshake word START in prose"
-  )
-  _assert(
-    _Tokens.normalize_completion_token_armed_handshake("RESTART") == "noop",
-    "RESTART does not match START word"
-  )
-  _assert(
-    _Tokens.normalize_completion_token_armed_handshake("START <|im_end|>") == "START",
-    "strip trailing chat marker after START"
-  )
-  _assert(
-    _Tokens.normalize_completion_token_armed_handshake("<|im_end|>") == "noop",
-    "chat markers alone → noop"
-  )
-
 func _test_top_down_camera_pan_directions() -> void:
   var forward_only := _TopDownCameraScr.strengths_from_actions(0.0, 0.0, 0.0, 1.0)
   _assert(
@@ -11747,3 +12654,149 @@ func _test_top_down_camera_zoom_clamp() -> void:
   _assert(is_equal_approx(zoomed_in, 0.35), "camera zoom in clamps at minimum scale")
   var zoomed_out: float = _TopDownCameraScr.apply_zoom_step(2.95, false, 0.12, 0.35, 3.0)
   _assert(is_equal_approx(zoomed_out, 3.0), "camera zoom out clamps at maximum scale")
+
+
+## CONTROLLED REPRO (2026-09-23): maintainer playtest report — a rabbit got cornered on the north
+## wall by a wolf that "didn't seem like it was able to close for the kill." A prior read-only
+## investigation this session found two *unconfirmed* hypotheses in the actual duel's log (rolling
+## last-800-lines file, no earlier data reaching back far enough to know if engagement was lost or
+## never armed): (a) neither wolf was bound to the rabbit as a live target in the available window,
+## and (b) the rabbit's MOVE_F near the wall might not be translating into real cumulative
+## displacement (single-tick blocked-detection possibly missing near-zero *cumulative* progress).
+## This fixture forces the scenario deterministically instead of relying on spawn RNG like the
+## original playtest did: rabbit spawned near a real north wall (world −Z, matching this file's own
+## "camera pan forward maps to world −Z" convention — see `_test_top_down_camera_pan_directions`),
+## wolf spawned southwest of it. Both creatures run their OWN independent `CreatureMotorStack.tick()`
+## with a REAL live awareness scan of each other's REAL body in the scene tree (no
+## `set_live_scan_for_test` synthetic override, unlike this file's other pursuit-smoke fixtures) —
+## the closest thing to the actual duel runtime a headless fixture can offer without booting
+## `main_3d.gd`. This is exploratory: diagnostics are `print()`-only, not `_assert`, because the
+## actual outcome is the thing under investigation here, not a known-good contract to pin down.
+## Only setup sanity (both creatures actually perceive each other at least once) is a hard assert —
+## if that fails the *repro* is miswired (bad spawn distance/awareness params), not a motor bug.
+func _test_repro_rabbit_cornered_north_wall_live_pursuit() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main, 70.0)
+
+  # North wall: world −Z. Wide enough that neither creature can just route around its ends
+  # within the run — the point is to force a genuine wall-pin, not a brief graze.
+  var wall := StaticBody3D.new()
+  wall.name = "NorthWall"
+  wall.collision_layer = 1
+  wall.collision_mask = 1
+  var wall_shape := BoxShape3D.new()
+  wall_shape.size = Vector3(40.0, 3.0, 1.0)
+  var wall_col := CollisionShape3D.new()
+  wall_col.shape = wall_shape
+  wall.add_child(wall_col)
+  wall.position = Vector3(0.0, 1.5, -28.5)
+  main.add_child(wall)
+
+  # Rabbit cornered ~2m south of the wall face.
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, -26.5))
+  rabbit.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  # Well-fed: isolates the flee reaction from a competing hunger/forage drive (matches the
+  # well-fed-herbivore convention used elsewhere in this file, e.g. `body.current_calories = 50.0`).
+  rabbit.current_calories = 50.0
+
+  # Wolf spawned southwest of the rabbit per the maintainer's report. Hungry so it's motivated to
+  # actively pursue live prey rather than idle-explore — matches this file's established
+  # "current_calories = 2.0" hungry-carnivore convention (see `_test_motor_live_pursuit_no_turn_storm_smoke`).
+  var wolf := _spawn_carnivore_body(main, Vector3(-16.0, 1.0, -6.0))
+  wolf.last_move_direction = Vector3(0.7071, 0.0, -0.7071)
+  wolf.current_calories = 2.0
+
+  await process_frame
+
+  var rabbit_stack := _motor_stack_test_configure(rabbit)
+  var wolf_stack := _motor_stack_test_configure(wolf)
+  # This fixture drives both stacks' tick() from outside each body's own _physics_process, same
+  # as this file's other externally-driven fixtures (CLEANUP C14) — disable the airborne (C10)
+  # invariant so a headless is_on_floor() artifact can't be mistaken for a real stuck-under-geometry trip.
+  rabbit_stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+  wolf_stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+
+  var start_dist := wolf.global_position.distance_to(rabbit.global_position)
+  var min_dist := start_dist
+  var wolf_live_ticks := 0
+  var wolf_latch_armed_ticks := 0
+  var max_latch_total := 0
+  var rabbit_threat_seen_ticks := 0
+  var rabbit_flight_ticks := 0
+  var rabbit_blocked_movef_ticks := 0
+  var rabbit_unblocked_movef_ticks := 0
+
+  # Rolling-window progress tracker for hypothesis (b) — "cumulative near-zero progress despite
+  # unblocked MOVE_F". Sampled only while the rabbit is actively fleeing AND within 4m of the wall
+  # (z < -24.0), the exact condition the playtest symptom describes, not the whole run.
+  const WINDOW := 30
+  var window_positions: Array[Vector3] = []
+  var min_window_net_progress := INF
+  var window_samples_near_wall := 0
+
+  var delta := 1.0 / 60.0
+  for _tick_i in 400:
+    wolf_stack.tick(delta)
+    rabbit_stack.tick(delta)
+
+    var wsnap := wolf_stack.get_debug_snapshot()
+    var rsnap := rabbit_stack.get_debug_snapshot()
+
+    var dist := wolf.global_position.distance_to(rabbit.global_position)
+    min_dist = minf(min_dist, dist)
+
+    if wolf_stack.get_planner_step_source() == &"live":
+      wolf_live_ticks += 1
+    max_latch_total = maxi(max_latch_total, int(wsnap.get("prey_engagement_latch_total", 0)))
+    if int(wsnap.get("prey_engagement_ticks_remaining", 0)) > 0:
+      wolf_latch_armed_ticks += 1
+
+    if int(rsnap.get("threat_count", 0)) > 0:
+      rabbit_threat_seen_ticks += 1
+    if rabbit_stack.is_flight_fast_path_active():
+      rabbit_flight_ticks += 1
+      if str(rsnap.get("action", "")) == "MOVE_F":
+        if bool(rsnap.get("blocked", false)):
+          rabbit_blocked_movef_ticks += 1
+        else:
+          rabbit_unblocked_movef_ticks += 1
+      if rabbit.global_position.z < -24.0:
+        window_samples_near_wall += 1
+        window_positions.append(rabbit.global_position)
+        if window_positions.size() > WINDOW:
+          window_positions.pop_front()
+        if window_positions.size() == WINDOW:
+          var net: float = (window_positions[0] as Vector3).distance_to(window_positions[WINDOW - 1])
+          min_window_net_progress = minf(min_window_net_progress, net)
+
+  print(
+    "REPRO_NORTH_WALL: start_dist=%.2f min_dist=%.2f closed=%s" % [
+      start_dist, min_dist, str(min_dist < start_dist - 0.5)
+    ]
+  )
+  print(
+    "REPRO_NORTH_WALL: wolf_live_ticks=%d/400 wolf_latch_armed_ticks=%d max_latch_total=%d" % [
+      wolf_live_ticks, wolf_latch_armed_ticks, max_latch_total
+    ]
+  )
+  print(
+    "REPRO_NORTH_WALL: rabbit_threat_seen_ticks=%d/400 rabbit_flight_ticks=%d" % [
+      rabbit_threat_seen_ticks, rabbit_flight_ticks
+    ]
+  )
+  print(
+    "REPRO_NORTH_WALL: rabbit_blocked_movef_ticks=%d rabbit_unblocked_movef_ticks=%d" % [
+      rabbit_blocked_movef_ticks, rabbit_unblocked_movef_ticks
+    ]
+  )
+  print(
+    "REPRO_NORTH_WALL: window_samples_near_wall=%d min_window_net_progress(%dtick)=%.3f" % [
+      window_samples_near_wall, WINDOW, min_window_net_progress
+    ]
+  )
+
+  _assert(rabbit_threat_seen_ticks > 0, "repro setup: rabbit perceives wolf as a threat at least once")
+  _assert(wolf_live_ticks > 0, "repro setup: wolf perceives rabbit as live food at least once")
+
+  main.queue_free()

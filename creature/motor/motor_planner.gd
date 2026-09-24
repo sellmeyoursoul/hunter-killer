@@ -135,6 +135,9 @@ static func new_state() -> Dictionary:
     ## Vector3.ZERO check.
     "flee_blend_dir_prev": Vector3.ZERO,
     "flee_blend_dir_prev_set": false,
+    ## Decision 44 follow-up F telemetry: winning flee candidate kind + score of the last mint.
+    "flee_pick_kind": &"",
+    "flee_pick_effective": 0.0,
     "pursuit_detour_waypoint": Vector3.ZERO,
     ## See `step_goal_set` — same sentinel-collision hazard for the pursuit-detour latch.
     "pursuit_detour_waypoint_set": false,
@@ -1085,6 +1088,12 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     state["step_goal"] = Vector3.ZERO
     state["step_goal_set"] = false
     state["step_instance_id"] = 0
+    ## CLEANUP C44 (2026-09-23): without this, a `step_source` left over from the *previous*
+    ## goal_kind (e.g. `"explore"` from a just-exited GK_FIND_FOOD search) survives into the first
+    ## tick of the new goal — `GK_AVOID_HOSTILES`'s explore-latch gate below reads `step_source`
+    ## before it derives anything of its own, and a stale `"explore"` would make it skip the live
+    ## flee derive entirely on a goal that just became active with a real visible threat.
+    state["step_source"] = &"live"
     state["explore_dir"] = Vector3.ZERO
     state["explore_waypoint"] = Vector3.ZERO
     state["explore_waypoint_set"] = false
@@ -1181,7 +1190,22 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
       elif state.get("step_source", &"") == &"explore":
         _maintain_explore_latch(ctx, state, motor_v3)
     _GkReg.GK_AVOID_HOSTILES:
-      if refresh_targets or not has_step_goal:
+      ## CLEANUP C44 (2026-09-23, east-wall spinning): `apply_blocked_objective_resolution`'s §9
+      ## SEEK fallback (`_seed_explore_after_seek`) clears `step_goal_set` and latches
+      ## `step_source = "explore"` after `dead_end_record_min_blocked_ticks` consecutive blocked
+      ## ticks, expecting the *next* sync to mint an escape waypoint. This branch used to ignore
+      ## that seed entirely — `not has_step_goal` was already true the very next tick, so it fell
+      ## straight back into unconditionally re-deriving `_flee_objective()`, which returns the
+      ## identical wall-blocked bearing every time (a still-visible threat never fails
+      ## `_flee_has_visible_threat`) — clobbering the seed before it ever produced a waypoint and
+      ## sawtoothing forever (live -> blocked -> explore-seeded -> clobbered -> live -> ...).
+      ## Mirrors GK_SHELTER/GOAL_REST/default's own explore-latch handling: while an explore escape
+      ## is already seeded/latched, mint/maintain it instead of re-deriving the primary (live flee)
+      ## objective; only re-check the live threat on the next reconsideration cycle
+      ## (`refresh_targets`), same cadence the other goal kinds use to retry their own primary
+      ## source out of an active explore latch.
+      var avoid_step_source: StringName = state.get("step_source", &"live")
+      if refresh_targets or (not has_step_goal and avoid_step_source != &"explore"):
         ## `_flee_objective` returns `Vector3.ZERO` as an ambiguous "no threat" sentinel (see its
         ## doc comment) — this call site previously stored that return value unconditionally, so a
         ## no-threat tick could latch `step_goal` onto the world origin as if it were a real flee
@@ -1192,6 +1216,10 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
         state["step_goal_set"] = flee_valid
         state["step_instance_id"] = 0
         state["step_source"] = &"live"
+      elif not has_step_goal:
+        _mint_explore_objective_for_goal(ctx, state, creature_pos, motor_v3, goal_kind)
+      elif avoid_step_source == &"explore":
+        _maintain_explore_latch(ctx, state, motor_v3)
     _GkReg.GK_SHELTER:
       if refresh_targets or not has_step_goal:
         _sync_shelter_objective(ctx, state, creature_pos, motor_v3)
@@ -2401,12 +2429,41 @@ static func _remint_alternate_pursuit_detour(
   var dir := to_latched.normalized()
   var alt_sign := -1.0 if bool(state.get("pursuit_detour_alt_flip", false)) else 1.0
   state["pursuit_detour_alt_flip"] = not bool(state.get("pursuit_detour_alt_flip", false))
-  dir = dir.rotated(Vector3.UP, deg_to_rad(60.0 * alt_sign))
-  var wp := creature_pos + dir * maxf(dist, 3.0)
+  var rotated_dir := dir.rotated(Vector3.UP, deg_to_rad(60.0 * alt_sign))
+  var mint_dist := maxf(dist, 3.0)
+  var raw_dir := rotated_dir
   var map_rid: RID = ctx.get("map_rid", RID())
   var agent_r := _agent_radius(body)
-  # §9 slice 6 (2026-09-18): the ±60° alternate-side detour point is a fresh speculative pick —
-  # don't commit to one a ghost-layer object actually sits between here and.
+  ## C1 reopen (2026-09-24, §4k "both stuck" repro): the blind ±60° rotation never asks whether
+  ## just walking straight at the prey's actual live position would work — `_apply_live_food_objective`
+  ## already aims there every non-detoured tick, but once blocked this escalation only ever rotated
+  ## away from it, so a prey pinned in a corner (wall trapping it — the *ideal* case for a predator,
+  ## not an obstacle to route around) never got a direct-line attempt again. Reach-score a
+  ## straight-to-`ultimate` candidate against the existing rotated candidate with the same
+  ## `_flee_candidate_probe` + `_apply_route_plausibility_scan` primitive the flee side already uses
+  ## to pick among its own bearing candidates (comment at `_flee_candidate_probe` call site below
+  ## this function already noted C1 reuses the navmesh-reach primitive) — take whichever actually
+  ## reaches farther rather than assuming the rotation is always right. Ties keep the rotated pick
+  ## unchanged (`>` not `>=`), so synthetic fixtures with no navmesh (`_flee_candidate_probe` returns
+  ## the full requested distance for both when `map_rid` is invalid) reproduce today's behavior
+  ## exactly — this only changes the outcome when a real navmesh shows the straight line clearly
+  ## reaches farther.
+  var to_ultimate := Vector3(ultimate.x - creature_pos.x, 0.0, ultimate.z - creature_pos.z)
+  if to_ultimate.length_squared() > 1e-8:
+    var straight_dist := to_ultimate.length()
+    var straight_probe := _apply_route_plausibility_scan(
+      _flee_candidate_probe(map_rid, creature_pos, to_ultimate.normalized(), straight_dist),
+      ctx, body,
+    )
+    var rotated_probe := _apply_route_plausibility_scan(
+      _flee_candidate_probe(map_rid, creature_pos, rotated_dir, mint_dist), ctx, body,
+    )
+    if float(straight_probe.get("reach", 0.0)) > float(rotated_probe.get("reach", 0.0)):
+      raw_dir = to_ultimate.normalized()
+      mint_dist = straight_dist
+  var wp := creature_pos + raw_dir * mint_dist
+  # §9 slice 6 (2026-09-18): the alternate-side detour point is a fresh speculative pick — don't
+  # commit to one a ghost-layer object actually sits between here and.
   wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   ## §4k review (2026-09-23): decision 21 named the C1 pursuit-detour latch as one of five mint
@@ -2772,6 +2829,8 @@ static func clear_flee_waypoint_latch(state: Dictionary) -> void:
   state["flee_waypoint_chain_index"] = 0
   state["flee_blend_dir_prev"] = Vector3.ZERO
   state["flee_blend_dir_prev_set"] = false
+  state["flee_pick_kind"] = &""
+  state["flee_pick_effective"] = 0.0
 
 
 ## P3 — drop stale non-Flight objective fields on first [code]ff=1[/code] tick (§12.2 post-6d).
@@ -2904,6 +2963,23 @@ static func _flee_has_visible_threat(ctx: Dictionary) -> bool:
   return false
 
 
+## Unit horizontal direction pointing away from the *nearest* in-awareness threat (decision 20's
+## worst-case rule), or [constant Vector3.ZERO] with no threat / a co-located one. Used by the locale
+## flee-candidate half-plane filter in [method _flee_belief_candidates]. Example: threat at (-10,0,0),
+## creature at origin -> (1, 0, 0).
+static func _flee_away_from_nearest_threat(ctx: Dictionary, creature_pos: Vector3) -> Vector3:
+  var best_d := INF
+  var away := Vector3.ZERO
+  for t_v in _FleeScoring.threat_positions(ctx.get("threat_samples", []), creature_pos):
+    var t: Vector3 = t_v
+    var delta := Vector3(creature_pos.x - t.x, 0.0, creature_pos.z - t.z)
+    var d := delta.length()
+    if d < best_d and d > 1e-4:
+      best_d = d
+      away = delta / d
+  return away
+
+
 ## True when [param endpoint] matches a remembered avoid_hostiles dead-end mark (decision 21's
 ## shared subroutine, wired here 2026-09-22 — this was one of the five mint sites decision 21 named
 ## but never actually got wired). Belief candidates (shelter/choke) are deliberately never checked
@@ -2919,6 +2995,30 @@ static func _flee_endpoint_is_dead_end(
   if adapter == null or not adapter.has_method(&"is_waypoint_dead_end"):
     return false
   return adapter.is_waypoint_dead_end(creature_pos, endpoint, _GkReg.GK_AVOID_HOSTILES, motor_v3)
+
+
+## True when a locale-cell or choke-point flee belief at [param pos] should be excluded from the
+## flee pool: it matches a known avoid_hostiles dead-end mark ([method _flee_endpoint_is_dead_end])
+## AND no usable (non-`failed`) shelter belief sits within `dead_end_match_radius` (default 52.0, the
+## same radius the dead-end mark match uses) of it. Shelter-only override — a choke/other belief never
+## rescues. Applies to avoid_hostiles locale cells (2026-09-24) and choke-point candidates (decision
+## 44 follow-up B, 2026-09-24); shelter candidates are never dead-end-filtered (decision 11). Callers
+## drop excluded beliefs before scoring/capping so they never take a `flee_belief_max_candidates` slot.
+## Example: `_flee_belief_pos_is_excluded_dead_end(ctx, creature_pos, choke_mouth, motor_v3)`.
+static func _flee_belief_pos_is_excluded_dead_end(
+  ctx: Dictionary,
+  creature_pos: Vector3,
+  pos: Vector3,
+  motor_v3: Dictionary,
+) -> bool:
+  if not _flee_endpoint_is_dead_end(ctx, creature_pos, pos, motor_v3):
+    return false
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  if adapter != null and adapter.has_method(&"has_usable_shelter_near"):
+    var radius := float(motor_v3.get("dead_end_match_radius", 52.0))
+    if adapter.has_usable_shelter_near(pos, radius):
+      return false
+  return true
 
 
 ## Decision 23 (§9 slice 10): the single threat capsule to shape-cast a candidate flee route's
@@ -3088,11 +3188,13 @@ static func _mint_flee_waypoint(
         "dist": flee_dist,
         "bonus": 0.0,
         "belief": false,
+        "kind": &"open",
       })
     candidates.append_array(_flee_belief_candidates(ctx, body, creature_pos, flee_dist, motor_v3))
     if has_prior_flee_dir:
       candidates.append({
         "dir": prior_flee_dir, "dist": flee_dist, "bonus": 0.0, "belief": false, "incumbent": true,
+        "kind": &"incumbent",
       })
 
     var best_dir := base_dir
@@ -3100,11 +3202,13 @@ static func _mint_flee_waypoint(
     var best_effective := -INF
     var best_endpoint := creature_pos
     var best_path := PackedVector3Array()
+    var best_kind: StringName = &"open"
     var best_clear_dir := Vector3.ZERO
     var best_clear_reach := -1.0
     var best_clear_effective := -INF
     var best_clear_endpoint := creature_pos
     var best_clear_path := PackedVector3Array()
+    var best_clear_kind: StringName = &"open"
     var found_clear := false
     for cand_v in candidates:
       var cand: Dictionary = cand_v
@@ -3115,14 +3219,34 @@ static func _mint_flee_waypoint(
         detour_threat_radius, detour_threat_height,
       )
       var reach := float(probe.get("reach", 0.0))
+      var cand_kind: StringName = cand.get("kind", &"open")
+      # Shelter/choke beliefs are "rescaled" candidates; locale cells are not (decision 44
+      # follow-up A, 2026-09-24): a locale cell is scored with its true reach and its separation is
+      # normalised by the full flee distance, so a near cell can no longer masquerade as a full
+      # flee-distance escape (the over-attraction that pulled flee toward the predator).
+      var rescaled := bool(cand["belief"]) and cand_kind != &"locale"
+      var score_reach := reach
       if bool(cand["belief"]):
         # A belief candidate is probed only out to the belief itself (so the waypoint can land on
-        # it), which would make its raw reach tiny next to an open bearing's. Score the fraction of
-        # that trip actually reachable as an equivalent full flee distance instead.
+        # it), which would make its raw reach tiny next to an open bearing's. The fraction of that
+        # trip actually reachable, as an equivalent full flee distance, is what `best_reach` /
+        # `final_reach` track for EVERY belief kind (so the give-up escalation below keeps judging
+        # "is this route actually open" exactly as before); shelter/choke are also *scored* with
+        # it, locale cells are scored with their true reach.
         reach = flee_dist * clampf(reach / maxf(cand_dist, 1e-6), 0.0, 1.0)
+        if rescaled:
+          score_reach = reach
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
       var margin := _FleeScoring.race_margin(creature_pos, endpoint, threat_pts)
+      # Separation term (decision 44 follow-up A): every candidate scores how much farther from its
+      # nearest threat it ends than the creature is now; ending closer is penalised. Exception: a
+      # shelter the creature wins the race to (margin > 0) is credited a full escape (1.0).
+      var separation := _FleeScoring.separation_gain(
+        creature_pos, endpoint, threat_pts, cand_dist if rescaled else flee_dist,
+      )
+      if cand_kind == &"shelter" and _FleeScoring.shelter_race_won(margin):
+        separation = 1.0
       # Decision 23: a route with at least one object this creature fits through but the threat
       # doesn't earns an additive detour-forcing bonus on top of whatever bonus this candidate
       # already carries (0.0 for a plain open bearing) — same race-gated shape as the belief
@@ -3130,7 +3254,7 @@ static func _mint_flee_waypoint(
       var cand_bonus := float(cand["bonus"])
       if bool(probe.get("detour_forcing", false)):
         cand_bonus += float(motor_v3.get("flee_detour_forcing_bonus", 0.15))
-      var effective := _FleeScoring.effective(reach, flee_dist, margin, cand_bonus, motor_v3)
+      var effective := _FleeScoring.effective(score_reach, flee_dist, margin, cand_bonus, motor_v3, separation)
       if bool(cand.get("incumbent", false)):
         effective *= 1.0 + maxf(0.0, float(motor_v3.get("flee_incumbent_bearing_bonus", 0.25)))
       if effective > best_effective:
@@ -3139,6 +3263,7 @@ static func _mint_flee_waypoint(
         best_dir = candidate_dir
         best_endpoint = endpoint
         best_path = cand_path
+        best_kind = cand_kind
       # A known dead end disqualifies an open bearing from the "clear" tier exactly like a recent
       # backtrack does (decision 21) — never for a belief candidate (decision 11). The unconditional
       # `best_*` tier above stays untouched, so RT1's "nothing viable anywhere" fallback still holds.
@@ -3161,11 +3286,16 @@ static func _mint_flee_waypoint(
         best_clear_dir = candidate_dir
         best_clear_endpoint = endpoint
         best_clear_path = cand_path
+        best_clear_kind = cand_kind
         found_clear = true
     var final_dir := best_clear_dir if found_clear else best_dir
     var final_reach := best_clear_reach if found_clear else best_reach
     var final_endpoint := best_clear_endpoint if found_clear else best_endpoint
     var final_path := best_clear_path if found_clear else best_path
+    # Flee-pick telemetry (decision 44 follow-up F): which candidate kind won and its score.
+    # Overwritten below when the give-up escalation or the boxed-in hold replaces the pick.
+    var final_kind: StringName = best_clear_kind if found_clear else best_kind
+    var final_effective := best_clear_effective if found_clear else best_effective
 
     # CLEANUP C9 give-up escalation (2026-08-07): the 6-candidate sweep above only samples every
     # 60° — in a genuine corner none of those 6 may reach anywhere close to `flee_dist`, but a
@@ -3215,12 +3345,16 @@ static func _mint_flee_waypoint(
         final_reach = scan_best_clear_reach
         final_endpoint = scan_best_clear_endpoint
         final_path = scan_best_clear_path
+        final_kind = &"giveup"
+        final_effective = final_reach
       elif scan_best_reach > final_reach:
         final_dir = scan_best_dir
         state["flee_give_up_active"] = true
         final_reach = scan_best_reach
         final_endpoint = scan_best_endpoint
         final_path = scan_best_path
+        final_kind = &"giveup"
+        final_effective = final_reach
 
     # CLEANUP RANDOMTESTS RT1 (2026-08-10): both scans above score every candidate purely by
     # navmesh reach — when the creature is near/past the edge of the baked navmesh (confirmed via
@@ -3241,6 +3375,8 @@ static func _mint_flee_waypoint(
       # and projecting the waypoint that close collapses the bearing math to noise.
       reach_known = false
       final_dir = base_dir
+      final_kind = &"boxed"
+      final_effective = 0.0
       if bool(state.get("flee_waypoint_set", false)):
         var prior_wp: Vector3 = state.get("flee_waypoint", Vector3.ZERO)
         var prior_dir := prior_wp - creature_pos
@@ -3282,6 +3418,11 @@ static func _mint_flee_waypoint(
       wp = creature_pos + final_dir * flee_dist
       state["flee_waypoint_chain"] = PackedVector3Array([wp])
     state["flee_waypoint_chain_index"] = 0
+    ## `open` / `incumbent` / `shelter` / `choke` / `locale` from the scored pool, `giveup` when the
+    ## C9 escalation sweep replaced it, `boxed` for the RT1 no-reach hold. `flee_pick_effective` is
+    ## the winner's `FleeCandidateScoring.effective` (for `giveup` its raw reach, `boxed` 0.0).
+    state["flee_pick_kind"] = final_kind
+    state["flee_pick_effective"] = final_effective
 
   var ttl := int(motor_v3.get("blocked_approach_memory_ticks", 45))
   history.append({"dir": (wp - creature_pos).normalized(), "until_tick": physics_tick + ttl})
@@ -3412,13 +3553,18 @@ static func _shelter_candidate_passes_stage_b(
   return frac >= 1.0 - 1e-6
 
 
-## Shelter/choke-point belief candidates for [method _mint_flee_waypoint]'s widened pool (decision 20):
-## each is `{dir, dist, bonus, belief}` — a bearing straight at the belief, probed only out to the
-## belief itself so the waypoint can land on it, with `bonus` = the configured belief bonus x tier
-## weight x proximity (fraction of flee distance). Only beliefs within `flee_belief_radius_factor` x
-## [param flee_dist] enter, nearest `flee_belief_max_candidates` kept, and ones the creature is
-## already standing on are skipped. Choke points additionally pass `FleeCandidateScoring.choke_useful`
-## (creature fits, every considered threat is known not to) — otherwise they are just open ground.
+## Shelter/choke-point (and, in leftover cap slots, avoid_hostiles locale-cell) belief candidates for
+## [method _mint_flee_waypoint]'s widened pool (decision 20):
+## each is `{dir, dist, bonus, belief, kind}` — a bearing straight at the belief, probed only out to
+## the belief itself so the waypoint can land on it, with `bonus` = the configured belief bonus x tier
+## weight x proximity (fraction of flee distance) and `kind` in `shelter` / `choke` / `locale`. Only
+## beliefs within `flee_belief_radius_factor` x [param flee_dist] enter, nearest
+## `flee_belief_max_candidates` kept, and ones the creature is already standing on are skipped. Choke
+## points additionally pass `FleeCandidateScoring.choke_useful` (creature fits, every considered
+## threat is known not to) — otherwise they are just open ground — and, like locale cells, are
+## dropped at a known avoid_hostiles dead end unless a non-failed shelter is near
+## ([method _flee_belief_pos_is_excluded_dead_end]). Locale cells are further limited to cells more
+## than one coverage cell away and in the half-plane away from the nearest threat.
 static func _flee_belief_candidates(
   ctx: Dictionary,
   body: CharacterBody3D,
@@ -3442,7 +3588,7 @@ static func _flee_belief_candidates(
       # disqualify from the pool entirely, not a lower score.
       if not _shelter_candidate_passes_stage_b(ctx, row["pos"], motor_v3):
         continue
-      raw.append({"pos": row["pos"], "bonus": shelter_bonus * float(row["weight"])})
+      raw.append({"pos": row["pos"], "bonus": shelter_bonus * float(row["weight"]), "kind": &"shelter"})
   if adapter.has_method(&"consult_choke_point_beliefs"):
     var own_diameter := 0.0
     if body != null and body.has_method(&"get_collision_capsule_radius"):
@@ -3456,7 +3602,71 @@ static func _flee_belief_candidates(
       var row: Dictionary = row_v
       if not _FleeScoring.choke_useful(float(row["opening_width"]), own_diameter, threat_diameters):
         continue
-      raw.append({"pos": row["pos"], "bonus": choke_bonus * float(row["weight"])})
+      # Decision 44 follow-up B (2026-09-24): a choke mouth at a known avoid_hostiles dead end is
+      # dropped (before scoring/capping, so it never takes a cap slot) unless a non-failed shelter
+      # sits near it — same shelter-only rescue as locale cells. Shelters stay exempt (decision 11).
+      if _flee_belief_pos_is_excluded_dead_end(ctx, creature_pos, row["pos"], motor_v3):
+        continue
+      raw.append({"pos": row["pos"], "bonus": choke_bonus * float(row["weight"]), "kind": &"choke"})
+  var scored := _flee_score_belief_entries(raw, creature_pos, flee_dist, radius, min_dist)
+  var cap := maxi(0, int(motor_v3.get("flee_belief_max_candidates", 4)))
+  if scored.size() > cap:
+    scored = scored.slice(0, cap)
+  # Third belief kind: remembered avoid_hostiles locale cells (CREATURE_MEMORY §14.3 Option A). They
+  # only fill whatever slots of the shared `flee_belief_max_candidates` cap shelter/choke left
+  # unused (nearest first), so a verified refuge is never crowded out by an unverified "escaped near
+  # here once" cell. Like shelter/choke they are `belief: true` candidates — probed by the same
+  # route-plausibility/detour scan in the caller and exempt from the `avoided` dead-end check in
+  # `_mint_flee_waypoint` (locale cells at a dead end are instead filtered out below, at build time,
+  # unless a shelter sits there). Unlike shelter/choke they are scored with their TRUE reach (no
+  # rescale to the full flee distance) plus the separation term, so an unobstructed open bearing
+  # outscores a locale cell; a cell mostly matters once open bearings are cut short by geometry.
+  var free_slots := cap - scored.size()
+  if free_slots > 0 and adapter.has_method(&"consult_flee_locale_candidates"):
+    var locale_bonus := float(motor_v3.get("flee_locale_bias_bonus", 0.05))
+    var locale_raw: Array = []
+    # Decision 44 follow-up A (2026-09-24, over-attraction fix): a locale cell is only "I got away
+    # near here once", so it must not pull the creature sideways/backwards or onto its own spot.
+    # (b) skip cells whose centre is within one coverage cell of the creature (includes its own cell
+    # — the cell it is standing in says nothing about where to run); (c) skip cells not in the
+    # away half-plane from the nearest threat (`dir · away >= 0`). Both run before scoring/capping,
+    # so a filtered cell never takes a cap slot.
+    var coverage_cell := _GoalSource.coverage_cell_from_motor(motor_v3)
+    var away_dir := _flee_away_from_nearest_threat(ctx, creature_pos)
+    var now_sec := float(int(ctx.get("now_ms", Time.get_ticks_msec()))) / 1000.0
+    for row_v in adapter.consult_flee_locale_candidates(creature_pos, motor_v3, now_sec):
+      var row: Dictionary = row_v
+      var cell_pos: Vector3 = row["pos"]
+      var to_cell := Vector3(cell_pos.x - creature_pos.x, 0.0, cell_pos.z - creature_pos.z)
+      if to_cell.length() <= coverage_cell:
+        continue
+      if away_dir.length_squared() > 1e-8 and to_cell.normalized().dot(away_dir) < 0.0:
+        continue
+      # Dead-end exclusion (user decision 2026-09-24): a locale cell at a known dead end is dropped
+      # BEFORE scoring/capping (so it never takes a cap slot) unless a shelter counts there.
+      if _flee_belief_pos_is_excluded_dead_end(ctx, creature_pos, cell_pos, motor_v3):
+        continue
+      locale_raw.append({"pos": cell_pos, "bonus": locale_bonus * float(row["weight"]), "kind": &"locale"})
+    var locale_scored := _flee_score_belief_entries(locale_raw, creature_pos, flee_dist, radius, min_dist)
+    if locale_scored.size() > free_slots:
+      locale_scored = locale_scored.slice(0, free_slots)
+    scored.append_array(locale_scored)
+  return scored
+
+
+## Turns raw belief entries (`{pos, bonus, kind}`) into flee-pool candidates (`{dir, dist, bonus,
+## belief, kind, _sort}`), nearest first: drops ones the creature already stands on (`<= min_dist`)
+## or beyond [param radius], and scales each bonus by proximity (fraction of [param radius]
+## remaining). `kind` (`shelter` / `choke` / `locale`) is carried through unchanged for scoring
+## (separation normalisation, shelter race exception) and flee-pick telemetry. Shared by the
+## shelter/choke pass and the locale pass of [method _flee_belief_candidates].
+static func _flee_score_belief_entries(
+  raw: Array,
+  creature_pos: Vector3,
+  flee_dist: float,
+  radius: float,
+  min_dist: float,
+) -> Array:
   var scored: Array = []
   for entry_v in raw:
     var entry: Dictionary = entry_v
@@ -3471,12 +3681,10 @@ static func _flee_belief_candidates(
       "dist": minf(dist, flee_dist),
       "bonus": float(entry["bonus"]) * proximity,
       "belief": true,
+      "kind": entry.get("kind", &"shelter"),
       "_sort": dist,
     })
   scored.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["_sort"]) < float(b["_sort"]))
-  var cap := maxi(0, int(motor_v3.get("flee_belief_max_candidates", 4)))
-  if scored.size() > cap:
-    scored = scored.slice(0, cap)
   return scored
 
 

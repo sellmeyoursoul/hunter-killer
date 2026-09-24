@@ -312,22 +312,149 @@ func record_shelter_observation(
   _GoalBelief.upsert_shelter_observation(_beliefs, instance_id, anchor, now_ms, enclosure_fraction)
 
 
-## Upgrades the nearest confirmed shelter within [param motor_v3]'s [code]arrival_tolerance[/code]
-## of [param creature_pos] to battle-tested — call on the tick this creature's own threat-free
-## streak (`safety_met`) first goes true. See [method GoalBeliefMemory.upgrade_confirmed_shelter_to_battle_tested].
-func notify_safety_recovered_near_shelter(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> void:
+## Promotes the nearest observed-or-confirmed shelter within [param motor_v3]'s
+## [code]arrival_tolerance[/code] of [param creature_pos] to battle-tested — call on the
+## [code]flight_just_exited[/code] tick (an acute-threat Flight episode just ended while standing
+## here; PHYSICS_SQUEEZE.md §3 decision 9). Replaces the retired `notify_safety_recovered_near_shelter`
+## `safety_met` edge trigger. See [method GoalBeliefMemory.upgrade_shelter_to_battle_tested].
+## Returns the promoted shelter's instance id, or 0 when nothing was promoted (telemetry).
+func notify_flight_escaped_near_shelter(creature_pos: Vector3, motor_v3: Dictionary, now_ms: int) -> int:
   var upgrade_radius := float(motor_v3.get("arrival_tolerance", 5.0))
-  _GoalBelief.upgrade_confirmed_shelter_to_battle_tested(_beliefs, creature_pos, now_ms, upgrade_radius)
+  return _GoalBelief.upgrade_shelter_to_battle_tested(_beliefs, creature_pos, now_ms, upgrade_radius)
+
+
+## Records an `avoid_hostiles` locale-prior SUCCESS at [param body_pos] after a Flight episode ended
+## (`flight_just_exited`; CREATURE_MEMORY §2.1.2/§14.2) — the writer counterpart of
+## [method notify_food_consumption_outcome], same `try_salient_write` shape. Anchor = the creature's
+## own cell at exit; modality defaults to `flee_retreat` (classifier stub inactive, empty motor ctx).
+## The matching FAILURE signal is [method notify_flight_reacquired] (re-acquisition proxy). Clears
+## the same-goal continuation guard afterwards so the next Flight episode's write is never blocked
+## by this one. Returns whether the write landed (false: rate-limited, anchor cell out of the
+## environment grid's bounds, goal kind not enabled, ...).
+func notify_flight_escape_outcome(
+  body_pos: Vector3,
+  motor_v3: Dictionary,
+  env_grid: Variant = null,
+) -> bool:
+  return _write_avoid_hostiles_outcome(body_pos, motor_v3, env_grid, _GoalSource.TIER_SUCCESS)
+
+
+## Re-acquisition failure proxy (decision 44 follow-up C, 2026-09-24): a new acute Flight episode
+## started soon after (`flee_reacquire_window_sec`) and close to (one coverage cell) the previous
+## escape's exit anchor — the escape there did not actually shake the pursuer, so the stack calls
+## this to write `TIER_FAILURE` on [param anchor]'s cell, same `try_salient_write` path as the
+## SUCCESS write. One SUCCESS then one FAILURE on a fresh row drives `success_delta` to −0.0225
+## (EWMA α 0.15), which drops the cell from [method consult_flee_locale_candidates]. Returns
+## whether the write landed. Example: `notify_flight_reacquired(last_exit_pos, motor_v3, grid)`.
+func notify_flight_reacquired(
+  anchor: Vector3,
+  motor_v3: Dictionary,
+  env_grid: Variant = null,
+) -> bool:
+  return _write_avoid_hostiles_outcome(anchor, motor_v3, env_grid, _GoalSource.TIER_FAILURE)
+
+
+## Shared `avoid_hostiles` locale write for [method notify_flight_escape_outcome] /
+## [method notify_flight_reacquired]: one `try_salient_write` with an empty motor ctx, then clears
+## the continuation guard. Returns the write result (false with no store).
+func _write_avoid_hostiles_outcome(
+  anchor: Vector3,
+  motor_v3: Dictionary,
+  env_grid: Variant,
+  tier: StringName,
+) -> bool:
+  if _locale_store == null:
+    return false
+  var wrote: bool = _locale_store.try_salient_write(
+    _GkReg.GK_AVOID_HOSTILES,
+    &"avoid_hostiles",
+    anchor,
+    motor_v3,
+    env_grid,
+    {},
+    {"tier": tier},
+    _effective_goal_kinds,
+    _modality_allowlist,
+    _traits,
+    _goal_catalog,
+  )
+  _locale_store.clear_salient_continuation()
+  return wrote
+
+
+## Telemetry passthrough: the `avoid_hostiles` locale row stats at [param anchor]'s cell — see
+## [method GoalSourceMemoryStore.locale_row_stats_at]. Pure read.
+func avoid_hostiles_row_stats_at(anchor: Vector3, motor_v3: Dictionary) -> Dictionary:
+  if _locale_store == null:
+    return {"found": false, "cell_x": 0, "cell_y": 0, "attempt_count": 0, "stored_strength": 0.0, "success_delta": 0.0}
+  return _locale_store.locale_row_stats_at(_GkReg.GK_AVOID_HOSTILES, anchor, motor_v3)
+
+
+## Count of usable `avoid_hostiles` locale cells right now (same filters as
+## [method consult_flee_locale_candidates]) — debug snapshot `ahc` field. Pure read.
+func avoid_hostiles_cell_count(motor_v3: Dictionary) -> int:
+  if _locale_store == null:
+    return 0
+  return _locale_store.avoid_hostiles_cells(motor_v3).size()
+
+
+## Remembered `avoid_hostiles` locale cells as flee-pool candidates (third belief kind beside
+## shelter/choke; CREATURE_MEMORY §14.3 Option A). Each entry: `{pos, weight}` — `pos` is the cell
+## centre `((cell + 0.5) * coverage_cell)` at [param creature_pos]'s height (same floor convention as
+## `GoalSourceMemoryStore.grid_indices_for_anchor`), `weight` in (0, 1] from the cell's best positive
+## `stored_strength`. Rows with non-positive strength or `success_delta`, and rows idle past their
+## eviction limit (checked against [param now_sec], wall-clock seconds; negative = read the clock),
+## are skipped. Pure read: does NOT touch `last_used_time` (merely being considered is not
+## reinforcement) and does not evict. Radius/proximity/half-plane filtering is the caller's job.
+## Example: `consult_flee_locale_candidates(pos, motor_v3)`.
+func consult_flee_locale_candidates(creature_pos: Vector3, motor_v3: Dictionary, now_sec: float = -1.0) -> Array:
+  if _locale_store == null:
+    return []
+  var coverage_cell := _GoalSource.coverage_cell_from_motor(motor_v3)
+  var out: Array = []
+  for cell_v in _locale_store.avoid_hostiles_cells(motor_v3, now_sec):
+    var cell: Dictionary = cell_v
+    out.append({
+      "pos": Vector3(
+        (float(cell["cell_x"]) + 0.5) * coverage_cell,
+        creature_pos.y,
+        (float(cell["cell_y"]) + 0.5) * coverage_cell,
+      ),
+      "weight": float(cell["weight"]),
+    })
+  return out
+
+
+## True when any shelter belief that has not `failed` (tier `observed`, `confirmed` or `battle_tested`)
+## sits within [param radius] of [param pos] (horizontal distance). Shelter-ONLY on purpose: used to let
+## a shelter rescue a dead-end locale flee candidate — choke-point and other goal kinds never count
+## (a choke mouth is a passage, not a refuge). Also rescues dead-end choke-point flee candidates
+## (decision 44 follow-up B). Pure read. Example:
+## `has_usable_shelter_near(cell_centre, motor_v3.get("dead_end_match_radius", 52.0))`.
+func has_usable_shelter_near(pos: Vector3, radius: float) -> bool:
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_SHELTER:
+      continue
+    if row.get("shelter_tier", &"") == _GoalBelief.SHELTER_TIER_FAILED:
+      continue
+    var bpos: Vector3 = _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    if Vector2(bpos.x - pos.x, bpos.z - pos.z).length() <= radius:
+      return true
+  return false
 
 
 ## True when [param instance_id] failed its last shelter evaluation — used to skip immediately
-## re-nominating a candidate that already failed the squeeze-fit check.
+## re-nominating a candidate that already failed the squeeze-fit check. A `battle_tested` row is
+## never "recently failed", even though it may still carry an older `shelter_fail_count` (kept on
+## promotion as history, decision 44 follow-up E) — a real escape there outranks the old failure.
 func shelter_candidate_recently_failed(instance_id: int) -> bool:
   if not _beliefs.has(instance_id):
     return false
   var row: Dictionary = _beliefs[instance_id]
   return (
     row.get("goal_kind", &"") == _GkReg.GK_SHELTER
+    and row.get("shelter_tier", &"") != _GoalBelief.SHELTER_TIER_BATTLE_TESTED
     and not bool(row.get("fit_confirmed", false))
     and int(row.get("shelter_fail_count", 0)) >= 1
   )

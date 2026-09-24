@@ -3,7 +3,7 @@ class_name MotorPlannerExploreLog
 ## Fixed-width motor tick lines for F10 HUD + rolling smoke log ([code]user://logs/motor_explore_tick.log[/code]).
 
 const _LOG_REL_PATH := "logs/motor_explore_tick.log"
-const _MAX_LINES := 800
+const _MAX_LINES := 1600
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 
 static var _lines: PackedStringArray = PackedStringArray()
@@ -124,6 +124,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + "scan=%s blk_act=%s cblk=%3d ff=%d food=%d thr=%d"
     + eat_dbg
     + thr_dbg
+    + flee_mem_suffix(snap)
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),
@@ -147,6 +148,21 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     int(snap.get("ready_food", 0)),
     int(snap.get("threat_count", 0)),
   ]
+
+
+## Flee-memory suffix (decision 44 follow-up F) for [method format_explore_tick_line]:
+## ` fk=<kind> ahc=<n>` on `gk=avoid_hostiles` lines when the snapshot's `flee_memory_debug` toggle
+## is on, else "". `fk` = last flee mint's winning candidate kind (`open` / `incumbent` / `shelter` /
+## `choke` / `locale` / `giveup` / `boxed`, `-` before the first mint); `ahc` = usable avoid_hostiles
+## locale cells. Contains no `%`, so it is safe inside the line's format string.
+## Example: ` fk=locale ahc=2`.
+static func flee_mem_suffix(snap: Dictionary) -> String:
+  if not bool(snap.get("flee_memory_debug", false)) or str(snap.get("goal_kind", "")) != "avoid_hostiles":
+    return ""
+  var kind := str(snap.get("flee_pick_kind", ""))
+  if kind.is_empty():
+    kind = "-"
+  return " fk=%s ahc=%d" % [kind, int(snap.get("avoid_hostiles_cell_count", -1))]
 
 
 ## Multi-line explore snapshot for on-screen HUD (log file keeps [method format_explore_tick_line]).
