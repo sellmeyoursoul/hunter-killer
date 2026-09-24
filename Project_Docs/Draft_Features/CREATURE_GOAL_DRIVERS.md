@@ -308,6 +308,8 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 
 #### 5.1.1 Salient episode emitter (phase-1 resolved)
 
+> **V3 note (2026-09-24):** the `avoid_hostiles` salient write is now wired from the V3 stack (`CreatureMotorStack._on_flight_exited` → `MemoryAdapter.notify_flight_escape_outcome`), passing an empty `{}` motor ctx (classifier stub inactive → default `flee_retreat`), not the V2 `ai_driver` / `MotorContext` path described below; see §5.1.5.
+
 **Owner:** [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — **canonical** path for salient writes, **`LocalePriorMap`** updates, tag inference, and validation. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** invokes it **only after** [MEMORY §14 write gates](CREATURE_MEMORY.md) pass; passes **`MotorContext`**, outcome, **`GoalKind`**, food-anchor **`Vector2`**, merged **`creature_motor`**, and per-instance allowlists. **Cardinal / motor code** may set **`MotorContext`** tactic flags — **must not** write locale priors directly.
 
 **Pipeline:**
@@ -425,7 +427,9 @@ urgency_boost = urgency_boost_linear_slope * external_urgency * gate(slot_b_base
 
 Flags — **[CREATURE_MOVEMENT_V2 §A.2.1](CREATURE_MOVEMENT_V2.md)**. Until detectors ship, most fits are **0** — ranking leans on **`stored_strength`** + **`replay_rank_score`** (expected).
 
-#### 5.1.5 `avoid_hostiles` escape reversal suppression (phase-1 resolved)
+#### 5.1.5 `avoid_hostiles` escape reversal suppression (phase-1 resolved — **superseded under V3, 2026-09-24**)
+
+> **V3 status:** the `avoid_hostiles` writer is **live** (`MemoryAdapter.notify_flight_escape_outcome` on `flight_just_exited`; success tier, `{}` ctx — [CREATURE_MEMORY.md §14.2](CREATURE_MEMORY.md), [PHYSICS_SQUEEZE.md decision 44](PHYSICS_SQUEEZE.md)). Since 2026-09-24 a re-acquisition proxy also writes `TIER_FAILURE` (`notify_flight_reacquired`, on `flight_just_entered` near a recent exit; [PHYSICS_SQUEEZE.md decision 45](PHYSICS_SQUEEZE.md), [CREATURE_MEMORY.md §14.4](CREATURE_MEMORY.md)). **AH-7 reversal suppression was dropped:** during Flight the hub's eligible list is empty and the incumbent is cleared each consideration, so an Avoid → Find-food flip cannot occur mid-episode; re-entry of another threat stays inside the same latched episode. The V2 text below is retained as legacy design context only; the broader V2 `MotorContext` rewrite of this section remains deferred.
 
 When **`try_salient_write`** would fire on **jeopardy clear** ([CREATURE_MEMORY.md §14.4](CREATURE_MEMORY.md)):
 
@@ -767,6 +771,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Date | Change |
 |------|--------|
+| 2026-09-24 | **§5.1.1 / §5.1.5:** `avoid_hostiles` writer live under V3 (`flight_just_exited` → `notify_flight_escape_outcome`); AH-7 reversal suppression dropped (goal table empty during Flight). Broader V2 `MotorContext` rewrite still deferred. |
 | 2026-06-20 | **V3 Step 3 sibling sync (§12.3.3):** Motor authority → [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); read order updated; §2 tree = semantic model for hub eligibility (not cardinal scorer). **§12.3.4** at **6d**. |
 | 2026-05-25 | **Phase 2:** salient emitter + locale priors integrated at runtime (`ai_driver` → `goal_source_memory`); Phase 1 contracts unchanged (trait Tier-2 stub, tactic classifiers optional). |
 | 2026-05-23 | **§2 / §6:** live **`SeekCandidate`** / threat ingest cross-link **CREATURE_MOVEMENT_V2 §E.1** (hybrid radius + forward cone awareness). |
