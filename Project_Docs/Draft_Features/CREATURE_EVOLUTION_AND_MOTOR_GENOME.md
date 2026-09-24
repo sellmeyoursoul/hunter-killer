@@ -30,7 +30,7 @@ Treat each tunable float (and a few ints/bools with fixed enums) as a **gene** w
 | Horizon | `lookahead_sec`, `scripted_intent_hold_physics_ticks` | Affects reactivity vs oscillation. |
 | Awareness | `awareness_radius`, `awareness_cone_extra`, `awareness_cone_half_angle_deg`, `awareness_memory_ticks`, `awareness_memory_weight`, `awareness_memory_horizon_sec` | Controls spatial attention and ghost influence. |
 | Obstacles | `weight_obstacle` | Static repulsion strength. |
-| Mode | `mode` | Keep `scripted` vs `llm` as discrete; evolution typically fixes `scripted`. |
+| Mode | `mode` | `scripted` is the only value now — the `llm` motor mode was retired (code removed 2026-09-23); evolution should not treat this as a discrete gene with a real alternative until/unless a new non-scripted motor mode exists. |
 
 **Normalization for crossover:** map each gene to `[0,1]` via `(x - min) / (max - min)` inside clamps; denormalize after mutation.
 

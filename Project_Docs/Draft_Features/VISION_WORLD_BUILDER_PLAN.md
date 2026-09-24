@@ -12,7 +12,7 @@
 
 **Out of scope (explicit non-goals):**  
 - Shipping an MMO from this repository in a single phase.  
-- Replacing physics with LLM-driven motor control (see **§3** and [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md)).  
+- Replacing physics with LLM-driven motor control — **retired**, not a phase-scoped non-goal: the LLM movement code path was removed 2026-09-23 (see **§3** and [AI_INT_CONVERSATION_SCOPE_PLAN.md](AI_INT_CONVERSATION_SCOPE_PLAN.md)).  
 - Locking network architecture until a dedicated networking phase exists.
 
 ---

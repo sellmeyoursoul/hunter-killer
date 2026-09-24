@@ -13,7 +13,7 @@
 **Out of scope (explicit non-goals):**  
 - Full utility-AI or behavior-tree product in this phase.  
 - Networking / persistence schema for MMO scale.  
-- Using LLM output as the real-time movement controller ([VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md)).
+- Using LLM output as the real-time movement controller ([VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md)) — **retired**, not merely out of phase scope: the LLM movement code path was removed from the repo 2026-09-23.
 
 ---
 

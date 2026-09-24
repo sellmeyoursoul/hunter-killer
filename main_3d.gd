@@ -112,6 +112,12 @@ var _spawn_seed: int = 0
 var _spawn_existing_points: Array[Vector2] = []
 var _spawn_locked_layout: Dictionary = {}
 var _spawn_last_layout: Dictionary = {}
+## Debug-only starting-calorie override for a locked-layout repro session, keyed the same as
+## `_spawn_locked_layout` (`creature_0`, `creature_1`, ...) — read from `playfield_spawn.debug_start_calories`
+## (game_config.json). Not part of the locked-layout file format itself (positions only); this is a
+## separate, independently toggleable escape hatch for pinning hunger state alongside a frozen
+## position repro. Empty by default (no override applied).
+var _spawn_debug_start_calories: Dictionary = {}
 var _nav_region: NavigationRegion3D
 ## `NavigationRegion3D.bake_navigation_mesh()` runs on a background thread — `get_navigation_map_rid()`
 ## returns a valid RID immediately, but `NavigationServer3D.map_get_path` on it returns empty until
@@ -415,6 +421,8 @@ func _init_spawn_layout() -> void:
     ## Locked mode never draws from _spawn_rng for placement — record the locked file's own seed
     ## (not a fresh one) so the rewritten snapshot doesn't imply positions came from RNG this run.
     _spawn_seed = int(_spawn_locked_layout.get("seed", _spawn_seed))
+  var debug_cal_v: Variant = cfg.get("debug_start_calories", {})
+  _spawn_debug_start_calories = debug_cal_v.duplicate(true) if typeof(debug_cal_v) == TYPE_DICTIONARY else {}
 
 
 func _playfield_spawn_config() -> Dictionary:
@@ -1084,6 +1092,13 @@ func _spawn_configured_creatures() -> void:
       add_child(root)
       var body := root.get_node("Body") as CharacterBody3D
       _setup_motor_body(body, groups)
+      ## Deferred: [CreatureRoot3D]'s own `_ready()` queues `_propagate_definition_to_children`
+      ## (`call_deferred`), which calls `Vitals.apply_parent_definition()` and resets
+      ## `Vitals.current_calories` to the species' full `caloric_needs`. That reset is queued
+      ## earlier in this same frame (from [code]add_child(root)[/code] above) than this call, so
+      ## deferring here guarantees our override runs *after* it in the flush order — a synchronous
+      ## call here would get silently clobbered a moment later.
+      call_deferred("_apply_debug_start_calories", body, idx)
       _snap_creature_to_ground(root, body, pos, str(def.species_id))
       if body.has_method(&"start_duel_spawn"):
         body.call(&"start_duel_spawn")
@@ -1094,6 +1109,35 @@ func _spawn_configured_creatures() -> void:
         _player_body = body
       idx += 1
   call_deferred("_settle_spawned_creature_bodies")
+
+
+## Debug-only starting-calorie pin for a locked-layout repro session — see
+## `_spawn_debug_start_calories` doc comment. No-op when `playfield_spawn.debug_start_calories`
+## (game_config.json) doesn't carry a `creature_<idx>` key; leaves the vitals component's own
+## `caloric_needs`-derived default untouched otherwise.
+## Sets `current_calories` on both `body` (`CreatureKinematicBody3D`) and its sibling `Vitals`
+## node (`CreatureVitalsComponent`): `Vitals.current_calories` is the value the V3 motor stack's
+## `_calorie_ratio()` reads first ([creature_motor_stack.gd]) and the value `Body`'s own
+## `_sync_calories_from_vitals()` re-pulls into `body.current_calories` every `_physics_process`
+## tick — pinning only `body` gets overwritten within one frame.
+func _apply_debug_start_calories(body: CharacterBody3D, idx: int) -> void:
+  if not is_instance_valid(body):
+    return
+  var key := "creature_%d" % idx
+  if not _spawn_debug_start_calories.has(key):
+    return
+  var cal := float(_spawn_debug_start_calories[key])
+  body.set("current_calories", cal)
+  var root := body.get_parent()
+  var vitals := root.get_node_or_null("Vitals") if root != null else null
+  if vitals != null:
+    vitals.set("current_calories", cal)
+  OLog.info(
+    "Main3D: debug_start_calories override — %s current_calories=%.1f (vitals_found=%s)"
+    % [key, cal, str(vitals != null)],
+    true,
+    "Main3D",
+  )
 
 
 func _setup_motor_body(body: CharacterBody3D, groups: Array[StringName]) -> void:

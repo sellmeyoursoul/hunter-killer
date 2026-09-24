@@ -1,6 +1,6 @@
 extends Node
 ## Autoload **GameConfig**: loads and merges [code]user://game_config.json[/code] before **OLog** initializes.
-## Provides merged [code]logging_params[/code], [code]inference_client[/code], [code]perception[/code], [code]creature_motor[/code], [code]creature_motor_v3[/code], and [code]playfield_spawn[/code] with safe defaults.
+## Provides merged [code]logging_params[/code], [code]perception[/code], [code]creature_motor[/code], [code]creature_motor_v3[/code], and [code]playfield_spawn[/code] with safe defaults.
 
 const CONFIG_PATH := "user://game_config.json"
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -31,14 +31,6 @@ func get_logging_params() -> Dictionary:
   if typeof(lp) != TYPE_DICTIONARY:
     return _Merge.default_logging_params()
   return lp.duplicate(true)
-
-
-## Merged [code]inference_client[/code] for the remote TL HTTP client (may have empty [code]INFERENCE_BASE_URL[/code]).
-func get_inference_client() -> Dictionary:
-  var ic: Variant = _merged.get("inference_client", {})
-  if typeof(ic) != TYPE_DICTIONARY:
-    return _Merge.default_inference_client()
-  return ic.duplicate(true)
 
 
 ## Merged [code]perception[/code] (e.g. [code]SNAPSHOT_PHYSICS_STRIDE[/code]).

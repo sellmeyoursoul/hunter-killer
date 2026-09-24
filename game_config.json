@@ -4,32 +4,16 @@
   "MAX_LINES_PER_PROCESS": 256,
   "MAX_QUEUE_ENTRIES": 2048
   },
-  "inference_client": {
-  "INFERENCE_BASE_URL": "http://127.0.0.1:8080",
-  "COMPLETIONS_PATH": "/v1/completions",
-  "CHAT_COMPLETIONS_PATH": "/v1/chat/completions",
-  "MODEL_ID": "tinyllama",
-  "API_KEY": "",
-  "HTTP_TIMEOUT_MS": 8000,
-  "INFERENCE_PERIOD_MS": 250,
-  "MAX_OUTPUT_TOKENS": 48,
-  "LLAMA_COMPLETION_GRAMMAR_ENABLED": true,
-  "TEMPERATURE": 0.0,
-  "INFERENCE_AUTO_START_ENABLED": false,
-  "BUNDLE_ROOT_OVERRIDE": "",
-  "BUNDLED_SERVER_EXE": "bin/llama-server.exe",
-  "BUNDLED_MODEL_GGUF": "tinyllama-Q4_K_M.gguf",
-  "BUNDLED_SERVER_ARGS": ["--no-mmap", "-ngl", "0"],
-  "BUNDLED_SERVER_ATTACH_CONSOLE": false,
-  "INFERENCE_PROBE_PATH": "/health",
-  "INFERENCE_START_TIMEOUT_MS": 300000
-  },
   "perception": {
   "SNAPSHOT_PHYSICS_STRIDE": 1
   },
   "playfield_spawn": {
   "seed": 0,
-  "locked_layout_path": ""
+  "locked_layout_path": "res://spawn_layout_cornered_wall_repro.json",
+  "debug_start_calories": {
+    "creature_0": 55.0,
+    "creature_1": 60.0
+  }
   },
   "creature_motor": {
   "mode": "scripted",

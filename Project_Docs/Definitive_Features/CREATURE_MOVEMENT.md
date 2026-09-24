@@ -14,7 +14,7 @@
 
 | Layer | Role (3D production — see banner) |
 |-------|------|
-| **Intent producers** | `AiDriver` (scripted 8-way motor), human input, LLM tokens (`UP`/`DOWN`/`LEFT`/`RIGHT` — cardinals only today) |
+| **Intent producers** | `AiDriver` (scripted 8-way motor / ENGINE round, aka "CPU Player"), human input |
 | **Intent storage** | `creature_move_intent` on [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (**Body** child) |
 | **Physics application** | **`CharacterBody3D.move_and_slide`** on all duel species (**D4** — no rigid mob fork) |
 | **Motor planner** | `creature/motor/cardinal_avoidance.gd` — scores **9 candidates** (8-way + idle), picks minimum cost |
@@ -67,7 +67,6 @@ flowchart TD
 |------|--------|---------|---------------------------|
 | **HUMAN** | Keyboard (`move_*` actions) | `player._read_move_intent()` | Stops (`velocity = 0`) |
 | **ENGINE** | `AiDriver._physics_process` | `player` / `mob` | Stops (player); mob keeps **last heading** speed if intent zero (see §8) |
-| **AI** | LLM completion tokens via `_apply_action_token` | `player` only today | Same as ENGINE on player |
 
 | File | Notes |
 |------|-------|
@@ -75,7 +74,7 @@ flowchart TD
 | [`mob.gd`](../../mob.gd) | `control_mode` int; groups: `mobs`, `creatures`; default diet **CARNIVORE** |
 | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) | `sync_duel_control_modes()`, `playing_control_mode_int_for_motor_mode_string()` |
 
-**LLM path:** `_apply_action_token` sets cardinal intent on `_primary_creature` only — **not** the unified duel loop for carnivore.
+**LLM movement control is retired.** The scripted (ENGINE) motor is the only non-human intent producer; there is no LLM-token movement path in this codebase. The `AI` control-mode int (`CreatureControlMode.Mode.AI`) exists in the shared enum but is not driven by any producer here — do not read it as an active third mode. The "CPU Player" / ENGINE round feature (`AiDriver.begin_engine_player_round()`, ARMED/PLAYING/WAITING state machine) is a real, still-shipped AI-controlled duel opponent — it is driven by the same scripted/V3 motor as any other creature, not by an LLM.
 
 ---
 
@@ -171,7 +170,7 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 
 | Key | Default | Used for |
 |-----|---------|----------|
-| `mode` | `"scripted"` | `scripted` vs LLM motor |
+| `mode` | `"scripted"` | Motor mode selector; `_creature_motor_mode()` always returns `"scripted"` today — LLM movement mode is retired |
 | `lookahead_sec` | `0.15` | Prediction horizon |
 | `weight_dist` | `0.45` | Mob inverse distance |
 | `weight_dist_sq` | `55.0` | Mob crowding |
@@ -486,7 +485,6 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 | Identical paths | Symmetric costs + shared tick seeds (mitigated partially by `motor_intent_cost_chaos` + per-body shuffle seed) |
 | “Stuck” carnivore still moving | Zero intent does not stop mob ENGINE motion |
 | Food memory | Designed in comments / `CREATURE_MEMORY.md`; **not wired** |
-| LLM motor | Tokens on primary creature only; duel carnivore always scripted |
 | `wall_slide_pick.gd` | Used in mob **legacy** cruise, not ENGINE duel |
 
 ---
@@ -529,5 +527,7 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 
 | Date | Change |
 |------|--------|
+| 2026-09-24 | **V3 closeout session — archival NOT executed.** Both duel manual sign-offs closed (post-6d Flight fast-path; post-6d-explore-prey); [`CREATURE_MOVEMENT_V3_CLEANUP.md`](../Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) C1 (pursuit-detour pinch stall near corner geometry) and C24 (`avoid_host` explore-fallback sawtooth) fixed, tested, re-closed `done`; V3 §15 V2 cleanup backlog row #10 (`ai_driver.gd` thin-loop, no `_by_body` motor state) closed via dead-code deletion; every `Deferred` row in V3 §13/§15.3 mapped into [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md). **[CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) was checked against its own §12 step 11 promotion checklist and found still blocked:** §13 lists two rows still `Tracking` — **MEMORY sibling sync (6d)** (§12.3.2) and **GOAL_DRIVERS sibling sync (6d)** (§12.3.4). Verified by grep: [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) and [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) still carry live V2-era `MotorContext` / `cardinal_avoidance.gd` / `sector_weights[8]` formulas and cross-links (e.g. MEMORY §14.1 projection formula, GOAL_DRIVERS §5.1.1 tactic-flag producer) that the §12.3.2 / §12.3.4 checklists specify rewriting to adapter-consult wording — that rewrite has not landed despite `post-6d` phase status showing `Done`. V3 therefore **remains Draft_Features** (still the active motor spec per the banner above) until that sibling-doc rewrite closes and §13 shows zero `Tracking` rows. |
+| 2026-09-23 | LLM-driven movement control **retired** (code removal: `ai_action_tokens.gd`, `bundled_inference_launcher.gd`, `system_prompt.txt`, `inference_client` config, `_apply_action_token`/`arm_ai_session` and related `AiDriver` signals/methods deleted). §1 intent-producers row and §3 control-mode table no longer list an LLM/`AI`-token producer; §6.1 `mode` key row and §12 known-gaps row updated to match. ENGINE/"CPU Player" round feature (`begin_engine_player_round()`, ARMED/PLAYING/WAITING) is unaffected — it runs the same scripted/V3 motor as any other creature, not an LLM. |
 | 2026-07-05 | Banner → V3 authority; removed duplicated V3 debug/planner prose from §10; §11/§14 point to V3 §7 / §12.2. |
 | 2026-06-08 | Supersession banner for 3D production; §1 executive summary notes 3D paths; debug overlay → `awareness_debug_overlay_3d.gd` (M3). |
