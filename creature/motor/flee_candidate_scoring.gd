@@ -144,22 +144,107 @@ static func separation_gain(creature_pos: Vector3, endpoint: Vector3, threat_pts
   return clampf(gained / norm_dist, -1.0, 1.0)
 
 
-## Shelter exception to the separation term: true when the creature believes it wins the race to
-## the shelter endpoint (worst-case race margin strictly > 0, i.e. `belief_race_factor` above its
-## 0.5 toss-up value). Such a shelter is scored as a full escape (separation credited as 1.0 — the
-## value a straight-away open bearing earns) instead of by the distance it leaves to the threat:
-## once inside a refuge the creature reaches first, remaining distance to the pursuer is not what
-## keeps it safe. Merely zeroing the term would still leave every won shelter `gain × flee_dist`
-## behind straight-away open ground. Choke points do NOT get this exception.
-static func shelter_race_won(margin: float) -> bool:
-  return margin > 0.0
+## Minimum worst-case race margin that counts as a "won" race (user decision 2026-09-25, matrix case
+## c4: a hard `margin > 0` cutoff let float-noise dead heats — creature and threat equidistant from
+## the shelter — win). Scaled by the `change_stability` trait with the repo's usual convention (same
+## as `MotorPlanner._food_handoff_starvation_margin` / `_effective_prey_engagement_latch_ticks`):
+## `t = clamp((cs + 100) / 200, 0, 1)`, `min = base × lerp(scale_min, scale_max, t)`, from
+## `flee_race_won_min_margin` (base, default 0.04) and `flee_race_won_min_margin_scale_min` /
+## `_scale_max` (defaults 0.5 / 1.5). High Change tolerates a closer race; high Stability sheers off
+## to open ground rather than risk a close call. Clamped to >= 0 so a misconfigured negative value
+## can never turn a lost race into a won one.
+## [param traits]: creature traits dict (`change_stability` in [-100, 100]; missing = 0, neutral).
+## [param motor_v3]: `creature_motor_v3` params. Returns the minimum margin (exclusive threshold).
+## Example (defaults): cs −100 -> 0.02, cs 0 -> 0.04, cs +100 -> 0.06.
+static func race_won_min_margin(traits: Dictionary, motor_v3: Dictionary) -> float:
+  var base := float(motor_v3.get("flee_race_won_min_margin", 0.04))
+  var change_stability := float(traits.get("change_stability", 0.0))
+  var t := clampf((change_stability + 100.0) / 200.0, 0.0, 1.0)
+  var scale_min := float(motor_v3.get("flee_race_won_min_margin_scale_min", 0.5))
+  var scale_max := float(motor_v3.get("flee_race_won_min_margin_scale_max", 1.5))
+  return maxf(0.0, base * lerpf(scale_min, scale_max, t))
+
+
+## Whether the creature believes it wins the race to a shelter/choke endpoint: worst-case race
+## margin strictly above [method race_won_min_margin] (trait-scaled; a near dead heat is not a win).
+## The single "race won" predicate for all three race-won consumers: the shelter separation credit
+## (1.0), the shelter race-term floor ([method shelter_race_won_race_term]) and the choke partial
+## credit ([method choke_race_won_separation]).
+## Shelter exception to the separation term: a won-race shelter is scored as a full escape
+## (separation credited as 1.0 — the value a straight-away open bearing earns) instead of by the
+## distance it leaves to the threat: once inside a refuge the creature reaches first, remaining
+## distance to the pursuer is not what keeps it safe. Merely zeroing the term would still leave every
+## won shelter `gain × flee_dist` behind straight-away open ground. Choke points get only a partial
+## credit instead — see [method choke_race_won_separation].
+## [param margin]: worst-case race margin ([method race_margin]). [param traits] / [param motor_v3]:
+## as [method race_won_min_margin]; empty traits = neutral.
+## Example (defaults, neutral): margin 0.05 -> true; margin 0.01 -> false.
+static func shelter_race_won(margin: float, motor_v3: Dictionary, traits: Dictionary = {}) -> bool:
+  return margin > race_won_min_margin(traits, motor_v3)
+
+
+## Choke partial race-won credit (user decision 2026-09-24: "more weight, but not automatically
+## win"): when the creature wins the race to a choke mouth (same predicate as
+## [method shelter_race_won], margin above the trait-scaled minimum), its separation is floored at
+## `flee_choke_race_won_separation_credit` (default 0.5, clamped to [0, 1]) — i.e.
+## `max(actual_separation, credit)`. A lost race or near dead heat returns [param separation]
+## unchanged. Below the shelter's full 1.0 because a choke only slows the pursuer (it must detour
+## around), whereas a shelter the creature reaches first ends the chase; a floor rather than an
+## override, so a choke that already earns more separation than the credit keeps it.
+## [param margin]: worst-case race margin at the choke endpoint ([method race_margin]).
+## [param separation]: that endpoint's [method separation_gain]. [param traits]: creature traits for
+## [method race_won_min_margin] (empty = neutral). Returns the separation to score.
+## Example: margin 0.2, separation 0.3, default credit -> 0.5; margin -0.1, separation 0.3 -> 0.3.
+static func choke_race_won_separation(
+  margin: float,
+  separation: float,
+  motor_v3: Dictionary,
+  traits: Dictionary = {},
+) -> float:
+  if not shelter_race_won(margin, motor_v3, traits):
+    return separation
+  var credit := clampf(float(motor_v3.get("flee_choke_race_won_separation_credit", 0.5)), 0.0, 1.0)
+  return maxf(separation, credit)
+
+
+## Race term for a shelter candidate (user tuning fix 2026-09-25, "matrix case 1": a nearby shelter
+## the creature wins the race to by a small margin lost to open ground purely on the race term).
+## When the creature wins the race to the shelter ([method shelter_race_won], margin above the
+## trait-scaled [method race_won_min_margin]) the shelter's race term is floored at
+## [param open_ref_race_term] — the race term the straight-away open bearing earns in the same mint —
+## i.e. `max(race_term(margin), open_ref_race_term)`. A lost race or near dead heat returns the
+## ordinary [method race_term] unchanged. Rationale: open ground is
+## only preferable when no reachable refuge exists; a won shelter should never trail open ground on
+## the race axis. Reach, separation and the race-gated belief bonus are untouched, so a won shelter
+## that costs reach still loses to fuller open ground. Shelter-only: chokes (which intentionally do
+## not auto-win, [method choke_race_won_separation]) and locale cells are not floored.
+## [param margin]: worst-case race margin at the shelter endpoint ([method race_margin]).
+## [param open_ref_race_term]: straight-away open bearing's [method race_term] this mint; pass -INF
+## when unknown (no floor). [param traits]: creature traits for [method race_won_min_margin] (empty =
+## neutral). Returns the race term to score (feed to [method effective] as its `race_term_floor`).
+## Example: margin 0.09, open ref 0.10 (open margin 0.17 × gain 0.6) -> 0.10 instead of 0.054;
+## margin -0.1 -> race_term(-0.1) = -0.06 regardless of the open ref.
+static func shelter_race_won_race_term(
+  margin: float,
+  open_ref_race_term: float,
+  motor_v3: Dictionary,
+  traits: Dictionary = {},
+) -> float:
+  var own := race_term(margin, motor_v3)
+  if not shelter_race_won(margin, motor_v3, traits):
+    return own
+  return maxf(own, open_ref_race_term)
 
 
 ## Final candidate score in distance units: measured reach plus `flee_dist ×` (race term + the
 ## belief's own bonus gated by the race + `flee_separation_gain × separation`). Open bearings pass
 ## `belief_bonus_frac = 0`. [param separation] comes from [method separation_gain] (or 1.0 for a
-## shelter the creature wins the race to, [method shelter_race_won]); default 0.0 keeps the
-## pre-separation score for callers that don't supply it.
+## shelter the creature wins the race to, [method shelter_race_won]; floored at the choke credit for
+## a choke it wins the race to, [method choke_race_won_separation]); default 0.0 keeps the
+## pre-separation score for callers that don't supply it. [param race_term_floor] floors the race
+## term (`max(race_term(margin), floor)`) — only the won-race shelter passes one
+## ([method shelter_race_won_race_term]); default -INF leaves the race term unchanged. The belief
+## bonus gate ([method belief_race_factor]) always uses the raw [param margin].
 static func effective(
   reach: float,
   flee_dist: float,
@@ -167,7 +252,9 @@ static func effective(
   belief_bonus_frac: float,
   motor_v3: Dictionary,
   separation: float = 0.0,
+  race_term_floor: float = -INF,
 ) -> float:
   var bonus := belief_bonus_frac * belief_race_factor(margin, motor_v3) if belief_bonus_frac > 0.0 else 0.0
   var sep_term := float(motor_v3.get("flee_separation_gain", 0.25)) * separation
-  return reach + flee_dist * (race_term(margin, motor_v3) + bonus + sep_term)
+  var race := maxf(race_term(margin, motor_v3), race_term_floor)
+  return reach + flee_dist * (race + bonus + sep_term)

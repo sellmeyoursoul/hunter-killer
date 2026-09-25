@@ -274,6 +274,17 @@ func _run_all() -> void:
   _test_flee_locale_sideways_and_toward_threat_cells_lose_to_open_ground()
   _test_flee_locale_straight_ahead_cell_scored_with_true_reach()
   _test_flee_shelter_race_won_exempt_from_separation_penalty_but_lost_race_is_not()
+  _test_flee_choke_race_won_separation_credit_math()
+  _test_flee_choke_race_won_credit_adds_weight_but_is_not_an_automatic_win()
+  # Won-race shelter race-term floor (user tuning fix 2026-09-25, "matrix case 1")
+  _test_flee_shelter_race_won_race_term_math()
+  _test_flee_race_won_min_margin_scales_with_change_stability()
+  _test_flee_race_won_near_dead_heat_is_not_won_at_any_trait()
+  _test_flee_race_won_close_margin_depends_on_change_stability()
+  _test_flee_close_race_shelter_change_takes_it_stability_sheers_off()
+  _test_flee_small_margin_won_shelter_beats_open_ground()
+  _test_flee_lost_race_shelter_race_term_not_floored()
+  _test_flee_small_margin_won_choke_race_term_not_floored()
   _test_avoid_hostiles_cells_skips_rows_idle_past_eviction_limit()
   _test_flight_exit_shelter_promotion_sets_fit_confirmed_keeps_fail_count()
   _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_anchor()
@@ -406,6 +417,9 @@ func _run_all() -> void:
   _test_awareness_scan_best_ready_food_target_excludes_ids()
   _test_food_plant_missing_stimulus_kind_id()
   _test_goal_source_memory()
+  _test_default_open_grid_origin_is_playfield_min()
+  _test_locale_writes_succeed_in_all_quadrants_of_origin_shifted_grid()
+  _test_locale_seek_consults_negative_quadrant_row()
   _test_goal_kind_phase_c_replay()
   _test_creature_trait_usage_wiring()
   _test_locale_prior_escalate_seek()
@@ -9910,7 +9924,7 @@ func _test_flee_choke_candidate_at_dead_end_rescued_only_by_nearby_shelter() -> 
 ## farther from the NEAREST threat than the creature stands now, negative when closer, 0 with no
 ## threats, clamped to [-1, 1]; `effective` ranks equal-reach/equal-margin endpoints by it (the
 ## open-bearing "farther-from-threat endpoint beats the nearer one" rule); the shelter exception
-## predicate is "race won" (margin > 0).
+## predicate is "race won" (margin > trait-scaled `flee_race_won_min_margin`).
 func _test_flee_separation_gain_math() -> void:
   var me := Vector3.ZERO
   var threat := Vector3(-60.0, 0.0, 0.0)
@@ -9936,7 +9950,10 @@ func _test_flee_separation_gain_math() -> void:
   var neutral := _FleeScoring.effective(150.0, 150.0, 0.1, 0.0, motor_v3, 0.0)
   _assert(farther > nearer, "same reach and margin: the endpoint farther from the threat scores higher")
   _assert(closer_than_now < neutral, "ending closer to the threat than now is penalised")
-  _assert(_FleeScoring.shelter_race_won(0.01) and not _FleeScoring.shelter_race_won(0.0), "race won means margin > 0")
+  _assert(
+    _FleeScoring.shelter_race_won(0.05, motor_v3) and not _FleeScoring.shelter_race_won(0.0, motor_v3),
+    "race won means margin above the (neutral) minimum; a dead heat is not won",
+  )
 
 
 ## Decision 44 follow-up A repro (2026-09-24): creature (40,40), threat (-20,40), avoid_hostiles
@@ -10030,7 +10047,7 @@ func _test_flee_locale_straight_ahead_cell_scored_with_true_reach() -> void:
 
 
 ## Decision 44 follow-up A shelter exception: a confirmed shelter the creature wins the race to
-## (margin > 0) is still chosen even though it ends slightly CLOSER to the threat (17.9u vs 20u now).
+## (margin > trait-scaled minimum) is still chosen even though it ends slightly CLOSER to the threat (17.9u vs 20u now).
 ## The same shelter with the race lost (threat moved so it gets there first) is not — there it gets
 ## the separation penalty like any other candidate. The lost-race case amplifies the shelter bonus
 ## (0.6) so it would win on bonus alone without the separation term.
@@ -10062,6 +10079,355 @@ func _test_flee_shelter_race_won_exempt_from_separation_penalty_but_lost_race_is
       _assert(state.get("flee_pick_kind") != &"shelter", "a lost-race shelter is not chosen (separation penalty applies)")
     body.get_parent().remove_child(body)
     body.queue_free()
+  main.queue_free()
+
+
+## Choke race-won partial credit (user decision 2026-09-24, "more weight, but not automatically
+## win"): `choke_race_won_separation` floors a won-race choke's separation at
+## `flee_choke_race_won_separation_credit` (a floor, not an override), leaves a lost race or a dead
+## heat untouched, and the default sits strictly between "no exception" (0) and the shelter's 1.0.
+func _test_flee_choke_race_won_separation_credit_math() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var credit := float(motor_v3.get("flee_choke_race_won_separation_credit", -1.0))
+  _assert(credit > 0.0 and credit < 1.0, "choke credit default is between no exception (0) and shelter's full 1.0")
+  _assert(
+    is_equal_approx(_FleeScoring.choke_race_won_separation(0.2, 0.1, motor_v3), credit),
+    "won race, separation below the credit: floored at the credit",
+  )
+  _assert(
+    is_equal_approx(_FleeScoring.choke_race_won_separation(0.2, 0.8, motor_v3), 0.8),
+    "won race, separation above the credit: kept (floor, not override)",
+  )
+  _assert(
+    is_equal_approx(_FleeScoring.choke_race_won_separation(-0.1, 0.1, motor_v3), 0.1),
+    "lost race: ordinary separation term",
+  )
+  _assert(
+    is_equal_approx(_FleeScoring.choke_race_won_separation(0.0, -0.3, motor_v3), -0.3),
+    "dead heat is not a won race: ordinary (negative) separation kept",
+  )
+  var with_credit := _FleeScoring.effective(
+    150.0, 150.0, 0.2, 0.1, motor_v3, _FleeScoring.choke_race_won_separation(0.2, 0.1, motor_v3)
+  )
+  var without_credit := _FleeScoring.effective(150.0, 150.0, 0.2, 0.1, motor_v3, 0.1)
+  _assert(with_credit > without_credit, "a won-race choke scores above its own no-credit score")
+  motor_v3["flee_choke_race_won_separation_credit"] = 3.0
+  _assert(
+    is_equal_approx(_FleeScoring.choke_race_won_separation(0.2, 0.1, motor_v3), 1.0),
+    "credit is clamped to 1.0 (never more than a shelter's full escape)",
+  )
+
+
+## One flee mint for the choke race-credit tests: creature at the origin, threat 60u west (away =
+## +X), flee distance 150, a confirmed choke at [param choke_pos] the creature fits and the threat
+## doesn't, no navmesh (every candidate reaches its full probe distance). [param credit] < 0 keeps
+## the default `flee_choke_race_won_separation_credit`. Returns `{kind, effective, margin}` — the
+## pick's `flee_pick_kind` / `flee_pick_effective` and the choke's race margin.
+func _flee_choke_credit_mint(main: Node3D, choke_pos: Vector3, credit: float) -> Dictionary:
+  var probe_body := _spawn_herbivore_body(main, Vector3(500.0, 1.0, 500.0))
+  var own_diameter := float(probe_body.call(&"get_collision_capsule_radius")) * 2.0
+  probe_body.get_parent().remove_child(probe_body)
+  probe_body.queue_free()
+  var threat_pos := Vector3(-60.0, 1.0, 0.0)
+  var setup := _flee_belief_test_setup(main, threat_pos, own_diameter * 4.0)
+  var motor_v3: Dictionary = setup["motor_v3"]
+  motor_v3["awareness_radius"] = 150.0
+  if credit >= 0.0:
+    motor_v3["flee_choke_race_won_separation_credit"] = credit
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  var body: CharacterBody3D = setup["body"]
+  setup["adapter"].record_choke_point_confirmation(choke_pos, own_diameter * 1.5, motor_v3, int(ctx["now_ms"]))
+  var state := _MotorPlanner.new_state()
+  (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  var out := {
+    "kind": state.get("flee_pick_kind"),
+    "effective": float(state.get("flee_pick_effective", 0.0)),
+    "margin": _FleeScoring.race_margin(body.global_position, choke_pos, [threat_pos]),
+  }
+  body.get_parent().remove_child(body)
+  body.queue_free()
+  return out
+
+
+## Planner-level choke credit: (1) a won-race choke 40u sideways (actual separation ~0.30) loses to
+## straight-away open ground with no credit but wins with the default credit — more weight than
+## before; (2) a won-race choke at (-10, 50) (margin ~0.16) still loses to the unobstructed,
+## full-reach straight-away open bearing at the default credit, although a shelter-equivalent full
+## credit (1.0) would have tipped it — not an automatic win; (3) a lost-race choke scores the same
+## at any credit (open ground wins either way, with an identical pick score).
+func _test_flee_choke_race_won_credit_adds_weight_but_is_not_an_automatic_win() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var side := Vector3(0.0, 1.0, 40.0)
+  var side_none := _flee_choke_credit_mint(main, side, 0.0)
+  var side_default := _flee_choke_credit_mint(main, side, -1.0)
+  _assert(float(side_default["margin"]) > 0.0, "fixture: race to the sideways choke is won")
+  _assert(side_none["kind"] == &"open", "no credit: the sideways won-race choke loses to open ground")
+  _assert(side_default["kind"] == &"choke", "default credit: the sideways won-race choke is chosen")
+  _assert(
+    float(side_default["effective"]) > float(side_none["effective"]),
+    "the credited choke outscores the best no-credit pick (straight-away open ground)",
+  )
+  var back := Vector3(-10.0, 1.0, 50.0)
+  var back_default := _flee_choke_credit_mint(main, back, -1.0)
+  var back_full := _flee_choke_credit_mint(main, back, 1.0)
+  _assert(float(back_default["margin"]) > 0.0, "fixture: race to the side-back choke is won")
+  _assert(back_full["kind"] == &"choke", "fixture: a shelter-equivalent full credit would make this choke win")
+  _assert(back_default["kind"] == &"open", "default credit: a won-race choke does not beat clearly better open ground")
+  var lost := Vector3(-45.0, 1.0, 10.0)
+  var lost_default := _flee_choke_credit_mint(main, lost, -1.0)
+  var lost_full := _flee_choke_credit_mint(main, lost, 1.0)
+  _assert(float(lost_default["margin"]) < 0.0, "fixture: race to the choke near the threat is lost")
+  _assert(lost_default["kind"] == &"open" and lost_full["kind"] == &"open", "a lost-race choke is not chosen at any credit")
+  _assert(
+    is_equal_approx(float(lost_default["effective"]), float(lost_full["effective"])),
+    "lost race: the credit does not change the outcome score",
+  )
+  main.queue_free()
+
+
+## Won-race shelter race-term floor math (user tuning fix 2026-09-25): a won race (margin > trait-scaled minimum) is
+## floored at the open reference race term (a floor, not an override); a lost race or dead heat
+## keeps its own race term; a -INF reference means no floor; `effective` applies the floor only
+## through its optional `race_term_floor` and leaves the belief-bonus gate on the raw margin.
+func _test_flee_shelter_race_won_race_term_math() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var open_ref := _FleeScoring.race_term(0.17, motor_v3)
+  _assert(
+    is_equal_approx(_FleeScoring.shelter_race_won_race_term(0.09, open_ref, motor_v3), open_ref),
+    "won race, own race term below the open reference: floored at the reference",
+  )
+  _assert(
+    is_equal_approx(
+      _FleeScoring.shelter_race_won_race_term(0.3, open_ref, motor_v3), _FleeScoring.race_term(0.3, motor_v3)
+    ),
+    "won race, own race term above the reference: kept (floor, not override)",
+  )
+  _assert(
+    is_equal_approx(
+      _FleeScoring.shelter_race_won_race_term(-0.1, open_ref, motor_v3), _FleeScoring.race_term(-0.1, motor_v3)
+    ),
+    "lost race: ordinary race term",
+  )
+  _assert(
+    is_equal_approx(_FleeScoring.shelter_race_won_race_term(0.0, open_ref, motor_v3), 0.0),
+    "dead heat is not a won race: no floor",
+  )
+  _assert(
+    is_equal_approx(
+      _FleeScoring.shelter_race_won_race_term(0.09, -INF, motor_v3), _FleeScoring.race_term(0.09, motor_v3)
+    ),
+    "unknown open reference (-INF): no floor",
+  )
+  var plain := _FleeScoring.effective(150.0, 150.0, 0.09, 0.1, motor_v3, 1.0)
+  _assert(
+    is_equal_approx(_FleeScoring.effective(150.0, 150.0, 0.09, 0.1, motor_v3, 1.0, -INF), plain),
+    "effective: a -INF floor leaves the score unchanged",
+  )
+  var floored := _FleeScoring.effective(
+    150.0, 150.0, 0.09, 0.1, motor_v3, 1.0, _FleeScoring.shelter_race_won_race_term(0.09, open_ref, motor_v3)
+  )
+  _assert(
+    is_equal_approx(floored - plain, 150.0 * (open_ref - _FleeScoring.race_term(0.09, motor_v3))),
+    "effective: the floor raises only the race term (bonus gate still uses the raw margin)",
+  )
+
+
+## Trait-scaled "race won" minimum margin (user decision 2026-09-25): defaults give Change (−100)
+## 0.02, neutral 0.04, Stability (+100) 0.06; out-of-range traits clamp to the ends; a missing trait
+## (or empty traits) is neutral; a negative configured base never goes below 0.
+func _test_flee_race_won_min_margin_scales_with_change_stability() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var change := _FleeScoring.race_won_min_margin({"change_stability": -100.0}, motor_v3)
+  var neutral := _FleeScoring.race_won_min_margin({"change_stability": 0.0}, motor_v3)
+  var stability := _FleeScoring.race_won_min_margin({"change_stability": 100.0}, motor_v3)
+  _assert(is_equal_approx(change, 0.02), "full Change: min margin 0.02 (got %.4f)" % change)
+  _assert(is_equal_approx(neutral, 0.04), "neutral: min margin 0.04 (got %.4f)" % neutral)
+  _assert(is_equal_approx(stability, 0.06), "full Stability: min margin 0.06 (got %.4f)" % stability)
+  _assert(
+    is_equal_approx(_FleeScoring.race_won_min_margin({"change_stability": -300.0}, motor_v3), 0.02)
+    and is_equal_approx(_FleeScoring.race_won_min_margin({"change_stability": 300.0}, motor_v3), 0.06),
+    "traits beyond [-100, 100] clamp to the Change / Stability ends",
+  )
+  _assert(
+    is_equal_approx(_FleeScoring.race_won_min_margin({}, motor_v3), 0.04)
+    and is_equal_approx(_FleeScoring.race_won_min_margin({"explorer_builder": 80.0}, motor_v3), 0.04),
+    "missing change_stability trait = neutral",
+  )
+  motor_v3["flee_race_won_min_margin"] = -0.5
+  _assert(
+    is_equal_approx(_FleeScoring.race_won_min_margin({}, motor_v3), 0.0),
+    "a negative configured base clamps to 0 (a lost race can never count as won)",
+  )
+
+
+## Matrix case c4 (2026-09-25): a near dead heat (margin 0.01, float noise above 0) is NOT a won
+## race at any trait — for all three consumers (shelter predicate / separation credit, shelter
+## race-term floor, choke credit) — and c4-style geometry (shelter at (-29.5, 40): creature 49.7u,
+## threat 50.3u from it, margin ~+0.006 — a positive dead heat the old `> 0` rule counted as won)
+## loses to open ground at the mint even for full Change.
+func _test_flee_race_won_near_dead_heat_is_not_won_at_any_trait() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var open_ref := _FleeScoring.race_term(0.17, motor_v3)
+  for cs in [-100.0, 0.0, 100.0]:
+    var traits := {"change_stability": cs}
+    _assert(not _FleeScoring.shelter_race_won(0.01, motor_v3, traits), "cs %.0f: margin 0.01 is not a won race" % cs)
+    _assert(
+      is_equal_approx(
+        _FleeScoring.shelter_race_won_race_term(0.01, open_ref, motor_v3, traits), _FleeScoring.race_term(0.01, motor_v3)
+      ),
+      "cs %.0f: dead-heat shelter race term is not floored" % cs,
+    )
+    _assert(
+      is_equal_approx(_FleeScoring.choke_race_won_separation(0.01, 0.1, motor_v3, traits), 0.1),
+      "cs %.0f: dead-heat choke gets no separation credit" % cs,
+    )
+  var main := Node3D.new()
+  root.add_child(main)
+  var threat_pos := Vector3(-60.0, 1.0, 0.0)
+  var shelter_pos := Vector3(-29.5, 1.0, 40.0)
+  var setup := _flee_belief_test_setup(main, threat_pos)
+  var mv3: Dictionary = setup["motor_v3"]
+  mv3["awareness_radius"] = 150.0
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  ctx["traits"] = {"change_stability": -100.0}
+  var body: CharacterBody3D = setup["body"]
+  setup["adapter"].record_shelter_evaluation(632, shelter_pos, true, 0.9, int(ctx["now_ms"]))
+  var margin := _FleeScoring.race_margin(body.global_position, shelter_pos, [threat_pos])
+  _assert(margin > 0.0 and margin < 0.02, "fixture: c4-style shelter is a positive near dead heat (margin %.4f)" % margin)
+  var state := _MotorPlanner.new_state()
+  (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, mv3)
+  _assert(state.get("flee_pick_kind") == &"open", "c4 dead-heat shelter loses to open ground even for full Change")
+  main.queue_free()
+
+
+## A close but real race (margin 0.05) counts as won for neutral and full Change but not for full
+## Stability — for all three consumers.
+func _test_flee_race_won_close_margin_depends_on_change_stability() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var open_ref := _FleeScoring.race_term(0.17, motor_v3)
+  var own := _FleeScoring.race_term(0.05, motor_v3)
+  var credit := float(motor_v3.get("flee_choke_race_won_separation_credit", 0.5))
+  for cs in [-100.0, 0.0, 100.0]:
+    var traits := {"change_stability": cs}
+    var expect_won: bool = cs < 50.0
+    _assert(
+      _FleeScoring.shelter_race_won(0.05, motor_v3, traits) == expect_won,
+      "cs %.0f: margin 0.05 won == %s" % [cs, str(expect_won)],
+    )
+    _assert(
+      is_equal_approx(
+        _FleeScoring.shelter_race_won_race_term(0.05, open_ref, motor_v3, traits), open_ref if expect_won else own
+      ),
+      "cs %.0f: shelter race-term floor applied == %s" % [cs, str(expect_won)],
+    )
+    _assert(
+      is_equal_approx(_FleeScoring.choke_race_won_separation(0.05, 0.1, motor_v3, traits), credit if expect_won else 0.1),
+      "cs %.0f: choke credit applied == %s" % [cs, str(expect_won)],
+    )
+
+
+## Mint-level trait split (matrix case c3 geometry): creature at the origin, threat 60u west, flee
+## distance 150, no navmesh, a confirmed shelter far to the side at (0, 120) — margin ~0.056, inside
+## (Change 0.02, Stability 0.06). From identical geometry a full-Change creature counts the race as
+## won and takes the shelter; a full-Stability creature does not and sheers off to open ground.
+func _test_flee_close_race_shelter_change_takes_it_stability_sheers_off() -> void:
+  var threat_pos := Vector3(-60.0, 1.0, 0.0)
+  var shelter_pos := Vector3(0.0, 1.0, 120.0)
+  for cs in [-100.0, 100.0]:
+    var main := Node3D.new()
+    root.add_child(main)
+    var setup := _flee_belief_test_setup(main, threat_pos)
+    var motor_v3: Dictionary = setup["motor_v3"]
+    motor_v3["awareness_radius"] = 150.0
+    var ctx: Dictionary = setup["ctx"]
+    ctx["space_state"] = null
+    ctx["traits"] = {"change_stability": cs}
+    var body: CharacterBody3D = setup["body"]
+    setup["adapter"].record_shelter_evaluation(633, shelter_pos, true, 0.9, int(ctx["now_ms"]))
+    var margin := _FleeScoring.race_margin(body.global_position, shelter_pos, [threat_pos])
+    _assert(margin > 0.02 and margin < 0.06, "fixture: shelter margin %.4f between Change and Stability minimums" % margin)
+    var state := _MotorPlanner.new_state()
+    var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+    if cs < 0.0:
+      _assert(state.get("flee_pick_kind") == &"shelter", "full Change: the close-race shelter is taken")
+      _assert(Vector2(wp.x - shelter_pos.x, wp.z - shelter_pos.z).length() < 1.0, "full Change: waypoint lands on the shelter")
+    else:
+      _assert(state.get("flee_pick_kind") == &"open", "full Stability: sheers off to open ground from the same geometry")
+    main.queue_free()
+
+
+## Matrix case 1 repro (2026-09-25): creature at the origin, threat 60u west, flee distance 150, no
+## navmesh (full reach everywhere), a confirmed shelter side-back at (-20, 50). The creature wins the
+## race by a small margin (~0.09) — below the straight-away open bearing's (~0.17) — and both earn
+## separation 1.0 and full reach, so before the floor the race term alone handed the pick to open
+## ground (200.3 vs 202.5). Now the reachable shelter it reaches first is chosen.
+func _test_flee_small_margin_won_shelter_beats_open_ground() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var threat_pos := Vector3(-60.0, 1.0, 0.0)
+  var shelter_pos := Vector3(-20.0, 1.0, 50.0)
+  var setup := _flee_belief_test_setup(main, threat_pos)
+  var motor_v3: Dictionary = setup["motor_v3"]
+  motor_v3["awareness_radius"] = 150.0
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  var body: CharacterBody3D = setup["body"]
+  setup["adapter"].record_shelter_evaluation(630, shelter_pos, true, 0.9, int(ctx["now_ms"]))
+  var margin := _FleeScoring.race_margin(body.global_position, shelter_pos, [threat_pos])
+  var open_margin := _FleeScoring.race_margin(body.global_position, Vector3(150.0, 1.0, 0.0), [threat_pos])
+  _assert(margin > 0.0 and margin < open_margin, "fixture: race won, by less than the straight-away open margin")
+  var state := _MotorPlanner.new_state()
+  var wp: Vector3 = (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  _assert(state.get("flee_pick_kind") == &"shelter", "a small-margin won-race shelter beats open ground")
+  _assert(Vector2(wp.x - shelter_pos.x, wp.z - shelter_pos.z).length() < 1.0, "the waypoint lands on the shelter")
+  main.queue_free()
+
+
+## A lost-race shelter is not floored: shelter at (-35, 40) with the threat 60u west (margin ~-0.06).
+## Separation gain is zeroed and the shelter bonus raised so the race term decides — flooring it at
+## the straight-away open bearing's race term would make the shelter win; unfloored, open ground does.
+func _test_flee_lost_race_shelter_race_term_not_floored() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var threat_pos := Vector3(-60.0, 1.0, 0.0)
+  var shelter_pos := Vector3(-35.0, 1.0, 40.0)
+  var setup := _flee_belief_test_setup(main, threat_pos)
+  var motor_v3: Dictionary = setup["motor_v3"]
+  motor_v3["awareness_radius"] = 150.0
+  motor_v3["flee_separation_gain"] = 0.0
+  motor_v3["flee_shelter_bias_bonus"] = 0.5
+  var ctx: Dictionary = setup["ctx"]
+  ctx["space_state"] = null
+  var body: CharacterBody3D = setup["body"]
+  setup["adapter"].record_shelter_evaluation(631, shelter_pos, true, 0.9, int(ctx["now_ms"]))
+  var margin := _FleeScoring.race_margin(body.global_position, shelter_pos, [threat_pos])
+  _assert(margin < 0.0, "fixture: race to the shelter is lost")
+  var state := _MotorPlanner.new_state()
+  (_MotorPlanner as GDScript).call("_mint_flee_waypoint", ctx, state, body, motor_v3)
+  _assert(state.get("flee_pick_kind") == &"open", "a lost-race shelter's race term is not floored: open ground wins")
+  main.queue_free()
+
+
+## Chokes are NOT race-term floored (they intentionally do not auto-win): a won-race choke at the
+## matrix case 1 spot (-20, 50) (margin ~0.09) loses to straight-away open ground at the default
+## credit, and — the sensitive case — even with a shelter-equivalent separation credit (1.0), where
+## it matches the shelter on separation and trails open ground only on the race term (~201.5 vs
+## 202.5); a shelter-style race floor would add ~+6.9 and flip it.
+func _test_flee_small_margin_won_choke_race_term_not_floored() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var spot := Vector3(-20.0, 1.0, 50.0)
+  var choke_default := _flee_choke_credit_mint(main, spot, -1.0)
+  var choke_full := _flee_choke_credit_mint(main, spot, 1.0)
+  _assert(float(choke_default["margin"]) > 0.0, "fixture: race to the choke is won")
+  _assert(choke_default["kind"] == &"open", "default credit: a small-margin won-race choke loses to open ground")
+  _assert(
+    choke_full["kind"] == &"open",
+    "full separation credit: the choke still loses on the race term (no race-term floor for chokes)",
+  )
   main.queue_free()
 
 
@@ -10985,6 +11351,132 @@ func _test_goal_source_memory() -> void:
   _assert(not dup, "same-goal continuation blocks second write")
   _assert(_GkReg.validate_goal_kind(&"find_food", kinds), "validate_goal_kind core")
   _assert(not _GkReg.validate_goal_kind(&"bogus", kinds), "validate_goal_kind rejects unknown")
+
+
+## Live grasslands-scale playfield bounds (centred on the world origin) used by the locale-quadrant
+## tests below. Returns the `_playfield_bounds`-shaped dictionary `main_3d.gd` recomputes at build.
+func _origin_centred_playfield_bounds() -> Dictionary:
+  var mn := Vector2(-100.0, -100.0)
+  var mx := Vector2(100.0, 103.7)
+  return {"valid": true, "min": mn, "max": mx, "size": mx - mn}
+
+
+## Builds the fallback env grid through the real `Main3D._create_default_open_grid` on an orphaned
+## (never-readied) Main3D instance whose playfield bounds are [param bounds]; an empty dict leaves
+## the bounds unset (invalid → [method Main3D.get_motor_playfield_bounds_min] falls back to (0, 0)).
+func _default_open_grid_for_bounds(bounds: Dictionary) -> EnvironmentGridBaked:
+  var main_script := load("res://main_3d.gd") as Script
+  var main: Node3D = main_script.new()
+  if not bounds.is_empty():
+    main.set("_playfield_bounds", bounds)
+    main.set("_motor_playfield_size", bounds.get("size", Vector2.ZERO))
+  var grid := main.call("_create_default_open_grid") as EnvironmentGridBaked
+  main.free()
+  return grid
+
+
+## Fresh default-pack [MemoryAdapter] (no stack/body) for locale-write tests — same `configure` +
+## `set_goal_catalog` wiring [method CreatureMotorStack.configure] applies, with empty traits/catalog.
+func _locale_test_memory_adapter() -> _MemoryAdapter:
+  var adapter := _MemoryAdapter.new()
+  adapter.configure("", {})
+  adapter.set_goal_catalog({})
+  return adapter
+
+
+## Locale-quadrant fix (2026-09-24): the fallback open grid is anchored at the playfield min so its
+## world extent covers the whole (origin-centred) playfield, not just the +x/+z quadrant.
+func _test_default_open_grid_origin_is_playfield_min() -> void:
+  var grid := _default_open_grid_for_bounds(_origin_centred_playfield_bounds())
+  _assert(grid != null and grid.is_valid_shape(), "default open grid is a valid-shape EnvironmentGridBaked")
+  if grid == null:
+    return
+  _assert(
+    grid.origin_world.is_equal_approx(Vector2(-100.0, -100.0)),
+    "default open grid origin_world is the playfield bounds min (got %s)" % str(grid.origin_world),
+  )
+  _assert(
+    grid.cell_width == 50 and grid.cell_height == 51 and is_equal_approx(grid.cell_size, 4.0),
+    "default open grid keeps ceil(size / 4u) dims (got %dx%d)" % [grid.cell_width, grid.cell_height],
+  )
+  _assert(
+    grid.world_to_cell(Vector2(-99.0, -99.0)) == Vector2i(0, 0)
+    and grid.world_to_cell(Vector2(99.0, 103.0)) == Vector2i(49, 50),
+    "default open grid maps playfield min/max corners to its first/last cells",
+  )
+  var fallback := _default_open_grid_for_bounds({})
+  _assert(
+    fallback != null and fallback.origin_world == Vector2.ZERO,
+    "unset/invalid bounds keep the (0, 0) origin (fallback-floor path unchanged)",
+  )
+
+
+## Locale-quadrant fix (2026-09-24): `anchor_cell_in_bounds` uses the env grid's own world→cell
+## conversion, so find_food and avoid_hostiles locale writes land in every quadrant of an
+## origin-shifted grid, and anchors outside the grid's world extent are refused.
+func _test_locale_writes_succeed_in_all_quadrants_of_origin_shifted_grid() -> void:
+  var grid := _default_open_grid_for_bounds(_origin_centred_playfield_bounds())
+  var motor_v3 := _motor_v3_test_params()
+  var anchors: Array = [
+    Vector3(60.0, 0.0, 60.0),
+    Vector3(-60.0, 0.0, 60.0),
+    Vector3(-60.0, 0.0, -60.0),
+    Vector3(60.0, 0.0, -60.0),
+  ]
+  for anchor_v in anchors:
+    var anchor: Vector3 = anchor_v
+    var adapter := _locale_test_memory_adapter()
+    var cell := _GoalMem.grid_indices_for_anchor(anchor, motor_v3)
+    adapter.notify_food_consumption_outcome(anchor, false, motor_v3, grid)
+    var food_stats: Dictionary = adapter.get_locale_store().locale_row_stats_at(
+      _GkReg.GK_FIND_FOOD, anchor, motor_v3
+    )
+    _assert(
+      bool(food_stats.get("found", false)),
+      "find_food locale write lands at %s (cell %s)" % [str(anchor), str(cell)],
+    )
+    _assert(
+      adapter.notify_flight_escape_outcome(anchor, motor_v3, grid),
+      "avoid_hostiles locale write lands at %s (cell %s)" % [str(anchor), str(cell)],
+    )
+  var oob_adapter := _locale_test_memory_adapter()
+  for oob_v in [Vector3(150.0, 0.0, 0.0), Vector3(-150.0, 0.0, -150.0), Vector3(0.0, 0.0, 110.0)]:
+    var oob: Vector3 = oob_v
+    _assert(
+      not _GoalMem.anchor_cell_in_bounds(oob, motor_v3, grid),
+      "anchor %s outside the grid's world extent is out of bounds" % str(oob),
+    )
+    _assert(
+      not oob_adapter.notify_flight_escape_outcome(oob, motor_v3, grid),
+      "avoid_hostiles write refused at out-of-extent anchor %s" % str(oob),
+    )
+    oob_adapter.notify_food_consumption_outcome(oob, false, motor_v3, grid)
+    _assert(
+      not bool(oob_adapter.get_locale_store().locale_row_stats_at(_GkReg.GK_FIND_FOOD, oob, motor_v3).get("found", false)),
+      "find_food write refused at out-of-extent anchor %s" % str(oob),
+    )
+
+
+## Locale-quadrant fix (2026-09-24): a find_food row written in the −x/−z quadrant is consultable —
+## `consult_locale_seek` goes active and points at that negative-index cell's centre.
+func _test_locale_seek_consults_negative_quadrant_row() -> void:
+  var grid := _default_open_grid_for_bounds(_origin_centred_playfield_bounds())
+  var motor_v3 := _motor_v3_test_params()
+  var adapter := _locale_test_memory_adapter()
+  var food_anchor := Vector3(-60.0, 0.0, -60.0)
+  adapter.notify_food_consumption_outcome(food_anchor, false, motor_v3, grid)
+  var cell := _GoalMem.grid_indices_for_anchor(food_anchor, motor_v3)
+  _assert(cell.x < 0 and cell.y < 0, "sanity: −x/−z anchor maps to a negative locale cell (got %s)" % str(cell))
+  var coverage := _GoalMem.coverage_cell_from_motor(motor_v3)
+  var cell_center := Vector3((float(cell.x) + 0.5) * coverage, 0.0, (float(cell.y) + 0.5) * coverage)
+  var consult := adapter.consult_locale_seek(Vector3(-40.0, 0.0, -40.0), motor_v3, grid)
+  _assert(bool(consult.get("active", false)), "consult_locale_seek is active for a −x/−z find_food row")
+  var consult_anchor: Vector3 = consult.get("anchor", Vector3.ZERO)
+  _assert(
+    consult_anchor.distance_to(cell_center) < 0.01,
+    "consult_locale_seek anchors at the negative cell centre %s (got %s)" % [str(cell_center), str(consult_anchor)],
+  )
+
 
 func _test_ground_sampler_center_lower_than_rim() -> void:
   var pack: Dictionary = await _grasslands_playfield_with_sampler()

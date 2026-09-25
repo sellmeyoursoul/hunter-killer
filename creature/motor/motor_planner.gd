@@ -3189,6 +3189,8 @@ static func _mint_flee_waypoint(
         "bonus": 0.0,
         "belief": false,
         "kind": &"open",
+        # i == 0 is `base_dir` itself; its race term is the won-shelter floor reference below.
+        "straight_away": i == 0,
       })
     candidates.append_array(_flee_belief_candidates(ctx, body, creature_pos, flee_dist, motor_v3))
     if has_prior_flee_dir:
@@ -3210,6 +3212,13 @@ static func _mint_flee_waypoint(
     var best_clear_path := PackedVector3Array()
     var best_clear_kind: StringName = &"open"
     var found_clear := false
+    # Won-race shelter race-term floor (user tuning fix 2026-09-25, `_FleeScoring
+    # .shelter_race_won_race_term`): the straight-away open bearing's race term this mint. It is the
+    # first candidate in the pool, so it is always set before any shelter belief is scored.
+    var open_ref_race_term := -INF
+    # "Race won" needs a trait-scaled minimum margin, not merely > 0 (user decision 2026-09-25,
+    # `_FleeScoring.race_won_min_margin`): Change tolerates a closer race, Stability sheers off.
+    var flee_traits: Dictionary = ctx.get("traits", {})
     for cand_v in candidates:
       var cand: Dictionary = cand_v
       var candidate_dir: Vector3 = cand["dir"]
@@ -3239,14 +3248,28 @@ static func _mint_flee_waypoint(
       var endpoint: Vector3 = probe.get("endpoint", creature_pos)
       var cand_path: PackedVector3Array = probe.get("path", PackedVector3Array())
       var margin := _FleeScoring.race_margin(creature_pos, endpoint, threat_pts)
+      if bool(cand.get("straight_away", false)):
+        open_ref_race_term = _FleeScoring.race_term(margin, motor_v3)
       # Separation term (decision 44 follow-up A): every candidate scores how much farther from its
-      # nearest threat it ends than the creature is now; ending closer is penalised. Exception: a
-      # shelter the creature wins the race to (margin > 0) is credited a full escape (1.0).
+      # nearest threat it ends than the creature is now; ending closer is penalised. Exceptions: a
+      # shelter the creature wins the race to (margin above the trait-scaled minimum) is credited a
+      # full escape (1.0); a choke it wins the race to gets a partial floor
+      # (`flee_choke_race_won_separation_credit`, user decision 2026-09-24: more weight, but not an
+      # automatic win).
       var separation := _FleeScoring.separation_gain(
         creature_pos, endpoint, threat_pts, cand_dist if rescaled else flee_dist,
       )
-      if cand_kind == &"shelter" and _FleeScoring.shelter_race_won(margin):
+      # A won-race shelter's race term is also floored at the straight-away open bearing's, so a
+      # refuge it reaches first never trails open ground on the race axis (user tuning fix
+      # 2026-09-25). Chokes and locale cells are deliberately not floored.
+      var race_term_floor := -INF
+      if cand_kind == &"shelter" and _FleeScoring.shelter_race_won(margin, motor_v3, flee_traits):
         separation = 1.0
+        race_term_floor = _FleeScoring.shelter_race_won_race_term(
+          margin, open_ref_race_term, motor_v3, flee_traits
+        )
+      elif cand_kind == &"choke":
+        separation = _FleeScoring.choke_race_won_separation(margin, separation, motor_v3, flee_traits)
       # Decision 23: a route with at least one object this creature fits through but the threat
       # doesn't earns an additive detour-forcing bonus on top of whatever bonus this candidate
       # already carries (0.0 for a plain open bearing) — same race-gated shape as the belief
@@ -3254,7 +3277,9 @@ static func _mint_flee_waypoint(
       var cand_bonus := float(cand["bonus"])
       if bool(probe.get("detour_forcing", false)):
         cand_bonus += float(motor_v3.get("flee_detour_forcing_bonus", 0.15))
-      var effective := _FleeScoring.effective(score_reach, flee_dist, margin, cand_bonus, motor_v3, separation)
+      var effective := _FleeScoring.effective(
+        score_reach, flee_dist, margin, cand_bonus, motor_v3, separation, race_term_floor,
+      )
       if bool(cand.get("incumbent", false)):
         effective *= 1.0 + maxf(0.0, float(motor_v3.get("flee_incumbent_bearing_bonus", 0.25)))
       if effective > best_effective:

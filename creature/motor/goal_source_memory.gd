@@ -136,18 +136,21 @@ static func grid_indices_for_anchor(anchor: Vector3, motor_p: Dictionary) -> Vec
   )
 
 
-## Returns [code]false[/code] when [param env_grid] is missing/invalid or anchor cell is OOB ([CREATURE_MEMORY.md §2.1.1](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)).
-static func anchor_cell_in_bounds(anchor: Vector3, motor_p: Dictionary, env_grid: Variant) -> bool:
+## Returns [code]false[/code] when [param env_grid] is missing/invalid or [param anchor] lies outside
+## the grid's world extent ([CREATURE_MEMORY.md §2.1.1](../../Project_Docs/Draft_Features/CREATURE_MEMORY.md)).
+## The bounds test uses the grid's own world→cell conversion ([method EnvironmentGridBaked.world_to_cell]:
+## its `origin_world` + `cell_size`), so it holds in every quadrant of an origin-shifted grid — it is
+## deliberately independent of the 52u coverage cell used for locale row identity
+## ([method grid_indices_for_anchor], which may be negative). [param _motor_p] is unused (kept for
+## call-site compatibility). Example: `anchor_cell_in_bounds(Vector3(-40, 0, -40), motor_v3, grid)`.
+static func anchor_cell_in_bounds(anchor: Vector3, _motor_p: Dictionary, env_grid: Variant) -> bool:
   if env_grid == null or not (env_grid is _EnvGrid):
     return false
   var grid := env_grid as EnvironmentGridBaked
-  if not grid.is_valid_shape():
+  if not grid.is_valid_shape() or grid.cell_size <= 0.0:
     return false
-  var coverage_cell := coverage_cell_from_motor(motor_p)
-  var rel := Vector2(anchor.x, anchor.z)
-  var cx := int(floorf(rel.x / coverage_cell))
-  var cy := int(floorf(rel.y / coverage_cell))
-  return cx >= 0 and cy >= 0 and cx < grid.cell_width and cy < grid.cell_height
+  var c := grid.world_to_cell(_MotorPlane.to_grid_world(anchor))
+  return c.x >= 0 and c.y >= 0 and c.x < grid.cell_width and c.y < grid.cell_height
 
 
 static func context_hash_for_find_food(

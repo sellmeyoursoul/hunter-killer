@@ -1295,6 +1295,13 @@ func _ensure_environment_grid() -> void:
   environment_grid = _create_default_open_grid()
 
 
+## Builds the fallback all-open [EnvironmentGridBaked] (4u cells, every cell `passible`, zero impact)
+## sized to [method get_motor_playfield_size] and anchored at [method get_motor_playfield_bounds_min],
+## so the grid's world extent matches the playfield in every quadrant — the live grasslands playfield
+## is centred on the world origin (min ≈ (−100, −100)), and a (0, 0) origin left 3/4 of it outside the
+## grid, silently refusing locale salient writes there (`GoalSourceMemoryStore.anchor_cell_in_bounds`).
+## Must run after [method _build_playfield] (bounds recomputed); the fallback-floor path's min is (0, 0).
+## Returns the new grid (never null). Example: `environment_grid = _create_default_open_grid()`.
 func _create_default_open_grid() -> Resource:
   var sz := get_motor_playfield_size()
   var cell_world := 4.0
@@ -1308,7 +1315,7 @@ func _create_default_open_grid() -> Resource:
   grid.cell_width = cw
   grid.cell_height = ch
   grid.cell_size = cell_world
-  grid.origin_world = Vector2.ZERO
+  grid.origin_world = get_motor_playfield_bounds_min()
   grid.kind_presets = [open]
   var ids := PackedInt32Array()
   ids.resize(cw * ch)

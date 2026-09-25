@@ -418,12 +418,34 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     ## endpoint to the NEAREST threat - that distance from where the creature stands now) / flee_dist
     ## (shelter/choke: / their own probed distance, mirroring their reach rescale), clamped +-1.
     ## Ending closer to the threat than now is penalised; a shelter the creature wins the race to
-    ## (margin > 0) is credited 1.0 instead. 0.25 = each unit of separation gained is worth a quarter
+    ## (margin > trait-scaled `flee_race_won_min_margin`) is credited 1.0 instead. 0.25 = each unit of separation gained is worth a quarter
     ## unit of reachable travel: large enough that a straight-away open bearing (separation ~ 1)
     ## beats a candidate that ends closer to the threat (e.g. the 2026-09-24 repro: -0.08) by
-    ## ~0.27 x flee_dist on this term alone, small enough that a choke point ~14u off-axis
-    ## (separation ~0.4 after rescale) still wins its existing decision-20 test (limit ~0.33).
+    ## ~0.27 x flee_dist on this term alone, small enough that a choke point ~14u off-axis still
+    ## wins its existing decision-20 fit-gate test: it wins that race (margin ~0.17), so its raw
+    ## ~0.41 separation is floored at the 0.5 choke credit below, and the test holds up to a gain
+    ## of ~0.326 (~0.279 with the credit at 0).
     "flee_separation_gain": 0.25,
+    ## User decision 2026-09-24 ("more weight, but not automatically win"): a choke point the
+    ## creature wins the race to (margin > trait-scaled `flee_race_won_min_margin`) has its separation floored at this value —
+    ## `max(actual separation, credit)` — instead of the shelter's full 1.0 credit; a lost race
+    ## keeps the ordinary term. 0.5 = half a straight-away escape: a choke only slows the pursuer
+    ## (it must detour), a won-race shelter ends the chase. Worth at most +0.125 x flee_dist over
+    ## no credit (0.25 gain x 0.5), which is less than the 0.25 x flee_dist a straight-away open
+    ## bearing earns on this term, so an unobstructed full-reach open bearing is not beaten on
+    ## separation alone. Clamped to [0, 1].
+    "flee_choke_race_won_separation_credit": 0.5,
+    ## User decision 2026-09-25 (matrix case c4): a flee race to a shelter/choke only counts as
+    ## "won" (shelter separation credit 1.0, shelter race-term floor, choke credit above) when the
+    ## worst-case race margin exceeds this minimum — a hard > 0 cutoff let float-noise dead heats
+    ## win. Base value at neutral `change_stability`; scaled by lerp(scale_min, scale_max, t) with
+    ## t = clamp((cs + 100) / 200, 0, 1), same convention as `food_handoff_starvation_margin_*`:
+    ## Change (-100) 0.02, neutral 0.04, Stability (+100) 0.06. 0.04 clears the c4 dead heat while
+    ## keeping c2 (m ~0.09) and c3 (m ~0.056) won at neutral; full Stability drops c3 (sheers off
+    ## to open ground). `belief_race_factor` / race_term are not affected. Clamped to >= 0.
+    "flee_race_won_min_margin": 0.04,
+    "flee_race_won_min_margin_scale_min": 0.5,
+    "flee_race_won_min_margin_scale_max": 1.5,
     ## Decision 44 follow-up C (2026-09-24): re-acquisition failure proxy window (wall-clock
     ## seconds, same clock as the rest of the stack — pausing does not stop it). A new acute Flight
     ## episode starting within this long after a Flight exit, within one coverage cell of that exit
