@@ -4,7 +4,7 @@
 >
 > **Read order:** [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) (why traits exist) → **this file** (where code reads them) → [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) §2.2 / §14 (replay projection) → [CREATURE_MOVEMENT_V2.md](../Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1 / §A.4 (motor bands; traits pointer).
 >
-> **Implementation snapshot (repo):** Four `@export_range(-100, 100)` ints on [`creature_definition.gd`](../../creature/definition/creature_definition.gd). **Spawn-fixed** (copied once per body into `_goal_memory_meta_for_body` — no per-tick mutation). **Live:** Slot A replay + Slot B **`change_stability`** rank bias + salient-write trait dict passthrough + **post-6d-explore-prey (shipped)** prey engagement latch duration (D10 — [CREATURE_MOVEMENT_V3.md §12.2](../Draft_Features/CREATURE_MOVEMENT_V3.md)). **Stub:** Tier-2 **`tier2_urgency_channels`** ([`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) zero deltas). **Not traits:** Preserve/Find bands, flee/jeopardy ticks, compassion/community motor fields.
+> **Implementation snapshot (repo):** Four `@export_range(-100, 100)` ints on [`creature_definition.gd`](../../creature/definition/creature_definition.gd). **Spawn-fixed** (copied once per body into `_goal_memory_meta_for_body` — no per-tick mutation). **Live:** Slot A replay + Slot B **`change_stability`** rank bias + salient-write trait dict passthrough + **post-6d-explore-prey (shipped)** prey engagement latch duration (D10 — [CREATURE_MOVEMENT_V3.md §12.2](../Draft_Features/CREATURE_MOVEMENT_V3.md)) + **`change_stability`** flee "race won" tolerance (2026-09-25 — [PHYSICS_SQUEEZE.md decision 45 M](../Draft_Features/PHYSICS_SQUEEZE.md)). **Stub:** Tier-2 **`tier2_urgency_channels`** ([`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) zero deltas). **Not traits:** Preserve/Find bands, flee/jeopardy ticks, compassion/community motor fields.
 
 ---
 
@@ -13,7 +13,7 @@
 | Export | −100 pole | +100 pole | `CreatureDefinition` default |
 |--------|-----------|-----------|----------------------------|
 | `explorer_builder` | Explorer | Builder | `0` |
-| `change_stability` | Change | Stability | `0` |
+| `change_stability` | Change(high risk) | Stability(low risk) | `0` |
 | `compassion_self_interest` | Compassion | Self-interest | `0` |
 | `community_individual` | Community | Individual | `0` |
 
@@ -61,6 +61,7 @@ Slot A uses **eight global pole ids** on each `LocalePriorMap` row (`pole_facet_
 | **Slot A replay (personality pull)** | All four via **pole facet** alignment on stored `pole_facet_tag` | [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — `slot_a_raw_for_pole`, `effective_slot_a`, `consult_replay_weight` |
 | **Slot B rank bias (novelty vs proven)** | **`change_stability` only** | [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — `_replay_rank_bundle` → `trait_rank_bias` |
 | **Prey engagement latch duration** *(post-6d-explore-prey — shipped)* | **`change_stability` only** | [`motor_planner.gd`](../../creature/motor/motor_planner.gd) — effective latch ticks at arm/refresh; keys in `creature_motor_v3` — [CREATURE_MOVEMENT_V3.md §12.2 D10](../Draft_Features/CREATURE_MOVEMENT_V3.md) |
+| **Flee "race won" tolerance** *(shipped 2026-09-25)* | **`change_stability` only** | [`flee_candidate_scoring.gd`](../../creature/motor/flee_candidate_scoring.gd) — `race_won_min_margin(traits, motor_v3)` → `shelter_race_won` (also `choke_race_won_separation`, `shelter_race_won_race_term`); called from [`motor_planner.gd`](../../creature/motor/motor_planner.gd) `_mint_flee_waypoint` with `ctx["traits"]` (built by [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) `_traits_from_body()`). Minimum race margin for a flee race to a shelter/choke to count as won: `t = clamp((cs + 100) / 200, 0, 1)`, `min = max(0, flee_race_won_min_margin × lerp(scale_min, scale_max, t))`; defaults 0.04 × 0.5…1.5 → Change 0.02 / neutral 0.04 / Stability 0.06. Change tolerates a closer race; Stability sheers off to open ground. Keys in `creature_motor_v3` — [PHYSICS_SQUEEZE.md decision 45 M](../Draft_Features/PHYSICS_SQUEEZE.md), [CREATURE_MEMORY.md §10](../Draft_Features/CREATURE_MEMORY.md). **No species `.tres` sets `change_stability` today**, so every live creature is neutral. |
 | **Salient write metadata** | Passed through on outcome hooks (poles validated at write) | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_goal_memory_meta_for_body` → `try_salient_write` |
 | **Believed goal pull** | Same as consult replay when `context_hash` matches | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_apply_believed_goal_bias_to_ctx` |
 | **Tier-2 urgency channels** | **Stub — zero delta** | [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) — `apply_trait_urgency_channels` returns base only |
@@ -138,6 +139,7 @@ replay_weight  = stored_strength * (1 + replay_delta / 100)
 
 | Date | Change |
 |------|--------|
+| 2026-09-25 | **Flee race-won tolerance:** `change_stability` scales the minimum race margin that counts as a won flee race to a shelter/choke (`FleeCandidateScoring.race_won_min_margin`; keys `flee_race_won_min_margin` 0.04, `_scale_min` 0.5, `_scale_max` 1.5). §3 row + snapshot added; cross-link PHYSICS_SQUEEZE decision 45 M. |
 | 2026-07-09 | **D10 / post-6d-explore-prey:** `change_stability` scales prey engagement latch duration (tactic persistence — not hub); cross-link MOVEMENT §12.2. |
 | 2026-06-04 | D.4 completion: spawn read path, pole↔axis table, replay motor keys, phase-1 vs spec note; cross-links MOVEMENT §A.4. |
 | 2026-06-04 | Initial tier III map (Phase D): four traits, Slot A/B live paths, Tier-2 urgency stub. |

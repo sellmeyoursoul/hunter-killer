@@ -131,7 +131,7 @@ These appear in the same [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MOD
 | `speed` | **Live** — `creature_speed` in motor lookahead | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §4 |
 | `size` / `creature_size` | **Live** — squeeze, shrub slowdown, motor `creature_size` | [OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md), [ENVIRONMENT_MODEL_PLAN.md](./ENVIRONMENT_MODEL_PLAN.md) |
 | `weight` | **Reserved** — env `crush_weight` future | [ENVIRONMENT_MODEL_PLAN.md](./ENVIRONMENT_MODEL_PLAN.md) §4 |
-| Motivation traits (−100…+100) | **Partial** — Slot A/B replay; Tier-2 urgency stub | [CREATURE_TRAIT_USAGE.md](./CREATURE_TRAIT_USAGE.md), [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) |
+| Motivation traits (−100…+100) | **Partial** — Slot A/B replay; `change_stability` V3 motor scalars (see CREATURE_TRAIT_USAGE §3); Tier-2 urgency stub | [CREATURE_TRAIT_USAGE.md](./CREATURE_TRAIT_USAGE.md), [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) |
 
 ---
 
@@ -152,3 +152,4 @@ These appear in the same [CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MOD
 | 2026-09-12 | Observation §3.5 gains a **Live (partial)** consumer: predator prey-race giveaway — `stat_observation` (same stub shape as Composure, point pool always full) scales how many non-closing re-arm ticks a predator tolerates before excluding a live-but-unwinnable chase. See [CREATURE_MOVEMENT_V3.md §3](../Draft_Features/CREATURE_MOVEMENT_V3.md) "prey-race giveaway". |
 | 2026-09-15 | Added top-level **Curve conventions** pointer (`CreatureStatCurve.saturating` default vs. `StatMath`'s multi-peg table technique). Dexterity §3.8 promoted to **Specified**: turn-rate curve pegged at dexterity 1/10/25 (183.7/691.6/1350.0 deg/sec), unifying goal-directed movement's continuous turn law with boundary-scan/eat-orbit's discrete stepping — implementation not started. See [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9](../Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md). |
 | 2026-09-15 | Curve conventions revised: single curve (`StatMath.peg_curve`) for all stat-driven scalars — `CreatureStatCurve.saturating` retired, Composure/Observation migrated. Dexterity §3.8 promoted to **Live**: turn-rate curve wired via `creature_motor_stack.gd::_refresh_move_turn_rate`, unifying goal-directed movement and boundary-scan/EAT-orbit onto one dexterity-derived rate. See [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9](../Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) "Implemented" for the full writeup. |
+| 2026-09-25 | Motivation-traits row (§5) now notes the `change_stability` V3 motor scalars (prey latch, flee "race won" tolerance), pointing to [CREATURE_TRAIT_USAGE.md §3](./CREATURE_TRAIT_USAGE.md). |
