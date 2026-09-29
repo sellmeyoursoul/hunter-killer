@@ -74,7 +74,7 @@
 | `seed_choke_rate` | float | Rate at which this species displaces existing plants in target cell |
 | `movement_impact` | float | % speed reduction for creatures passing through |
 | `fit_size` | float | Creatures smaller than this bypass slowdown |
-| `crush_weight` | float | Creature weight above this destroys plant (0 = indestructible by crush—clarify vs ENVIRONMENT) |
+| `crush_weight` | float | Creature weight above this destroys plant (0 = indestructible by crush—clarify vs ENVIRONMENT). **Navmesh interaction (2026-09-28):** solid shrubs currently carve the shared playfield navmesh ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md) §4h, decision 46 B). A crushable shrub probably shouldn't. This is undecided and part of the open per-size navmesh conversation ([ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) "Crushable shrubs vs the navmesh bake"). |
 
 ### Methods
 

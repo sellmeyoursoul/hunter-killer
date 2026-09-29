@@ -8,10 +8,13 @@ Purpose: Working spec for ENGINE creature movement and goal refactor (V3). **Aut
 
 # Definitions
 
-1. **Safety** — **State** (not an action): `safety_time` consecutive **goal-consideration cycles** (not physics ticks — §10) with no danger in the **full** zone of awareness (cone + area — §8.1; default `safety_time` = 5; tune in playtest). **Danger** = **live** hostile in zone (LoS clear) **or** valid **threat ghost** (§8.1). Required before the **`REST` action** may begin (§6.1). Pending Safety may therefore require up to **`safety_time × n`** physics ticks minimum (§6.1). **`safety_time` continues to advance during Flight fast-path** (§6.3, §10). When Safety state ends, **`REST` requirements are no longer met** — hub stops emitting `REST` each tick (§6.1, §7.2). Distinct from **`STAY`** (Definitions §5).
+1. **Safety** — **State** (not an action): `safety_time` consecutive **goal-consideration cycles** (not physics ticks — §10) with no danger in the **full** zone of awareness (cone + area — §8.1; default `safety_time` = 5; tune in playtest). **Danger** = **live** hostile in zone (LoS clear) **or** valid **threat ghost** (§8.1). **While the Flight latch is held** (2026-09-29), danger also includes a **remembered hostile**: an `avoid_hostiles` belief seen within `flight_threat_memory_sec` whose believed position is within `flight_acute_panic_radius × (1 + flight_release_margin_frac)` (§6.3). Required before the **`REST` action** may begin (§6.1). Pending Safety may therefore require up to **`safety_time × n`** physics ticks minimum (§6.1). **`safety_time` continues to advance during Flight fast-path** (§6.3, §10). When Safety state ends, **`REST` requirements are no longer met** — hub stops emitting `REST` each tick (§6.1, §7.2). Distinct from **`STAY`** (Definitions §5).
 2. **Clear path** — LoS ray **and** capsule/corridor sweep both pass (see §3 Movement Weighing tree).
 3. **Step** — A discrete sub-task toward an active goal (e.g. Eat: move past boulder → move to shrub → EAT). **Completion:** all objectives for the step are satisfied.
-4. **Objective** — Exit criteria for the active step (world position or non-movement action target). **Completion:** creature reaches the position (within **`arrival_tolerance`**, same as **`action_max_distance`** when set — §7.2) or completes the bound action.
+4. **Objective** — Exit criteria for the active step (world position or non-movement action target). **Completion:** creature reaches the position (within **`arrival_tolerance`**, same as **`action_max_distance`** when set — §7.2) or completes the bound action. **Clarified 2026-09-28 ([PHYSICS_SQUEEZE.md decision 46 E/F](PHYSICS_SQUEEZE.md)):**
+   - "Reaches" is measured **horizontally** (XZ, `MotorPlane.horizontal_distance`). A body's position is its capsule centre, ~7.7 m up for the wolf.
+   - Arrival is judged at the **objective itself** (`step_ultimate_pos`), not at a navmesh sub-step (`step_goal` hop). Reaching an intermediate hop only re-resolves the next hop.
+   - Applies to hop-routed steps (`live` / `locale` / `locale_search` / `precise` / `memory_moving` under `find_food`, `precise` under `shelter`). See [CLEANUP `step_ultimate_pos` contract](CREATURE_MOVEMENT_V3_CLEANUP.md#resolved--overshoot-guard-layer-1).
 5. **Action** — One atomic unit per physics tick (`MOVE_*`, `TURN_*`, `EAT`, `REST`, `STAY`, etc.). **ENGINE** creatures emit at most **one** action per tick (see §7). Non-movement actions may carry **`action_max_distance`** (world units) — max range to bind target; **`null` / unset** = cannot interact at distance (§7.2). **`STAY`** — no movement, full awareness, baseline metabolism (§7.5); empty goal table (§10) or Rest pending Safety (§6.1). **`REST`** — deliberate recovery under Rest goal + §6.1 only; half baseline; cone off while selected (§8.1). Human-player input mapping is **deferred** — working cadence assumptions in §7.
 6. **Cone of awareness** — Forward-facing **3D** observation cone from the eye ray origin (§8.1), limited by line of sight — no seeing through solids.
 7. **Area of awareness** — **Spherical** observation radius around the creature (§8.1), limited by line of sight — no seeing through solids.
@@ -343,7 +346,11 @@ flowchart TD
 
 **Resolved — “clear corridor”:** Same test as legacy Movement Weighing root — LoS ray **`los_blocked_occlusion_fraction`** (§3 unified **0.80**) **and** capsule / corridor AABB sweep toward **`step_goal`**. Headless: corridor sweep when raycast absent (§3 headless rule).
 
-**Resolved — “solid” obstruction (v1):** Static colliders **`world_static`**, navmesh-unreachable segments, and **playfield edge clamp** (footprint would leave bounds — treat rim as solid for this tree). Rewrites **`step_goal`** via navmesh-first substep ([`motor_path_clear.gd`](../../creature/motor/motor_path_clear.gd) `resolve_step_objective`) or mode-specific rim rules (§7.3 explore).
+**Resolved — “solid” obstruction (v1):** Static colliders **`world_static`**, navmesh-unreachable segments, and **playfield edge clamp** (footprint would leave bounds — treat rim as solid for this tree). Rewrites **`step_goal`** via navmesh-first substep ([`motor_path_clear.gd`](../../creature/motor/motor_path_clear.gd) `resolve_step_objective`) or mode-specific rim rules (§7.3 explore). **Substep rule (2026-09-25, [PHYSICS_SQUEEZE.md decision 46 E](PHYSICS_SQUEEZE.md)):**
+- The path query starts at `MotorPathClear.nav_query_origin`, the navmesh point under the body, not its raised capsule centre.
+- The substep is the first path point more than `MIN_HOP_DISTANCE` (2 m) away **horizontally**. It falls back to the ultimate when there is no map, no path, or the ultimate is within 2 m.
+- A route scan truncated onto the creature's own position is treated as a dead end at the pursuit-detour, memory-pursuit-detour and locale-search mint sites; explore rotates its bearing instead.
+- **Live navmesh note:** until 2026-09-25 the live bake had zero polygons (decision 46 B), so in live play every substep fell back to the raw target.
 
 **Resolved — “reevaluate” split:** Two timescales — **fast** (same tick / next ticks): secondary objectives in zone, backtrack detour, §9 persist/switch/seek, explore replan; **slow** (consideration cycle §10): hub re-scores goals. §3.2 is the **expanded** fast+slow branch; §3.1 is the **default happy path**.
 
@@ -464,7 +471,7 @@ Legacy ASCII for **blocked-primary** and **seek** branches — invoked from §3.
 
 | Artifact | Path | Role |
 |----------|------|------|
-| **Fixture builder** | [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) (new) | Headless-only: spawn flat walkable floor + `NavigationRegion3D`, **sync bake**, return valid `map_rid` |
+| **Fixture builder** | [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd) (new) | Headless-only: spawn flat walkable floor + `NavigationRegion3D`, **sync bake**, return valid `map_rid`. Since 2026-09-25 the mesh is also pushed to the server explicitly, and tests `await MotorPathFixture.await_nav_ready(built)` (or `await_region_nav_ready`) before querying: the map syncs a few frames after the bake. |
 | **Layout variants** | same module | **`open`** — clear floor nav path; **`blocked`** — floor + static AABB wall for backtrack / detour slices; **`pursuit_pinch`** — [CLEANUP](CREATURE_MOVEMENT_V3_CLEANUP.md) carnivore–prey obstacle smoke (proposed) |
 | **Main stub hook** | extend [`tests/terrain_test_main_stub.gd`](../../tests/terrain_test_main_stub.gd) | Add **`get_navigation_map_rid()`** delegating to active fixture (same contract as `main_3d`) |
 | **Cleanup hub** | [CREATURE_MOVEMENT_V3_CLEANUP.md](CREATURE_MOVEMENT_V3_CLEANUP.md) | Bug/gap design; headless smoke extensions beyond `open` / `blocked` |
@@ -859,16 +866,26 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 - **Squeeze tradeoff:** weigh danger distance vs calorie count when boxed in — separate from starvation override in GOAL_DRIVERS (anticipatory, not dominance flip).
 - **Urgency:** §1 — `urgency_flight` from `gate_dist` geometry × creature-global **`threat_disposition_mod`** × combat **`relative_threat_mod`** (v1 stubs **1.0** on disposition/combat terms).
 - Outcome Hook: danger no longer in the zone of awareness for X ticks of the Goal consideration cadence, where X is the value safety_time (default 5, number to be tuned in playtesting.)
-  - **Wired (2026-09-24):** the Outcome Hook now fires on `flight_just_exited` via `CreatureMotorStack._on_flight_exited()`, keyed to the body position at exit. It (1) promotes a nearby `observed`/`confirmed` shelter belief to `battle_tested` (`MemoryAdapter.notify_flight_escaped_near_shelter`, radius `arrival_tolerance`) and (2) writes a success-tier `avoid_hostiles` locale row at the body cell (`MemoryAdapter.notify_flight_escape_outcome`; §15.3). Design: [PHYSICS_SQUEEZE.md §3 decisions 9/44](PHYSICS_SQUEEZE.md).
+  - **Deferred commit (2026-09-29, [PHYSICS_SQUEEZE.md decision 46 H](PHYSICS_SQUEEZE.md), user-approved option 5).**
+    - `_on_flight_exited()` now only records a **pending** exit (position + time).
+    - `_commit_pending_flight_exit_if_confirmed()` runs the outcomes below once `flight_exit_confirm_sec` (2.0 s, wall clock) has passed with no Flight re-entry, and arms the re-acquisition proxy. The withheld clean-exit disposition nudge is applied at the same time.
+    - If Flight re-enters inside the window, `_on_flight_entered()` **cancels** the pending exit: no SUCCESS, no FAILURE, no shelter promotion, no disposition nudge (the entry nudge is suppressed too). The episode just continues.
+    - A window ≤ 0 commits at once (pre-fix behaviour).
+    - The bullets below describe what the **commit** does.
+  - **Wired (2026-09-24):** the Outcome Hook now fires on `flight_just_exited` via `CreatureMotorStack._on_flight_exited()` (since 2026-09-29, on the deferred commit above), keyed to the body position at exit. It (1) promotes a nearby `observed`/`confirmed` shelter belief to `battle_tested` (`MemoryAdapter.notify_flight_escaped_near_shelter`, radius `arrival_tolerance`) and (2) writes a success-tier `avoid_hostiles` locale row at the body cell (`MemoryAdapter.notify_flight_escape_outcome`; §15.3). Design: [PHYSICS_SQUEEZE.md §3 decisions 9/44](PHYSICS_SQUEEZE.md).
   - **Promotion semantics (2026-09-24, PHYSICS_SQUEEZE decision 45 E).** Only the **nearest** non-failed shelter within `arrival_tolerance` is considered; if it is already `battle_tested` the call is a no-op. On promotion the row gets `fit_confirmed = true` and a bumped `last_observed_ms`, and keeps its `shelter_fail_count` as history. The call returns the promoted instance id (0 = none).
   - **Re-acquisition failure proxy (2026-09-24, decision 45 C).**
-    - **Arming.** The exit also arms an anchor: body position plus time, reset in `configure()`.
+    - **Arming.** The exit also arms an anchor: body position plus time, reset in `configure()`. Since 2026-09-29 the anchor is armed only when the exit **commits**; the window is still timed from the exit.
     - **Firing.** On the next `flight_just_entered`, `CreatureMotorStack._on_flight_entered()` checks that the exit was at most `flee_reacquire_window_sec` ago (25 s, wall clock) and that the body is within one coverage cell of the anchor. If both hold, `MemoryAdapter.notify_flight_reacquired` writes an `avoid_hostiles` `TIER_FAILURE` on the anchor's cell ([CREATURE_MEMORY.md §14.4](CREATURE_MEMORY.md)).
     - **At most one failure per exit.** The anchor is cleared when the proxy fires or when the window expires.
-    - **Accepted side effect:** a `safety_met` flicker (exit, then immediate re-entry) counts as re-acquisition.
-  - **Telemetry.** With `flee_memory_debug_log` on (debug builds, default true), both hooks log a `FleeMem exit` / `FleeMem reacq` OLog line (tag `FleeMemory`).
+    - ~~**Accepted side effect:** a `safety_met` flicker (exit, then immediate re-entry) counts as re-acquisition.~~ **Resolved 2026-09-29:** a re-entry within `flight_exit_confirm_sec` cancels the pending exit instead (see Deferred commit above).
+  - **Telemetry.** With `flee_memory_debug_log` on (debug builds, default true), the hooks log OLog lines (tag `FleeMemory`): `FleeMem exit-pending` (on release), then `FleeMem exit-commit` or `FleeMem exit-cancel`, and `FleeMem reacq` (now with `tdist=`). The single `FleeMem exit` line was split on 2026-09-29.
 
-**Resolved — Flight fast-path exit:** Release when danger is absent from the zone of awareness for **`safety_time`** goal-consideration cycles (same as Outcome Hook above). Then run full goal consideration per §10.
+**Resolved — Flight fast-path exit:** Release when danger is absent from the zone of awareness for **`safety_time`** goal-consideration cycles (same as Outcome Hook above). Then run full goal consideration per §10. **Amended 2026-09-29 ([PHYSICS_SQUEEZE.md decision 46 H](PHYSICS_SQUEEZE.md), option 1):**
+- While the Flight latch is held, "danger" also includes the nearest **remembered** hostile (`MemoryAdapter.nearest_remembered_hostile`): an `avoid_hostiles` belief seen within `flight_threat_memory_sec` (2.0 s) whose believed position (last seen + velocity × age) is within `flight_acute_panic_radius × (1 + flight_release_margin_frac)` (0.25).
+- **Why.** Awareness is a small rear sphere plus a forward cone, so a fleeing creature facing away from its pursuer used to "feel safe". The vigilance ghost's 0.4 s horizon (§8.1) is shorter than the ~0.67 s Safety window, which let Flight release with the pursuer right behind.
+- Once the row ages out or the believed threat is beyond the margin, release proceeds on the normal `safety_time` streak.
+- **Residual:** a pursuer trailing just outside the rear sphere (e.g. a wolf at 16–17 u vs the rabbit's 15.9 u) still allows a release after the memory expires. That release is now harmless when Flight re-enters within the confirm window (the re-entry cancels it). A look-back / rear-awareness behaviour is in the backlog.
 
 **Resolved — `safety_time` during Flight fast-path:** **`safety_time` counter continues during acute Flight** — each consideration cycle with no danger in the full zone increments toward exit; danger present resets the counter. The goal table is not scored during Flight (eligible list empty, §10); awareness / danger evaluation still runs on the consideration cadence.
 
@@ -1364,6 +1381,7 @@ While **`REST` is selected:** **area sphere only**; cone **off** (table above). 
 **Movers** (`is_moving = true` — **all tracked creatures**: hostiles, prey, mates, neutrals, relocating mobs):
 
 - **Believed position** for zone membership: **`last_world_pos`**; optional intercept hint **`last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`** (default **0.4 s** — MEMORY §5.5) for pursuit / Flight geometry only.
+- **Flight threat memory is separate from this ghost (2026-09-29, [PHYSICS_SQUEEZE.md decision 46 H](PHYSICS_SQUEEZE.md)).** The ghost only projects while the row is geometrically in zone, and its 0.4 s horizon is shorter than the ~0.67 s Safety window. So while the Flight latch is held, Safety also reads `MemoryAdapter.nearest_remembered_hostile`: a pure read of `avoid_hostiles` rows seen within `flight_threat_memory_sec` (2.0 s), with believed distance = `last_world_pos` + `last_velocity` × age, gated at `flight_acute_panic_radius × (1 + flight_release_margin_frac)`. It is **not** a ghost sample, and it does not feed `consult_danger_samples`, `urgency_flight`, or the `REST` interrupt; only the latched Safety counter (§6.3).
 - **Persist while:** **`last_world_pos`** (and intercept when used for reach-cap test) remains inside **geometric zone** (full union; **area sphere only** while `REST` selected — same posture table as live ingest).
 - **Also drop when (reach cap — formula A):** **`gate_dist(creature, believed_pos) > awareness_radius + awareness_cone_extra`**, where **`believed_pos`** is **`last_world_pos`** or extrapolated intercept — prevents stale chase of targets that have **believed** to have moved beyond max zone reach even if last observed point still sits behind cover in the rear sphere.
 - **Fields:** reuse MEMORY §5.5 — **`last_velocity`**, **`ghost_strength`** (age decay within mover TTL optional; zone exit + reach cap are primary evictors).
@@ -1628,7 +1646,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 | Approach-heading backtrack TTL (v1) | §3 Seek cycle | **V3 intent.** Reuse **keep** `blocked_approach_memory.gd`; no position stack v1 |
 | Dead-end memory — geographic + instance | §3, §8.4 | **V3 intent.** §5.6 + `_goal_belief` passibility; **6d** |
 | Goal table during Flight/combat (was "freeze") | §10 | **V3 intent, wording corrected 2026-09-24:** Flight ships as eligible list empty / incumbent cleared, not a literal freeze. Full consideration after release |
-| Flight exit = `safety_time` cycles safe | §6.3 | **V3 intent.** Matches Outcome Hook |
+| Flight exit = `safety_time` cycles safe | §6.3 | **V3 intent.** Matches Outcome Hook. **2026-09-29:** while latched, a remembered hostile (`flight_threat_memory_sec`) also counts as danger; exit outcomes commit after `flight_exit_confirm_sec` and are cancelled on re-entry (PHYSICS_SQUEEZE decision 46 H) |
 | Coarse TTL vs travel-distance Seek handoff | §8.3 | **V3 intent.** Separate policies |
 | Coarse path-in-direction; `sector_weights` retired for locomotion | §8.3 | **V3 intent.** MEMORY schema unchanged; not `MotorContext.believed_goal_source_bias` |
 | Coarse incumbent: recency tie-break (`last_observed_ms`) | §8.3 | **V3 intent.** Not distance |
@@ -2493,6 +2511,15 @@ live → [moving consult if engagement latch valid] → static precise → coars
 - **Goal change to Flight clears engagement latch** (D2) — prey pursuit **bridge** does not survive Flight; **prey beliefs in storage are not cleared**.
 - **When `find_food` wins again after Flight ends:** run the **normal** `find_food` planner step-source order (`live` → `[moving if latch]` → static precise → coarse → locale → explore). **No** post-Flight special-case moving consult.
 - **Remembered prey after Flight:** instance beliefs written during chase **persist** (mover TTL **`goal_memory_mover_ttl_sec`** — **10 s**). **Live** prey in awareness → `live` bind + latch re-arm (D2). **Static** (non-moving) prey belief → normal `precise` / `coarse` consult. **Moving** prey belief only, latch cleared → belief remains for inventory / future slices; **this slice** does **not** cold-start `consult_moving_prey_food` (D8, T9). **No** consultable memory and no live prey → normal inventory-gated explore / memory-or-explore routing.
+- **Lost-prey search (2026-09-28, [PHYSICS_SQUEEZE.md decision 46 G](PHYSICS_SQUEEZE.md)) — amends the previous bullet within one `find_food` episode.**
+  - **Hint.** Every live moving-prey arm stamps a last-known prey hint (`lost_prey_hint_pos` / `_vel` / `_instance_id`), fresh for `locale_search_ticks` (240). Memory pursuit (`memory_moving`) advances the hint position.
+  - **Trigger.** When live and memory pursuit have both lapsed, the planner opens a bounded search window (`step_source = locale_search`, `locale_search_origin = &"lost_prey"`, same budget/radius as the empty-locale search) instead of falling to random explore.
+  - **Anchor.** The hint projected `_LOST_PREY_SEARCH_LEAD_S` (1.0 s, a code constant) along the last velocity, capped at `locale_search_radius`.
+  - **Hold.** The window survives consideration refreshes.
+  - **Candidates.** Candidates are ranked (not a dead end, route not truncated, bearing toward the anchor). `_lost_prey_bearing_fallback` probes 8 bearings when none is clear.
+  - **Not started when:** there is no fresh hint, a window is already active, the prey is still in the live scan, or a prey-race give-up cleared the hint.
+  - **Give-up.** A lost-prey give-up leaves locale food beliefs untouched.
+  - **Unchanged.** Goal change (including to Flight) still clears the hint along with the engagement latch.
 
 **Resolved — carnivore-only scope (2026-07-09):** **Omnivore** diet / pursuit / P1 ingress / duel smoke for this slice is **out of scope**. Ship and test **carnivore** (fox) vs **herbivore prey** (rabbit) only. Omnivore plant-vs-prey bind, engagement arm, and diet-first threat edge cases deferred to a later slice.
 

@@ -120,30 +120,43 @@
 
 ## 6. Godot 3D physics — layer / mask (hunger shrubs + duel actors)
 
-**Chosen approach:** **Layer / mask split (Option A)** for **Food B** (`open_shrub_3d`) — **no** `PhysicsBody3D.add_collision_exception_with(player)` as the primary mechanism for v1. **Food A** (`solid_shrub_3d`) uses the **same solidity class as perimeter boulders** (player and mob both collide).
+**Chosen approach:** **Layer / mask split (Option A)** for **Food B** (`open_shrub_3d`) — **no** `PhysicsBody3D.add_collision_exception_with(player)` as the primary mechanism for v1. *(The diet-role split itself was replaced in 2026-09 by a size-gated query-only ghost layer; see the model-change summary below.)* **Food A** (`solid_shrub_3d`) uses the **same solidity class as perimeter boulders** (player and mob both collide).
 
-**Authoritative numbers** below match [`project.godot`](../../project.godot) **`3d_physics/layer_*`**, [`creature_*_kinematic_3d.tscn`](../../creature/templates/), and [`*_shrub_3d.tscn`](../../assets/plants/) as of **2026-06-08**. If bits change in code, update **this table** and **`project.godot`** in the same PR.
+**Authoritative numbers** below match [`project.godot`](../../project.godot) **`3d_physics/layer_*`**, [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) `_apply_physics_layers()`, [`*_shrub_3d.tscn`](../../assets/plants/), and [`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd) as of **2026-09-29** (previous snapshot 2026-06-08). If bits change in code, update **this table** and **`project.godot`** in the same PR.
+
+**Model change since 2026-06-08 (summary; design in [PHYSICS_SQUEEZE.md](../Draft_Features/PHYSICS_SQUEEZE.md) decisions 16, 25, 33):**
+- The diet-role `plant_mob_block` split is retired. Both diets now use real `collision_mask = 1` (terrain / layer 1 only).
+- Object-scale "prey passes, predator doesn't" obstacles (`open_shrub_3d`'s `MobBlocker`) sit on a **query-only ghost layer** (mask value `16`, `GhostObstacleQuery.GHOST_LAYER_MASK`). That layer is in no body's movement mask. The motor shape-casts each creature's own capsule against it before moving.
 
 ### 6.1 Layer bits (3D physics)
 
-| Bit | Value `2^(bit-1)` | `[layer_names]` name | Occupants |
-|-----|-------------------|----------------------|-----------|
-| 1 | `1` | `world_static` | Playfield floor / mesh collision; perimeter **StaticBody3D** boulders; **Food A** **`solid_shrub_3d`** blocker; **Food B** **`open_shrub_3d`** calorie **`Area3D`** **collision_layer** (overlap only — see §6.2) |
-| 2 | `2` | `player` | Herbivore duel **`CharacterBody3D`** ([`creature_herbivore_kinematic_3d.tscn`](../../creature/templates/creature_herbivore_kinematic_3d.tscn) **Body**; layers set in [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) `_apply_physics_layers()`) |
-| 3 | `4` | `mob` | Carnivore duel **`CharacterBody3D`** ([`creature_carnivore_kinematic_3d.tscn`](../../creature/templates/creature_carnivore_kinematic_3d.tscn) **Body**; `is_hostile` → mob layer) |
-| 4 | `8` | `plant_mob_block` | **Food B only:** **`open_shrub_3d`** **MobBlocker** **StaticBody3D** shell that blocks **mobs** but **not** the player |
+| Bit (layer #) | Value `2^(bit-1)` | Used in code as | `project.godot` `[layer_names]` entry | Occupants |
+|-----|-------------------|-----------------|---------------------------------------|-----------|
+| 1 | `1` | `world_static` (`PlayfieldBounds3D.WORLD_STATIC_COLLISION_MASK`) | `layer_1="world_static"` | Playfield floor / terrain trimesh; **perimeter and interior boulders** (convex, `ensure_obstacle_physics`); **Food A** **`solid_shrub_3d`** body; both shrubs' calorie **`Area3D`** `collision_layer` (overlap only, §6.2) |
+| 2 | `2` | herbivore body | `layer_2="player"` | Herbivore duel **`CharacterBody3D`** (`is_hostile == false`) |
+| 3 | `4` | carnivore body | *(none; see note)* | Carnivore duel **`CharacterBody3D`** (`is_hostile == true`) |
+| 4 | `8` | *(retired)* | *(none; see note)* | Nothing since PHYSICS_SQUEEZE decision 25/33 (was `plant_mob_block`). |
+| 5 | `16` | ghost / query-only (`GhostObstacleQuery.GHOST_LAYER_MASK`) | *(none; see note)* | **Food B** **`open_shrub_3d`** **MobBlocker** (convex hull from visual). Not in any body's movement mask. |
+
+**`project.godot` naming mismatch (known, not fixed; editor labels only, no runtime effect).** The `[layer_names]` entries are keyed by mask **value**, not layer number:
+- `layer_4="mob"` labels layer 4 (value 8), but the carnivore body uses value 4 (layer 3).
+- `layer_8="plant_mob_block"` labels layer 8 (value 128).
+- `layer_16="obstacle_query_ghost"` labels layer 16 (value 32768), while the ghost code uses value 16 (layer 5).
+
+Fixing the names is an app-shell `project.godot` change; see [PHYSICS_SQUEEZE.md decision 46 B](../Draft_Features/PHYSICS_SQUEEZE.md).
 
 ### 6.2 Masks (targets for hunger + duel)
 
 | Body | `collision_layer` | `collision_mask` | Role |
 |------|-------------------|------------------|------|
-| **Herbivore (player)** | `2` | `1` | Walks **world_static** + Food B calorie areas; **`1` excludes bit `8`** → **no** physics collision with **`plant_mob_block`**. |
-| **Carnivore (mob)** | `4` | `1 \| 8` (= **`9`**) | Collides with **rocks** and **`plant_mob_block`** — same treatment as other solid obstacles for movement / avoidance. |
-| **Food A `solid_shrub_3d` static** | `1` | **`7`** (scene default) | Impassible for **player** and **mobs**. |
-| **Food B `open_shrub_3d` MobBlocker** | `8` | **`4`** | Mutual mask↔layer with **mob** layer so **CharacterBody3D** contacts register. |
-| **Food B / Food A calorie `Area3D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **player-only** overlap for burst calories. Mobs (**layer `4`**) do **not** match mask **`2`**. |
+| **Herbivore** | `2` | `1` | Real collision with layer 1 only. Ghost-layer objects are enforced by the motor's shape-cast, not physics. |
+| **Carnivore** | `4` | `1` | Same real mask as the herbivore since PHYSICS_SQUEEZE decision 33 (was `9` = 1+8). Predator/prey no longer differ in real physics. |
+| **Food A `solid_shrub_3d` static** | `1` | **`7`** (scene default) | Real solid for everyone. Carves the navmesh (§6.3.1). |
+| **Food B `open_shrub_3d` MobBlocker** | `16` | **`0`** | Movement-inert ghost collider. Size-gated passage via the motor's shape-cast (each creature's own capsule radius), not physics. Does **not** carve the navmesh. |
+| **Food B / Food A calorie `Area3D`** | `1` | **`2`** | `monitoring = true`; **`collision_mask = 2`** → **herbivore-only** overlap for burst calories. Carnivores (layer value `4`) do **not** match mask **`2`**. Skipped by the navmesh bake (static-collider parsing ignores `Area3D`). |
+| **Boulders (perimeter + interior)** | `1` | `1` | Real solids (`ensure_world_static_layers`). Carve the navmesh (§6.3.1). |
 
-**Implementer note:** Calorie **`Area3D`** nodes are **not** a substitute for mob blocking; keep the **StaticBody3D** shell on **`plant_mob_block`** for **`open_shrub_3d`**.
+**Implementer note:** Calorie **`Area3D`** nodes are **not** a substitute for obstacle blocking. `open_shrub_3d` blocking is the ghost-layer **MobBlocker** plus the motor's shape-cast ([`ghost_obstacle_query.gd`](../../creature/motor/ghost_obstacle_query.gd)). Any other solid-detection query (EAT contact ray, shelter enclosure probe, route scan) must also check the ghost layer (PHYSICS_SQUEEZE decisions 28/29).
 
 ### 6.3 Static obstacle collision authoring (mesh ↔ physics)
 
@@ -151,12 +164,34 @@
 
 | Prop class | Scene pattern | Collision bake |
 |------------|---------------|----------------|
-| **Mesh-only imports** (perimeter boulders, mesh props without physics) | No **`StaticBody3D`** in the imported scene | **Spawn-time trimesh** via [`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd) [`ensure_obstacle_physics()`](../../environment/playfield_bounds_3d.gd) — [`PlayfieldPerimeterBoulders`](../../environment/playfield_perimeter_boulders.gd) calls this on spawn. **Do not** add placeholder static bodies on mesh-only imports or baking is skipped. |
+| **Mesh-only imports** (perimeter and interior boulders, mesh props without physics) | No **`StaticBody3D`** in the imported scene | **Spawn-time convex hull** (not trimesh since CLEANUP C10, 2026-08-06) via [`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd) [`ensure_obstacle_physics()`](../../environment/playfield_bounds_3d.gd), which also forces layer/mask `1`. [`PlayfieldPerimeterBoulders`](../../environment/playfield_perimeter_boulders.gd) and `main_3d.gd` `_spawn_interior_boulders` call it after scaling (`BOULDER_VISUAL_SCALE` 3.0 perimeter, `INTERIOR_BOULDER_VISUAL_SCALE` 6.0 interior), so the hull matches the scaled mesh. **Do not** add placeholder static bodies on mesh-only imports or baking is skipped. |
 | **Food shrubs** (`solid_shrub_3d`, `open_shrub_3d`) | Empty **`StaticBody3D`** / **`MobBlocker`** shell (layers per §6.2); no hand-authored placeholder spheres | **Convex hull from active visual** in [`bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) `_ready` / visual refresh via [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd). Calorie **`Area3D`** pickup sphere sized from the same visual AABB. |
 | **Creatures** | **`CharacterBody3D`** capsule on **Body** (not mesh colliders) | Capsule radius/height + vertical center from mounted **Visual** mesh via [`creature_mesh_footprint.gd`](../../creature/capabilities/creature_mesh_footprint.gd) after [`creature_root_3d.gd`](../../creature/creature_root_3d.gd) mounts the species blend. |
 | **Playfield floor** | Collision defines walkable bounds | Do **not** auto-match decorative grass mesh padding — bounds come from floor colliders ([`playfield_bounds_3d.gd`](../../environment/playfield_bounds_3d.gd)). |
 
-**Helper module:** [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd) — convex blocker sync + pickup sphere fit. **Boulders** use **trimesh** (accurate static rock); **shrubs** use **convex hull** (cheaper, fewer snags).
+**Helper module:** [`static_obstacle_collision.gd`](../../environment/static_obstacle_collision.gd) — convex blocker sync + pickup sphere fit. **Boulders and shrubs** both use a **convex hull**. Boulders moved off trimesh in CLEANUP C10 (2026-08-06) because a concave trimesh on a slope left a seam capsules tunnelled through. Only the terrain itself stays trimesh.
+
+**Prop grounding (2026-09-25):** `main_3d.gd` `_snap_playfield_props_to_ground` raycasts layer 1 under each prop and sets the root Y so the mesh bottom rests on the hit. The bottom offset (`_prop_mesh_bottom_offset_y`) is measured in **world** units, so the prop's own scale counts; before this, scaled props sank. Props with no ground under them are removed. The older `PlayfieldBounds3D.mesh_local_bottom_y` / `snap_prop_root_to_ground` still use root-local units and have test callers only.
+
+### 6.3.1 Navmesh bake sources (2026-09-25; open design item)
+
+The shared playfield `NavigationRegion3D` (`main_3d.gd` `_bake_playfield_navmesh`) is baked from **layer-1 static colliders** only:
+- `geometry_parsed_geometry_type = PARSED_GEOMETRY_STATIC_COLLIDERS`;
+- `geometry_collision_mask = 1`;
+- source mode `SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN` on group `playfield_navmesh_source`, which tags the playfield root (terrain + `Obstacles3D`) and `FoodPlants`.
+
+| Source | Carves the navmesh? |
+|--------|---------------------|
+| Terrain, perimeter boulders, interior boulders | **Yes** (layer 1) |
+| `solid_shrub_3d` body | **Yes** (layer 1, since 2026-09-28; expected to change once shrubs are crushable) |
+| `open_shrub_3d` MobBlocker | **No** (ghost layer) |
+| Calorie `Area3D`s | **No** (not static colliders) |
+| Creatures | **No** (not in the source groups; not static) |
+
+- **Timing.** The bake runs after prop grounding (`_ground_props_then_bake_navmesh`). `is_navigation_ready()` turns true only once the navigation map answers queries on the new mesh (up to 30 physics frames, with explicit re-push).
+- **Erosion.** `agent_radius` = the largest spawned creature's capsule radius, rounded up to a 0.25 m voxel (wolf ≈ 7.25 m). Every creature's queries use this eroded mesh.
+- **Open.** Whether to bake per size class or species is open and **undecided by the user** ([PHYSICS_SQUEEZE.md decision 46 B](../Draft_Features/PHYSICS_SQUEEZE.md); backlog "Shared navmesh bake erodes…").
+- **History.** Before 2026-09-25 the bake used the region's default source mode, which found no geometry, so the live navmesh had zero polygons.
 
 ### 6.4 Randomized playfield spawn layout (interior boulders / food / duel pair)
 
@@ -165,6 +200,9 @@
 **Overlap policy (intentional asymmetry):**
 - **Interior boulders and food** (`_SpawnRandomizer.pick_uniform_fraction`) are pure uniform-random within the edge margin — **no** mutual-separation or terrain-depression check. They may overlap each other or land in awkward terrain on purpose.
 - **Creature spawns only** (`_SpawnRandomizer.pick_clear_fraction`, and the `rng`/`existing_points` overload of [`PlayfieldGroundSampler.pick_duel_spawn_fractions()`](../../environment/playfield_ground_sampler.gd)) reject candidates too close to already-placed boulders/food or below the existing depression-safety threshold, so a creature never spawns embedded in a prop or on terrain that risks the C9/C10 tunneling class of bug.
+- **"Too close" (2026-09-25):** `main_3d.gd` `_creature_spawn_prop_clearance_m()` = max(`PlayfieldSpawnRandomizer.DEFAULT_MIN_SEPARATION_M`, first interior boulder's XZ half-extent + largest spawned capsule radius). That is ≈ 13.4 m with 6x boulders and the wolf. The same distance is applied to food props, which is conservative.
+- **Interior boulder size (2026-09-25):** `INTERIOR_BOULDER_VISUAL_SCALE` = 6.0 (~12.8 × 12.3 m XZ, ~12.3 m tall); the perimeter ring stays at 3.0.
+- **Known spawn-height bug (open, not fixed):** `PlayfieldBounds3D.capsule_half_height_on_body` returns `height/2 + radius`. A Godot 4 `CapsuleShape3D.height` is the full height, so creatures spawn with the capsule bottom ~r too high (~7 m for the wolf) and fall. Tracked in the backlog.
 
 **Config** (`game_config.json` → `playfield_spawn`, merged via [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)):
 
@@ -191,8 +229,9 @@
 
 ## 7. Acceptance criteria
 
-- [x] **`project.godot`** lists **`3d_physics/layer_*`** names for bits used in §6.1 (at minimum **1, 2, 4, 8**).  
-- [x] **Carnivore** `collision_mask` **ORs** in **`plant_mob_block`** (`8`) when Food B is present (target **`9`**).  
+- [x] **`project.godot`** lists **`3d_physics/layer_*`** names for bits used in §6.1 (at minimum **1, 2, 4, 8**). **Caveat (2026-09-29):** the names are keyed by mask value, not layer number (see the §6.1 naming-mismatch note), so the editor labels for values 4 / 16 are on the wrong layers.  
+- [x] ~~**Carnivore** `collision_mask` **ORs** in **`plant_mob_block`** (`8`) when Food B is present (target **`9`**).~~ **Superseded (PHYSICS_SQUEEZE decision 33):** carnivore mask is `1`; Food B blocking is the ghost layer (§6.2).  
+- [x] Navmesh bake sources match §6.3.1 (`_test_bake_playfield_navmesh_produces_walkable_polygons`, `_test_bake_playfield_navmesh_includes_solid_food_plants`, `_test_bake_playfield_navmesh_mask_excludes_ghost_layer`).  
 - [ ] **Food B** scene root (or shared plant README under **`res://assets/plants/open_shrub/`**) carries a **short comment** pointing to this **§6** table.  
 - [ ] `crush_weight == 0` semantics documented in code comments (unchanged — future crush phase).
 
@@ -203,7 +242,7 @@
 | Risk | Mitigation |
 |------|------------|
 | Double-penalty (plant + terrain) | Single “effective modifier” merge function |
-| Pathfinding without navmesh | **Partially addressed:** [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) scopes **2D** mob detour + rejoin; **full navmesh** still optional future work |
+| Pathfinding without navmesh | **Partially addressed:** [OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) scopes **2D** mob detour + rejoin; **full navmesh** still optional future work. **2026-09-25:** the V3 motor uses a shared playfield navmesh (§6.3.1). It was silently empty until that date. It is eroded by the largest creature's radius, and per-size baking is an open, undecided design item. |
 
 ---
 
@@ -272,6 +311,7 @@
 
 | Date | Change |
 |------|--------|
+| 2026-09-29 | **§6 re-synced to code ([PHYSICS_SQUEEZE.md decision 46](../Draft_Features/PHYSICS_SQUEEZE.md)).** §6.1/§6.2 had drifted since 2026-06-08: the carnivore mask is `1` (was `9`); the `open_shrub_3d` MobBlocker is on the ghost layer (value 16, mask 0), not `plant_mob_block`; value 8 is retired; boulders are layer 1. Added the `project.godot` layer-name mismatch note (names keyed by mask value). §6.3: boulders are convex, not trimesh (C10); prop grounding in world units. New §6.3.1 navmesh bake sources (layer-1 static colliders, groups mode on `playfield_navmesh_source`, solid shrubs carve, map-sync readiness; the per-size question is open). §6.4: spawn prop clearance ≈13.4 m, interior boulders 6x, spawn-height bug noted. §7 acceptance and §8 risk row updated. |
 | 2026-08-08 | **§6.4 (new):** Randomized interior boulder / food / duel-pair spawn (perimeter boulders unaffected) with a lockable `spawn_layout_last_run.json` repro file; `game_config.json` gained `playfield_spawn` (`seed`, `locked_layout_path`). Deliberate stress test — boulders/food may overlap, only creature spawns get overlap-avoidance. |
 | 2026-06-08 | **§6:** Promoted to **3D** layer/mask table (`3d_physics`, kinematic duel templates, `*_shrub_3d.tscn`); §2 context + §7 acceptance updated (M3). |
 | 2026-05-14 | **§6:** Godot **2D layer/mask split (Option A)** for **`solid_shrub`** / **`open_shrub`**; mob mask **`9`**; renumbered §6→§12. Tracking: physics table **Specified**. |
