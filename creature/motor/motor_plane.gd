@@ -71,6 +71,17 @@ static func to_grid_world(v: Vector3) -> Vector2:
   return Vector2(v.x, v.z)
 
 
+## Distance between [param a] and [param b] on the horizontal motor plane (XZ only; Y ignored).
+## Use this whenever a body's position is compared to a navmesh/path point or any other
+## ground-level objective. A body's `global_position` is its capsule centre, which sits about half
+## the capsule height above the ground: roughly 1.9 m for the rabbit and 7.7 m for the wolf. That
+## is more than `arrival_tolerance` (5 m), so a 3D distance from a wolf to a hop directly under it
+## never counts as arrived (the wolf silent-stall root cause, 2026-09-25).
+## Example: `MotorPlane.horizontal_distance(body.global_position, nav_hop) <= arrival_tol`.
+static func horizontal_distance(a: Vector3, b: Vector3) -> float:
+  return Vector2(b.x - a.x, b.z - a.z).length()
+
+
 ## Motor-plane position for a duel [Node3D] physics child.
 static func body_motor_position(body: Node) -> Vector3:
   if body is Node3D:
@@ -91,7 +102,19 @@ static func body_motor_velocity(body: Node) -> Vector3:
   return Vector3.ZERO
 
 
-## Capsule footprint half-extents on the motor plane ([CollisionShape3D] capsule child).
+## Horizontal footprint half-extents on the motor plane for [param body]'s upright
+## [CollisionShape3D] capsule child: [code]Vector2(x = world-X half-extent, y = world-Z
+## half-extent)[/code]. Consumed by [PlayfieldClamp] (clamp, edge margins, boundary hug).
+##
+## An upright [CapsuleShape3D]'s horizontal cross-section is a circle of [member
+## CapsuleShape3D.radius], so both axes are [code]radius[/code]. (Before 2026-09-25 the Z axis was
+## [code]radius + height / 2[/code] — a leftover from the 2D port, where a [CapsuleShape2D]'s
+## height ran along screen Y, which became world Z on the motor plane. It made the playfield clamp
+## hold creatures ~[code]height / 2[/code] farther from the north/south edges than from east/west —
+## 7.67 u extra for the wolf. No caller needs a vertical extent from this function.)
+## [param motor_p]'s [code]creature_half_extent_x[/code] / [code]creature_half_extent_y[/code] are
+## the fallback when [param body] is null or has no capsule child.
+## Example: wolf capsule r 7.03, h 15.33 → [code]Vector2(7.03, 7.03)[/code].
 static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   var he_xy := Vector2(
     maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
@@ -101,11 +124,8 @@ static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
     return he_xy
   var cs3 := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs3 != null and cs3.shape is CapsuleShape3D:
-    var cap3 := cs3.shape as CapsuleShape3D
-    return Vector2(
-      maxf(0.0, cap3.radius),
-      maxf(0.0, cap3.radius + cap3.height * 0.5),
-    )
+    var r := maxf(0.0, (cs3.shape as CapsuleShape3D).radius)
+    return Vector2(r, r)
   return he_xy
 
 

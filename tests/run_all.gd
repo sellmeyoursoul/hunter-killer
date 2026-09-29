@@ -40,6 +40,7 @@ const _MotorAction := preload("res://creature/motor/motor_action.gd")
 const _ActionOutcome := preload("res://creature/motor/action_outcome.gd")
 const _LocomotionExecutor := preload("res://creature/motor/locomotion_executor.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
+const _MotorPathClear := preload("res://creature/motor/motor_path_clear.gd")
 const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
 const _MotorGoalHub := preload("res://creature/motor/motor_goal_hub.gd")
 const _ShelterProbe := preload("res://creature/motor/shelter_enclosure_probe.gd")
@@ -171,6 +172,11 @@ func _run_all() -> void:
   _test_motor_planner_pursuit_detour_alternate_on_persistent_block()
   _test_motor_planner_pursuit_detour_gives_up_on_dead_end_alternate()
   await _test_motor_planner_pursuit_detour_prefers_straight_line_when_it_reaches_farther()
+  await _test_motor_path_clear_resolve_step_objective_skips_hop_under_tall_body()
+  await _test_motor_tall_capsule_live_pursuit_no_silent_stall_on_real_navmesh()
+  await _test_motor_planner_pursuit_detour_gives_up_when_route_scan_collapses_onto_self()
+  await _test_motor_planner_locale_seek_walks_past_intermediate_hop_on_real_navmesh()
+  await _test_motor_planner_locale_search_arrival_judged_on_search_point_not_hop()
   _test_motor_planner_live_pursuit_blocked_seek_suppressed()
   _test_motor_planner_memory_pursuit_detour_releases_latch_on_arrival()
   _test_motor_planner_memory_pursuit_detour_alternate_on_persistent_block()
@@ -288,6 +294,9 @@ func _run_all() -> void:
   _test_avoid_hostiles_cells_skips_rows_idle_past_eviction_limit()
   _test_flight_exit_shelter_promotion_sets_fit_confirmed_keeps_fail_count()
   _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_anchor()
+  _test_flight_threat_memory_holds_safety_while_latched_until_threat_believed_gone()
+  _test_flight_exit_flicker_reentry_in_confirm_window_commits_nothing()
+  _test_flight_exit_commits_after_confirm_window_and_late_reentry_writes_failure()
   _test_flee_pick_kind_telemetry_and_explore_log_suffix()
   _test_decision44_smoke_layout_pins_all_object_sets()
   _test_waypoint_chain_simplify_drops_collinear_points()
@@ -389,6 +398,8 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_stale_instance_id()
   _test_creature_motor_stack_memory_live_sync()
   _test_creature_motor_stack_memory_maintain_coarse_ttl()
+  _test_creature_motor_stack_configure_plain_body_builds_memory_adapter()
+  _test_instance_id_lookup_rejects_non_objectdb_ids()
   _test_creature_motor_stack_memory_eat_locale_write()
   _test_creature_motor_stack_memory_write_dual_isolation()
   _test_creature_motor_stack_sated_understocked_mapping_urgency()
@@ -408,11 +419,18 @@ func _run_all() -> void:
   _test_creature_motor_stack_memory_passibility_switch()
   _test_creature_motor_stack_memory_blocked_objective()
   await _test_creature_motor_stack_blocked_memory_writes()
+  await _test_creature_motor_stack_blocked_precise_memory_writes_passibility_and_dead_end()
   await _test_motor_planner_blocked_food_excluded_from_reselection()
   await _test_motor_planner_live_food_awareness_grace_holds_through_transient_dropout()
   _test_motor_planner_locale_empty_arrival_starts_search()
   _test_motor_planner_locale_search_waypoint_rerolls_dead_end()
   await _test_motor_planner_locale_search_giveup_invalidates_belief()
+  await _test_motor_planner_lost_prey_search_heads_toward_last_known_prey()
+  await _test_motor_planner_lost_prey_search_absent_without_prey_hint()
+  _test_motor_planner_lost_prey_search_skipped_for_visible_or_given_up_prey()
+  await _test_motor_planner_lost_prey_search_giveup_keeps_locale_belief()
+  _test_motor_planner_lost_prey_search_candidate_ranking()
+  await _test_motor_planner_lost_prey_bearing_fallback_avoids_ghost_blocked_bearing()
   await _test_motor_planner_locale_handoff_respects_arrival_cooldown()
   _test_awareness_scan_best_ready_food_target_excludes_ids()
   _test_food_plant_missing_stimulus_kind_id()
@@ -441,6 +459,7 @@ func _run_all() -> void:
   _test_creature_3d_template_scenes_load()
   _test_shrub_3d_visual_scenes_load()
   await _test_shrub_mesh_collision_bake()
+  await _test_shrub_regrow_hull_rebuild_once_per_state_change()
   await _test_creature_capsule_fits_visual_mesh()
   await _test_creature_3d_predation_contact()
   _test_eat_range_scales_with_predator_body_size()
@@ -491,6 +510,11 @@ func _run_all() -> void:
   await _test_clamp_velocity_to_ghost_fit_escape_hatch()
   await _test_locomotion_executor_reports_ghost_layer_block()
   await _test_bake_playfield_navmesh_mask_excludes_ghost_layer()
+  await _test_bake_playfield_navmesh_produces_walkable_polygons()
+  await _test_bake_playfield_navmesh_includes_solid_food_plants()
+  _test_motor_plane_footprint_is_radius_on_both_axes()
+  await _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach()
+  await _test_interior_boulder_blocks_wolf_capsule()
   await _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit()
   await _test_shelter_enclosure_probe_detects_real_refuge_ring()
   await _test_repro_rabbit_cornered_north_wall_live_pursuit()
@@ -608,11 +632,11 @@ func _test_interior_boulder_spawn_scale() -> void:
   var rock := boulder.instantiate() as Node3D
   root.add_child(rock)
   var aabb_before := _StaticObstacleCollision.world_mesh_aabb(rock)
-  rock.scale = Vector3.ONE * PlayfieldBounds3D.BOULDER_VISUAL_SCALE
+  rock.scale = Vector3.ONE * PlayfieldBounds3D.INTERIOR_BOULDER_VISUAL_SCALE
   var aabb_after := _StaticObstacleCollision.world_mesh_aabb(rock)
   _assert(
     bool(aabb_before.get("valid", false)) and bool(aabb_after.get("valid", false)),
-    "boulder mesh AABB valid before/after applying BOULDER_VISUAL_SCALE",
+    "boulder mesh AABB valid before/after applying INTERIOR_BOULDER_VISUAL_SCALE",
   )
   var size_before: Vector3 = (
     (aabb_before.get("max", Vector3.ZERO) as Vector3) - (aabb_before.get("min", Vector3.ZERO) as Vector3)
@@ -621,8 +645,8 @@ func _test_interior_boulder_spawn_scale() -> void:
     (aabb_after.get("max", Vector3.ZERO) as Vector3) - (aabb_after.get("min", Vector3.ZERO) as Vector3)
   )
   _assert(
-    is_equal_approx(size_after.y / maxf(size_before.y, 1e-6), PlayfieldBounds3D.BOULDER_VISUAL_SCALE),
-    "BOULDER_VISUAL_SCALE actually scales the boulder's real world mesh size",
+    is_equal_approx(size_after.y / maxf(size_before.y, 1e-6), PlayfieldBounds3D.INTERIOR_BOULDER_VISUAL_SCALE),
+    "INTERIOR_BOULDER_VISUAL_SCALE actually scales the boulder's real world mesh size",
   )
   var colliders: int = PlayfieldBounds3D.ensure_obstacle_physics(rock)
   _assert(colliders >= 1, "a scaled boulder still bakes convex collision")
@@ -952,12 +976,14 @@ func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
     float(wolf_def.get("collision_capsule_radius")) > 2.5 * 0.7,
     "wolf declared capsule_radius is roughly 3x fox's declared 0.7",
   )
-  var fox_aabb := _StaticObstacleCollision.world_mesh_aabb(
-    (load("res://assets/creatures/fox/fox.blend") as PackedScene).instantiate(),
-  )
-  var wolf_aabb := _StaticObstacleCollision.world_mesh_aabb(
-    (load("res://assets/creatures/wolf/wolf_3d.tscn") as PackedScene).instantiate(),
-  )
+  # Orphan (never-in-tree) instances must be freed explicitly — these two were leaking a full
+  # visual scene each (mesh + the .blend's bundled preview Camera3D/OmniLight3D) at exit.
+  var fox_visual := (load("res://assets/creatures/fox/fox.blend") as PackedScene).instantiate()
+  var wolf_visual := (load("res://assets/creatures/wolf/wolf_3d.tscn") as PackedScene).instantiate()
+  var fox_aabb := _StaticObstacleCollision.world_mesh_aabb(fox_visual)
+  var wolf_aabb := _StaticObstacleCollision.world_mesh_aabb(wolf_visual)
+  fox_visual.free()
+  wolf_visual.free()
   _assert(
     bool(fox_aabb.get("valid", false)) and bool(wolf_aabb.get("valid", false)),
     "fox and wolf visual meshes produce valid AABBs",
@@ -1208,6 +1234,7 @@ func _test_creature_motor_v3_playfield_distance_scale() -> void:
     is_equal_approx(float(scaled.get("arrival_tolerance", 0.0)), 5.0),
     "v3 arrival_tolerance does not scale with playfield factor",
   )
+  body.free()
 
 
 func _motor_v3_test_params() -> Dictionary:
@@ -3969,6 +3996,10 @@ func _test_creature_motor_stack_memory_maintain_coarse_ttl() -> void:
   var body := CharacterBody3D.new()
   stack.configure(body, null, motor_p, "", {})
   var adapter := stack.get_memory_adapter()
+  _assert(adapter != null, "configure on a plain CharacterBody3D still builds the memory adapter")
+  if adapter == null:
+    body.free()
+    return
   var now_ms := Time.get_ticks_msec()
   var iid := 424242
   adapter.set_beliefs_for_test({
@@ -3984,6 +4015,52 @@ func _test_creature_motor_stack_memory_maintain_coarse_ttl() -> void:
   })
   adapter.maintain_beliefs(Vector3.ZERO, now_ms, motor_p)
   _assert(not adapter.get_beliefs().has(iid), "adapter maintain evicts coarse belief after coarse TTL")
+  body.free()
+
+
+## Regression (float(null) SCRIPT ERROR in `CreatureMotorStack.configure`): a body without the
+## creature script's `caloric_needs` property must not abort configure halfway — the adapter and
+## cadence must be wired and the unreadable hint simply omitted. A real creature body still gets
+## `caloric_needs_hint` from its own `caloric_needs`.
+func _test_creature_motor_stack_configure_plain_body_builds_memory_adapter() -> void:
+  var plain_stack := _CreatureMotorStack.new()
+  var plain_body := CharacterBody3D.new()
+  plain_stack.configure(plain_body, null, _motor_v3_test_params(), "", {})
+  _assert(plain_stack.get_memory_adapter() != null, "plain-body configure builds memory adapter")
+  var plain_motor: Dictionary = plain_stack.get("_motor_v3")
+  _assert(not plain_motor.has("caloric_needs_hint"), "plain-body configure omits unreadable caloric_needs_hint")
+  plain_body.free()
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  var motor: Dictionary = stack.get("_motor_v3")
+  _assert(
+    is_equal_approx(float(motor.get("caloric_needs_hint", -1.0)), maxf(1.0, float(body.caloric_needs))),
+    "creature-body configure still derives caloric_needs_hint from caloric_needs",
+  )
+  main.free()
+
+
+## Regression for the `slot >= slot_max` ObjectDB flood: synthetic / hash-shaped ids (validator
+## field 0) must be rejected before any ObjectDB lookup, while real ids — alive, freed, and
+## RefCounted (sign bit set) — are accepted, resolving to the object or to null once freed.
+func _test_instance_id_lookup_rejects_non_objectdb_ids() -> void:
+  var lookup := preload("res://creature/motor/instance_id_lookup.gd")
+  _assert(not lookup.can_be_object_id(0), "instance id 0 is not an object id")
+  _assert(not lookup.can_be_object_id(1), "small synthetic id 1 is not an object id")
+  _assert(not lookup.can_be_object_id(88050), "fixture-style synthetic id is not an object id")
+  _assert(lookup.resolve(88050) == null, "resolve(synthetic) is null")
+  var node := Node.new()
+  var live_id := node.get_instance_id()
+  _assert(lookup.can_be_object_id(live_id), "live node id is object-id shaped")
+  _assert(lookup.resolve(live_id) == node, "resolve(live id) returns the node")
+  node.free()
+  _assert(lookup.can_be_object_id(live_id), "freed node id stays object-id shaped")
+  _assert(lookup.resolve(live_id) == null, "resolve(freed id) is null")
+  var rc := RefCounted.new()
+  _assert(lookup.can_be_object_id(rc.get_instance_id()), "RefCounted id (sign bit set) is object-id shaped")
+  _assert(lookup.resolve(rc.get_instance_id()) == rc, "resolve(RefCounted id) returns the object")
 
 
 func _test_creature_motor_stack_memory_eat_locale_write() -> void:
@@ -4105,6 +4182,10 @@ func _test_creature_motor_stack_debug_snapshot() -> void:
 
 func _test_creature_motor_stack_memory_kind_ewma() -> void:
   var adapter := _MemoryAdapter.new()
+  # Configure like `CreatureMotorStack.configure` does: an unconfigured adapter has an empty
+  # effective GoalKind list, so the locale half of `notify_food_consumption_outcome` rejected the
+  # write with a push_error ("unknown GoalKind find_food") — fixture omission, not a negative test.
+  adapter.configure("", {})
   var motor_p := _motor_v3_test_params()
   motor_p["kind_nutrition_yield_reference_calories"] = 5.0
   _assert(
@@ -4413,23 +4494,54 @@ func _test_creature_motor_stack_memory_blocked_objective() -> void:
   )
 
 
-func _test_creature_motor_stack_blocked_memory_writes() -> void:
-  var main := Node3D.new()
-  root.add_child(main)
-  _motor_v3_test_floor(main)
+## Adds one axis-aligned static box (layer/mask 1) of [param size] centered at [param center].
+func _add_static_test_box(parent: Node3D, center: Vector3, size: Vector3) -> StaticBody3D:
   var wall := StaticBody3D.new()
   var box := BoxShape3D.new()
-  box.size = Vector3(0.5, 4.0, 4.0)
+  box.size = size
   var col := CollisionShape3D.new()
   col.shape = box
   wall.add_child(col)
   wall.collision_layer = 1
   wall.collision_mask = 1
-  main.add_child(wall)
-  wall.global_position = Vector3(1.2, 1.0, 0.0)
+  parent.add_child(wall)
+  wall.global_position = center
+  return wall
+
+
+## Builds the stack-level blocked-move fixture shared by the two `blocked_*_memory_writes` tests: a
+## herbivore at the origin facing +X inside a dead-end pocket (front wall + two side walls, open
+## only behind it), with the food target [param food_gap] meters past the front wall. The side
+## walls make it a genuine dead end: live pursuit's own sideways detour is blocked too, so the
+## detour/alternate/give-up path runs to completion instead of sliding along an open wall.
+##
+## Wall placement is derived from the rabbit's *live* capsule radius (post-decision-14 scaling it's
+## ~1.74m) rather than a hardcoded x: the original fixture pinned the wall face at x=0.95, which the
+## enlarged capsule overlapped at spawn — the first ticks then read as an EAT through the wall and a
+## depenetration shove instead of a blocked move, and the §9/passibility path was never reached.
+## Returns `{main, body, stack, food_pos, wall_face_x, capsule_r}`.
+func _blocked_move_stack_fixture(food_gap: float) -> Dictionary:
+  # Let any previous test's queue_free'd scene (same footprint) leave the physics space first.
+  await process_frame
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.current_calories = 10.0
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
+  var capsule_r := float(body.call(&"get_collision_capsule_radius"))
+  var wall_face_x := capsule_r + 1.0
+  var side_face_z := capsule_r + 1.0
+  var pocket_back_x := -8.0
+  _add_static_test_box(main, Vector3(wall_face_x + 0.25, 1.0, 0.0), Vector3(0.5, 4.0, 2.0 * side_face_z + 1.0))
+  var side_len := wall_face_x - pocket_back_x
+  var side_center_x := (wall_face_x + pocket_back_x) * 0.5
+  for side_sign in [-1.0, 1.0]:
+    _add_static_test_box(
+      main,
+      Vector3(side_center_x, 1.0, side_sign * (side_face_z + 0.25)),
+      Vector3(side_len, 4.0, 0.5),
+    )
   await physics_frame
   var motor_p := _motor_v3_test_params()
   motor_p["dead_end_record_min_blocked_ticks"] = 1
@@ -4438,11 +4550,33 @@ func _test_creature_motor_stack_blocked_memory_writes() -> void:
   body.set_use_v3_action_calories(true)
   body.set_motor_stack_drives_physics(true)
   body.set_control_mode(_ControlMode.engine_as_int())
+  return {
+    "main": main,
+    "body": body,
+    "stack": stack,
+    "food_pos": Vector3(wall_face_x + 0.5 + food_gap, 1.0, 0.0),
+    "wall_face_x": wall_face_x,
+    "capsule_r": capsule_r,
+  }
+
+
+## Live food behind an undetourable wall: live pursuit first tries its own detour/alternate path
+## (§9 is deliberately suppressed while live food is visible — `should_suppress_live_pursuit_blocked_
+## resolution`), and only once that gives up does §9 run and write passibility / dead-end / action.
+## The two fixture-premise asserts make this self-diagnosing if the setup ever drifts again.
+func _test_creature_motor_stack_blocked_memory_writes() -> void:
+  var fx: Dictionary = await _blocked_move_stack_fixture(6.0)
+  var body: CharacterBody3D = fx["body"]
+  var stack: CreatureMotorStack = fx["stack"]
+  _assert(
+    body.global_position.x + float(fx["capsule_r"]) < float(fx["wall_face_x"]),
+    "blocked-move fixture: body spawns clear of the wall",
+  )
   const FOOD_IID := 88001
   stack.set_live_scan_for_test({
     "food_split": {
       "ready": [{
-        "pos": Vector3(5.0, 1.0, 0.0),
+        "pos": fx["food_pos"],
         "instance_id": FOOD_IID,
         "stimulus_kind_id": &"shrub_berries",
         "consumable_now": true,
@@ -4454,11 +4588,13 @@ func _test_creature_motor_stack_blocked_memory_writes() -> void:
     "threat_samples": [],
     "food_map_confidence": 1.0,
   })
-  stack.tick(1.0 / 60.0)
   var wrote_memory := false
-  for _i in 40:
-    stack.tick(1.0 / 60.0)
+  var saw_blocked_move := false
+  for _i in 120:
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
     await physics_frame
+    if int(outcome.action) == _MotorAction.MOVE_FORWARD and outcome.blocked:
+      saw_blocked_move = true
     var adapter: _MemoryAdapter = stack.get_memory_adapter()
     var beliefs: Dictionary = adapter.get_beliefs()
     if beliefs.has(FOOD_IID):
@@ -4472,8 +4608,40 @@ func _test_creature_motor_stack_blocked_memory_writes() -> void:
     if stack.get_planner_blocked_objective_action() != &"":
       wrote_memory = true
       break
+  _assert(saw_blocked_move, "blocked-move fixture: pursuit actually hits the wall (MOVE_FORWARD blocked)")
   _assert(wrote_memory, "stack blocked move writes passibility, dead-end, or §9 action")
-  main.queue_free()
+  (fx["main"] as Node).queue_free()
+
+
+## Precise-memory target behind the same wall: no live-pursuit suppression applies, so the first
+## resolved blocked move must write BOTH a passibility failure on the remembered instance and a
+## dead-end mark along the approach (§4k), plus a §9 action. Stronger than the live variant's OR.
+func _test_creature_motor_stack_blocked_precise_memory_writes_passibility_and_dead_end() -> void:
+  var fx: Dictionary = await _blocked_move_stack_fixture(6.0)
+  var stack: CreatureMotorStack = fx["stack"]
+  const FOOD_IID := 88002
+  stack.set_live_scan_for_test(_motor_stack_empty_food_scan())
+  stack.seed_precise_food_belief_for_test(FOOD_IID, fx["food_pos"], Time.get_ticks_msec())
+  var saw_passibility := false
+  var saw_dead_end := false
+  var saw_action := false
+  for _i in 120:
+    stack.tick(1.0 / 60.0)
+    await physics_frame
+    var adapter: _MemoryAdapter = stack.get_memory_adapter()
+    var beliefs: Dictionary = adapter.get_beliefs()
+    if beliefs.has(FOOD_IID) and int((beliefs[FOOD_IID] as Dictionary).get("passibility_fail_count", 0)) >= 1:
+      saw_passibility = true
+    if adapter.get_dead_end_marks().size() >= 1:
+      saw_dead_end = true
+    if stack.get_planner_blocked_objective_action() != &"":
+      saw_action = true
+    if saw_passibility and saw_dead_end and saw_action:
+      break
+  _assert(saw_passibility, "blocked precise seek increments passibility_fail_count on the belief")
+  _assert(saw_dead_end, "blocked precise seek records a dead-end mark")
+  _assert(saw_action, "blocked precise seek records a §9 blocked-objective action")
+  (fx["main"] as Node).queue_free()
 
 
 ## best_ready_food_target's excluded_instance_ids param (fed by _food_pursuit_exclusions) skips
@@ -4721,6 +4889,276 @@ func _test_motor_planner_locale_search_giveup_invalidates_belief() -> void:
     "invalidated cell no longer consults active with no other candidate in memory",
   )
   main.queue_free()
+
+
+## Live moving-prey scan with one entry — the shape `AwarenessZoneScan` emits for a visible prey.
+func _lost_prey_live_scan(prey_pos: Vector3, prey_iid: int, prey_vel: Vector3) -> Dictionary:
+  return {
+    "food_split": {
+      "ready": [{
+        "pos": prey_pos,
+        "instance_id": prey_iid,
+        "stimulus_kind_id": &"rabbit",
+        "consumable_now": true,
+        "line_of_sight_clear": true,
+        "occluded": false,
+        "source": &"live",
+        "is_moving": true,
+        "velocity": prey_vel,
+      }],
+      "unready": [],
+    },
+  }
+
+
+## 2026-09-28 (decision-44 live smoke): a wolf that lost its prey (live pursuit, then memory
+## pursuit, both lapsed) fell back to random `explore`, whose bearing (spawn/facing-weighted) took
+## it AWAY from the prey's last-known position. Arrange: a carnivore facing west live-pursues a
+## prey 30 m east running east; then engagement lapses and the prey is gone from the scan. Act: the
+## fallback derive. Assert: a bounded lost-prey `locale_search` anchored ahead of the prey's
+## last-known position, its committed point bearing toward the prey (positive dot) — and the step
+## holds across a consideration refresh instead of being re-minted as explore.
+## Validity-checked red with the `_maybe_start_lost_prey_search` call removed (explore went west).
+func _test_motor_planner_lost_prey_search_heads_toward_last_known_prey() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  body.set("last_move_direction", Vector3(-1.0, 0.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var creature_pos := body.global_position
+  var prey_iid := 88301
+  var prey_pos := creature_pos + Vector3(30.0, 0.0, 0.0)
+  var prey_vel := Vector3(6.0, 0.0, 0.0)
+  var ctx := {
+    "body": body,
+    "traits": {},
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "motor_v3": motor_v3,
+  }
+  var planner := _MotorPlanner as GDScript
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  planner.call(
+    "_derive_find_food_step_objective", ctx, state, creature_pos, motor_v3,
+    _lost_prey_live_scan(prey_pos, prey_iid, prey_vel), RID(), 0.5,
+  )
+  _assert(state.get("step_source", &"") == &"live", "arrange: live pursuit of the moving prey")
+  _assert(
+    int(state.get("lost_prey_hint_instance_id", 0)) == prey_iid,
+    "live moving-prey pursuit stamps the last-known prey hint",
+  )
+  # Both pursuits lapse: engagement latch expired, awareness grace spent, prey out of the scan.
+  planner.call("_clear_prey_engagement", state)
+  state["live_food_awareness_grace_ticks_remaining"] = 0
+  var empty_scan := {"food_split": {"ready": [], "unready": []}}
+  planner.call("_derive_find_food_step_objective", ctx, state, creature_pos, motor_v3, empty_scan, RID(), 0.5)
+  _assert(
+    state.get("step_source", &"") == &"locale_search" and state.get("locale_search_origin", &"") == &"lost_prey",
+    "losing moving prey opens a lost-prey search, not random explore (src=%s)" % str(state.get("step_source", &"")),
+  )
+  var anchor: Vector3 = state.get("locale_search_anchor", Vector3.ZERO)
+  _assert(
+    anchor.x > prey_pos.x + 1.0 and absf(anchor.z - prey_pos.z) < 0.01,
+    "search anchor is projected ahead along the prey's last heading (anchor=%s)" % anchor,
+  )
+  # `step_goal` (what the creature steers at) — `step_ultimate_pos` can still hold the stale live
+  # prey position when the fallback is explore, which would make this check pass vacuously.
+  var steer: Vector3 = state.get("step_goal", Vector3.ZERO)
+  var target: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  var to_prey := Vector3(prey_pos.x - creature_pos.x, 0.0, prey_pos.z - creature_pos.z).normalized()
+  var to_steer := Vector3(steer.x - creature_pos.x, 0.0, steer.z - creature_pos.z).normalized()
+  _assert(
+    bool(state.get("step_goal_set", false)) and to_steer.dot(to_prey) > 0.0,
+    "fallback waypoint bears toward the last-known prey position (dot=%.2f steer=%s)" % [to_steer.dot(to_prey), steer],
+  )
+  _assert(int(state.get("lost_prey_hint_ticks_remaining", -1)) == 0, "the hint is consumed (one-shot)")
+  planner.call("_derive_find_food_step_objective", ctx, state, creature_pos, motor_v3, empty_scan, RID(), 0.5)
+  _assert(
+    state.get("step_source", &"") == &"locale_search"
+    and (state.get("step_ultimate_pos", Vector3.ZERO) as Vector3).distance_to(target) < 0.01,
+    "a consideration refresh holds the lost-prey search step instead of re-minting explore",
+  )
+  main.queue_free()
+
+
+## 2026-09-28: with no last-known prey (nothing was ever pursued), the fallback is unchanged —
+## plain `explore`, no search window opened.
+func _test_motor_planner_lost_prey_search_absent_without_prey_hint() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var ctx := {
+    "body": body,
+    "traits": {},
+    "memory_adapter": stack.get_memory_adapter(),
+    "now_ms": Time.get_ticks_msec(),
+    "motor_v3": motor_v3,
+  }
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  var empty_scan := {"food_split": {"ready": [], "unready": []}}
+  (_MotorPlanner as GDScript).call(
+    "_derive_find_food_step_objective", ctx, state, body.global_position, motor_v3, empty_scan, RID(), 0.5
+  )
+  _assert(state.get("step_source", &"") == &"explore", "no prey hint: fallback is still explore")
+  _assert(not bool(state.get("locale_search_anchor_set", false)), "no prey hint: no search window opened")
+  main.queue_free()
+
+
+## 2026-09-28: the lost-prey search is not started for a prey still in the live scan (a deliberate
+## give-up with the prey in view, e.g. the prey-race exclusion), and the prey-race give-up itself
+## drops the hint so the search can't start later either.
+func _test_motor_planner_lost_prey_search_skipped_for_visible_or_given_up_prey() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var planner := _MotorPlanner as GDScript
+  var prey_iid := 88302
+  var prey_pos := Vector3(20.0, 1.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  planner.call(
+    "_note_lost_prey_hint_from_live", state,
+    {"pos": prey_pos, "instance_id": prey_iid, "velocity": Vector3(3.0, 0.0, 0.0)}, motor_v3,
+  )
+  var started: bool = planner.call(
+    "_maybe_start_lost_prey_search", state, motor_v3, _lost_prey_live_scan(prey_pos, prey_iid, Vector3.ZERO)
+  )
+  _assert(not started, "no lost-prey search while the prey is still in the live scan")
+  _assert(int(state.get("lost_prey_hint_instance_id", 0)) == prey_iid, "the hint survives for a later real loss")
+  # Prey-race give-up clears it.
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var race_v3 := motor_v3.duplicate()
+  race_v3["prey_race_giveup_ticks"] = 1
+  state["prey_race_instance_id"] = prey_iid
+  state["prey_race_best_dist"] = 0.0
+  planner.call(
+    "_track_prey_race_and_maybe_give_up", {"body": body}, state,
+    {"pos": prey_pos, "instance_id": prey_iid}, prey_iid, race_v3,
+  )
+  _assert(int(state.get("prey_race_excluded_instance_id", 0)) == prey_iid, "arrange: prey-race give-up fired")
+  _assert(int(state.get("lost_prey_hint_instance_id", 0)) == 0, "a prey-race give-up drops the lost-prey hint")
+  var empty_scan := {"food_split": {"ready": [], "unready": []}}
+  _assert(
+    not bool(planner.call("_maybe_start_lost_prey_search", state, motor_v3, empty_scan)),
+    "no lost-prey search for a prey the predator deliberately gave up on",
+  )
+  main.queue_free()
+
+
+## 2026-09-28: a lost-prey search running out of budget releases the step like any search, but
+## must not hard-invalidate a locale food belief near the anchor (the prey just moved on — that
+## says nothing about the cell). The empty-locale-arrival search still does (see
+## `_test_motor_planner_locale_search_giveup_invalidates_belief`).
+func _test_motor_planner_lost_prey_search_giveup_keeps_locale_belief() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  await process_frame
+  var stack := _motor_stack_test_configure(body)
+  var motor_v3 := _motor_v3_test_params()
+  var adapter: _MemoryAdapter = stack.get_memory_adapter()
+  var anchor := Vector3(10.0, 0.0, 10.0)
+  adapter.seed_locale_prior_for_test(0, 0, 1.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"locale_search"
+  state["locale_search_origin"] = &"lost_prey"
+  state["locale_search_anchor"] = anchor
+  state["locale_search_anchor_set"] = true
+  state["locale_search_ticks_remaining"] = 1
+  state["step_goal"] = anchor
+  state["step_goal_set"] = true
+  (_MotorPlanner as GDScript).call(
+    "_maybe_search_arrival_remint", {"body": body, "memory_adapter": adapter}, state,
+    body.global_position, motor_v3, RID(), 0.4,
+  )
+  _assert(
+    not bool(state.get("locale_search_anchor_set", false)) and state.get("locale_search_origin", &"x") == &"",
+    "lost-prey search window clears itself (and its origin) once the budget is spent",
+  )
+  _assert(
+    bool(adapter.consult_locale_seek(anchor, motor_v3).get("active", false)),
+    "a lost-prey search give-up leaves the locale food belief near the anchor intact",
+  )
+  main.queue_free()
+
+
+## 2026-09-28: lost-prey candidate ranking — a clear route toward the anchor beats a truncated
+## (ghost-blocked) one, which beats a known dead end; a clear point bearing away from the anchor is
+## not "ideal" (keeps sampling); inside the search radius bearing is ignored.
+func _test_motor_planner_lost_prey_search_candidate_ranking() -> void:
+  var planner := _MotorPlanner as GDScript
+  var me := Vector3.ZERO
+  var anchor := Vector3(30.0, 0.0, 0.0)
+  var toward := Vector3(25.0, 0.0, 5.0)
+  var away := Vector3(-10.0, 0.0, 0.0)
+  var clear_toward: float = planner.call("_lost_prey_search_candidate_score", me, anchor, 12.0, toward, false, false)
+  var trunc_toward: float = planner.call("_lost_prey_search_candidate_score", me, anchor, 12.0, toward, true, false)
+  var dead_toward: float = planner.call("_lost_prey_search_candidate_score", me, anchor, 12.0, toward, false, true)
+  var clear_away: float = planner.call("_lost_prey_search_candidate_score", me, anchor, 12.0, away, false, false)
+  _assert(clear_toward > trunc_toward and trunc_toward > dead_toward, "clear > truncated > dead end")
+  _assert(bool(planner.call("_lost_prey_candidate_is_ideal", clear_toward)), "clear route toward the prey is ideal")
+  _assert(not bool(planner.call("_lost_prey_candidate_is_ideal", clear_away)), "clear route away from the prey is not")
+  _assert(not bool(planner.call("_lost_prey_candidate_is_ideal", trunc_toward)), "a ghost-truncated route is not")
+  var inside: float = planner.call(
+    "_lost_prey_search_candidate_score", Vector3(28.0, 0.0, 0.0), anchor, 12.0, away, false, false
+  )
+  _assert(bool(planner.call("_lost_prey_candidate_is_ideal", inside)), "inside the search radius bearing is ignored")
+
+
+## 2026-09-28: when every point around the lost-prey anchor routes into a blocked spot, the search
+## walks a clear bearing instead. On an open navmesh with a ghost-layer box squarely on the direct
+## bearing to the anchor (the navmesh can't see it), the direct bearing's route scan collapses, so
+## the fallback must pick a clear bearing that still leans toward the anchor (±45°); with no box it
+## picks the direct bearing. Far-off origin so no other fixture's colliders interfere.
+func _test_motor_planner_lost_prey_bearing_fallback_avoids_ghost_blocked_bearing() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var o := Vector3(7000.0, 0.0, 7000.0)
+  var map_rid := _explicit_navmesh_on_isolated_map(
+    main,
+    PackedVector3Array([o + Vector3(-40, 0, -40), o + Vector3(40, 0, -40), o + Vector3(40, 0, 40), o + Vector3(-40, 0, 40)]),
+    [[0, 1, 2, 3]],
+  )
+  var start := o + Vector3(0.0, 1.0, 0.0)
+  var anchor := o + Vector3(30.0, 0.0, 0.0)
+  _assert(await _await_nav_path(map_rid, start, anchor), "open-square navmesh answers path queries (fallback)")
+  var body := _spawn_herbivore_body(main, start)
+  await process_frame
+  body.global_position = start
+  var motor_v3 := _motor_v3_test_params()
+  var ctx := {"body": body, "map_rid": map_rid, "space_state": body.get_world_3d().direct_space_state}
+  var planner := _MotorPlanner as GDScript
+  var to_anchor := Vector3(1.0, 0.0, 0.0)
+  var open_pick: Dictionary = planner.call("_lost_prey_bearing_fallback", ctx, map_rid, start, anchor, motor_v3)
+  var open_ep: Vector3 = open_pick.get("endpoint", start)
+  var open_dir := Vector3(open_ep.x - start.x, 0.0, open_ep.z - start.z).normalized()
+  _assert(not open_pick.is_empty() and open_dir.dot(to_anchor) > 0.95, "open ground: fallback takes the direct bearing (dir=%s)" % open_dir)
+  var ghost := StaticBody3D.new()
+  ghost.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  ghost.collision_mask = 0
+  var gcol := CollisionShape3D.new()
+  var gbox := BoxShape3D.new()
+  gbox.size = Vector3(2.0, 6.0, 2.0)
+  gcol.shape = gbox
+  ghost.add_child(gcol)
+  main.add_child(ghost)
+  ghost.global_position = o + Vector3(10.0, 3.0, 0.0)
+  await physics_frame
+  await physics_frame
+  var pick: Dictionary = planner.call("_lost_prey_bearing_fallback", ctx, map_rid, start, anchor, motor_v3)
+  var ep: Vector3 = pick.get("endpoint", start)
+  var dir := Vector3(ep.x - start.x, 0.0, ep.z - start.z).normalized()
+  _assert(
+    not pick.is_empty() and dir.dot(to_anchor) > 0.5 and dir.dot(to_anchor) < 0.9,
+    "ghost on the direct bearing: fallback leans around it, still toward the prey (dir=%s)" % dir,
+  )
+  await _free_isolated_nav_map(main, map_rid)
 
 
 ## 2026-09-13 stuck-rabbit fix: the live-vs-locale handoff branch (a second call site minting a
@@ -5976,10 +6414,11 @@ func _test_motor_planner_pursuit_detour_prefers_straight_line_when_it_reaches_fa
   nm.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN
   nm.geometry_collision_mask = 1
   nav_region.navigation_mesh = nm
-  nav_region.bake_navigation_mesh()
+  nav_region.bake_navigation_mesh(false)
   var map_rid := nav_region.get_navigation_map()
   NavigationServer3D.map_set_active(map_rid, true)
   NavigationServer3D.map_set_cell_height(map_rid, 0.25)
+  _assert(await _MotorPathFixture.await_region_nav_ready(nav_region), "rotated-bearing navmesh synced to the map")
 
   var creature_pos := Vector3(0.0, 1.0, 0.0)
   var prey_pos := Vector3(20.0, 1.0, 0.0)
@@ -6040,6 +6479,465 @@ func _test_motor_planner_pursuit_detour_prefers_straight_line_when_it_reaches_fa
     ) % new_wp,
   )
   main.queue_free()
+
+
+## Tall-body navmesh regression fixture (2026-09-25 wolf silent-stall): hand-authored navmesh
+## polygons (no bake), so the exact shape `map_get_path` sees is under test control. A flat 40×40
+## quad "A" at y=0, plus a narrow steep ramp "B" (x 19.5..20.5, rising to y=6 at z=-3) that joins
+## A through a 1 m portal at z=0. A capsule centre ~7.7 m above A near that portal (the wolf's
+## height) is closer in 3D to B's top than to the floor under it. So `map_get_path` starts on B,
+## and the funnel emits the portal corner (20.5, 0, 0), which sits 0.2–1.6 m horizontally from
+## the body but ~7.7 m away in 3D. This is the same signature captured live on the decision-44
+## layout (hop 0.16 m under the wolf, `closest_a` snapped 0.62 m uphill). Returns the map RID of
+## an isolated map (see [method _explicit_navmesh_on_isolated_map]); release it with
+## [method _free_isolated_nav_map] after freeing [param parent].
+func _tall_body_slope_bias_navmesh(parent: Node3D) -> RID:
+  return _explicit_navmesh_on_isolated_map(
+    parent,
+    PackedVector3Array([
+      Vector3(0.0, 0.0, 0.0), Vector3(19.5, 0.0, 0.0), Vector3(20.5, 0.0, 0.0),
+      Vector3(40.0, 0.0, 0.0), Vector3(40.0, 0.0, 40.0), Vector3(0.0, 0.0, 40.0),
+      Vector3(20.5, 6.0, -3.0), Vector3(19.5, 6.0, -3.0),
+    ]),
+    [[0, 1, 2, 3, 4, 5], [1, 7, 6, 2]],
+  )
+
+
+## Hand-authored navmesh ([param vertices] + [param polygons], index arrays) on its own freshly
+## created navigation map. Earlier tests' regions still sit on the World3D default map, which
+## would otherwise merge into (and reroute) paths on this fixture. The region is parented under
+## [param parent]; returns the new map RID.
+## Example: `var m := _explicit_navmesh_on_isolated_map(main, verts, [[0, 1, 2, 3]])`.
+func _explicit_navmesh_on_isolated_map(
+  parent: Node3D, vertices: PackedVector3Array, polygons: Array
+) -> RID:
+  var map_rid := NavigationServer3D.map_create()
+  NavigationServer3D.map_set_cell_size(map_rid, 0.25)
+  NavigationServer3D.map_set_cell_height(map_rid, 0.25)
+  NavigationServer3D.map_set_active(map_rid, true)
+  var nm := NavigationMesh.new()
+  nm.cell_size = 0.25
+  nm.cell_height = 0.25
+  nm.set_vertices(vertices)
+  for poly in polygons:
+    nm.add_polygon(PackedInt32Array(poly))
+  var region := NavigationRegion3D.new()
+  region.name = "ExplicitNavRegion"
+  region.navigation_mesh = nm
+  region.set_navigation_map(map_rid)
+  parent.add_child(region)
+  return map_rid
+
+
+## Frees [param parent] (which owns the fixture region) and, one frame later, the isolated map.
+func _free_isolated_nav_map(parent: Node, map_rid: RID) -> void:
+  parent.queue_free()
+  await process_frame
+  if map_rid.is_valid():
+    NavigationServer3D.free_rid(map_rid)
+
+
+## Waits (bounded) until [param map_rid] answers a ≥2-point path from [param from] to [param to].
+func _await_nav_path(map_rid: RID, from: Vector3, to: Vector3) -> bool:
+  for _i in 30:
+    await physics_frame
+    if NavigationServer3D.map_get_path(map_rid, from, to, true).size() >= 2:
+      return true
+  return false
+
+
+## 2026-09-25 wolf silent-stall root cause 1: `MotorPathClear.resolve_step_objective` used a 3D
+## `distance_squared_to > 4.0` hop gate. For a body whose centre is ~7.7 m above the navmesh, every
+## hop passes that gate, including one directly under the body. Arrange asserts the fixture really
+## produces such a hop (`path[1]` within 2 m XZ); Act/Assert requires the resolved step objective
+## to be a real hop more than `MIN_HOP_DISTANCE` away on the ground plane. Validity-checked red
+## against the pre-fix 3D gate.
+func _test_motor_path_clear_resolve_step_objective_skips_hop_under_tall_body() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var map_rid := _tall_body_slope_bias_navmesh(main)
+  var target := Vector3(35.0, 0.0, 20.0)
+  var creature_pos := Vector3(20.5, 7.7, 0.2)
+  _assert(await _await_nav_path(map_rid, creature_pos, target), "slope-bias navmesh answers path queries")
+  var raw: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, target, true)
+  _assert(
+    raw.size() >= 3 and _MotorPlane.horizontal_distance(creature_pos, raw[1]) < _MotorPathClear.MIN_HOP_DISTANCE,
+    "fixture reproduces the live signature: path[1] sits within 2 m (XZ) of the elevated body (path=%s)" % raw,
+  )
+  var resolved := _MotorPathClear.resolve_step_objective(map_rid, creature_pos, target, 7.03)
+  var hop_xz := _MotorPlane.horizontal_distance(creature_pos, resolved)
+  _assert(
+    hop_xz > _MotorPathClear.MIN_HOP_DISTANCE,
+    "resolved step objective is a real hop, not the point under the body (xz=%.2f resolved=%s)" % [hop_xz, resolved],
+  )
+  # A ground-level creature at the same XZ has nothing within 2 m either — the XZ gate agrees.
+  var ground_resolved := _MotorPathClear.resolve_step_objective(
+    map_rid, Vector3(creature_pos.x, 0.1, creature_pos.z), target, 1.7
+  )
+  _assert(
+    _MotorPlane.horizontal_distance(creature_pos, ground_resolved) > _MotorPathClear.MIN_HOP_DISTANCE,
+    "ground-level query resolves a real hop too (resolved=%s)" % ground_resolved,
+  )
+  await _free_isolated_nav_map(main, map_rid)
+
+
+## 2026-09-25 wolf silent-stall closed-loop regression: a wolf-sized capsule (r≈7.03, h≈15.33)
+## chases a live target ≥20 m away on the slope-bias navmesh, driven by the real
+## `CreatureMotorStack`. It starts next to the portal corner that the elevated path query keeps
+## emitting under the body. Pre-fix, the step goal collapsed onto the wolf's own XZ, and it spun on
+## unblocked MOVE_FORWARD with ~zero displacement (the `MOTOR_INVARIANT ... silent stall` trip seen
+## 7/7 live on the decision-44 layout). Requires no 30-tick net-displacement stall (the
+## invariant's own window and 2 cm threshold), no step goal within 0.5 m (XZ) of the body while
+## pursuing, and closing to EAT reach. The stack's fail-fast invariants are disabled so a
+## regression shows up as an ASSERT instead of `quit(1)` killing the whole suite.
+func _test_motor_tall_capsule_live_pursuit_no_silent_stall_on_real_navmesh() -> void:
+  var main := _TerrainTestMainStub.new()
+  root.add_child(main)
+  var floor_body := StaticBody3D.new()
+  floor_body.collision_layer = 1
+  var floor_shape := BoxShape3D.new()
+  floor_shape.size = Vector3(90.0, 0.2, 90.0)
+  var floor_col := CollisionShape3D.new()
+  floor_col.shape = floor_shape
+  floor_body.add_child(floor_col)
+  floor_body.position = Vector3(20.0, -0.1, 15.0)
+  main.add_child(floor_body)
+  var map_rid := _tall_body_slope_bias_navmesh(main)
+  main.set("_fixture_map_rid", map_rid)
+  var prey_pos := Vector3(35.0, 1.0, 20.0)
+  var start_xz := Vector3(20.5, 0.0, 1.0)
+  _assert(await _await_nav_path(map_rid, start_xz, prey_pos), "tall-capsule pursuit fixture answers path queries")
+  var body := _spawn_carnivore_body(main, start_xz + Vector3(0.0, 9.0, 0.0))
+  var cap_h := float(body.call("get_collision_capsule_height"))
+  var cap_r := float(body.call("get_collision_capsule_radius"))
+  _assert(cap_r > 6.0 and cap_h > 14.0, "fixture body is wolf-sized (r=%.2f h=%.2f)" % [cap_r, cap_h])
+  var resting_y := cap_h * 0.5
+  body.global_position = start_xz + Vector3(0.0, resting_y, 0.0)
+  body.current_calories = 2.0
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await process_frame
+  await physics_frame
+  var stack := _motor_stack_test_configure(body)
+  stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+  const PREY_IID := 88070
+  var start_xz_dist := _MotorPlane.horizontal_distance(body.global_position, prey_pos)
+  _assert(start_xz_dist >= 20.0, "target starts ≥20 m away (xz=%.2f)" % start_xz_dist)
+  var stall := _MotorStallDetector.Tracker.new(30, 0.02)
+  var min_goal_xz := INF
+  var min_prey_xz := start_xz_dist
+  var eat_reached := false
+  var move_ticks := 0
+  for _tick_i in 360:
+    stack.set_live_scan_for_test(_motor_pursuit_pinch_live_scan(prey_pos, PREY_IID))
+    var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+    _motor_pursuit_pinch_ypin(body, resting_y)
+    var act := int(outcome.action)
+    if act == _MotorAction.EAT:
+      eat_reached = true
+      break
+    var pos := body.global_position
+    min_prey_xz = minf(min_prey_xz, _MotorPlane.horizontal_distance(pos, prey_pos))
+    if act == _MotorAction.MOVE_FORWARD and not outcome.blocked:
+      move_ticks += 1
+      stall.sample(Vector3(pos.x, 0.0, pos.z))
+      min_goal_xz = minf(min_goal_xz, _MotorPlane.horizontal_distance(pos, stack.get_planner_step_goal()))
+  _assert(move_ticks >= 10, "tall-capsule pursuit: sustained MOVE_FORWARD (moves=%d)" % move_ticks)
+  _assert(
+    not stall.stalled(0),
+    "tall-capsule pursuit: no 30-tick unblocked-MOVE_FORWARD silent stall (max_stall_streak=%d)"
+    % stall.max_stall_streak,
+  )
+  _assert(
+    min_goal_xz > 0.5,
+    "tall-capsule pursuit: step goal never collapses onto the body's own XZ (min=%.2f)" % min_goal_xz,
+  )
+  _assert(
+    eat_reached or min_prey_xz < start_xz_dist - 8.0,
+    "tall-capsule pursuit: closes on the target (start=%.2f min=%.2f eat=%s)"
+    % [start_xz_dist, min_prey_xz, str(eat_reached)],
+  )
+  await _free_isolated_nav_map(main, map_rid)
+
+
+## 2026-09-25 wolf silent-stall root cause 2: `_route_scanned_endpoint` can truncate a detour
+## target back to roughly the creature's own position. Here a ghost-layer block sits beside a
+## wolf-sized body, so the capsule sweep is blocked at the path's very first point. Pre-fix
+## `_remint_alternate_pursuit_detour` committed that point as the new detour waypoint, a
+## MOVE_FORWARD target at the creature's own feet. It must instead give up the same way a known
+## dead-end alternate does (`pursuit_detour_gave_up`, latch cleared), so §9 blocked resolution
+## gets its tick. Also pins `_route_scan_collapsed_onto_self`'s own contract. Validity-checked red
+## against the pre-fix remint.
+func _test_motor_planner_pursuit_detour_gives_up_when_route_scan_collapses_onto_self() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var tol := float(motor_v3.get("arrival_tolerance", 5.0))
+  var planner := _MotorPlanner as GDScript
+  _assert(
+    bool(planner.call("_route_scan_collapsed_onto_self", Vector3.ZERO, Vector3(20, 0, 0), Vector3(1, 7, 0), motor_v3)),
+    "collapse helper: far target truncated to within tolerance (XZ, height ignored) is collapsed",
+  )
+  _assert(
+    not bool(planner.call("_route_scan_collapsed_onto_self", Vector3.ZERO, Vector3(20, 0, 0), Vector3(tol + 1.0, 0, 0), motor_v3)),
+    "collapse helper: truncated endpoint beyond tolerance is a usable objective",
+  )
+  _assert(
+    not bool(planner.call("_route_scan_collapsed_onto_self", Vector3.ZERO, Vector3(3, 0, 0), Vector3(1, 0, 0), motor_v3)),
+    "collapse helper: a target that was already close is never 'collapsed'",
+  )
+
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main, 60.0)
+  var map_rid := _explicit_navmesh_on_isolated_map(
+    main,
+    PackedVector3Array([
+      Vector3(-20.0, 0.0, -20.0), Vector3(20.0, 0.0, -20.0), Vector3(20.0, 0.0, 20.0), Vector3(-20.0, 0.0, 20.0),
+    ]),
+    [[0, 1, 2, 3]],
+  )
+  # Ghost-layer wall (query-only layer, `GhostObstacleQuery.GHOST_LAYER_MASK`) whose near face is
+  # 8 m east of the creature, spanning z -10..10. A wolf capsule (r≈7.03) sweeping east or
+  # north-east hits it after ~1 m, so both the straight-to-prey candidate and the +60° rotated
+  # alternate truncate to ~1 m from the creature. (The wall must be *ahead*, not overlapping at the
+  # start: `cast_motion` reports a start-overlapped capsule as fully clear, `[1, 1]`.)
+  var ghost := StaticBody3D.new()
+  ghost.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  ghost.collision_mask = 0
+  var ghost_shape := BoxShape3D.new()
+  ghost_shape.size = Vector3(2.0, 3.0, 20.0)
+  var ghost_col := CollisionShape3D.new()
+  ghost_col.shape = ghost_shape
+  ghost.add_child(ghost_col)
+  ghost.position = Vector3(9.0, 1.5, 0.0)
+  main.add_child(ghost)
+  var creature_xz := Vector3.ZERO
+  var prey_pos := Vector3(15.0, 1.0, 0.0)
+  _assert(await _await_nav_path(map_rid, creature_xz, prey_pos), "flat explicit navmesh answers path queries")
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 8.0, 0.0))
+  body.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  await physics_frame
+  var detour_wp := Vector3(0.0, 0.0, 8.0)
+  var state := _MotorPlanner.new_state()
+  state["step_source"] = &"live"
+  state["step_goal"] = detour_wp
+  state["step_goal_set"] = true
+  state["pursuit_detour_waypoint"] = detour_wp
+  state["pursuit_detour_waypoint_set"] = true
+  state["pursuit_detour_ticks_remaining"] = 24
+  state["pursuit_detour_alt_flip"] = false
+  state["step_ultimate_pos"] = prey_pos
+  state["step_ultimate_pos_set"] = true
+  state["prey_engagement_instance_id"] = 88071
+  state["prey_engagement_ticks_remaining"] = 40
+  state["prey_engagement_latch_total"] = 40
+  state["consecutive_blocked"] = 3
+  var ctx := {
+    "body": body,
+    "scan": _motor_pursuit_pinch_live_scan(prey_pos, 88071),
+    "space_state": main.get_world_3d().direct_space_state,
+    "eye_height": 1.0,
+    "map_rid": map_rid,
+    "physics_tick": 5,
+    "delta": 1.0 / 60.0,
+  }
+  var probe_endpoint: Vector3 = planner.call(
+    "_route_scanned_endpoint", ctx, body, map_rid, body.global_position, Vector3(12.0, 0.0, 0.0)
+  )
+  _assert(
+    _MotorPlane.horizontal_distance(body.global_position, probe_endpoint) <= tol,
+    "fixture reproduces the truncation: route scan out of here collapses onto the body (endpoint=%s)"
+    % probe_endpoint,
+  )
+  planner.call("apply_immediate_blocked_path_reevaluation", ctx, state, body, motor_v3)
+  var committed := bool(state.get("pursuit_detour_waypoint_set", false))
+  var new_wp: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
+  _assert(
+    not committed or _MotorPlane.horizontal_distance(body.global_position, new_wp) > tol,
+    "a route scan collapsed onto the creature is never committed as the detour waypoint (wp=%s)" % new_wp,
+  )
+  _assert(
+    bool(state.get("pursuit_detour_gave_up", false)),
+    "collapsed alternate gives up (lets §9 blocked resolution through), same as a dead-end alternate",
+  )
+  await _free_isolated_nav_map(main, map_rid)
+
+
+## Records `notify_locale_food_arrival_empty` calls (CLEANUP C15 empty-arrival FAILURE write) for
+## the hop-vs-ultimate tests. It exposes no other adapter method, so every `has_method`-guarded
+## adapter call in the planner is skipped and nothing else in memory can steer the step.
+class _LocaleArrivalRecorder extends RefCounted:
+  var anchors: Array = []
+
+  ## Adapter hook the planner calls on an empty locale arrival; stores [param anchor].
+  func notify_locale_food_arrival_empty(anchor: Vector3, _motor_v3: Dictionary, _env_grid: Variant) -> void:
+    anchors.append(anchor)
+
+
+## L-shaped hand-authored navmesh (isolated map) whose route from the origin to the far end of the
+## east corridor must bend at the corridor mouth (1, 0, 3): a south strip x -1..1, z -1..3, joined
+## to an east strip x -1..20, z 3..5. From (0, *, 0) the first path point past `MIN_HOP_DISTANCE`
+## is that corner, ~3.2 m away (XZ): inside the 5 m `arrival_tolerance`, while (16, 0, 4) is ~16.5 m
+## away. Returns the map RID; release with [method _free_isolated_nav_map].
+func _hop_inside_arrival_tolerance_navmesh(parent: Node3D) -> RID:
+  return _explicit_navmesh_on_isolated_map(
+    parent,
+    PackedVector3Array([
+      Vector3(-1.0, 0.0, -1.0), Vector3(1.0, 0.0, -1.0), Vector3(1.0, 0.0, 3.0), Vector3(-1.0, 0.0, 3.0),
+      Vector3(20.0, 0.0, 3.0), Vector3(20.0, 0.0, 5.0), Vector3(-1.0, 0.0, 5.0),
+    ]),
+    # East strip starts at a corner vertex: its first three vertices must not be collinear, or the
+    # server derives a degenerate polygon plane and closest-point queries on it go wrong.
+    [[0, 1, 2, 3], [4, 5, 6, 3, 2]],
+  )
+
+
+## Hop-vs-ultimate fix (2026-09-28, live `STAY src=locale` stall): a find_food LOCALE step steers
+## at a navmesh hop (`step_goal`) ~3 m out while the locale anchor (`step_ultimate_pos`) is ~16 m
+## away. Pre-fix, `select_action` judged arrival on the hop (inside `arrival_tolerance`), and locale
+## steps carry no instance id, so it returned STAY forever. Closed loop on the planner (kinematic
+## stand-in for the executor: each MOVE_FORWARD moves 0.3 m straight at `step_goal`). Requires:
+## the fixture really produces an in-tolerance hop; no STAY and no `completed_step_objective`
+## while short of the anchor; the creature reaches the anchor; and the C15 empty-arrival write
+## plus the revisit cooldown fire exactly once, at the anchor (never at the hop).
+## Validity-checked red against the pre-fix hop-judged arrival.
+func _test_motor_planner_locale_seek_walks_past_intermediate_hop_on_real_navmesh() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var map_rid := _hop_inside_arrival_tolerance_navmesh(main)
+  var start := Vector3(0.0, 1.0, 0.0)
+  var anchor := Vector3(16.0, 0.0, 4.0)
+  _assert(await _await_nav_path(map_rid, Vector3.ZERO, anchor), "L-corridor navmesh answers path queries")
+  var body := _spawn_herbivore_body(main, start)
+  body.last_move_direction = Vector3(0.0, 0.0, 1.0)
+  await process_frame
+  body.global_position = start
+  var motor_v3 := _motor_v3_test_params()
+  var tol := float(motor_v3.get("arrival_tolerance", 5.0))
+  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var hop := _MotorPathClear.resolve_step_objective(map_rid, start, anchor, 0.5)
+  var hop_xz := _MotorPlane.horizontal_distance(start, hop)
+  _assert(
+    hop_xz > _MotorPathClear.MIN_HOP_DISTANCE and hop_xz <= tol and _MotorPlane.horizontal_distance(hop, anchor) > 10.0,
+    "fixture: first hop is inside arrival_tolerance while the anchor is >10 m on (hop=%s xz=%.2f)" % [hop, hop_xz],
+  )
+  var recorder := _LocaleArrivalRecorder.new()
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_source"] = &"locale"
+  state["step_goal"] = hop
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = anchor
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = 0
+  var planner := _MotorPlanner as GDScript
+  _assert(
+    not bool(planner.call("completed_step_objective", body, state, motor_v3, _MotorAction.STAY)),
+    "a STAY while standing inside tolerance of an intermediate hop does not complete the locale step",
+  )
+  var stay_short := 0
+  var moves := 0
+  var arrival_dist := -1.0
+  var cleared_on_tick := -1
+  for tick_i in 240:
+    var ctx := {
+      "body": body,
+      "motor_v3": motor_v3,
+      "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+      "scan": _motor_stack_empty_food_scan(),
+      "map_rid": map_rid,
+      "memory_adapter": recorder,
+      "physics_tick": tick_i,
+      "delta": 1.0 / 60.0,
+    }
+    var act := int(planner.call("select_action", ctx, state))
+    if recorder.anchors.size() > 0:
+      arrival_dist = _MotorPlane.horizontal_distance(body.global_position, anchor)
+      cleared_on_tick = tick_i
+      break
+    var short_of_anchor := _MotorPlane.horizontal_distance(body.global_position, anchor) > tol
+    if act == _MotorAction.STAY and short_of_anchor:
+      stay_short += 1
+    if short_of_anchor and bool(planner.call("completed_step_objective", body, state, motor_v3, act)):
+      stay_short += 1
+    if act == _MotorAction.MOVE_FORWARD:
+      moves += 1
+      var goal: Vector3 = state.get("step_goal", body.global_position)
+      var to_goal := Vector3(goal.x - body.global_position.x, 0.0, goal.z - body.global_position.z)
+      if to_goal.length() > 1e-4:
+        body.global_position += to_goal.normalized() * minf(0.3, to_goal.length())
+  _assert(stay_short == 0, "no STAY / step completion while short of the locale anchor (got %d)" % stay_short)
+  _assert(moves > 20, "creature walks the corridor instead of parking at the hop (moves=%d)" % moves)
+  _assert(
+    recorder.anchors.size() == 1 and (recorder.anchors[0] as Vector3).distance_to(anchor) < 0.01,
+    "C15 empty-arrival write fires exactly once, for the real anchor (calls=%s)" % str(recorder.anchors),
+  )
+  _assert(
+    arrival_dist >= 0.0 and arrival_dist <= eat_max,
+    "C15 write happens at the anchor, not at the hop (dist to anchor=%.2f tick=%d)" % [arrival_dist, cleared_on_tick],
+  )
+  _assert(
+    bool(state.get("locale_arrival_clear_anchor_set", false))
+    and (state.get("locale_arrival_clear_anchor", Vector3.ZERO) as Vector3).distance_to(anchor) < 0.01
+    and int(state.get("locale_arrival_clear_cooldown_ticks", 0)) > 0,
+    "revisit cooldown is stamped on the real anchor",
+  )
+  await _free_isolated_nav_map(main, map_rid)
+
+
+## Hop-vs-ultimate fix (2026-09-28), locale_search half: `_mint_locale_search_waypoint` now keeps
+## the (navmesh-snapped) search point as `step_ultimate_pos`, with `step_goal` the hop toward it,
+## and `_maybe_search_arrival_remint` / `completed_step_objective` judge arrival on that point.
+## Pre-fix, standing inside tolerance of a hop re-minted a fresh random point every tick (and
+## `select_action` STAYed), so the search never went anywhere. Validity-checked red pre-fix.
+func _test_motor_planner_locale_search_arrival_judged_on_search_point_not_hop() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var map_rid := _hop_inside_arrival_tolerance_navmesh(main)
+  var start := Vector3(0.0, 1.0, 0.0)
+  var far_point := Vector3(16.0, 0.0, 4.0)
+  _assert(await _await_nav_path(map_rid, Vector3.ZERO, far_point), "L-corridor navmesh answers path queries (search)")
+  var body := _spawn_herbivore_body(main, start)
+  await process_frame
+  body.global_position = start
+  var motor_v3 := _motor_v3_test_params()
+  var planner := _MotorPlanner as GDScript
+  # Mint: the committed arrival point is on the navmesh and the step goal is a hop toward it.
+  seed(4242)
+  var mint_state := _MotorPlanner.new_state()
+  mint_state["locale_search_anchor"] = far_point
+  mint_state["locale_search_anchor_set"] = true
+  var mint_ctx := {"body": body, "map_rid": map_rid}
+  planner.call("_mint_locale_search_waypoint", mint_ctx, mint_state, start, motor_v3, map_rid, 0.5)
+  randomize()
+  var search_pt: Vector3 = mint_state.get("step_ultimate_pos", Vector3.ZERO)
+  var on_mesh := NavigationServer3D.map_get_closest_point(map_rid, search_pt)
+  _assert(
+    bool(mint_state.get("step_ultimate_pos_set", false)) and on_mesh.distance_to(search_pt) < 0.05,
+    "search mint stores the navmesh-snapped search point as step_ultimate_pos (pt=%s closest=%s)" % [search_pt, on_mesh],
+  )
+  _assert(int(mint_state.get("step_instance_id", -1)) == 0, "search step still carries no food instance id")
+  # Arrival: at a hop inside tolerance but far from the search point, nothing re-mints or completes.
+  var hop := _MotorPathClear.resolve_step_objective(map_rid, start, far_point, 0.5)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_source"] = &"locale_search"
+  state["locale_search_anchor"] = far_point
+  state["locale_search_anchor_set"] = true
+  state["locale_search_ticks_remaining"] = 100
+  state["step_goal"] = hop
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = far_point
+  state["step_ultimate_pos_set"] = true
+  planner.call("_maybe_search_arrival_remint", {"body": body}, state, start, motor_v3, map_rid, 0.5)
+  _assert(
+    (state.get("step_ultimate_pos", Vector3.ZERO) as Vector3).distance_to(far_point) < 0.01
+    and (state.get("step_goal", Vector3.ZERO) as Vector3).distance_to(hop) < 0.01,
+    "no search re-mint while only an intermediate hop is within tolerance",
+  )
+  _assert(
+    not bool(planner.call("completed_step_objective", body, state, motor_v3, _MotorAction.STAY)),
+    "a STAY at an intermediate hop does not complete the search step",
+  )
+  await _free_isolated_nav_map(main, map_rid)
 
 
 func _test_motor_planner_live_pursuit_blocked_seek_suppressed() -> void:
@@ -8735,6 +9633,16 @@ func _arm_stack_flight_exit_next_tick(stack: CreatureMotorStack) -> void:
   stack.set("_was_flight_fast_path", true)
 
 
+## Flight flicker fix option 5: a Flight exit only records a PENDING escape; its SUCCESS write /
+## shelter promotion / clean-exit nudge commit once `flight_exit_confirm_sec` passes with no
+## re-entry. This backdates `stack`'s pending exit past that window and ticks once, so the commit
+## runs on that tick (no real 2 s wait). Call right after the `flight_just_exited` tick.
+func _confirm_pending_flight_exit(stack: CreatureMotorStack) -> void:
+  var confirm_ms := int(float(_motor_v3_test_params().get("flight_exit_confirm_sec", 2.0)) * 1000.0)
+  stack.set("_flight_exit_ms", Time.get_ticks_msec() - confirm_ms - 100)
+  stack.tick(1.0 / 60.0)
+
+
 ## Locale rows currently stored for `goal_kind` on `stack`'s memory adapter.
 func _stack_locale_rows_for(stack: CreatureMotorStack, goal_kind: StringName) -> Array:
   var out: Array = []
@@ -8802,9 +9710,16 @@ func _test_creature_motor_stack_flight_exit_promotes_nearby_shelter_from_observe
     _assert(before < battle_w, "%s shelter starts below the battle-tested weight" % from_tier)
     _arm_stack_flight_exit_next_tick(stack)
     stack.tick(1.0 / 60.0)
+    ## Flicker fix option 5: the exit tick itself only records a pending escape — promotion waits
+    ## for the confirm window (no re-entry) to pass.
+    _assert(
+      is_equal_approx(adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec()), before),
+      "flight_just_exited at an %s shelter does not promote it before the confirm window" % from_tier,
+    )
+    _confirm_pending_flight_exit(stack)
     _assert(
       is_equal_approx(adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec()), battle_w),
-      "flight_just_exited at an %s shelter promotes it to battle-tested" % from_tier,
+      "a confirmed Flight exit at an %s shelter promotes it to battle-tested" % from_tier,
     )
     body.get_parent().remove_child(body)
     body.queue_free()
@@ -8817,6 +9732,7 @@ func _test_creature_motor_stack_flight_exit_promotes_nearby_shelter_from_observe
   far_stack.get_memory_adapter().record_shelter_evaluation(far_iid, far_anchor, true, 0.9, Time.get_ticks_msec())
   _arm_stack_flight_exit_next_tick(far_stack)
   far_stack.tick(1.0 / 60.0)
+  _confirm_pending_flight_exit(far_stack)
   _assert(
     is_equal_approx(
       far_stack.get_memory_adapter().shelter_confidence_score(far_anchor, motor_v3, Time.get_ticks_msec()),
@@ -8839,8 +9755,14 @@ func _test_creature_motor_stack_flight_exit_writes_one_avoid_hostiles_locale_row
   stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
   _arm_stack_flight_exit_next_tick(stack)
   stack.tick(1.0 / 60.0)
+  ## Flicker fix option 5: nothing is written until the exit is confirmed (no re-entry in window).
+  _assert(
+    _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES).is_empty(),
+    "a pending (unconfirmed) Flight exit writes no avoid_hostiles row yet",
+  )
+  _confirm_pending_flight_exit(stack)
   var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
-  _assert(rows.size() == 1, "one Flight exit writes exactly one avoid_hostiles row")
+  _assert(rows.size() == 1, "one confirmed Flight exit writes exactly one avoid_hostiles row")
   if rows.size() == 1:
     var row: Dictionary = rows[0]
     _assert(int(row.get("cell_x", -1)) == 0 and int(row.get("cell_y", -1)) == 0, "row anchors at the body's exit cell")
@@ -8849,6 +9771,7 @@ func _test_creature_motor_stack_flight_exit_writes_one_avoid_hostiles_locale_row
     _assert(float(row.get("success_delta", 0.0)) > 0.0 and float(row.get("stored_strength", 0.0)) > 0.0, "SUCCESS reward gives positive delta and strength")
   _arm_stack_flight_exit_next_tick(stack)
   stack.tick(1.0 / 60.0)
+  _confirm_pending_flight_exit(stack)
   rows = _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
   _assert(
     rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 2 and int(rows[0].get("success_count", 0)) == 2,
@@ -10531,8 +11454,11 @@ func _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_an
     stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
     _arm_stack_flight_exit_next_tick(stack)
     stack.tick(1.0 / 60.0)
+    ## Flicker fix option 5: the SUCCESS (and the FAILURE-proxy anchor) only land once the exit is
+    ## confirmed; the re-entries below all happen after that window, i.e. genuine re-acquisitions.
+    _confirm_pending_flight_exit(stack)
     var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
-    _assert(rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 1, "%s: exit wrote one SUCCESS" % variant)
+    _assert(rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 1, "%s: confirmed exit wrote one SUCCESS" % variant)
     if variant == "outside_window":
       stack.set("_flight_exit_ms", Time.get_ticks_msec() - 30000)
     elif variant == "far_from_anchor":
@@ -10555,6 +11481,189 @@ func _test_creature_motor_stack_flight_reacquire_writes_one_failure_near_exit_an
       _assert(int(rows[0].get("attempt_count", 0)) == 2, "a second entry after the same exit writes nothing more")
     else:
       _assert(int(row.get("attempt_count", 0)) == 1, "%s: no FAILURE written" % variant)
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Flight flicker fix option 1 (2026-09-29): while the Flight latch is held, a remembered hostile
+## (avoid_hostiles belief seen within `flight_threat_memory_sec`) believed within
+## `flight_acute_panic_radius * (1 + flight_release_margin_frac)` keeps the safety counter at zero
+## even with no threat sample in view — a fleeing creature faces away from its pursuer. It releases
+## once the threat is believed beyond the margin (last position, or velocity-extrapolated) or the
+## memory expires; with no remembered hostile a genuine escape still releases after `safety_time`;
+## and outside a latched episode (REST / find_food safety) the memory is ignored.
+func _test_flight_threat_memory_holds_safety_while_latched_until_threat_believed_gone() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var required := maxi(1, int(motor_v3.get("safety_time", 5)))
+  var panic_r := float(motor_v3.get("flight_acute_panic_radius", 220.0))
+  var margin := float(motor_v3.get("flight_release_margin_frac", 0.25))
+  var mem_ms := int(float(motor_v3.get("flight_threat_memory_sec", 2.0)) * 1000.0)
+  _assert(
+    mem_ms > int(float(motor_v3.get("goal_memory_ghost_horizon_sec", 0.4)) * 1000.0),
+    "flight_threat_memory_sec outlasts the vigilance-ghost horizon",
+  )
+  var inside := panic_r * 0.5
+  var in_margin := panic_r * (1.0 + margin * 0.5)
+  var beyond := panic_r * (1.0 + margin * 1.5)
+  ## [label, latched, offset_x, age_ms (-1 = no belief), velocity_x, expect Flight held]
+  var cases := [
+    ["inside panic radius, just seen", true, inside, 0, 0.0, true],
+    ["inside the release margin", true, in_margin, 0, 0.0, true],
+    ["believed beyond the margin", true, beyond, 0, 0.0, false],
+    ["memory expired", true, inside, mem_ms + 500, 0.0, false],
+    ["moving away, extrapolated beyond the margin", true, in_margin, 1000, panic_r, false],
+    ["moving closer, extrapolated inside", true, beyond, 1000, inside - beyond, true],
+    ["no remembered hostile (genuine escape)", true, 0.0, -1, 0.0, false],
+    ["not latched (REST safety unchanged)", false, inside, 0, 0.0, false],
+  ]
+  var main := Node3D.new()
+  root.add_child(main)
+  for c in cases:
+    var label: String = c[0]
+    var latched: bool = c[1]
+    var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+    var stack := _motor_stack_test_configure(body)
+    stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+    var adapter := stack.get_memory_adapter()
+    adapter.set_beliefs_for_test({})
+    if int(c[3]) >= 0:
+      adapter.seed_threat_belief_for_test(
+        9001,
+        body.global_position + Vector3(float(c[2]), 0.0, 0.0),
+        Time.get_ticks_msec() - int(c[3]),
+        &"wolf",
+        Vector3(float(c[4]), 0.0, 0.0),
+      )
+    stack.set("_flight_fast_path_latched", latched)
+    stack.set("_flight_fast_path_active", latched)
+    stack.set("_was_flight_fast_path", latched)
+    stack.set("_safety_cycles", 0)
+    stack.set("_safety_met", false)
+    stack.set("_threat_seen_since_safety_check", false)
+    for _i in required + 2:
+      stack.call("_update_safety_on_consideration")
+    var held: bool = c[5]
+    _assert(
+      stack.is_safety_met() == (not held),
+      "%s: safety_met %s after %d threat-free windows" % [label, "stays false" if held else "goes true", required + 2],
+    )
+    if latched:
+      stack.tick(1.0 / 60.0)
+      _assert(
+        stack.is_flight_fast_path_active() == held,
+        "%s: Flight %s on the next tick" % [label, "stays latched" if held else "releases"],
+      )
+    body.get_parent().remove_child(body)
+    body.queue_free()
+  main.queue_free()
+
+
+## Flight flicker fix option 5 (2026-09-29): an exit followed by a re-entry inside
+## `flight_exit_confirm_sec` was never an escape — no avoid_hostiles SUCCESS, no re-acquisition
+## FAILURE, no shelter battle_tested promotion, and the exit/re-entry disposition nudges are both
+## withheld (one unbroken episode's +entry/+exit, not a +0.16 pump per flicker). Nothing is armed or
+## committed later either.
+func _test_flight_exit_flicker_reentry_in_confirm_window_commits_nothing() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+  var stack := _motor_stack_test_configure(body)
+  stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+  stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+  var adapter := stack.get_memory_adapter()
+  var anchor := body.global_position
+  var shelter_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+  adapter.record_shelter_evaluation(shelter_iid, anchor, true, 0.9, Time.get_ticks_msec())
+  var confirmed_w := float(motor_v3.get("shelter_confidence_confirmed", 0.6))
+  adapter.set_threat_disposition_mod_for_test(0.8, motor_v3)
+  _arm_stack_flight_exit_next_tick(stack)
+  stack.tick(1.0 / 60.0)
+  _assert(not stack.is_flight_fast_path_active(), "flicker: fixture exited Flight")
+  _assert(bool(stack.get("_flight_exit_pending")), "flicker: the exit is pending confirmation")
+  _arm_stack_flight_entry_next_tick(stack)
+  stack.tick(1.0 / 60.0)
+  _assert(stack.is_flight_fast_path_active(), "flicker: fixture re-entered Flight inside the confirm window")
+  _assert(not bool(stack.get("_flight_exit_pending")), "flicker: the re-entry cancels the pending exit")
+  _assert(
+    _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES).is_empty(),
+    "flicker: neither a SUCCESS nor a re-acquisition FAILURE row is written",
+  )
+  _assert(
+    is_equal_approx(adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec()), confirmed_w),
+    "flicker: the shelter at the exit is not promoted to battle_tested",
+  )
+  _assert(
+    is_equal_approx(adapter.get_threat_disposition_mod(), 0.8),
+    "flicker: exit + re-entry nudges are withheld (disposition not pumped)",
+  )
+  ## Long after the window: the cancelled exit never commits and never arms the FAILURE proxy.
+  stack.set("_flight_exit_ms", Time.get_ticks_msec() - 10000)
+  stack.tick(1.0 / 60.0)
+  _assert(_stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES).is_empty(), "flicker: nothing commits later")
+  _assert(not bool(stack.get("_has_flight_exit_anchor")), "flicker: no re-acquisition anchor armed")
+  main.queue_free()
+
+
+## Flight flicker fix option 5 (2026-09-29): (d) an exit with no re-entry commits after
+## `flight_exit_confirm_sec` — one SUCCESS row, the shelter at the exit promoted to battle_tested,
+## the withheld clean-exit nudge applied and the FAILURE-proxy anchor armed; (e) a re-entry after the
+## window near the anchor commits the SUCCESS first then writes the FAILURE on the same tick, as the
+## pre-fix re-acquisition proxy did (success_delta -0.0225).
+func _test_flight_exit_commits_after_confirm_window_and_late_reentry_writes_failure() -> void:
+  var motor_v3 := _motor_v3_test_params()
+  var evade := float(motor_v3.get("flight_disposition_evade_delta", 0.08))
+  var battle_w := float(motor_v3.get("shelter_confidence_battle_tested", 1.0))
+  var confirm_ms := int(float(motor_v3.get("flight_exit_confirm_sec", 2.0)) * 1000.0)
+  var main := Node3D.new()
+  root.add_child(main)
+  for variant in ["no_reentry", "late_reentry_near_anchor"]:
+    var body := _spawn_herbivore_body(main, Vector3(4.0, 1.0, 4.0))
+    var stack := _motor_stack_test_configure(body)
+    stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+    stack.set_environment_grid_for_test(_motor_stack_test_env_grid())
+    var adapter := stack.get_memory_adapter()
+    var anchor := body.global_position
+    var shelter_iid := _GoalBeliefMemoryScr.shelter_cell_instance_id(anchor, motor_v3)
+    adapter.record_shelter_evaluation(shelter_iid, anchor, true, 0.9, Time.get_ticks_msec())
+    adapter.set_threat_disposition_mod_for_test(0.8, motor_v3)
+    _arm_stack_flight_exit_next_tick(stack)
+    stack.tick(1.0 / 60.0)
+    _assert(
+      _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES).is_empty()
+      and is_equal_approx(adapter.get_threat_disposition_mod(), 0.8),
+      "%s: nothing committed on the exit tick" % variant,
+    )
+    if variant == "no_reentry":
+      _confirm_pending_flight_exit(stack)
+      var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+      _assert(
+        rows.size() == 1 and int(rows[0].get("attempt_count", 0)) == 1 and int(rows[0].get("success_count", 0)) == 1,
+        "no_reentry: one SUCCESS committed after the confirm window",
+      )
+      _assert(
+        is_equal_approx(adapter.shelter_confidence_score(anchor, motor_v3, Time.get_ticks_msec()), battle_w),
+        "no_reentry: shelter at the exit promoted to battle_tested on commit",
+      )
+      _assert(is_equal_approx(adapter.get_threat_disposition_mod(), 0.8 + evade), "no_reentry: clean-exit nudge applied on commit")
+      _assert(bool(stack.get("_has_flight_exit_anchor")), "no_reentry: re-acquisition anchor armed on commit")
+    else:
+      stack.set("_flight_exit_ms", Time.get_ticks_msec() - confirm_ms - 100)
+      _arm_stack_flight_entry_next_tick(stack)
+      stack.tick(1.0 / 60.0)
+      _assert(stack.is_flight_fast_path_active(), "late_reentry: fixture re-entered Flight")
+      var rows := _stack_locale_rows_for(stack, _GkReg.GK_AVOID_HOSTILES)
+      var row: Dictionary = rows[0] if rows.size() == 1 else {}
+      _assert(
+        int(row.get("attempt_count", 0)) == 2 and int(row.get("success_count", 0)) == 1,
+        "late_reentry: SUCCESS committed then one FAILURE on the same tick",
+      )
+      _assert(is_equal_approx(float(row.get("success_delta", 1.0)), -0.0225), "late_reentry: success_delta = -0.0225")
+      _assert(
+        is_equal_approx(adapter.get_threat_disposition_mod(), 0.8 + 2.0 * evade),
+        "late_reentry: committed exit nudge + genuine re-entry nudge both land",
+      )
     body.get_parent().remove_child(body)
     body.queue_free()
   main.queue_free()
@@ -12493,7 +13602,9 @@ func _test_ghost_obstacle_query_open_shrub_size_gated() -> void:
 func _test_route_scanned_endpoint_truncates_blocked_target() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var fake_map_rid: RID = _MotorPathFixture.build_open(main).get("map_rid", RID())
+  var built := _MotorPathFixture.build_open(main)
+  var fake_map_rid: RID = built.get("map_rid", RID())
+  _assert(await _MotorPathFixture.await_nav_ready(built), "route-scan fixture navmesh synced to the map")
   # `build_open`'s own fixture floor spans world x/z 0..40 — the shrub and both probed points
   # need to sit inside that so `NavigationServer3D.map_get_path` actually returns a real path
   # (a target outside the baked floor just yields an empty/degenerate one).
@@ -12934,6 +14045,299 @@ func _test_bake_playfield_navmesh_mask_excludes_ghost_layer() -> void:
   await process_frame
 
 
+## 2026-09-25 (live finding): `_bake_playfield_navmesh()` produced an EMPTY navmesh in the real
+## game — the region defaulted to parsing visual meshes among its OWN children, and it has none;
+## the terrain/boulder colliders are its siblings under PlayfieldRoot. `map_get_path` came back
+## empty everywhere and every live Flight mint fell through to `fk=boxed`. This bakes through the
+## real function on a minimal playfield root shaped like the live mount (a layer-1 StaticBody3D
+## floor that is a sibling of the region, not its child), far from every other test fixture so a
+## leaked region elsewhere on the shared map can't satisfy the path query by accident.
+## Also pins decision 22: a ghost-layer box in the middle of the floor must not carve.
+func _test_bake_playfield_navmesh_produces_walkable_polygons() -> void:
+  var main: Node3D = (load("res://main_3d.gd") as Script).new()
+  var playfield_root := Node3D.new()
+  root.add_child(playfield_root)
+  var origin := Vector3(5000.0, 0.0, 5000.0)
+  playfield_root.position = origin
+  var floor_body := StaticBody3D.new()
+  floor_body.name = "TerrainStandIn"
+  floor_body.collision_layer = 1
+  floor_body.collision_mask = 1
+  var floor_col := CollisionShape3D.new()
+  var floor_box := BoxShape3D.new()
+  floor_box.size = Vector3(40.0, 0.2, 40.0)
+  floor_col.shape = floor_box
+  floor_body.add_child(floor_col)
+  floor_body.position = Vector3(0.0, -0.1, 0.0)
+  playfield_root.add_child(floor_body)
+  var ghost := StaticBody3D.new()
+  ghost.name = "GhostLayerBox"
+  ghost.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  ghost.collision_mask = 0
+  var ghost_col := CollisionShape3D.new()
+  var ghost_box := BoxShape3D.new()
+  ghost_box.size = Vector3(4.0, 4.0, 4.0)
+  ghost_col.shape = ghost_box
+  ghost.add_child(ghost_col)
+  ghost.position = Vector3(0.0, 2.0, 0.0)
+  playfield_root.add_child(ghost)
+  main.set("_playfield_root", playfield_root)
+  main.call("_bake_playfield_navmesh")
+  var ready := false
+  for _i in 600:
+    await process_frame
+    if bool(main.call("is_navigation_ready")):
+      ready = true
+      break
+  _assert(ready, "playfield navmesh bake finishes (is_navigation_ready)")
+  # No extra frames on purpose: is_navigation_ready() must mean "map already queryable", not just
+  # "bake thread finished" (the map syncs the new mesh 2-3 physics frames after bake_finished).
+  var region: NavigationRegion3D = main.get("_nav_region")
+  var poly_count := 0
+  if region != null and region.navigation_mesh != null:
+    poly_count = region.navigation_mesh.get_polygon_count()
+  _assert(poly_count > 0, "playfield navmesh bake yields polygons from sibling layer-1 colliders (got %d)" % poly_count)
+  var map_rid: RID = main.call("get_navigation_map_rid")
+  var from := origin + Vector3(-15.0, 0.0, -15.0)
+  var to := origin + Vector3(15.0, 0.0, 15.0)
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, from, to, true)
+  var ends_ok := (
+    path.size() >= 2
+    and Vector2(path[0].x, path[0].z).distance_to(Vector2(from.x, from.z)) < 1.0
+    and Vector2(path[path.size() - 1].x, path[path.size() - 1].z).distance_to(Vector2(to.x, to.z)) < 1.0
+  )
+  _assert(ends_ok, "map_get_path crosses the baked playfield between two open points (size=%d)" % path.size())
+  var centre_cp := NavigationServer3D.map_get_closest_point(map_rid, origin)
+  _assert(
+    Vector2(centre_cp.x, centre_cp.z).distance_to(Vector2(origin.x, origin.z)) < 0.5,
+    "a ghost-layer box does not carve the shared playfield navmesh (decision 22)",
+  )
+  main.free()
+  playfield_root.queue_free()
+  await process_frame
+
+
+## 2026-09-28 (decision-44 live smoke): solid shrubs are real layer-1 colliders but live under
+## `Main/FoodPlants` ([member _food_root]), not the playfield root, so the group-source bake never
+## parsed them — the navmesh routed a wolf straight through a solid shrub it could not pass. Bakes
+## through the real function with a solid-shrub-like layer-1 box under a separate food root (a
+## sibling of the playfield root, like the live mount) plus an open-shrub-like ghost-layer box, and
+## checks the solid one carves a hole the path bends around while the ghost one stays walkable.
+## Validity-checked red without the `_food_root` group tag in `_bake_playfield_navmesh`.
+func _test_bake_playfield_navmesh_includes_solid_food_plants() -> void:
+  var main: Node3D = (load("res://main_3d.gd") as Script).new()
+  var playfield_root := Node3D.new()
+  root.add_child(playfield_root)
+  var food_root := Node3D.new()
+  food_root.name = "FoodPlants"
+  root.add_child(food_root)
+  var origin := Vector3(6000.0, 0.0, 6000.0)
+  playfield_root.position = origin
+  food_root.position = origin
+  var floor_body := StaticBody3D.new()
+  floor_body.collision_layer = 1
+  floor_body.collision_mask = 1
+  var floor_col := CollisionShape3D.new()
+  var floor_box := BoxShape3D.new()
+  floor_box.size = Vector3(40.0, 0.2, 40.0)
+  floor_col.shape = floor_box
+  floor_body.add_child(floor_col)
+  floor_body.position = Vector3(0.0, -0.1, 0.0)
+  playfield_root.add_child(floor_body)
+  # Solid-shrub stand-in: `solid_shrub_3d`'s `StaticBody3D` is collision_layer 1.
+  var solid := StaticBody3D.new()
+  solid.name = "SolidShrubStandIn"
+  solid.collision_layer = 1
+  solid.collision_mask = 7
+  var solid_col := CollisionShape3D.new()
+  var solid_box := BoxShape3D.new()
+  solid_box.size = Vector3(6.0, 3.0, 6.0)
+  solid_col.shape = solid_box
+  solid.add_child(solid_col)
+  solid.position = Vector3(0.0, 1.5, 0.0)
+  food_root.add_child(solid)
+  # Open-shrub stand-in: `open_shrub_3d`'s `MobBlocker` is on the ghost layer — must not carve.
+  var open_offset := Vector3(0.0, 0.0, 12.0)
+  var ghost := StaticBody3D.new()
+  ghost.name = "OpenShrubStandIn"
+  ghost.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  ghost.collision_mask = 0
+  var ghost_col := CollisionShape3D.new()
+  var ghost_box := BoxShape3D.new()
+  ghost_box.size = Vector3(4.0, 3.0, 4.0)
+  ghost_col.shape = ghost_box
+  ghost.add_child(ghost_col)
+  ghost.position = open_offset + Vector3(0.0, 1.5, 0.0)
+  food_root.add_child(ghost)
+  main.set("_playfield_root", playfield_root)
+  main.set("_food_root", food_root)
+  main.call("_bake_playfield_navmesh")
+  var ready := false
+  for _i in 600:
+    await process_frame
+    if bool(main.call("is_navigation_ready")):
+      ready = true
+      break
+  _assert(ready, "solid-shrub navmesh bake finishes (is_navigation_ready)")
+  var map_rid: RID = main.call("get_navigation_map_rid")
+  # Checked by path shape, not `map_get_closest_point`: measured 2026-09-28 that the closest-point
+  # query still answers a ground-height point inside the carved footprint here, while the path
+  # (what the motor actually follows) clearly routes around it.
+  var from := origin + Vector3(-15.0, 0.0, 0.0)
+  var to := origin + Vector3(15.0, 0.0, 0.0)
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, from, to, true)
+  var max_off_axis := 0.0
+  for p in path:
+    max_off_axis = maxf(max_off_axis, absf(p.z - origin.z))
+  _assert(
+    path.size() >= 3 and max_off_axis > 2.5,
+    "a path across the solid shrub bends around it (size=%d max |dz|=%.2f)" % [path.size(), max_off_axis],
+  )
+  var open_path: PackedVector3Array = NavigationServer3D.map_get_path(
+    map_rid, from + open_offset, to + open_offset, true
+  )
+  var open_off_axis := 0.0
+  for p in open_path:
+    open_off_axis = maxf(open_off_axis, absf(p.z - (origin.z + open_offset.z)))
+  _assert(
+    open_path.size() >= 2 and open_off_axis < 0.5,
+    "an open shrub's ghost-layer blocker under FoodPlants still does not carve (decision 22, max |dz|=%.2f)" % open_off_axis,
+  )
+  main.free()
+  playfield_root.queue_free()
+  food_root.queue_free()
+  await process_frame
+
+
+## 2026-09-25: `MotorPlane.footprint_half_extents` returned (r, r + h/2) — the Z term was a 2D-port
+## leftover (CapsuleShape2D height ran along screen Y → world Z). An upright capsule's horizontal
+## footprint is r on both axes; the old value held the wolf 7.67 u farther off north/south edges.
+func _test_motor_plane_footprint_is_radius_on_both_axes() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var motor_p := _Merge.default_creature_motor_params()
+  var bodies: Array[CharacterBody3D] = [
+    _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0)),
+    _spawn_carnivore_body(main, Vector3(30.0, 1.0, 0.0)),
+  ]
+  for body in bodies:
+    var cap := (body.get_node("CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+    var he := _MotorPlane.footprint_half_extents(body, motor_p)
+    _assert(cap.height * 0.5 > 0.1, "footprint fixture capsule has real height (%s)" % body.name)
+    _assert(
+      is_equal_approx(he.x, cap.radius) and is_equal_approx(he.y, cap.radius),
+      "footprint half-extents are (r, r) for an upright capsule (r=%.2f got %s)" % [cap.radius, he],
+    )
+  main.queue_free()
+
+
+## 2026-09-25: with the (r, r + h/2) footprint the north/south clamp limit sat h/2 deeper than the
+## east/west one, so a rabbit pinned on the north edge could sit outside a wolf's eat reach even
+## with the wolf pinned on the same edge (probable cause of the C1 "both stuck" north-edge repro).
+## Clamps a real rabbit and a real wolf into the NW corner (checks each body's Z limit equals its
+## X limit), then pins both on the north edge (world -Z), the wolf 8 m along it, and checks the
+## rabbit is inside the wolf's real eat reach (`MotorPlanner._is_within_eat_range`).
+func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main, 160.0)
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var wolf := _spawn_carnivore_body(main, Vector3(20.0, 1.0, 0.0))
+  await process_frame
+  var bmin := Vector2(-50.0, -50.0)
+  var bmax := Vector2(50.0, 50.0)
+  var pair: Array[CharacterBody3D] = [rabbit, wolf]
+  for body in pair:
+    body.set("playfield_bounds_min", bmin)
+    body.set("playfield_bounds_max", bmax)
+    body.set("screen_size", bmax - bmin)
+    var cs := body.get_node("CollisionShape3D") as CollisionShape3D
+    var cap := cs.shape as CapsuleShape3D
+    var stand_y := cap.height * 0.5 - cs.position.y
+    body.global_position = Vector3(-70.0, stand_y, -70.0)
+    body.call("_clamp_playfield_position")
+    var x_lim: float = body.global_position.x - bmin.x
+    var z_lim: float = body.global_position.z - bmin.y
+    _assert(
+      is_equal_approx(x_lim, cap.radius) and is_equal_approx(z_lim, cap.radius),
+      "NW-corner clamp holds %s at r from both edges (r=%.2f x=%.2f z=%.2f)" % [body.name, cap.radius, x_lim, z_lim],
+    )
+  var rabbit_cs := rabbit.get_node("CollisionShape3D") as CollisionShape3D
+  var wolf_cs := wolf.get_node("CollisionShape3D") as CollisionShape3D
+  rabbit.global_position = Vector3(
+    0.0, (rabbit_cs.shape as CapsuleShape3D).height * 0.5 - rabbit_cs.position.y, -70.0
+  )
+  wolf.global_position = Vector3(
+    8.0, (wolf_cs.shape as CapsuleShape3D).height * 0.5 - wolf_cs.position.y, -70.0
+  )
+  rabbit.call("_clamp_playfield_position")
+  wolf.call("_clamp_playfield_position")
+  var motor_v3 := _motor_v3_test_params()
+  var in_reach := bool(
+    (_MotorPlanner as GDScript).call(
+      "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 1.0 / 60.0, rabbit.get_instance_id()
+    )
+  )
+  _assert(
+    in_reach,
+    "north-edge-pinned rabbit is inside a north-edge-pinned wolf's eat reach (dist=%.2f)"
+    % wolf.global_position.distance_to(rabbit.global_position),
+  )
+  main.queue_free()
+  await process_frame
+
+
+## 2026-09-25 (user-approved 2x interior boulders): a headless live run had the wolf (capsule
+## r 7.03, h 15.33) cross an interior boulder row. Re-probing showed a grounded wolf is already
+## stopped by a 3x row; the crossing came from the wolf reaching the boulder while still dropping
+## from its spawn height (capsule bottom ~r above the ground) and landing on the ~6.1 m top.
+## Covers both: (1) a grounded wolf driven head-on is stopped short of the boulder; (2) a wolf
+## released at spawn-drop height and driven at the boulder ends on the ground on the near side,
+## never on top / past it. (2) fails at the old 3x scale.
+func _test_interior_boulder_blocks_wolf_capsule() -> void:
+  var boulder_scene := load("res://assets/environment/obstacle_boulder/h-k-boulder1.blend") as PackedScene
+  for drop_start in [false, true]:
+    var main := Node3D.new()
+    root.add_child(main)
+    _motor_v3_test_floor(main, 160.0)
+    var rock := boulder_scene.instantiate() as Node3D
+    main.add_child(rock)
+    rock.scale = Vector3.ONE * PlayfieldBounds3D.INTERIOR_BOULDER_VISUAL_SCALE
+    PlayfieldBounds3D.ensure_obstacle_physics(rock)
+    var aabb0 := _StaticObstacleCollision.world_mesh_aabb(rock)
+    rock.global_position = Vector3(0.0, -float((aabb0.get("min", Vector3.ZERO) as Vector3).y), 0.0)
+    var aabb := _StaticObstacleCollision.world_mesh_aabb(rock)
+    var rmin: Vector3 = aabb.get("min", Vector3.ZERO)
+    var rmax: Vector3 = aabb.get("max", Vector3.ZERO)
+    var wolf := _spawn_carnivore_body(main, Vector3(0.0, 40.0, 60.0))
+    wolf.set_physics_process(false)
+    var cs := wolf.get_node("CollisionShape3D") as CollisionShape3D
+    var cap := cs.shape as CapsuleShape3D
+    var r := cap.radius
+    var start_bottom := r if drop_start else 0.05
+    wolf.global_position = Vector3(rmin.x - r - 2.0, start_bottom + cap.height * 0.5 - cs.position.y, 0.0)
+    wolf.velocity = Vector3.ZERO
+    await physics_frame
+    var max_x := -INF
+    for _t in 300:
+      wolf.apply_horizontal_move_intent(Vector3(1.0, 0.0, 0.0), 1.0 / 60.0)
+      await physics_frame
+      max_x = maxf(max_x, wolf.global_position.x)
+    var bottom := cs.global_position.y - cap.height * 0.5
+    var label := "spawn-drop" if drop_start else "grounded"
+    _assert(
+      max_x < rmin.x,
+      "%s wolf capsule centre never gets past the boulder's near face (max_x=%.2f near=%.2f far=%.2f)"
+      % [label, max_x, rmin.x, rmax.x],
+    )
+    _assert(
+      bottom < 0.5,
+      "%s wolf ends on the ground, not on the boulder (bottom=%.2f boulder top=%.2f)" % [label, bottom, rmax.y],
+    )
+    main.queue_free()
+    await process_frame
+
+
 ## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 / §9 slice 6 (2026-09-18): the debug refuge cluster's
 ## real root cause wasn't gap-size math at all — `open_shrub_3d`'s mesh pivot sits well off its own
 ## visual center, so placing every ring instance by node origin shifted their real mass the same
@@ -13095,6 +14499,73 @@ func _test_shrub_mesh_collision_bake() -> void:
     "open shrub pickup radius follows visual mesh footprint",
   )
   main.queue_free()
+
+## Perf regression (bush_food_3d regrow): `_process` runs every regrow frame (~50 s live) but the
+## blocker convex-hull rebuild must run once per discrete visual change (ready -> depleted,
+## depleted -> ready), not once per frame; same-frame requests dedupe. Final collider must be
+## the ready-visual hull again after regrow completes.
+func _test_shrub_regrow_hull_rebuild_once_per_state_change() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var scene := load(_SolidShrub3DScenePath) as PackedScene
+  var bush := scene.instantiate() as Node3D
+  main.add_child(bush)
+  bush.set_process(false)
+  bush.set("growth_rate", 1.0)
+  await process_frame
+  await process_frame
+  var blocker := bush.get_node_or_null("StaticBody3D") as StaticBody3D
+  _assert(blocker != null, "regrow hull: solid shrub has StaticBody3D blocker")
+  var base_count := int(bush.get("collision_sync_count"))
+  _assert(base_count == 1, "regrow hull: spawn bakes hull exactly once (got %d)" % base_count)
+  var ready_box := _shrub_blocker_hull_aabb(blocker)
+  bush.set("current_calories", 0.0)
+  bush.call("_refresh_visual")
+  bush.call("_refresh_visual")
+  await process_frame
+  _assert(
+    int(bush.get("collision_sync_count")) == base_count + 1,
+    "regrow hull: depletion rebuilds hull exactly once",
+  )
+  var depleted_box := _shrub_blocker_hull_aabb(blocker)
+  _assert(not depleted_box.is_equal_approx(ready_box), "regrow hull: depleted hull differs from ready hull")
+  var frames := 0
+  while not bool(bush.call("is_pickup_ready_for_motor")) and frames < 200:
+    bush.call("_process", 0.1)
+    await process_frame
+    frames += 1
+  _assert(frames >= 40, "regrow hull: regrow spans many frames (got %d)" % frames)
+  for i in 5:
+    bush.call("_process", 0.1)
+    await process_frame
+  var final_count := int(bush.get("collision_sync_count"))
+  _assert(
+    final_count == base_count + 2,
+    "regrow hull: regrow rebuilds hull once, not per frame (count %d, want %d)" % [final_count, base_count + 2],
+  )
+  _assert(
+    _shrub_blocker_hull_aabb(blocker).is_equal_approx(ready_box),
+    "regrow hull: collider matches ready visual after regrow",
+  )
+  main.queue_free()
+
+
+## Blocker-local AABB over every ConvexPolygonShape3D child's points (hull identity for tests).
+func _shrub_blocker_hull_aabb(body: StaticBody3D) -> AABB:
+  var box := AABB()
+  var first := true
+  for ch in body.get_children():
+    var cs := ch as CollisionShape3D
+    if cs == null or not (cs.shape is ConvexPolygonShape3D):
+      continue
+    for p in (cs.shape as ConvexPolygonShape3D).points:
+      var wp: Vector3 = cs.transform * p
+      if first:
+        box = AABB(wp, Vector3.ZERO)
+        first = false
+      else:
+        box = box.expand(wp)
+  return box
 
 func _test_creature_capsule_fits_visual_mesh() -> void:
   var main := Node3D.new()

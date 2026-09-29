@@ -15,6 +15,8 @@ class_name FleeCandidateScoring
 ## it brings the creature closer to the threat than it stands now), so every candidate also scores
 ## how much farther from its nearest threat it ends up — see [method separation_gain].
 
+const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
+
 ## Horizontal (XZ) threat positions for every `in_awareness` sample. Samples carry either
 ## `world_pos_3d` or the legacy 2D `world_pos`.
 static func threat_positions(samples: Array, creature_pos: Vector3) -> Array:
@@ -36,14 +38,15 @@ static func threat_positions(samples: Array, creature_pos: Vector3) -> Array:
 ## Threat's body radius, or 0.0 when unknown. A sample's own `capsule_radius` wins (test hook, and
 ## the seam where slice 10's held/noised estimate — decisions 8d/18 — will plug in); otherwise the
 ## live body behind `instance_id` is read directly. Ground truth for now: no composure noise or
-## hysteresis yet.
+## hysteresis yet. The id resolves via [code]_InstanceIdLookup[/code], so a stale/synthetic id
+## reads as unknown (0.0) without an ObjectDB engine error.
 static func threat_capsule_radius(sample: Dictionary) -> float:
   if sample.has("capsule_radius"):
     return maxf(0.0, float(sample["capsule_radius"]))
   var iid := int(sample.get("instance_id", 0))
   if iid == 0:
     return 0.0
-  var node := instance_from_id(iid)
+  var node := _InstanceIdLookup.resolve(iid)
   if node != null and node.has_method(&"get_collision_capsule_radius"):
     return maxf(0.0, float(node.call(&"get_collision_capsule_radius")))
   return 0.0
@@ -58,7 +61,7 @@ static func threat_capsule_height(sample: Dictionary) -> float:
   var iid := int(sample.get("instance_id", 0))
   if iid == 0:
     return 0.0
-  var node := instance_from_id(iid)
+  var node := _InstanceIdLookup.resolve(iid)
   if node != null and node.has_method(&"get_collision_capsule_height"):
     return maxf(0.0, float(node.call(&"get_collision_capsule_height")))
   return 0.0

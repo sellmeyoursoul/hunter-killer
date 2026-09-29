@@ -1,0 +1,35 @@
+{
+  "_note": "CLEANUP C44 live smoke (east-wall spinning, sub-acute avoid_hostiles). World = (-100 + 200*fx, -100 + 203.6806*fz). Rabbit (90, 68) about 8 m inside the east playfield edge; wolf (60, 68) 30 m due west on flat ground. 30 m is inside the rabbit's forward-cone awareness (58.2 m after playfield scaling) but outside acute Flight (23.3 m), so this runs the ff=0 hub path the C44 fix touches. The flee bearing points east, off the playfield (x about 105-114), and the east clamp blocks it at x about 98.3. Run with debug_start_calories creature_0=55 and creature_1=240 (the ratio clamps to 1.0, so the wolf wins REST and stays put with area-only perception). All 18 interior boulders are parked in the NW block x -85..-61, z -45..-27. Food is parked SW around (-70, 75). The forced refuge cluster at (0, 1.85) is about 110 m away.",
+  "seed": 4401,
+  "creature_0": [0.95, 0.82482],
+  "creature_1": [0.8, 0.82482],
+  "interior_boulders": [
+    [0.075, 0.27003],
+    [0.105, 0.27003],
+    [0.135, 0.27003],
+    [0.075, 0.29949],
+    [0.105, 0.29949],
+    [0.135, 0.29949],
+    [0.075, 0.32895],
+    [0.105, 0.32895],
+    [0.135, 0.32895],
+    [0.165, 0.27003],
+    [0.165, 0.29949],
+    [0.165, 0.32895],
+    [0.075, 0.3584],
+    [0.105, 0.3584],
+    [0.135, 0.3584],
+    [0.165, 0.3584],
+    [0.195, 0.27003],
+    [0.195, 0.29949]
+  ],
+  "solid_shrubs": [
+    [0.125, 0.85919],
+    [0.175, 0.89356],
+    [0.15, 0.79536]
+  ],
+  "open_shrubs": [
+    [0.21, 0.84446],
+    [0.09, 0.91319]
+  ]
+}

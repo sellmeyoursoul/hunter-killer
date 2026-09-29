@@ -454,6 +454,32 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     ## awareness (a few seconds), well below the 300 s row lifetime, so only a pursuer that is
     ## plainly still around counts as "the escape didn't work".
     "flee_reacquire_window_sec": 25.0,
+    ## Flight flicker fix (2026-09-29), option 1 — Flight threat memory (wall-clock seconds). While
+    ## the Flight latch is held, an avoid_hostiles belief last seen at most this long ago whose
+    ## believed position (last seen + velocity x age) is within
+    ## `flight_acute_panic_radius * (1 + flight_release_margin_frac)` still counts as danger for
+    ## the `safety_time` counter, so a fleeing creature that merely faces away from its pursuer
+    ## (awareness is a small sphere + forward cone) no longer "feels safe" and releases Flight while
+    ## the pursuer is still right behind it. 2.0 s: the safety window itself is only
+    ## `safety_time` (5) x consideration interval (8 ticks at neutral observation) ~ 0.67 s, and the
+    ## vigilance ghost (`goal_memory_ghost_horizon_sec` 0.4 s) expires well before that; live
+    ## flicker re-acquisitions came ~1.2-1.6 s after the last live sighting (exit ~1.1 s unseen +
+    ## 0.1-0.4 s turn-back), so 2.0 s covers them with margin while keeping the extra flee time
+    ## after a genuine break-off to ~2 s + the safety window. Only applies while latched.
+    "flight_threat_memory_sec": 2.0,
+    ## Fraction of `flight_acute_panic_radius` added as release hysteresis for the Flight threat
+    ## memory above (unitless, so it scales with the playfield like the radius itself): a
+    ## remembered hostile believed beyond panic_r x 1.25 no longer holds Flight.
+    "flight_release_margin_frac": 0.25,
+    ## Flight flicker fix, option 5 — deferred escape SUCCESS (wall-clock seconds). A Flight exit
+    ## only commits its avoid_hostiles SUCCESS locale write, shelter battle_tested promotion and
+    ## clean-exit disposition nudge once this long has passed without Flight re-entering; a
+    ## re-entry inside the window cancels them (the "escape" was a flicker, not an escape) and
+    ## writes no re-acquisition FAILURE. 2.0 s: ~15 consideration cycles; live rabbit
+    ## re-acquisitions clustered at 0.1-0.4 s (28 of 48) and 0.8-1.5 s (8 more) after exit, then
+    ## spread 2-13 s — 2.0 s swallows both flicker clusters while keeping genuine later
+    ## re-acquisitions (FAILURE via `flee_reacquire_window_sec`) intact.
+    "flight_exit_confirm_sec": 2.0,
     ## Decision 44 follow-up F: flee-memory telemetry toggle (debug builds only). When on:
     ## one OLog info line per Flight exit (exit cell, write result, row stats, promoted shelter)
     ## and per re-acquisition failure write, plus ` fk=<pick kind> ahc=<usable avoid_hostiles cells>`

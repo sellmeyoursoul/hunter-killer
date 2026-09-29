@@ -43,8 +43,9 @@ static func capsule_overlaps_ghost_layer(
 ## Fraction (0..1) of the straight motion [param from] → [param to] a capsule of [param radius]/
 ## [param height] can travel before first overlapping the ghost layer — a real sweep
 ## (`PhysicsDirectSpaceState3D.cast_motion`), not a discretized point-sample walk. `1.0` means the
-## whole segment is clear; `0.0` means the capsule is blocked (or already overlapping something)
-## right at [param from]. Used by [RoutePlausibilityScan] to walk a multi-segment navmesh path and
+## whole segment is clear; `0.0` means the capsule is blocked right at [param from]. Caveat:
+## `cast_motion` reports a capsule that already overlaps a ghost shape at [param from] as fully
+## clear (`1.0`), so a start-overlap is NOT detected here (see [method capsule_overlaps_ghost_layer]). Used by [RoutePlausibilityScan] to walk a multi-segment navmesh path and
 ## find the first point along it a given creature's own capsule can't actually clear.
 static func sweep_capsule_along_segment(
   space_state: PhysicsDirectSpaceState3D,

@@ -21,6 +21,15 @@ var current_calories: float = 5.0
 var _ready_visual: Node3D
 var _depleted_visual: Node3D
 var _calorie_area: Area3D
+## Last applied discrete visual state: -1 = not yet applied, 0 = depleted, 1 = ready (full).
+## [method _refresh_visual] early-outs when the state is unchanged so the ~50 s regrow does not
+## touch visibility or queue a collider rebuild every frame.
+var _visual_state: int = -1
+## True while a deferred [method _sync_mesh_collision_from_visual] is queued — dedupes
+## multiple same-frame requests into one hull rebuild.
+var _collision_sync_pending: bool = false
+## Test hook: number of hull rebuilds actually executed (one per discrete visual change).
+var collision_sync_count: int = 0
 
 
 func _ready() -> void:
@@ -39,11 +48,17 @@ func _ready() -> void:
   _strip_editor_only_nodes(_depleted_visual)
   _calorie_area = get_node_or_null("CalorieArea") as Area3D
   current_calories = float(max_calories)
-  _refresh_visual()
-  call_deferred("_sync_mesh_collision_from_visual")
+  # Force: visuals were just resolved, so apply state even if reset_session ran pre-ready.
+  _refresh_visual(true)
 
 
+## Rebuilds the blocker convex hull(s) and CalorieArea pickup sphere from the currently
+## visible visual (ready or depleted). Runs deferred via [method _queue_collision_sync];
+## clears the pending flag and bumps [member collision_sync_count]. Expensive
+## (`Mesh.create_convex_shape` per MeshInstance3D) — must only run on discrete visual changes.
 func _sync_mesh_collision_from_visual() -> void:
+  _collision_sync_pending = false
+  collision_sync_count += 1
   var visual := _active_visual_root()
   if visual == null:
     return
@@ -87,18 +102,38 @@ func reset_session() -> void:
   calories_changed.emit()
 
 
+## Regrows calories toward [member max_calories]. Calls [method _refresh_visual] each regrow
+## frame, which is a cheap no-op until the ready threshold is crossed (single swap + one
+## hull rebuild at regrow completion).
 func _process(delta: float) -> void:
   if current_calories < float(max_calories) - 1e-5:
     current_calories = minf(float(max_calories), current_calories + growth_rate * delta)
     _refresh_visual()
 
 
-func _refresh_visual() -> void:
+## Applies ready/depleted visibility from [member current_calories] and queues one collider
+## rebuild — only when the discrete state changes (or [param force] is true). Unchanged state
+## returns immediately (no visibility writes, no rebuild).
+## Example: `current_calories = 0.0; _refresh_visual()` swaps to depleted + queues one rebuild.
+func _refresh_visual(force: bool = false) -> void:
   var full := current_calories >= float(max_calories) - 1e-3
+  var state := 1 if full else 0
+  if not force and state == _visual_state:
+    return
+  _visual_state = state
   if _ready_visual != null:
     _ready_visual.visible = full
   if _depleted_visual != null:
     _depleted_visual.visible = not full
+  _queue_collision_sync()
+
+
+## Defers [method _sync_mesh_collision_from_visual] once; further calls before it runs are
+## dropped (the deferred sync reads whichever visual is active when it executes).
+func _queue_collision_sync() -> void:
+  if _collision_sync_pending:
+    return
+  _collision_sync_pending = true
   call_deferred("_sync_mesh_collision_from_visual")
 
 

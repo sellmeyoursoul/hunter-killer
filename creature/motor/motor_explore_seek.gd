@@ -8,6 +8,10 @@ const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 
 const _FORWARD_SWATCH_HALF_ANGLE_DEG := 45.0
+## Bearing rotations tried when a route-scanned explore waypoint collapses onto the creature
+## ([method _scan_explore_waypoint_avoiding_collapse]); 5 × 60° covers every other sextant.
+const _COLLAPSE_RETRY_MAX := 5
+const _COLLAPSE_RETRY_ROTATE_DEG := 60.0
 
 
 ## Mints [code]explore_dir[/code], [code]explore_waypoint[/code], [code]step_source = explore[/code]; returns [code]step_goal[/code].
@@ -27,7 +31,8 @@ static func mint_explore_step(
   var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
 
   if latched_valid:
-    if creature_pos.distance_to(latched) <= arrival_tol:
+    # XZ arrival (2026-09-25) — matches `motor_planner.gd` `_at_arrival`.
+    if _MotorPlane.horizontal_distance(creature_pos, latched) <= arrival_tol:
       state["explore_waypoint"] = Vector3.ZERO
       state["explore_waypoint_set"] = false
       latched_valid = false
@@ -71,9 +76,8 @@ static func mint_explore_step(
   # along that route, once at mint time (not every tick the latch holds, to avoid chasing a
   # progressively-truncated target as the creature approaches).
   if body != null:
-    waypoint = _planner_call(
-      "_route_scanned_endpoint",
-      [ctx, body, ctx.get("map_rid", RID()), creature_pos, waypoint],
+    waypoint = _scan_explore_waypoint_avoiding_collapse(
+      ctx, body, creature_pos, state, motor_v3, waypoint, reach
     )
   state["explore_waypoint"] = waypoint
   state["explore_waypoint_set"] = true
@@ -142,6 +146,42 @@ static func _pick_explore_dir(
   if best_dir.length_squared() < 1e-12:
     return _MotorPlane.HORIZONTAL_FORWARD
   return best_dir.normalized()
+
+
+## Route-scans [param waypoint] (via `MotorPlanner._route_scanned_endpoint`) and returns the
+## truncated walk target. If a ghost-layer blocker right next to the creature truncates the route
+## to within arrival tolerance of [param creature_pos], the waypoint has collapsed onto the
+## creature's own position (see `MotorPlanner._route_scan_collapsed_onto_self`). Committing that
+## would steer the creature at itself, so this rotates `explore_dir` by
+## [const _COLLAPSE_RETRY_ROTATE_DEG] and re-scans, up to [const _COLLAPSE_RETRY_MAX] times. It
+## keeps the last result if every bearing collapses (a boxed-in creature then arrives immediately
+## and re-mints next tick, rather than MOVE_FORWARD-spinning in place).
+## [param reach] is the explore mint distance; mutates `state["explore_dir"]` on retry.
+static func _scan_explore_waypoint_avoiding_collapse(
+  ctx: Dictionary,
+  body: CharacterBody3D,
+  creature_pos: Vector3,
+  state: Dictionary,
+  motor_v3: Dictionary,
+  waypoint: Vector3,
+  reach: float,
+) -> Vector3:
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var raw := waypoint
+  var scanned: Vector3 = _planner_call(
+    "_route_scanned_endpoint", [ctx, body, map_rid, creature_pos, raw]
+  )
+  for _i in _COLLAPSE_RETRY_MAX:
+    if not bool(_planner_call("_route_scan_collapsed_onto_self", [creature_pos, raw, scanned, motor_v3])):
+      break
+    var dir: Vector3 = (state.get("explore_dir", _MotorPlane.HORIZONTAL_FORWARD) as Vector3)
+    if dir.length_squared() < 1e-8:
+      dir = _MotorPlane.HORIZONTAL_FORWARD
+    dir = dir.normalized().rotated(Vector3.UP, deg_to_rad(_COLLAPSE_RETRY_ROTATE_DEG)).normalized()
+    state["explore_dir"] = dir
+    raw = creature_pos + dir * reach
+    scanned = _planner_call("_route_scanned_endpoint", [ctx, body, map_rid, creature_pos, raw])
+  return scanned
 
 
 static func _remint_explore_dir(

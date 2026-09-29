@@ -25,6 +25,19 @@ const GROUND_RAY_DEPTH := 512.0
 ## consistent with "no vertical gameplay yet" (CONVERT_TO_3D.md D6) — once full 3D/climbing ships,
 ## revisit whether boulders should stay this large or be genuinely scalable/climbable terrain.
 const BOULDER_VISUAL_SCALE := 3.0
+## Interior (randomized / locked-layout) boulders only — perimeter ring keeps
+## [constant BOULDER_VISUAL_SCALE]. Doubled 2026-09-25 (user-approved): at 3x the boulder is
+## ~6.4 x 6.1 m on XZ and ~6.1 m tall, lower than the wolf capsule's centre (r 7.03, h 15.33 →
+## centre 7.67 m up). A headless live run had the wolf cross an interior row; re-probing showed a
+## grounded wolf is stopped by a 3x row, and the crossing came from the wolf landing on a boulder
+## top while still falling from its spawn height (spawn places the capsule bottom ~r too high).
+## At 6x (~12.8 x 12.3 m, ~12.3 m tall) the top is above both the wolf's centre and that
+## spawn-drop bottom, so neither path works. The convex collider is baked
+## from the already-scaled visual ([method ensure_obstacle_physics]), so it scales with this.
+## Perimeter stays 3x on purpose: the playfield clamp already contains every creature at the rim,
+## and a 2x ring would reach ~6.9 m into the field (vs ~3.7 m), cutting the rabbit's usable edge
+## strip and shifting every edge-pinned smoke layout.
+const INTERIOR_BOULDER_VISUAL_SCALE := BOULDER_VISUAL_SCALE * 2.0
 
 
 ## Params:

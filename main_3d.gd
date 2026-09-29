@@ -62,6 +62,13 @@ const _REFUGE_CLUSTER_MAX_CALORIES := 2
 ## (game_config.json) at the copy to freeze a specific buggy layout for repro.
 const _SPAWN_LAYOUT_LAST_RUN_PATH := "res://spawn_layout_last_run.json"
 const _INTERIOR_BOULDER_COUNT := 18
+## Scene-tree group [method _bake_playfield_navmesh] tags [member _playfield_root] (and
+## [member _food_root], for the solid shrubs' layer-1 bodies) with so the navmesh baker parses
+## those whole subtrees (see the method's doc comment for why).
+const _NAVMESH_SOURCE_GROUP := &"playfield_navmesh_source"
+## Upper bound on physics frames [method _on_playfield_navmesh_baked] waits for the navigation map
+## to sync the freshly baked mesh before reporting ready anyway.
+const _NAV_SYNC_MAX_WAIT_FRAMES := 30
 const _SOLID_SHRUB_COUNT := 3
 const _OPEN_SHRUB_COUNT := 2
 
@@ -124,6 +131,9 @@ var _nav_region: NavigationRegion3D
 ## the bake actually finishes (CLEANUP C9, 2026-08-06: headless smoke driver was querying paths for
 ## flee-target scoring before the bake completed, silently getting empty paths every time).
 var _nav_baked: bool = false
+## Largest XZ half-extent (m) of a spawned interior boulder, measured from the first one placed
+## this build (0 until then). Feeds [method _creature_spawn_prop_clearance_m].
+var _interior_boulder_half_extent_m: float = 0.0
 
 
 func _ready() -> void:
@@ -394,9 +404,8 @@ func _build_playfield() -> void:
   _spawn_interior_boulders()
   _ensure_food_plants()
   _write_spawn_layout_file()
-  call_deferred("_snap_playfield_props_to_ground")
+  call_deferred("_ground_props_then_bake_navmesh")
   call_deferred("_bake_ground_sampler")
-  call_deferred("_bake_playfield_navmesh")
   _log_playfield_diagnostics()
 
 
@@ -554,6 +563,45 @@ func _duel_max_capsule_radius() -> float:
   return r
 
 
+## Minimum XZ distance (m) a randomized creature spawn keeps from every already-placed prop centre
+## in [member _spawn_existing_points]: the interior boulder's own half-extent plus the largest
+## creature capsule radius, so neither the rabbit nor the wolf spawns overlapping a boulder
+## (2026-09-25: the old flat 1.2 m default was already short at 3x boulders — ~3.2 m half-extent —
+## and 2x interior boulders made it ~6.4 m). Conservative for the smaller food props that share
+## the same point list. Never below [constant PlayfieldSpawnRandomizer.DEFAULT_MIN_SEPARATION_M].
+## Example: 6x boulder (half-extent ~6.42) + wolf radius 7.0 → ~13.4 m.
+func _creature_spawn_prop_clearance_m() -> float:
+  return maxf(
+    _SpawnRandomizer.DEFAULT_MIN_SEPARATION_M,
+    _interior_boulder_half_extent_m + _duel_max_capsule_radius(),
+  )
+
+
+## Builds (or rebuilds) the shared playfield [NavigationRegion3D] under [member _playfield_root]
+## and starts an async bake; [method is_navigation_ready] flips true in
+## [method _on_playfield_navmesh_baked].
+##
+## Source geometry: layer-1 [StaticBody3D] colliders anywhere under [member _playfield_root]
+## (terrain trimesh plus every layer-1 prop parented there — today that includes the perimeter and
+## interior boulders under `Obstacles3D`). Parsed via
+## [constant NavigationMesh.SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN] on
+## [constant _NAVMESH_SOURCE_GROUP] because the region's own default
+## ([constant NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN]) only parses the region's own
+## children — and this region has none, so the bake silently produced zero polygons (live
+## finding 2026-09-25: `map_get_path` always empty, every Flight mint `fk=boxed`). Parsing
+## [constant NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS] (not the default visual meshes)
+## because [member NavigationMesh.geometry_collision_mask] only filters collider parsing; with
+## mesh parsing the mask is ignored and every visual mesh (shrubs, creatures) would carve.
+##
+## Solid shrubs (2026-09-28, decision-44 live smoke): `solid_shrub_3d`'s `StaticBody3D` is a real
+## layer-1 collider, but [member _food_root] (`FoodPlants`) hangs off Main, not
+## [member _playfield_root], so the group bake never saw it — a wolf's navmesh route ran straight
+## through a solid shrub it can't pass. [member _food_root] is tagged into the same group (not
+## re-parented: its node path stays `Main/FoodPlants`). The layer-1 mask keeps `open_shrub_3d`
+## out (its `MobBlocker` is on the ghost layer, decision 22), and static-collider parsing skips
+## every shrub's `CalorieArea` ([Area3D]). The caller ([method _ground_props_then_bake_navmesh])
+## has already grounded the plants and their colliders were synced from the visual in their
+## deferred `_ready` step, so the bake sees the ready-visual hull at its final position.
 func _bake_playfield_navmesh() -> void:
   if _playfield_root == null:
     return
@@ -562,11 +610,21 @@ func _bake_playfield_navmesh() -> void:
   _nav_region = NavigationRegion3D.new()
   _nav_region.name = "PlayfieldNavRegion"
   _playfield_root.add_child(_nav_region)
+  if not _playfield_root.is_in_group(_NAVMESH_SOURCE_GROUP):
+    _playfield_root.add_to_group(_NAVMESH_SOURCE_GROUP)
+  if _food_root != null and is_instance_valid(_food_root) and not _food_root.is_in_group(_NAVMESH_SOURCE_GROUP):
+    _food_root.add_to_group(_NAVMESH_SOURCE_GROUP)
   var nm := NavigationMesh.new()
-  nm.agent_radius = _duel_max_capsule_radius()
-  nm.agent_height = 2.0
+  nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+  nm.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN
+  nm.geometry_source_group_name = _NAVMESH_SOURCE_GROUP
   nm.cell_size = 0.25
   nm.cell_height = 0.15
+  ## Snapped to whole voxels up front — the generator rounds them the same way anyway (radius and
+  ## height up, climb down) and logs a precision warning per property per bake when they aren't.
+  nm.agent_radius = ceilf(_duel_max_capsule_radius() / nm.cell_size - 0.001) * nm.cell_size
+  nm.agent_height = ceilf(2.0 / nm.cell_height - 0.001) * nm.cell_height
+  nm.agent_max_climb = floorf(0.25 / nm.cell_height + 0.001) * nm.cell_height
   ## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18): bake from world-static terrain (layer 1)
   ## only. Object-scale obstacles (the query-only "ghost" layer, decision 16) must never carve a
   ## permanent navmesh hole — per-species passability there is enforced live, by the motor's own
@@ -586,7 +644,37 @@ func _bake_playfield_navmesh() -> void:
   _nav_region.bake_navigation_mesh()
 
 
+## [signal NavigationRegion3D.bake_finished] handler. The region hands its new mesh to the
+## NavigationServer on the server's next map sync, not synchronously — measured 2026-09-25: for
+## ~2-3 physics frames after this signal `map_get_path` is still empty and
+## `map_get_closest_point` returns (0,0,0). A map iteration-id bump is not enough on its own (other
+## regions coming/going also bump it), so [member _nav_baked] only flips once the map actually
+## answers a closest-point query at one of the baked mesh's own vertices — capped at
+## [constant _NAV_SYNC_MAX_WAIT_FRAMES] physics frames so a stalled server can't wedge readiness.
 func _on_playfield_navmesh_baked() -> void:
+  var region := _nav_region
+  if region == null or not is_instance_valid(region) or not region.is_inside_tree():
+    _nav_baked = true
+    return
+  var nm := region.navigation_mesh
+  if nm == null or nm.get_polygon_count() == 0:
+    OLog.info("Main3D: playfield navmesh bake finished with 0 polygons", true, "Main3D")
+    _nav_baked = true
+    return
+  var probe: Vector3 = region.global_transform * nm.get_vertices()[nm.get_polygon(0)[0]]
+  var map_rid := region.get_navigation_map()
+  var tree := region.get_tree()
+  for i in _NAV_SYNC_MAX_WAIT_FRAMES:
+    if NavigationServer3D.map_get_closest_point(map_rid, probe).distance_to(probe) < 0.5:
+      break
+    ## Measured 2026-09-25 (headless suite, ~2 runs in 5): the region's own hand-off of the
+    ## freshly baked mesh sometimes never reaches the server (region iteration stays at 1, map
+    ## never re-syncs), so push the mesh explicitly — first try and every 10 frames after.
+    if i % 10 == 0:
+      NavigationServer3D.region_set_navigation_mesh(region.get_rid(), nm)
+    await tree.physics_frame
+    if region != _nav_region or not is_instance_valid(region):
+      return
   _nav_baked = true
 
 
@@ -749,15 +837,34 @@ func _spawn_interior_boulders() -> void:
       continue
     _obstacles_root.add_child(rock)
     rock.global_position = pos
-    rock.scale = Vector3.ONE * _Bounds3D.BOULDER_VISUAL_SCALE
+    rock.scale = Vector3.ONE * _Bounds3D.INTERIOR_BOULDER_VISUAL_SCALE
     rock.add_to_group(&"obstacles")
     PlayfieldBounds3D.ensure_obstacle_physics(rock)
+    if _interior_boulder_half_extent_m <= 0.0:
+      var aabb := _Bounds3D.world_mesh_aabb(rock)
+      if bool(aabb.get("valid", false)):
+        var sz: Vector3 = (aabb.get("max", Vector3.ZERO) as Vector3) - (aabb.get("min", Vector3.ZERO) as Vector3)
+        _interior_boulder_half_extent_m = maxf(sz.x, sz.z) * 0.5
     _spawn_existing_points.append(Vector2(pos.x, pos.z))
   _spawn_last_layout["interior_boulders"] = fracs
 
 
 func _ensure_world_static_collision(root: Node) -> void:
   _Bounds3D.ensure_world_static_layers(root)
+
+
+## Deferred from [method _build_playfield]: grounds every prop first, waits one frame so props the
+## snap removed (`queue_free`, no ground under them) are really gone, then bakes the navmesh.
+## Order matters (2026-09-25): the bake parses layer-1 colliders at their CURRENT positions, and
+## before this it ran in the same deferred batch as the snap — i.e. while the snap was still
+## awaiting its physics frame — so every boulder was baked at its pre-snap spawn height
+## (`surface_y`, the terrain AABB top), floating above the real ground.
+func _ground_props_then_bake_navmesh() -> void:
+  await _snap_playfield_props_to_ground()
+  if not is_inside_tree():
+    return
+  await get_tree().process_frame
+  _bake_playfield_navmesh()
 
 
 func _snap_playfield_props_to_ground() -> void:
@@ -796,8 +903,8 @@ func _snap_playfield_props_to_ground() -> void:
           prop.queue_free()
           continue
         var surface_y := float(ground.get("surface_y", hint_y))
-        var bottom_y := _prop_mesh_local_bottom_y(prop)
-        prop.global_position = Vector3(xz.x, surface_y - bottom_y, xz.y)
+        var bottom_offset := _prop_mesh_bottom_offset_y(prop)
+        prop.global_position = Vector3(xz.x, surface_y - bottom_offset, xz.y)
 
 
 func _prop_collision_rids_under(root: Node) -> Array:
@@ -846,29 +953,39 @@ func _raycast_prop_ground_surface(
   return {"hit": false, "surface_y": hint_y}
 
 
-func _prop_mesh_local_bottom_y(prop_root: Node3D) -> float:
+## World-space vertical offset (m) from [param prop_root]'s origin down to its lowest mesh point —
+## [method _snap_playfield_props_to_ground] sets the root's Y to `surface_y - offset` so the mesh
+## bottom rests on the ground. Measured in world units so the root's own scale is included.
+## (Before 2026-09-25 this returned the bottom in the root's LOCAL, unscaled units, so a scaled
+## prop sank by (scale - 1) x its local bottom depth — ~2 m for 3x boulders, ~5 m for the 6x
+## interior boulders, which would have left a 12.3 m boulder only ~7.3 m above the ground.)
+## Returns 0.0 when [param prop_root] has no mesh.
+## Example: 6x h-k-boulder1 (local bottom ~-1.0) → ~-6.0.
+func _prop_mesh_bottom_offset_y(prop_root: Node3D) -> float:
   var acc: Array = [INF]
-  _accum_prop_mesh_bottom_in_root_space(prop_root, prop_root, acc)
+  _accum_prop_mesh_bottom_offset_y(prop_root, prop_root, acc)
   var min_y: float = acc[0]
   return 0.0 if min_y == INF else min_y
 
 
-func _accum_prop_mesh_bottom_in_root_space(prop_root: Node3D, node: Node, acc: Array) -> void:
+## Recursive worker for [method _prop_mesh_bottom_offset_y]: folds each [MeshInstance3D]'s world
+## AABB corners (relative to [param prop_root]'s world Y) into [code]acc[0][/code] (running minimum).
+func _accum_prop_mesh_bottom_offset_y(prop_root: Node3D, node: Node, acc: Array) -> void:
   if node is MeshInstance3D:
     var mi := node as MeshInstance3D
     var mesh: Mesh = mi.mesh
     if mesh != null:
       var local_aabb := mesh.get_aabb()
-      var root_inv := prop_root.global_transform.affine_inverse()
+      var root_y := prop_root.global_position.y
       var size := local_aabb.size
       for ox in [0.0, size.x]:
         for oy in [0.0, size.y]:
           for oz in [0.0, size.z]:
             var mesh_point: Vector3 = local_aabb.position + Vector3(ox, oy, oz)
-            var in_root: Vector3 = root_inv * (mi.global_transform * mesh_point)
-            acc[0] = minf(float(acc[0]), in_root.y)
+            var world_point: Vector3 = mi.global_transform * mesh_point
+            acc[0] = minf(float(acc[0]), world_point.y - root_y)
   for ch in node.get_children():
-    _accum_prop_mesh_bottom_in_root_space(prop_root, ch, acc)
+    _accum_prop_mesh_bottom_offset_y(prop_root, ch, acc)
 
 
 func _ensure_food_plants() -> void:
@@ -1035,7 +1152,8 @@ func _spawn_configured_creatures() -> void:
     fracs.append(locked_1)
   elif total >= 2 and _ground_sampler != null and _ground_sampler.is_valid():
     var spawn_fracs: Array = _ground_sampler.pick_duel_spawn_fractions(
-      PlayfieldGroundSampler.SPAWN_MIN_SEPARATION_FRAC, _spawn_rng, _spawn_existing_points
+      PlayfieldGroundSampler.SPAWN_MIN_SEPARATION_FRAC, _spawn_rng, _spawn_existing_points,
+      _creature_spawn_prop_clearance_m(),
     )
     if spawn_fracs.size() >= 2:
       fracs.append(spawn_fracs[0] as Vector2)
@@ -1050,7 +1168,8 @@ func _spawn_configured_creatures() -> void:
   for _i in range(fracs.size(), total):
     fracs.append(
       _SpawnRandomizer.pick_clear_fraction(
-        _spawn_rng, _playfield_bounds, _ground_sampler, _spawn_existing_points
+        _spawn_rng, _playfield_bounds, _ground_sampler, _spawn_existing_points,
+        _creature_spawn_prop_clearance_m(),
       )
     )
   if fracs.size() > 0:

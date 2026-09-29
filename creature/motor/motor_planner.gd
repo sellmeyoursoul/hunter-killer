@@ -23,6 +23,7 @@ const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
+const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -79,6 +80,22 @@ static func new_state() -> Dictionary:
     "locale_search_anchor": Vector3.ZERO,
     "locale_search_anchor_set": false,
     "locale_search_ticks_remaining": 0,
+    ## Why the active search window was opened: `&""` = empty locale arrival (the original
+    ## 2026-09-13 use), `&"lost_prey"` = moving prey lost from both live and memory pursuit
+    ## (2026-09-28, see `_maybe_start_lost_prey_search`). A lost-prey window holds across
+    ## consideration refreshes, prefers unobstructed candidates toward the anchor, and does not
+    ## invalidate a locale food belief when it gives up.
+    "locale_search_origin": &"",
+    ## Last-known moving-prey position/velocity (2026-09-28 lost-prey search): stamped on every
+    ## live moving-prey arm (`_arm_prey_engagement_from_live_food`), position advanced by the
+    ## memory-pursuit projection (`_sync_moving_prey_memory_objective`). Consumed once, when both
+    ## live and memory pursuit have lapsed, to anchor a bounded search instead of random explore.
+    ## `lost_prey_hint_ticks_remaining` counts down from `locale_search_ticks` after each live
+    ## sighting; 0 = no usable hint.
+    "lost_prey_hint_pos": Vector3.ZERO,
+    "lost_prey_hint_vel": Vector3.ZERO,
+    "lost_prey_hint_instance_id": 0,
+    "lost_prey_hint_ticks_remaining": 0,
     "explore_no_progress_ticks": 0,
     "explore_last_facing_dot": -2.0,
     ## Prior tick's MOVE_FORWARD displacement magnitude for the still-ramping check in
@@ -223,12 +240,19 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   if bool(state.get("boundary_scan_active", false)) and state.get("step_source") == &"explore":
     return _boundary_scan_action(body, motor_v3, state)
   var delta := float(ctx.get("delta", 1.0 / 60.0))
-  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if not bool(state.get("step_goal_set", false)):
     return _MotorAction.STAY
+  _advance_reached_intermediate_hop(ctx, state, body, motor_v3)
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  ## Hop-vs-ultimate fix (2026-09-28): every arrival that *ends* the step (REST/WAIT/STAY below,
+  ## and `completed_step_objective`) is judged against the real objective, not an intermediate
+  ## navmesh hop — see `_step_arrival_target`.
+  var arrival_pt := _step_arrival_target(state)
   if goal_kind == _GkReg.GK_FIND_FOOD:
     if _can_eat_now(body, step_goal, state, motor_v3, delta, ctx):
       state["eat_orbit_turn_deg_accumulated"] = 0.0
+      if int(state.get("step_instance_id", 0)) == int(state.get("lost_prey_hint_instance_id", 0)):
+        _clear_lost_prey_hint(state)
       return _MotorAction.EAT
     var orbit_act := _select_eat_orbit_or_align(body, step_goal, state, motor_v3, delta)
     if orbit_act >= 0:
@@ -240,20 +264,109 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   # winning REST cycle was indistinguishable from ordinary idling both to the player and to that
   # perception gate. `_sync_shelter_or_rest_objective` now holds the creature's own position as the
   # step goal, so this is `true` the same tick REST is reached.
-  if goal_kind == _MotorGoalHub.GOAL_REST and _at_arrival(body, step_goal, motor_v3):
+  if goal_kind == _MotorGoalHub.GOAL_REST and _at_arrival(body, arrival_pt, motor_v3):
     return _MotorAction.REST
   ## Concealment-rest (2026-09-12 design): occupying (or still evaluating) a shelter spot is
   ## `WAIT`, not plain `STAY` — same idle-in-place shape, but at a composure-scaled calorie
   ## discount and (unlike `REST`) without losing the awareness cone, since this can happen while
   ## a threat is still active nearby. Covers both the STAY-evaluate probe window and continued
   ## occupancy after a shelter's confirmed.
-  if goal_kind == _GkReg.GK_SHELTER and _at_arrival(body, step_goal, motor_v3):
+  if goal_kind == _GkReg.GK_SHELTER and _at_arrival(body, arrival_pt, motor_v3):
     return _MotorAction.WAIT
   ## Bound food instance: do not STAY at arrival_tolerance before EAT step-range is reached.
-  if _at_arrival(body, step_goal, motor_v3):
+  if _at_arrival(body, arrival_pt, motor_v3):
     if goal_kind != _GkReg.GK_FIND_FOOD or int(state.get("step_instance_id", 0)) == 0:
       return _MotorAction.STAY
   return _locomote_toward_step_goal(body, motor_v3, state, ctx)
+
+
+## True when [param step_source] under [param goal_kind] steers at a navmesh hop
+## ([method MotorPathClear.resolve_step_objective], or the LoS re-resolve in
+## `_run_path_clearance_los_nav`) toward a separate real objective held in `step_ultimate_pos`.
+## For these, `step_goal` may be an intermediate point and must never be treated as the objective.
+## Hop-vs-ultimate fix (2026-09-28): `live` / `locale` / `locale_search` / `precise` /
+## `memory_moving` under GK_FIND_FOOD, and the `precise` shelter candidate under GK_SHELTER.
+## Everything else (explore, coarse, flee, REST, generic goals) keeps `step_goal` as the objective.
+## Example: `_is_hop_routed_step(GkReg.GK_FIND_FOOD, &"locale")` -> true.
+static func _is_hop_routed_step(goal_kind: StringName, step_source: StringName) -> bool:
+  if goal_kind == _GkReg.GK_FIND_FOOD:
+    return (
+      step_source == &"live"
+      or step_source == &"locale"
+      or step_source == &"locale_search"
+      or step_source == &"precise"
+      or step_source == &"memory_moving"
+    )
+  if goal_kind == _GkReg.GK_SHELTER:
+    return step_source == &"precise"
+  return false
+
+
+## The point whose arrival *ends* the current step (STAY / WAIT / REST, `completed_step_objective`,
+## search-waypoint remint). Returns `step_ultimate_pos` for a hop-routed step
+## ([method _is_hop_routed_step]) when it is set, else `step_goal`.
+## Hop-vs-ultimate fix (2026-09-28): with a real navmesh, `step_goal` is often the first path point
+## more than `MIN_HOP_DISTANCE` (2 m) away, which is inside `arrival_tolerance` (5 m). Judging
+## arrival on it made a locale-seeking rabbit STAY at a hop 3 m out while the anchor was 10–19 m
+## away, for thousands of ticks (locale steps carry no instance id, so nothing else moved it).
+static func _step_arrival_target(state: Dictionary) -> Vector3:
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  if not bool(state.get("step_ultimate_pos_set", false)):
+    return step_goal
+  if not _is_hop_routed_step(state.get("goal_kind", &""), state.get("step_source", &"")):
+    return step_goal
+  return state.get("step_ultimate_pos", step_goal)
+
+
+## Hop-vs-ultimate fix (2026-09-28): when the creature has reached (within `arrival_tolerance`, XZ)
+## an intermediate `step_goal` hop of a hop-routed step but not its `step_ultimate_pos`, re-resolve
+## the hop toward the ultimate ([method MotorPathClear.resolve_step_objective]) instead of letting
+## the step end there. Same "reached = within tolerance" rule as [method MotorWaypointChain.advance].
+## The re-resolve keeps the 2 m minimum hop, so a still-distant hop (2–5 m) is kept and walked,
+## and the next corner is picked once the creature is within 2 m of it. Mutates `step_goal` only.
+## Skipped while a pursuit / memory-pursuit detour latch owns `step_goal` (those release on their
+## own arrival check) and during shelter STAY-evaluate (`step_goal` is the probe anchor on purpose).
+## Clears the fixed-objective progress baselines when the hop moves so a farther new hop isn't
+## counted as a no-progress tick.
+static func _advance_reached_intermediate_hop(
+  ctx: Dictionary,
+  state: Dictionary,
+  body: CharacterBody3D,
+  motor_v3: Dictionary,
+) -> void:
+  if body == null or not bool(state.get("step_goal_set", false)):
+    return
+  if not bool(state.get("step_ultimate_pos_set", false)):
+    return
+  var step_source: StringName = state.get("step_source", &"")
+  if not _is_hop_routed_step(state.get("goal_kind", &""), step_source):
+    return
+  if step_source == &"live" and _pursuit_detour_latch_valid(state):
+    return
+  if step_source == &"memory_moving" and _memory_pursuit_detour_latch_valid(state):
+    return
+  if bool(state.get("shelter_eval_active", false)):
+    return
+  var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
+  var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
+  if _MotorPlane.horizontal_distance(step_goal, ultimate) < 1e-3:
+    return
+  if not _at_arrival(body, step_goal, motor_v3):
+    return
+  if _at_arrival(body, ultimate, motor_v3):
+    return
+  var map_rid: RID = ctx.get("map_rid", RID())
+  var resolved := _PathClear.resolve_step_objective(
+    map_rid, body.global_position, ultimate, _agent_radius(body)
+  )
+  if _MotorPlane.horizontal_distance(resolved, step_goal) < 1e-3:
+    return
+  state["step_goal"] = resolved
+  state["step_goal_set"] = true
+  state["locale_last_bearing_err_deg"] = INF
+  state["locale_last_dist_sq"] = INF
+  state["precise_last_bearing_err_deg"] = INF
+  state["precise_last_dist_sq"] = INF
 
 
 ## True for step sources that hold a stable world objective (no per-tick LoS/nav/backtrack rewrite).
@@ -413,12 +526,15 @@ static func _maybe_apply_fixed_objective_overshoot(
     ultimate_valid = bool(state.get("step_goal_set", false))
   if not ultimate_valid:
     return
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  if body.global_position.distance_to(ultimate) <= arrival_tol:
+  # XZ distances (2026-09-25): `ultimate`/`step_goal` may be ground-level navmesh points while
+  # `global_position` is the capsule centre — see `MotorPlane.horizontal_distance`.
+  var arrival_tol := _arrival_tolerance(motor_v3)
+  var dist_to_ultimate: float = _MotorPlane.horizontal_distance(body.global_position, ultimate)
+  if dist_to_ultimate <= arrival_tol:
     return
   var close_steps := int(motor_v3.get("approach_overshoot_guard_move_steps", 2))
   var close_band := close_steps * _expected_forward_step_world(body, delta)
-  if body.global_position.distance_to(ultimate) >= close_band:
+  if dist_to_ultimate >= close_band:
     return
   var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
   if not bool(state.get("step_goal_set", false)):
@@ -430,8 +546,8 @@ static func _maybe_apply_fixed_objective_overshoot(
   if to_goal_before.length_squared() < 1e-12:
     return
   var approach_dir := to_goal_before.normalized()
-  var dist_before := pos_before_tick.distance_to(step_goal)
-  var dist_after := pos_after.distance_to(step_goal)
+  var dist_before: float = _MotorPlane.horizontal_distance(pos_before_tick, step_goal)
+  var dist_after: float = _MotorPlane.horizontal_distance(pos_after, step_goal)
   var passed := _passed_goal_along_approach(pos_after, step_goal, approach_dir)
   var rear_confirm := dist_after > dist_before and _facing_dot_to_target(body, step_goal) < 0.0
   if not passed and not rear_confirm:
@@ -744,6 +860,8 @@ static func _reset_locale_progress_state(state: Dictionary) -> void:
 
 
 ## Bearing- or distance-improved progress toward [param step_goal] for fixed-objective stuck escalation.
+## Distance is measured on XZ (2026-09-25), so a tall body's vertical bob against a ground-level
+## goal (the wolf's centre Y oscillates ~0.15 m on terrain) can't masquerade as progress.
 static func _note_fixed_objective_position_progress(
   state: Dictionary,
   body: CharacterBody3D,
@@ -756,7 +874,8 @@ static func _note_fixed_objective_position_progress(
   if not bool(state.get("step_goal_set", false)):
     return
   var err_deg := absf(_signed_bearing_error_deg(body, step_goal))
-  var dist_sq := body.global_position.distance_squared_to(step_goal)
+  var dist_h := _horizontal_distance(body, step_goal)
+  var dist_sq := dist_h * dist_h
   var last_err := float(state.get(last_err_key, INF))
   var last_dist := float(state.get(last_dist_key, INF))
   if is_inf(last_err) or is_inf(last_dist):
@@ -1111,6 +1230,7 @@ static func _sync_step_objective(ctx: Dictionary, state: Dictionary, goal_kind: 
     _reset_explore_align_progress_state(state)
     _clear_prey_engagement(state)
     _clear_pursuit_detour_latch(state)
+    _clear_lost_prey_hint(state)
     state["step_ultimate_pos"] = Vector3.ZERO
     state["step_ultimate_pos_set"] = false
     state["eat_orbit_turn_deg_accumulated"] = 0.0
@@ -1387,6 +1507,14 @@ static func _derive_find_food_step_objective(
       ctx, state, creature_pos, motor_v3, scan, map_rid, agent_r
     ):
       return
+  ## Lost-prey search (2026-09-28, decision-44 live smoke): once live and memory pursuit have both
+  ## lapsed, search around where the prey was last known instead of falling to random `explore`
+  ## (which headed the wolf away from the prey). Hold an active lost-prey search step across
+  ## consideration refreshes — otherwise `explore_first` below re-mints explore on every refresh.
+  if _lost_prey_search_step_active(state):
+    _store_food_inventory_step_mode(ctx, state, motor_v3)
+    return
+  _maybe_start_lost_prey_search(state, motor_v3, scan)
   ## Bounded nearby-search after an empty locale arrival (2026-09-13 stuck-rabbit fix): prefer
   ## looking around the cell the creature just found empty over immediately wandering off via
   ## generic `explore` — `_maybe_search_arrival_remint` owns the countdown/give-up, this just
@@ -1687,6 +1815,7 @@ static func _clear_locale_step_fields(state: Dictionary, motor_v3: Dictionary = 
     state["locale_search_anchor"] = cleared_anchor
     state["locale_search_anchor_set"] = true
     state["locale_search_ticks_remaining"] = int(motor_v3.get("locale_search_ticks", 240))
+    state["locale_search_origin"] = &""
 
 
 ## Apply a locale memory-tier seek objective (anchor + nav substep). Returns `false` without
@@ -1728,13 +1857,198 @@ static func _clear_locale_search_state(state: Dictionary) -> void:
   state["locale_search_anchor"] = Vector3.ZERO
   state["locale_search_anchor_set"] = false
   state["locale_search_ticks_remaining"] = 0
+  state["locale_search_origin"] = &""
+
+
+## Lead time (s) the lost-prey search anchor is projected ahead of the last-known prey position
+## along its last-known velocity, capped at `locale_search_radius` so the search window still
+## covers the point the prey was last seen. See [method _lost_prey_search_anchor].
+const _LOST_PREY_SEARCH_LEAD_S := 1.0
+
+
+## Records [param food] (a live, moving prey entry from the awareness scan: `pos`, `velocity`,
+## `instance_id`) as the last-known prey hint and restarts its freshness countdown at
+## `locale_search_ticks`. Called on every live moving-prey arm, so a continuous chase keeps it fresh.
+static func _note_lost_prey_hint_from_live(state: Dictionary, food: Dictionary, motor_v3: Dictionary) -> void:
+  var iid := int(food.get("instance_id", 0))
+  if iid == 0:
+    return
+  var vel: Vector3 = food.get("velocity", Vector3.ZERO)
+  state["lost_prey_hint_pos"] = food.get("pos", Vector3.ZERO)
+  state["lost_prey_hint_vel"] = Vector3(vel.x, 0.0, vel.z)
+  state["lost_prey_hint_instance_id"] = iid
+  state["lost_prey_hint_ticks_remaining"] = maxi(1, int(motor_v3.get("locale_search_ticks", 240)))
+
+
+## Drops the last-known prey hint (goal-kind switch, prey-race give-up, prey eaten, or consumed by
+## [method _maybe_start_lost_prey_search]).
+static func _clear_lost_prey_hint(state: Dictionary) -> void:
+  state["lost_prey_hint_pos"] = Vector3.ZERO
+  state["lost_prey_hint_vel"] = Vector3.ZERO
+  state["lost_prey_hint_instance_id"] = 0
+  state["lost_prey_hint_ticks_remaining"] = 0
+
+
+## Search anchor for a lost prey: the hint position projected [constant _LOST_PREY_SEARCH_LEAD_S]
+## seconds along the hint velocity (XZ), capped at `locale_search_radius`. Returns the hint
+## position unchanged when the prey was (near) stationary.
+## Example: pos (10,0,0), vel (6,0,0), radius 12 → (16,0,0); vel (30,0,0) → (22,0,0).
+static func _lost_prey_search_anchor(state: Dictionary, motor_v3: Dictionary) -> Vector3:
+  var pos: Vector3 = state.get("lost_prey_hint_pos", Vector3.ZERO)
+  var vel: Vector3 = state.get("lost_prey_hint_vel", Vector3.ZERO)
+  vel.y = 0.0
+  var speed := vel.length()
+  if speed < 1e-3:
+    return pos
+  var lead := minf(speed * _LOST_PREY_SEARCH_LEAD_S, float(motor_v3.get("locale_search_radius", 12.0)))
+  return pos + vel / speed * lead
+
+
+## True while a lost-prey search window owns the step objective (`step_source == locale_search`,
+## origin `lost_prey`, budget left, step goal set) — [method _derive_find_food_step_objective]
+## holds it instead of re-deriving explore on a consideration refresh.
+static func _lost_prey_search_step_active(state: Dictionary) -> bool:
+  return (
+    state.get("step_source", &"") == &"locale_search"
+    and state.get("locale_search_origin", &"") == &"lost_prey"
+    and bool(state.get("locale_search_anchor_set", false))
+    and int(state.get("locale_search_ticks_remaining", 0)) > 0
+    and bool(state.get("step_goal_set", false))
+  )
+
+
+## Lost-prey search (2026-09-28, decision-44 live smoke): after a predator loses moving prey from
+## both live pursuit and memory pursuit, opens a bounded `locale_search` window (same machinery as
+## the empty-locale-arrival search: `locale_search_ticks` budget, `locale_search_radius` random
+## points, navmesh hop routing, route scan, dead-end rerolls) anchored at the prey's last-known
+## position projected along its last-known heading ([method _lost_prey_search_anchor]), instead of
+## letting the caller fall through to random `explore`. One-shot: consumes the hint.
+## No-op (returns false) when: no fresh hint; a search window is already active; or the hinted
+## prey is still in the live scan (a deliberate give-up with the prey in view, e.g. the prey-race
+## exclusion — searching for it would undo that give-up). Clears `step_goal_set` on success so the
+## caller's search branch mints the first waypoint this tick. Leaves `explore` untouched when
+## there's no hint, so behaviour without prey info is unchanged.
+static func _maybe_start_lost_prey_search(state: Dictionary, motor_v3: Dictionary, scan: Dictionary) -> bool:
+  if int(state.get("lost_prey_hint_ticks_remaining", 0)) <= 0:
+    return false
+  var iid := int(state.get("lost_prey_hint_instance_id", 0))
+  if iid == 0:
+    return false
+  if (
+    bool(state.get("locale_search_anchor_set", false))
+    and int(state.get("locale_search_ticks_remaining", 0)) > 0
+  ):
+    return false
+  if _live_food_instance_visible(scan, iid):
+    return false
+  var anchor := _lost_prey_search_anchor(state, motor_v3)
+  _clear_lost_prey_hint(state)
+  state["locale_search_anchor"] = anchor
+  state["locale_search_anchor_set"] = true
+  state["locale_search_ticks_remaining"] = int(motor_v3.get("locale_search_ticks", 240))
+  state["locale_search_origin"] = &"lost_prey"
+  state["step_goal_set"] = false
+  return true
+
+
+## Ranks one lost-prey search candidate for [method _mint_locale_search_waypoint]: a known dead end
+## (or a route scan collapsed onto the creature) costs 4, a route the plausibility scan truncated
+## (a ghost-layer object this body can't pass, e.g. an open shrub gap too narrow for a wolf) costs
+## 2, and the committed point's bearing is scored by its dot toward [param anchor] (ignored when the
+## creature is already inside [param radius] of the anchor, where "toward" is meaningless). Higher
+## is better; a result > 0 means "clear route, heading toward the prey" (see
+## [method _lost_prey_candidate_is_ideal]).
+static func _lost_prey_search_candidate_score(
+  creature_pos: Vector3,
+  anchor: Vector3,
+  radius: float,
+  search_point: Vector3,
+  truncated: bool,
+  dead_end: bool,
+) -> float:
+  var score := 0.0
+  if dead_end:
+    score -= 4.0
+  if truncated:
+    score -= 2.0
+  var to_anchor := Vector3(anchor.x - creature_pos.x, 0.0, anchor.z - creature_pos.z)
+  var to_point := Vector3(search_point.x - creature_pos.x, 0.0, search_point.z - creature_pos.z)
+  if to_anchor.length() > radius and to_point.length_squared() > 1e-8:
+    score += to_anchor.normalized().dot(to_point.normalized())
+  else:
+    score += 1.0
+  return score
+
+
+## True when a candidate score from [method _lost_prey_search_candidate_score] means a clear,
+## non-dead-end route whose point bears toward the anchor — the mint loop stops sampling there.
+static func _lost_prey_candidate_is_ideal(score: float) -> bool:
+  return score > 0.0
+
+
+## Bearings [method _lost_prey_bearing_fallback] probes around the creature (every 45°).
+const _LOST_PREY_FALLBACK_BEARINGS := 8
+
+
+## Lost-prey search fallback for when every candidate around the search anchor routes into a
+## blocked spot: probes [constant _LOST_PREY_FALLBACK_BEARINGS] bearings around the creature with
+## the same navmesh-reach + route-plausibility primitive flee and the C1 detour use
+## (`_flee_candidate_probe` + `_apply_route_plausibility_scan`), at
+## `max(locale_search_radius, 2 * agent radius + arrival_tolerance)`. Drops bearings whose reach
+## collapses within arrival tolerance or whose endpoint is a known dead end, then scores
+## `reach / probe_dist + 0.75 * dot(bearing, to_anchor)` — the clearest way out, tilted toward the
+## prey's side (a clear bearing directly away can still win when nothing toward the prey is
+## reachable, e.g. backing out of a wedge before going around).
+## Returns `{"endpoint": Vector3, "point": Vector3}` (route-scanned endpoint and its navmesh snap)
+## or `{}` when no bearing clears or [param ctx] has no body.
+static func _lost_prey_bearing_fallback(
+  ctx: Dictionary,
+  map_rid: RID,
+  creature_pos: Vector3,
+  anchor: Vector3,
+  motor_v3: Dictionary,
+) -> Dictionary:
+  var body: CharacterBody3D = ctx.get("body")
+  if body == null:
+    return {}
+  var tol := _arrival_tolerance(motor_v3)
+  var probe_dist := maxf(
+    float(motor_v3.get("locale_search_radius", 12.0)), 2.0 * _agent_radius(body) + tol
+  )
+  var to_anchor := Vector3(anchor.x - creature_pos.x, 0.0, anchor.z - creature_pos.z)
+  var anchor_dir := to_anchor.normalized() if to_anchor.length_squared() > 1e-8 else Vector3.ZERO
+  var adapter: RefCounted = ctx.get("memory_adapter")
+  var best: Dictionary = {}
+  var best_score := -INF
+  for i in _LOST_PREY_FALLBACK_BEARINGS:
+    var angle := TAU * float(i) / float(_LOST_PREY_FALLBACK_BEARINGS)
+    var dir := Vector3(cos(angle), 0.0, sin(angle))
+    var probe := _apply_route_plausibility_scan(
+      _flee_candidate_probe(map_rid, creature_pos, dir, probe_dist), ctx, body
+    )
+    var reach := float(probe.get("reach", 0.0))
+    var endpoint: Vector3 = probe.get("endpoint", creature_pos)
+    if reach <= tol or _MotorPlane.horizontal_distance(creature_pos, endpoint) <= tol:
+      continue
+    if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
+      if adapter.is_waypoint_dead_end(creature_pos, endpoint, _GkReg.GK_FIND_FOOD, motor_v3):
+        continue
+    var score := minf(1.0, reach / probe_dist) + 0.75 * dir.dot(anchor_dir)
+    if score > best_score:
+      best_score = score
+      best = {"endpoint": endpoint, "point": _snap_to_navmesh(map_rid, endpoint)}
+  return best
 
 
 ## Picks a fresh random waypoint within `locale_search_radius` of the search anchor and assigns it
 ## as this tick's step objective — `step_source = &"locale_search"` (not `&"locale"`) so none of
 ## the locale-specific EAT-handoff/no-progress machinery mistakes it for a bound food approach;
-## `step_instance_id` stays 0 and `step_ultimate_pos` is left unset so `_can_eat_now` never fires
-## on a point that isn't actually food.
+## `step_instance_id` stays 0 so `_can_eat_now` never fires on a point that isn't actually food.
+## Hop-vs-ultimate fix (2026-09-28): `step_goal` is a navmesh hop toward the (route-scanned) search
+## point, so the search point itself is stored as `step_ultimate_pos` — `_maybe_search_arrival_remint`
+## and `select_action` judge arrival on it (previously they judged it on the hop, so a 3 m hop
+## inside `arrival_tolerance` re-minted a fresh random point, and STAYed, every tick).
+## `_can_eat_now` / `_select_eat_orbit_or_align` stay inert here: both require a nonzero instance id.
 static func _mint_locale_search_waypoint(
   ctx: Dictionary,
   state: Dictionary,
@@ -1752,7 +2066,18 @@ static func _mint_locale_search_waypoint(
   ## transient and self-corrects next tick regardless, so this only needs to bias away, not
   ## guarantee avoidance.
   var resolved := Vector3.ZERO
+  var search_point := Vector3.ZERO
   var attempts := maxi(1, int(motor_v3.get("locale_search_dead_end_reroll_attempts", 4)))
+  ## Lost-prey search (2026-09-28): sample twice as many candidates and keep the best-ranked one
+  ## (`_lost_prey_search_candidate_score`: not a dead end, route not truncated by a ghost-layer
+  ## object this body can't pass, bearing toward the anchor) — so a wolf that just lost its prey in
+  ## a too-narrow gap doesn't re-drive into that same gap when a clear navmesh route exists.
+  var lost_prey: bool = state.get("locale_search_origin", &"") == &"lost_prey"
+  if lost_prey:
+    attempts *= 2
+  var best_score := -INF
+  var best_resolved := Vector3.ZERO
+  var best_point := Vector3.ZERO
   for _i in attempts:
     var angle := randf() * TAU
     var dist := randf_range(radius * 0.4, radius)
@@ -1760,19 +2085,64 @@ static func _mint_locale_search_waypoint(
     # §9 slice 6 (2026-09-18): don't commit to a random search point a ghost-layer object actually
     # sits between here and — truncate to the real reachable point along that route first.
     var scanned := _route_scanned_endpoint(ctx, ctx.get("body"), map_rid, creature_pos, raw)
+    search_point = _snap_to_navmesh(map_rid, scanned)
     resolved = _PathClear.resolve_step_objective(map_rid, creature_pos, scanned, agent_r)
-    var is_dead_end := false
-    if adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
+    # 2026-09-25: a scan truncated to within arrival tolerance of the creature itself is as useless
+    # as a known dead end — re-roll it the same way (see `_route_scan_collapsed_onto_self`).
+    var is_dead_end := _route_scan_collapsed_onto_self(creature_pos, raw, scanned, motor_v3)
+    if not is_dead_end and adapter != null and adapter.has_method(&"is_waypoint_dead_end"):
       is_dead_end = adapter.is_waypoint_dead_end(creature_pos, resolved, _GkReg.GK_FIND_FOOD, motor_v3)
-    if not is_dead_end:
+    if not lost_prey:
+      if not is_dead_end:
+        break
+      continue
+    var truncated := (
+      _MotorPlane.horizontal_distance(search_point, _snap_to_navmesh(map_rid, raw))
+      > _arrival_tolerance(motor_v3)
+    )
+    var score := _lost_prey_search_candidate_score(
+      creature_pos, anchor, radius, search_point, truncated, is_dead_end
+    )
+    if score > best_score:
+      best_score = score
+      best_resolved = resolved
+      best_point = search_point
+    if _lost_prey_candidate_is_ideal(score):
       break
+  if lost_prey:
+    resolved = best_resolved
+    search_point = best_point
+    ## Every point around the anchor routes into a blocked spot (typically the same too-narrow
+    ## ghost gap the prey escaped through — the shared navmesh's shortest path hugs a ghost object
+    ## it can't see): walk a clear bearing out of here instead, still preferring the prey's side.
+    if not _lost_prey_candidate_is_ideal(best_score):
+      var alt: Dictionary = _lost_prey_bearing_fallback(ctx, map_rid, creature_pos, anchor, motor_v3)
+      if not alt.is_empty():
+        search_point = alt.get("point", search_point)
+        resolved = _PathClear.resolve_step_objective(
+          map_rid, creature_pos, alt.get("endpoint", search_point), agent_r
+        )
   state["step_goal"] = resolved
   state["step_goal_set"] = true
-  state["step_ultimate_pos"] = Vector3.ZERO
-  state["step_ultimate_pos_set"] = false
+  state["step_ultimate_pos"] = search_point
+  state["step_ultimate_pos_set"] = true
   state["step_instance_id"] = 0
   state["step_stimulus_kind_id"] = &""
   state["step_source"] = &"locale_search"
+
+
+## Closest navmesh point to [param point] on [param map_rid], so an arrival target minted from a
+## random / off-mesh point is one the creature can actually stand within `arrival_tolerance` of.
+## Returns [param point] unchanged with no valid map or when the server answers its empty-map
+## `Vector3.ZERO` sentinel. Example: `_snap_to_navmesh(map_rid, Vector3(3, 0, 40))` -> nearest
+## walkable point to (3, 0, 40).
+static func _snap_to_navmesh(map_rid: RID, point: Vector3) -> Vector3:
+  if not map_rid.is_valid():
+    return point
+  var on_mesh := NavigationServer3D.map_get_closest_point(map_rid, point)
+  if on_mesh == Vector3.ZERO and point.length_squared() > 1e-6:
+    return point
+  return on_mesh
 
 
 ## Per-tick upkeep for an active nearby-search (2026-09-13 stuck-rabbit fix): counts the window
@@ -1798,16 +2168,21 @@ static func _maybe_search_arrival_remint(
   if remaining <= 0:
     var anchor: Vector3 = state.get("locale_search_anchor", Vector3.ZERO)
     var adapter: RefCounted = ctx.get("memory_adapter")
-    if adapter != null and adapter.has_method(&"invalidate_locale_belief_near"):
+    # A lost-prey search (2026-09-28) was never about a locale food belief — the prey just moved
+    # on — so giving up on it must not retire whatever locale cell happens to sit there.
+    var lost_prey: bool = state.get("locale_search_origin", &"") == &"lost_prey"
+    if not lost_prey and adapter != null and adapter.has_method(&"invalidate_locale_belief_near"):
       adapter.invalidate_locale_belief_near(anchor, motor_v3)
     _clear_locale_search_state(state)
     state["step_goal"] = Vector3.ZERO
     state["step_goal_set"] = false
     state["step_source"] = &""
     return
-  var goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-  var tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  if creature_pos.distance_to(goal) > tol:
+  # Hop-vs-ultimate fix (2026-09-28): arrival at the search point (`step_ultimate_pos`), not at
+  # an intermediate navmesh hop toward it — see `_step_arrival_target`.
+  var goal := _step_arrival_target(state)
+  # XZ arrival (2026-09-25) — see `_at_arrival`.
+  if _MotorPlane.horizontal_distance(creature_pos, goal) > _arrival_tolerance(motor_v3):
     return
   _mint_locale_search_waypoint(ctx, state, creature_pos, motor_v3, map_rid, agent_r)
 
@@ -1832,15 +2207,16 @@ static func _maybe_locale_arrival_bind_or_clear(
   if not ultimate_valid:
     return
   var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
-  var d := creature_pos.distance_to(ultimate)
+  # XZ (2026-09-25): locale anchors are ground-level points; `creature_pos` is the capsule centre.
+  var d: float = _MotorPlane.horizontal_distance(creature_pos, ultimate)
   if d > eat_max:
     return
   var food := _AwarenessScan.best_ready_food_target(scan.get("food_split", {}), creature_pos)
   if not food.is_empty():
     var food_pos: Vector3 = food.get("pos", Vector3.ZERO)
     if (
-      food_pos.distance_to(ultimate) <= eat_max
-      or food_pos.distance_to(creature_pos) <= eat_max
+      _MotorPlane.horizontal_distance(food_pos, ultimate) <= eat_max
+      or _MotorPlane.horizontal_distance(food_pos, creature_pos) <= eat_max
     ):
       _apply_live_food_objective(state, food, map_rid, creature_pos, agent_r)
       _arm_prey_engagement_from_live_food(ctx, state, food, motor_v3)
@@ -2193,8 +2569,8 @@ static func _try_maintain_pursuit_detour_latch(
     _clear_pursuit_detour_latch(state)
     return false
   var latched: Vector3 = state.get("pursuit_detour_waypoint", Vector3.ZERO)
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  if creature_pos.distance_to(latched) <= arrival_tol:
+  # XZ arrival (2026-09-25): the latched waypoint is a ground-level navmesh point — see `_at_arrival`.
+  if _MotorPlane.horizontal_distance(creature_pos, latched) <= _arrival_tolerance(motor_v3):
     _clear_pursuit_detour_latch(state)
     return false
   state["step_goal"] = latched
@@ -2244,8 +2620,8 @@ static func _try_maintain_memory_pursuit_detour_latch(
     _clear_memory_pursuit_detour_latch(state)
     return false
   var latched: Vector3 = state.get("memory_pursuit_detour_waypoint", Vector3.ZERO)
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  if creature_pos.distance_to(latched) <= arrival_tol:
+  # XZ arrival (2026-09-25) — see `_at_arrival`.
+  if _MotorPlane.horizontal_distance(creature_pos, latched) <= _arrival_tolerance(motor_v3):
     _clear_memory_pursuit_detour_latch(state)
     return false
   state["step_goal"] = latched
@@ -2320,12 +2696,15 @@ static func _remint_alternate_memory_pursuit_detour(
   var agent_r := _agent_radius(body)
   # §9 slice 6 (2026-09-18): mirrors `_remint_alternate_pursuit_detour`'s own route-scan guard —
   # don't commit to a fresh alternate-side pick a ghost-layer object sits between here and.
+  var raw_wp := wp
   wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
+  # 2026-09-25: scan collapsed onto the creature's own position → same as a dead end (below).
+  var collapsed := _route_scan_collapsed_onto_self(creature_pos, raw_wp, wp, motor_v3)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   ## §4k review (2026-09-23): same dead-end wiring as `_remint_alternate_pursuit_detour` — don't
   ## commit an escalation slot to a spot already known to fail.
   var adapter: RefCounted = ctx.get("memory_adapter")
-  if (
+  if collapsed or (
     adapter != null and adapter.has_method(&"is_waypoint_dead_end")
     and adapter.is_waypoint_dead_end(creature_pos, wp, _GkReg.GK_FIND_FOOD, motor_v3)
   ):
@@ -2464,7 +2843,11 @@ static func _remint_alternate_pursuit_detour(
   var wp := creature_pos + raw_dir * mint_dist
   # §9 slice 6 (2026-09-18): the alternate-side detour point is a fresh speculative pick — don't
   # commit to one a ghost-layer object actually sits between here and.
+  var raw_wp := wp
   wp = _route_scanned_endpoint(ctx, body, map_rid, creature_pos, wp)
+  # 2026-09-25: a scan truncated onto the creature's own position is treated exactly like a known
+  # dead end below (give up → §9 blocked resolution), never committed as a MOVE_FORWARD target.
+  var collapsed := _route_scan_collapsed_onto_self(creature_pos, raw_wp, wp, motor_v3)
   wp = _PathClear.resolve_step_objective(map_rid, creature_pos, wp, agent_r)
   ## §4k review (2026-09-23): decision 21 named the C1 pursuit-detour latch as one of five mint
   ## sites the shared dead-end check needed wiring into; it never was. A ±60° alternate landing on
@@ -2472,7 +2855,7 @@ static func _remint_alternate_pursuit_detour(
   ## treat it exactly like running out of escalations (give up, let one blocked-resolution tick
   ## through) rather than committing to a point already known to fail.
   var adapter: RefCounted = ctx.get("memory_adapter")
-  if (
+  if collapsed or (
     adapter != null and adapter.has_method(&"is_waypoint_dead_end")
     and adapter.is_waypoint_dead_end(creature_pos, wp, _GkReg.GK_FIND_FOOD, motor_v3)
   ):
@@ -2555,6 +2938,7 @@ static func _arm_prey_engagement_from_live_food(
   var iid := int(food.get("instance_id", 0))
   if iid == 0:
     return
+  _note_lost_prey_hint_from_live(state, food, motor_v3)
   var effective := _effective_prey_engagement_latch_ticks(ctx, motor_v3)
   state["prey_engagement_instance_id"] = iid
   state["prey_engagement_ticks_remaining"] = effective
@@ -2589,7 +2973,8 @@ static func _track_prey_race_and_maybe_give_up(
     state["prey_race_best_dist"] = INF
     state["prey_race_stall_ticks"] = 0
   var food_pos: Vector3 = food.get("pos", Vector3.ZERO)
-  var dist := body.global_position.distance_to(food_pos)
+  # XZ (2026-09-25): "closing" is planar — vertical bob of either capsule centre isn't progress.
+  var dist := _horizontal_distance(body, food_pos)
   var best_dist := float(state.get("prey_race_best_dist", INF))
   var epsilon := float(motor_v3.get("prey_race_not_closing_epsilon", 0.05))
   if dist < best_dist - epsilon:
@@ -2609,6 +2994,10 @@ static func _track_prey_race_and_maybe_give_up(
     motor_v3.get("prey_race_exclusion_cooldown_ticks", 60)
   )
   _clear_prey_race_tracking(state)
+  ## A deliberate give-up on an out-running prey must not turn into a lost-prey search for it
+  ## once it drops out of view (2026-09-28).
+  if int(state.get("lost_prey_hint_instance_id", 0)) == iid:
+    _clear_lost_prey_hint(state)
 
 
 static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> bool:
@@ -2632,6 +3021,11 @@ static func _live_food_instance_visible(scan: Dictionary, instance_id: int) -> b
 static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> void:
   _tick_prey_race_exclusion_cooldown(state)
   _tick_handoff_exclusion_cooldown(state)
+  var hint_ticks := int(state.get("lost_prey_hint_ticks_remaining", 0))
+  if hint_ticks > 0:
+    state["lost_prey_hint_ticks_remaining"] = hint_ticks - 1
+    if hint_ticks - 1 <= 0:
+      _clear_lost_prey_hint(state)
   if not _prey_engagement_latch_valid(state):
     return
   var scan: Dictionary = ctx.get("scan", {})
@@ -2690,6 +3084,10 @@ static func _sync_moving_prey_memory_objective(
   state["step_instance_id"] = new_iid
   state["step_stimulus_kind_id"] = moving.get("stimulus_kind_id", &"")
   state["step_source"] = &"memory_moving"
+  ## Lost-prey search (2026-09-28): keep the last-known position current with the memory
+  ## projection (freshness countdown untouched — only a live sighting refreshes it).
+  if new_iid != 0 and new_iid == int(state.get("lost_prey_hint_instance_id", 0)):
+    state["lost_prey_hint_pos"] = ultimate
   return true
 
 
@@ -2706,8 +3104,8 @@ static func _maintain_explore_latch(
   if not bool(state.get("explore_waypoint_set", false)):
     return
   var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  if creature_pos.distance_to(latched) <= arrival_tol:
+  # XZ arrival (2026-09-25): a route-scanned explore waypoint can be a ground-level path point.
+  if _MotorPlane.horizontal_distance(creature_pos, latched) <= _arrival_tolerance(motor_v3):
     state["explore_waypoint"] = Vector3.ZERO
     state["explore_waypoint_set"] = false
     state["step_goal"] = Vector3.ZERO
@@ -2872,11 +3270,20 @@ static func _flee_candidate_probe(
   if not map_rid.is_valid() or dist <= 0.0:
     return {"reach": dist, "endpoint": creature_pos + dir * dist, "path": PackedVector3Array()}
   var candidate := creature_pos + dir * dist
-  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, candidate, true)
+  # 2026-09-25: start from the navmesh surface under the body, not its elevated capsule centre —
+  # see `MotorPathClear.nav_query_origin`.
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(
+    map_rid, _PathClear.nav_query_origin(map_rid, creature_pos), candidate, true
+  )
   if path.size() < 2:
     return {"reach": 0.0, "endpoint": creature_pos, "path": PackedVector3Array()}
   var endpoint: Vector3 = path[path.size() - 1]
-  return {"reach": creature_pos.distance_to(endpoint), "endpoint": endpoint, "path": path}
+  # XZ reach (2026-09-25): `endpoint` is a ground-level navmesh point while `creature_pos` is the
+  # capsule centre. In 3D, a fully-blocked candidate read the centre height (~1.9 m rabbit, ~7.7 m
+  # wolf) as "reach" instead of ~0.
+  return {
+    "reach": _MotorPlane.horizontal_distance(creature_pos, endpoint), "endpoint": endpoint, "path": path,
+  }
 
 
 ## PHYSICS_SQUEEZE.md §8a/decision 22 (2026-09-18, implementation slice 2): [param probe]'s
@@ -2938,11 +3345,14 @@ static func _route_scanned_endpoint(
 ) -> Vector3:
   if not map_rid.is_valid() or body == null:
     return target
-  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, creature_pos, target, true)
+  # 2026-09-25: path starts on the surface under the body — see `MotorPathClear.nav_query_origin`.
+  var path: PackedVector3Array = NavigationServer3D.map_get_path(
+    map_rid, _PathClear.nav_query_origin(map_rid, creature_pos), target, true
+  )
   if path.size() < 2:
     return target
   var probe := {
-    "reach": creature_pos.distance_to(target),
+    "reach": _MotorPlane.horizontal_distance(creature_pos, target),
     "endpoint": target,
     "path": path,
   }
@@ -3819,14 +4229,15 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
 ## reach bonus on top of the tuned constant — `eat_action_max_distance` now means "reach beyond
 ## simple contact," not "reach from body center," matching how `_has_clear_contact_path_for_action`
 ## already reasons about the two bodies' physical extents rather than pretending they're points.
+## [param target_instance_id] resolves through [code]_InstanceIdLookup[/code] so a stale or
+## synthetic id contributes nothing without raising an ObjectDB engine error.
 static func _eat_reach_radius_bonus(body: CharacterBody3D, target_instance_id: int) -> float:
   var bonus := 0.0
   if body != null and body.has_method(&"get_collision_capsule_radius"):
     bonus += float(body.call(&"get_collision_capsule_radius"))
-  if target_instance_id != 0:
-    var target := instance_from_id(target_instance_id)
-    if target is Object and (target as Object).has_method(&"get_collision_capsule_radius"):
-      bonus += float((target as Object).call(&"get_collision_capsule_radius"))
+  var target := _InstanceIdLookup.resolve(target_instance_id)
+  if target != null and target.has_method(&"get_collision_capsule_radius"):
+    bonus += float(target.call(&"get_collision_capsule_radius"))
   return bonus
 
 
@@ -4123,7 +4534,8 @@ static func _latch_los_blocked(
   return latched
 
 
-## True when the tick's action completed a step objective (EAT or arrival STAY).
+## True when the tick's action completed a step objective (EAT or arrival STAY). Arrival is judged
+## against [method _step_arrival_target] (the real objective, not an intermediate navmesh hop).
 static func completed_step_objective(
   body: CharacterBody3D,
   state: Dictionary,
@@ -4138,11 +4550,12 @@ static func completed_step_objective(
     if bool(state.get("shelter_eval_active", false)):
       var result: StringName = state.get("shelter_eval_result", &"")
       return result == &"confirmed" or result == &"failed"
-    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-    return bool(state.get("step_goal_set", false)) and _at_arrival(body, step_goal, motor_v3)
+    # Hop-vs-ultimate fix (2026-09-28): arrival at an intermediate hop is not completion.
+    var wait_target := _step_arrival_target(state)
+    return bool(state.get("step_goal_set", false)) and _at_arrival(body, wait_target, motor_v3)
   if action == _MotorAction.STAY:
-    var step_goal: Vector3 = state.get("step_goal", Vector3.ZERO)
-    if bool(state.get("step_goal_set", false)) and _at_arrival(body, step_goal, motor_v3):
+    var stay_target := _step_arrival_target(state)
+    if bool(state.get("step_goal_set", false)) and _at_arrival(body, stay_target, motor_v3):
       return true
   return false
 
@@ -4249,9 +4662,36 @@ static func _agent_height(body: CharacterBody3D) -> float:
   return 1.2
 
 
+## True when [param body] is within `arrival_tolerance` of [param step_goal] on the XZ plane.
+## Measured horizontally (2026-09-25): step goals are often ground-level navmesh points while
+## `global_position` is the capsule centre. For the wolf (~7.7 m up), a 3D distance can never get
+## under the 5 m default tolerance.
 static func _at_arrival(body: CharacterBody3D, step_goal: Vector3, motor_v3: Dictionary) -> bool:
-  var tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
-  return body.global_position.distance_to(step_goal) <= tol
+  return _MotorPlane.horizontal_distance(body.global_position, step_goal) <= _arrival_tolerance(motor_v3)
+
+
+## `arrival_tolerance` from [param motor_v3], falling back to `eat_action_max_distance`, then 5.0 m.
+static func _arrival_tolerance(motor_v3: Dictionary) -> float:
+  return float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+
+
+## True when a [method _route_scanned_endpoint] truncation left [param endpoint] within arrival
+## tolerance (XZ) of [param creature_pos], even though the requested [param target] was farther
+## away. In that case the route is blocked right where the creature stands, and the endpoint is
+## not a real objective. Committing it as a MOVE_FORWARD target makes the creature steer at itself:
+## bearing to a sub-metre target is noise, so it turns in place with zero forward speed (a silent
+## stall). Mint sites should treat this like a dead end (re-roll, detour give-up, or cooldown).
+## Returns false when the target itself was already close, since a close endpoint is expected then.
+static func _route_scan_collapsed_onto_self(
+  creature_pos: Vector3,
+  target: Vector3,
+  endpoint: Vector3,
+  motor_v3: Dictionary,
+) -> bool:
+  var tol := _arrival_tolerance(motor_v3)
+  if _MotorPlane.horizontal_distance(creature_pos, target) <= tol:
+    return false
+  return _MotorPlane.horizontal_distance(creature_pos, endpoint) <= tol
 
 
 ## Applies §9 persist/switch/seek after blocked locomotion; mutates [param state] step fields.

@@ -7,6 +7,8 @@ class_name MotorWaypointChain
 ## around). [param target]/[method advance] leave the caller's own "ultimate destination" field
 ## (e.g. [code]step_ultimate_pos[/code]) untouched; this only governs the immediate steering point.
 
+const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+
 
 ## Reduces [param path] to its interior bends plus the final point (drops the start point — a
 ## chain never targets "where I already am" — and any point collinear with its neighbors, so the
@@ -40,6 +42,10 @@ static func simplify(path: PackedVector3Array, collinear_dot: float = 0.995) -> 
 ## [code]{"target": Vector3, "index": int, "done": bool}[/code] — [code]done[/code] once the
 ## returned target is the chain's last point. An empty chain returns [param creature_pos] itself
 ## with [code]done: true[/code] (nothing left to steer toward).
+## Arrival is measured on the XZ plane (2026-09-25): chain hops are ground-level navmesh points,
+## while [param creature_pos] is the capsule centre. For a tall body such as the wolf (centre
+## ~7.7 m up), the 3D distance never came within `arrival_tolerance` (5 m), so the chain never
+## advanced past a hop directly under it.
 static func advance(
   chain: PackedVector3Array,
   index: int,
@@ -49,6 +55,9 @@ static func advance(
   if chain.is_empty():
     return {"target": creature_pos, "index": 0, "done": true}
   var idx := clampi(index, 0, chain.size() - 1)
-  while idx < chain.size() - 1 and creature_pos.distance_to(chain[idx]) <= arrival_tolerance:
+  while (
+    idx < chain.size() - 1
+    and _MotorPlane.horizontal_distance(creature_pos, chain[idx]) <= arrival_tolerance
+  ):
     idx += 1
   return {"target": chain[idx], "index": idx, "done": idx == chain.size() - 1}

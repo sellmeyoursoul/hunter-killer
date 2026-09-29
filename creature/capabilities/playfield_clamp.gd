@@ -5,7 +5,7 @@ class_name PlayfieldClamp
 
 ## Params:
 ## - world_pos: Position to clamp.
-## - half_extents: Footprint half-size (x = horizontal radius, y = vertical half-height).
+## - half_extents: Footprint half-size (x = world-X half-extent, y = world-Z half-extent; both the capsule radius for an upright capsule).
 ## - bounds_max: Playfield max corner (2D viewport size, or 3D world [code]max[/code] on XZ).
 ## - bounds_min: Playfield min corner (usually [code]Vector2.ZERO[/code] in 2D; world offset in 3D).
 ## Returns:

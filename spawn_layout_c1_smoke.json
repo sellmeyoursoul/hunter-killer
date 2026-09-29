@@ -1,0 +1,35 @@
+{
+  "_note": "CLEANUP C1 reopen live smoke (cornered prey, blocked pursuit). World = (-100 + 200*fx, -100 + 203.6806*fz). Pocket = east playfield edge + 4-boulder wall along z = -53.05 (centres x 73.2..93.6; re-fitted 2026-09-25 for 2x interior boulders, ~12.8 x 12.3 m each, so the +z face stays at z about -46.9 and the wall still runs from x about 66.8 into the east perimeter ring). Rabbit (96, -43) sits in that corner; wolf (91, -30) is 13.9 m SSW, inside both creatures' 15.9 m omni awareness, so detection does not depend on the random spawn facing. The rabbit's flee bearing is into the corner. The wolf's x-clamp is x <= 93 (capsule r 7.03), so its straight line to the rabbit (x about 98) rubs the clamp and blocks. Backing off west gives a clear direct line into the corner. At 12.3 m tall the wall also blocks the wolf (the old note's 'wolf rides over interior boulders' came from the wolf landing on a 6.1 m boulder while still falling from its spawn height). Run with debug_start_calories creature_0=55 and creature_1=30. 14 spare boulders are parked NW (x -85..-67, z -45..-27). Food is parked SW. The refuge cluster at (0, 1.84) is about 107 m away.",
+  "seed": 101,
+  "creature_0": [0.98, 0.27985],
+  "creature_1": [0.955, 0.34368],
+  "interior_boulders": [
+    [0.866, 0.23051],
+    [0.9, 0.23051],
+    [0.934, 0.23051],
+    [0.968, 0.23051],
+    [0.075, 0.27003],
+    [0.105, 0.27003],
+    [0.135, 0.27003],
+    [0.075, 0.29949],
+    [0.105, 0.29949],
+    [0.135, 0.29949],
+    [0.075, 0.32895],
+    [0.105, 0.32895],
+    [0.135, 0.32895],
+    [0.165, 0.27003],
+    [0.165, 0.29949],
+    [0.165, 0.32895],
+    [0.075, 0.3584],
+    [0.105, 0.3584]
+  ],
+  "solid_shrubs": [
+    [0.125, 0.85919],
+    [0.175, 0.89356],
+    [0.15, 0.79536]
+  ],
+  "open_shrubs": [
+    [0.21, 0.84446],
+    [0.09, 0.91319]
+  ]
+}

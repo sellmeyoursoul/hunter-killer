@@ -11,6 +11,7 @@ const _LearnReg := preload("res://creature/memory/stimulus_learn_registry.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
+const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 
 const FEASIBILITY_PRECISE := 0.75
 const FEASIBILITY_COARSE := 0.45
@@ -196,6 +197,42 @@ func consult_danger_samples(zone_ctx: Dictionary, live_threat_samples: Array) ->
     if _OccludedGhost.danger_filter(vghost):
       out.append(vghost)
   return out
+
+
+## Nearest remembered hostile (an `avoid_hostiles` belief row) by *believed* horizontal distance —
+## the Flight threat memory read (flicker fix option 1, see `flight_threat_memory_sec`). Rows last
+## observed more than [param max_age_sec] ago (wall-clock, same clock as [param now_ms]) are
+## ignored; pass `INF` to consider every row (telemetry). Believed position = `last_world_pos`
+## plus `last_velocity` x age for a moving row, else `last_world_pos` (no extrapolation). Pure read.
+## Returns `{active, instance_id, believed_dist, last_dist, age_sec}`; `active` false (dists -1)
+## when no row qualifies. Example:
+## `nearest_remembered_hostile(body_pos, Time.get_ticks_msec(), 2.0)["believed_dist"]`.
+func nearest_remembered_hostile(creature_pos: Vector3, now_ms: int, max_age_sec: float) -> Dictionary:
+  var best := {"active": false, "instance_id": 0, "believed_dist": -1.0, "last_dist": -1.0, "age_sec": -1.0}
+  var best_d := INF
+  for iid in _beliefs.keys():
+    var row: Dictionary = _beliefs[iid]
+    if row.get("goal_kind", &"") != _GkReg.GK_AVOID_HOSTILES:
+      continue
+    var age_sec := maxf(0.0, float(now_ms - int(row.get("last_observed_ms", 0))) / 1000.0)
+    if age_sec > max_age_sec:
+      continue
+    var last_pos := _read_pos(row.get("last_world_pos", Vector3.ZERO))
+    var believed := last_pos
+    if bool(row.get("is_moving", false)):
+      var vel: Vector3 = _MotorPlane.read_velocity(row.get("last_velocity", Vector3.ZERO))
+      believed = last_pos + vel * age_sec
+    var d := Vector2(believed.x - creature_pos.x, believed.z - creature_pos.z).length()
+    if d < best_d:
+      best_d = d
+      best = {
+        "active": true,
+        "instance_id": int(iid),
+        "believed_dist": d,
+        "last_dist": Vector2(last_pos.x - creature_pos.x, last_pos.z - creature_pos.z).length(),
+        "age_sec": age_sec,
+      }
+  return best
 
 
 ## Returns a shallow copy of instance belief rows keyed by [code]instance_id[/code].
@@ -1431,14 +1468,17 @@ func _sample_world_pos(sample: Dictionary) -> Vector3:
   return Vector3.ZERO
 
 
+## True when the remembered/live food [param instance_id] may be eaten under this creature's diet
+## policy. Ids with no live node behind them (freed, or never an ObjectDB id at all) pass — there is
+## nothing to check the diet against.
 func _belief_instance_passes_diet(instance_id: int) -> bool:
   if _food_intake_policy == null or instance_id == 0:
     return true
-  if not is_instance_id_valid(instance_id):
-    # Remembered beliefs can outlive (or, in tests, never correspond to) a live scene Node —
-    # e.g. C4 (CREATURE_MOVEMENT_V3_CLEANUP.md): a stale/synthetic instance_id previously hit
-    # instance_from_id() directly and both spammed an engine-level ObjectDB error and silently
-    # failed the diet check. No live node to check against — do not gate on diet here.
+  # Remembered beliefs can outlive (or, in tests, never correspond to) a live scene Node — C4
+  # (CREATURE_MOVEMENT_V3_CLEANUP.md). The original C4 guard used `is_instance_id_valid()`, which
+  # goes through the same ObjectDB lookup as `instance_from_id()` and still raised the engine's
+  # `slot >= slot_max` error for synthetic ids; `_InstanceIdLookup.resolve` rejects those first.
+  var node := _InstanceIdLookup.resolve(instance_id)
+  if node == null:
     return true
-  var node := instance_from_id(instance_id)
   return _DietRegistry.node_is_valid_food_for_policy(node, _food_intake_policy)

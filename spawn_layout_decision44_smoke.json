@@ -1,110 +1,35 @@
 {
-  "_note": "Decision 44 live smoke (PHYSICS_SQUEEZE.md). World = (-100 + 200*fx, -100 + 203.7*fz). Rabbit (60,55), wolf (80,88) in the +x/+z quadrant (locale writes only land there). Boulder pocket in locale cell (0,0): back wall x=21 z=14..38, side walls z=12/z=40 x=24..42, opening east; cell centre (26,26) sits just inside the back wall. Refuge shrub cluster is the forced one at frac (0.5,0.5) = world (0,1.85). 5 spare boulders parked at the SW corner.",
+  "_note": "Decision 44 live smoke (PHYSICS_SQUEEZE.md). World = (-100 + 200*fx, -100 + 203.68*fz). Rabbit (60,55), wolf (80,88). Re-fitted 2026-09-25 for 2x interior boulders (6x mesh scale, each ~12.8 x 12.3 m on XZ, ~12.3 m tall): boulder pocket in locale cell (0,0), opening east, same inner faces as the 3x original. Back wall centres x=17.8, z 14.5..43.1 (inner face x~24.2); side walls centres z=8.9 and z=43.1, x 24.2..38.8 (inner faces z~15.0 and z~36.9, open end x~45.2). Interior ~21.9 m wide, so the wolf (radius ~7) can enter. Cell centre (26,26) sits just inside the back wall. The back wall starts at z=14.5 (not 8.9) to keep a ~5 m lane between the pocket and the forced refuge shrub cluster at frac (0.5,0.5) = world (0,1.84). 7 spare boulders parked at the SW corner.",
   "seed": 44,
-  "creature_0": [
-    0.8,
-    0.7609
-  ],
-  "creature_1": [
-    0.9,
-    0.9229
-  ],
+  "creature_0": [0.8, 0.7609],
+  "creature_1": [0.9, 0.9229],
   "interior_boulders": [
-    [
-      0.605,
-      0.5596
-    ],
-    [
-      0.605,
-      0.5891
-    ],
-    [
-      0.605,
-      0.6186
-    ],
-    [
-      0.605,
-      0.648
-    ],
-    [
-      0.605,
-      0.6775
-    ],
-    [
-      0.62,
-      0.5498
-    ],
-    [
-      0.62,
-      0.6873
-    ],
-    [
-      0.65,
-      0.5498
-    ],
-    [
-      0.65,
-      0.6873
-    ],
-    [
-      0.68,
-      0.5498
-    ],
-    [
-      0.68,
-      0.6873
-    ],
-    [
-      0.71,
-      0.5498
-    ],
-    [
-      0.71,
-      0.6873
-    ],
-    [
-      0.1,
-      0.0982
-    ],
-    [
-      0.13,
-      0.0982
-    ],
-    [
-      0.1,
-      0.1276
-    ],
-    [
-      0.07,
-      0.0687
-    ],
-    [
-      0.13,
-      0.1276
-    ]
+    [0.589, 0.56215],
+    [0.589, 0.5975],
+    [0.589, 0.63285],
+    [0.589, 0.66771],
+    [0.589, 0.70257],
+    [0.621, 0.53466],
+    [0.6575, 0.53466],
+    [0.694, 0.53466],
+    [0.621, 0.70257],
+    [0.6575, 0.70257],
+    [0.694, 0.70257],
+    [0.1, 0.09819],
+    [0.13, 0.09819],
+    [0.1, 0.12765],
+    [0.07, 0.06874],
+    [0.13, 0.12765],
+    [0.07, 0.12765],
+    [0.13, 0.06874]
   ],
   "solid_shrubs": [
-    [
-      0.8,
-      0.8837
-    ],
-    [
-      0.875,
-      0.6382
-    ],
-    [
-      0.725,
-      0.8346
-    ]
+    [0.8, 0.8837],
+    [0.875, 0.6382],
+    [0.725, 0.8346]
   ],
   "open_shrubs": [
-    [
-      0.925,
-      0.7855
-    ],
-    [
-      0.825,
-      0.5891
-    ]
+    [0.925, 0.7855],
+    [0.825, 0.5891]
   ]
 }
