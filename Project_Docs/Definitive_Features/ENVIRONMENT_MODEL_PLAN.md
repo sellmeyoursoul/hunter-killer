@@ -190,7 +190,7 @@ The shared playfield `NavigationRegion3D` (`main_3d.gd` `_bake_playfield_navmesh
 
 - **Timing.** The bake runs after prop grounding (`_ground_props_then_bake_navmesh`). `is_navigation_ready()` turns true only once the navigation map answers queries on the new mesh (up to 30 physics frames, with explicit re-push).
 - **Erosion.** `agent_radius` = the largest spawned creature's capsule radius, rounded up to a 0.25 m voxel (wolf ≈ 7.25 m). Every creature's queries use this eroded mesh.
-- **Open.** Whether to bake per size class or species is open and **undecided by the user** ([PHYSICS_SQUEEZE.md decision 46 B](../Draft_Features/PHYSICS_SQUEEZE.md); backlog "Shared navmesh bake erodes…").
+- **Open.** Whether to bake per size class or species is open and **undecided by the user** ([PHYSICS_SQUEEZE.md decision 46 B](../Draft_Features/PHYSICS_SQUEEZE.md); backlog "Shared navmesh bake erodes…"). Design: [NAVIGATION_PASSABILITY_PLAN.md](../Draft_Features/NAVIGATION_PASSABILITY_PLAN.md).
 - **History.** Before 2026-09-25 the bake used the region's default source mode, which found no geometry, so the live navmesh had zero polygons.
 
 ### 6.4 Randomized playfield spawn layout (interior boulders / food / duel pair)
