@@ -1,8 +1,18 @@
 # Hunter Killer — Per-creature navigation passability plan
 
-> **Status:** `design` (draft, 2026-09-30). **No code.** This doc owns the per-size / per-species navmesh question opened in [PHYSICS_SQUEEZE.md decision 46 B](PHYSICS_SQUEEZE.md), the backlog rows "Shared navmesh bake erodes by the largest creature's radius" and "Crushable shrubs vs the navmesh bake" in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md), and the "Open" bullet of [ENVIRONMENT_MODEL_PLAN.md §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md). The user answers the `<<Question>>` markers in §9 **in this doc**. The recommendation in §6 is **provisional, pending answers to Q1–Q5**.
+> **Status:** `design` (draft, 2026-09-30). **No code.** This doc owns the per-size / per-species navmesh question opened in [PHYSICS_SQUEEZE.md decision 46 B](PHYSICS_SQUEEZE.md), the backlog rows "Shared navmesh bake erodes by the largest creature's radius" and "Crushable shrubs vs the navmesh bake" in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md), and the "Open" bullet of [ENVIRONMENT_MODEL_PLAN.md §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md). The user answers the `<<Question>>` markers in §9 **in this doc**.
 >
-> **Sourcing.** The evidence below is taken from active docs ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md) decisions 16–25 and 46, [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [CREATURE_MOVEMENT_V3.md §3](CREATURE_MOVEMENT_V3.md), [CREATURE_MOVEMENT_V3_CLEANUP.md C1](CREATURE_MOVEMENT_V3_CLEANUP.md#c1--pursuit-contact-geometry-stall-fox)). Those docs cite the code. This design pass did not re-read the code. Before implementation starts, re-confirm the code paths named in §2.
+> **Decisions 2026-09-30 (user, in conversation; §6.1 D1–D5).** The **backbone is decided**: tiled per-size-class navmeshes (Option A), with the smallest fitting class chosen by conservative round-up. **Phase 4 changed**: it is now an **optional, switchable, budgeted local exact-refinement layer** (§5.8), not the Option D grid backend. Tiling moves into Phase 1 so that crush can be added later without re-architecting (D4). Per-class obstacle inclusion follows `passible` / `fit_size` (D5). Still open: class count and boundaries, dynamics latency, the performance budget and the remaining §9 questions (including new Q10–Q12).
+>
+> **Decisions 2026-10-01 (user, in conversation; §6.1 D6–D7).** Q1 answered (D6): crush capability is a **class property** (tied to size for now), slope/climb use a physics-derived class baseline with the door left open for per-creature variability, and climb / swim / compressibility are deferred with capability bits reserved. D7: class membership and navigation-layer masks are **derived at runtime** from config; no authored per-creature or per-species class or layer.
+>
+> **Decision 2026-10-01 (user, in conversation; §6.1 D8).** Slope and climbing structure: each class's baseline slope / climb **matches physics** (the bake slope is never raised for climbers); steep-ground walkers get **slope-variant maps** (one bake per occupied (size class, slope variant) pair, **sparse**); climbing features (boulders, cliffs, ledges) become **off-mesh links** carrying a reserved CLIMB navigation-layer bit on the existing maps; the `NavRouter` reports link traversal; "slower above X" is motor cost, not passability. Obstacles are removed from the bake **explicitly**, decoupled from slope / climb thresholds.
+>
+> **Decision 2026-10-01 (user, in conversation; §6.1 D9).** Q2 partially answered: **K = 3 size classes for now** (small: rabbit, fox; medium: wolf; large: mastodon, reserved, no archetype yet). Species names are descriptive only; membership is derived at runtime (D7), and the large class is not baked while no large species is in the roster (D8 sparse baking). Class **boundaries** (`R_k`) and the acceptable erosion tolerance stay open (Q2 remainder, gated on Q10 / Q12).
+>
+> **Decision 2026-10-01 (user, in conversation; §6.1 D10).** Navigation code ownership is a **two-layer split**. **Layer 1**, a creature-agnostic navigation maps service in `environment/navigation/` (new folder, created in Phase 1; owner `environment-world`), owns bake, tiling, class / variant maps, obstacle carving, links, readiness, tile rebakes and the size → class lookup. **Layer 2**, the creature-facing `NavRouter` in `creature/motor/` (owner `creature-motor`), is the single M5 entry point and holds all creature-specific path logic. `creature-entity` builds the `PassabilityProfile`. `main_3d.gd` keeps only bake kick-off and the handle hand-off. §8 phase owners are updated to match.
+>
+> **Sourcing.** The evidence below is taken from active docs ([PHYSICS_SQUEEZE.md](PHYSICS_SQUEEZE.md) decisions 16–25 and 46, [ENVIRONMENT_MODEL_PLAN.md §6](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), [CREATURE_MOVEMENT_V3.md §3](CREATURE_MOVEMENT_V3.md), [CREATURE_MOVEMENT_V3_CLEANUP.md C1](CREATURE_MOVEMENT_V3_CLEANUP.md#c1--pursuit-contact-geometry-stall-fox)). Those docs cite the code. The original design pass (2026-09-30) did not re-read the code. On 2026-10-01 the caller verified specific facts in code: the bake settings in `main_3d.gd` `_bake_playfield_navmesh` (~lines 605–644), `floor_max_angle` 50° in both kinematic templates, the `motor_planner.gd` order of operations (~3264 / ~3339), and the species archetype size fields in `creature/species/*.tres`. Facts verified that way are marked with their date in place. **Everything else still needs re-confirming** before implementation starts, including the code paths named in §2.
 >
 > Godot API statements in §5.0 come from knowledge of Godot 4.3–4.5. Each one carries a **verify** tag until someone checks it against the 4.7 docs.
 
@@ -17,10 +27,10 @@
 **Problem in one paragraph.** Today one playfield navmesh is eroded by the **largest** creature's radius (wolf, ≈ 7.25 m after voxel snapping). Every creature pathfinds on it. Small creatures lose gaps, edge strips, and access to their own food. Large creatures are routed through gaps they cannot use, because the navmesh does not contain the open-shrub ghost obstacles at all. The per-creature shape-cast route scan catches some of these routes after the fact. It cannot produce a better route: it only truncates or disqualifies the one the navmesh gave. Neither layer has the full truth.
 
 **Out of scope (explicit non-goals):**
-- Creature-vs-creature avoidance and pushing (RVO, crowding). Creatures do not carve the navmesh, and this plan keeps it that way.
+- Creature-vs-creature avoidance and pushing (RVO, crowding). Creatures do not carve the navmesh, and this plan keeps it that way. They also do not physically collide with each other: creature bodies use `collision_mask = 1` (world static only; `creature/capabilities/creature_kinematic_body_3d.gd` ~lines 250-253, verified 2026-09-30). Creature interaction is motor behaviour plus hitbox `Area3D` overlaps.
 - Line of sight / occlusion ([PHYSICS_SQUEEZE §8b](PHYSICS_SQUEEZE.md), backlog).
-- Designing the crush mechanic itself (`crush_weight` semantics, damage, regrowth). This plan only states what pathing needs from it (§4.4, Q3).
-- Designing climbing, swimming, or jumping. This plan only reserves the extension points (Q1).
+- Designing the crush mechanic itself (`crush_weight` semantics, damage, regrowth). This plan only states what pathing needs from it (§4.4, Q3). Crush **pathing structure** is planned now (D4), because it forces tiling into Phase 1. Crush **semantics** stay out of scope.
+- Designing climbing, swimming, or jumping **movement**. This plan only reserves the extension points (Q1) and, for climbing, the pathing structure (D8: CLIMB links, router-reported link traversal).
 - Flee / choke / shelter **scoring** (decisions 20, 39, 45). Those consume pathing output and are unchanged unless noted.
 
 ---
@@ -29,7 +39,7 @@
 
 **Repo / project root:** `hunter-killer/`
 **Engine & version:** Godot 4.7 (per caller; the project overview memory says 4.6). GDScript. C++ / GDExtension is in scope for the agent role; whether it is acceptable here is Q5.
-**Main scenes / entry:** `main_3d.tscn` / [`main_3d.gd`](../../main_3d.gd) (bake owner); headless tests `tests/run_all.gd` + [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd).
+**Main scenes / entry:** `main_3d.tscn` / [`main_3d.gd`](../../main_3d.gd) (bake owner today; per D10 the bake moves to `environment/navigation/` in Phase 1); headless tests `tests/run_all.gd` + [`tests/motor_path_fixture.gd`](../../tests/motor_path_fixture.gd).
 
 ### 2.1 Current navmesh bake (facts, per [PHYSICS_SQUEEZE decision 46 B](PHYSICS_SQUEEZE.md) and [ENVIRONMENT_MODEL_PLAN §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md))
 
@@ -41,8 +51,10 @@
 | Voxel | `cell_size` 0.25, `cell_height` 0.15 |
 | `agent_radius` | largest `collision_capsule_radius` in the spawn plan, rounded up to a voxel: wolf 7.03 → **7.25 m** |
 | `agent_height` | 2.0 requested → **2.10 m** (the wolf capsule is ~15 m tall; its centre is ~7.7 m up) |
-| `agent_max_climb` | 0.25 requested → **0.15 m** |
-| `agent_max_slope` | **Not recorded in any active doc.** <<Comment: record the value `_bake_playfield_navmesh` uses and compare it with `CharacterBody3D.floor_max_angle` (50° per [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) boulder-climb notes). If they differ, the navmesh and physics disagree about which slopes are walkable.>> |
+| `agent_max_climb` | 0.25 requested → **0.15 m** (`floorf(0.25/0.15 + 0.001) × 0.15`, snapped **down** to `cell_height`), one value for every creature (`main_3d.gd` `_bake_playfield_navmesh` ~lines 605–644, caller-verified 2026-10-01) |
+| `agent_max_slope` | **Not set** in `_bake_playfield_navmesh` (caller-verified 2026-10-01), so the bake uses the `NavigationMesh` engine default, believed **45°** (**verify**). |
+| Physics slope (`floor_max_angle`) | **50°** (`0.8726646259972418` rad) in both `creature/templates/creature_herbivore_kinematic_3d.tscn` (line 22) and `creature_carnivore_kinematic_3d.tscn` (line 20); `floor_snap_length` 0.35 (caller-verified 2026-10-01). |
+| Effective navmesh slope (suspected) | **~31°**. Recast connects neighbouring spans only if their height difference is ≤ `agent_max_climb` (**verify**). On a smooth slope each 0.25 m cell rises `0.25·tanθ`, so above `atan(0.15/0.25)` ≈ 31° neighbours disconnect and the slope fragments. That is below both the 45° default and physics' 50°, giving a physics / navmesh mismatch band of ~31–50°. <<Comment: confirm or deny by the headless terrain slope measurement (§11). Also verify no `.tscn` / `.tres` NavigationMesh resource overrides `agent_max_slope`. Phase 1 fixes the mismatch per D8.>> |
 | Readiness | `is_navigation_ready()` turns true only after the map answers a closest-point query on a baked vertex. The mesh is re-pushed every 10 frames, with a 30-frame cap. A 0-polygon bake logs and still reports ready. |
 | Maps | **One** map. Motor code reaches it through `main.get_navigation_map_rid()`. |
 
@@ -80,6 +92,8 @@
 | `CreatureMotorStack._resolve_main` → `map_rid` | map handle for the stack |
 | `tests/motor_path_fixture.gd` | builds its own map (`agent_radius` 0.25); `await_nav_ready` / `await_region_nav_ready` (decision 46 J) |
 
+**Migration target (D10).** Every motor call site above migrates onto the **Layer-2 `NavRouter`** (`creature/motor/`, M5); none keeps a raw map RID. The map handle that reaches the motor today through `main.get_navigation_map_rid()` (`main_3d.gd` ~551, caller-verified 2026-10-01) and `CreatureMotorStack._resolve_main` is replaced by **Layer-1 handles** (`environment/navigation/`) held behind the router. In Phase 0 the router wraps the current single map, reached through a thin `main_3d.gd` accessor. From Phase 1 it resolves per-(class, variant) handles from Layer 1. The fixture row moves onto Layer 1's fixture-buildable maps in Phase 1.
+
 **Existing patterns to follow:** [root CLAUDE.md](../../CLAUDE.md) and [Project_Docs/CLAUDE.md](../CLAUDE.md). Query-enforced passability for object-scale obstacles (decision 16). Ground-truth sizes with noise only at tactical decisions (decisions 8/18). Worst-alone impact merge (`EnvironmentMovementImpact.merge_greatest_impact`). Staged slices, tested as they land (§8h).
 
 ---
@@ -92,7 +106,7 @@
 - The rabbit loses gaps and edge strips it physically fits through.
 - Each `solid_shrub_3d` (rabbit food) sits inside a ~7 m hole. The closest navmesh point to the food is ≥ 7.25 m from the hull.
 - **Decision-44 smoke pocket.** The interior is ~21.9 m wide between boulder faces, which leaves only ~7–8 m navigable (21.9 − 2 × 7.25). The pocket was re-fitted for 6x boulders so the wolf could enter. The rabbit's navigable interior shrank by the same 14.5 m.
-- **Live capsule radii for small creatures are not in any active doc.** Declared `.tres` values (rabbit 0.6, fox 0.7) are only fallbacks. The fox's live value was 2.343 ([PHYSICS_SQUEEZE slice 4 changelog](PHYSICS_SQUEEZE.md)). <<Comment: measure and record the live rabbit capsule radius. Every erosion number for the small class depends on it, and Q2's class boundaries need it.>>
+- **Live capsule radii for small creatures are not in any active doc.** Declared `.tres` values are only fallbacks. Only two species archetypes exist (verified 2026-10-01, `creature/species/*.tres`): `rabbit_archetype.tres` (`creature_size` 1.7, `collision_capsule_radius` 0.6, height 2.0) and `wolf_archetype.tres` (6.0 / 7.0 / 15.3). **There is no fox archetype**, so the fox fallback 0.7 cited in earlier drafts has no `.tres` source. The fox's live value was 2.343 ([PHYSICS_SQUEEZE slice 4 changelog](PHYSICS_SQUEEZE.md)). <<Comment: confirm where the fox's live radius 2.343 comes from (likely a pack overlay or runtime scaling; unverified). D9's provisional small-class bound depends on it.>> <<Comment: measure and record the live rabbit capsule radius. Every erosion number for the small class depends on it, and Q2's class boundaries need it.>>
 
 ### 3.2 Gap trap (the navmesh cannot see the open shrub)
 
@@ -156,19 +170,22 @@
 | G8 | `NavigationServer3D.parse_source_geometry_data` + `bake_from_source_geometry_data(_async)`. `NavigationMeshSourceGeometryData3D` can be parsed **once** and baked with several `NavigationMesh` settings; `add_projected_obstruction` exists (believed 4.3+). | Bake N classes from one parse | medium — **verify** |
 | G9 | `AStarGrid2D` (engine C++, scriptable): `region`, `cell_size`, `set_point_solid`, `set_point_weight_scale`, `fill_solid_region` (believed 4.3+), jump-point option. Solidity is **global per grid**, with no per-query predicate. `AStar3D` covers arbitrary graphs. | Option D without GDExtension (one grid per class) | high for core API — **verify** `fill_solid_region` |
 | G10 | Bake and query cost for an 800 × 815-voxel terrain at 0.25 m: **unknown**. | Option A bake budget | **measure** |
+| G11 | Slope is baked: one `agent_max_slope` per bake. Steeper triangles are excluded from the mesh, and the unwalkable patches erode by `agent_radius`. Neighbouring spans connect only if their height difference ≤ `agent_max_climb`, so the step limit also caps the effective slope (`atan(agent_max_climb / cell_size)`). Slope / climb / height filters are also part of how layer-1 obstacles get removed; the bake has no "obstacle" tag. | D8: slope variants are separate bakes; obstacle removal must be explicit | medium-high — **verify** |
+| G12 | `NavigationLink3D` (server: `link_create`) joins two points on a map, with `navigation_layers`, `enter_cost`, `travel_cost` and a bidirectional flag. `NavigationPathQueryResult3D` reports `path_types` / `path_owner_ids` per path point, so a caller can tell which segments cross a link. | D8: climb links; router reports link traversal | medium — **verify against 4.7** |
 
-### 5.1 Option A — Per-size-class navigation maps
+### 5.1 Option A — Per-size-class navigation maps (**chosen backbone, D1**)
 
-**Shape.** K size classes, each with a class radius `R_k` (the upper bound of the class, snapped **up** to a voxel), plus class height / climb / slope. Each class gets its own map and region, baked from one shared parsed source (G8). A creature queries the map for the smallest class with `R_k ≥ its live radius` (conservative). Ghost-layer hulls are baked into **every** class map (mask `1 | 16`), pending Q6. Because hulls are solid for everyone (§2.2), erosion by `R_k` removes exactly the gaps that class can't fit through.
+**Shape.** K size classes, each with a class radius `R_k` (the upper bound of the class, snapped **up** to a voxel), plus class height / climb / slope. Each class gets its own map, **tiled** into regions (D4), baked from one shared parsed source (G8). A creature queries the map for the smallest class with `R_k ≥ its live radius` (conservative round-up, D1). Obstacles, including ghost-layer hulls, are included per class by the `passible` / `fit_size` rules in D5 (Q6 formally open). Because hulls are solid for everyone (§2.2), erosion by `R_k` removes exactly the gaps that class can't fit through.
 
 - **Pros:** Godot-native (G1, G2); zero custom pathfinding. Fixes erosion within a bounded tolerance: the loss for a creature of radius r is `R_k − r`. Fixes the gap trap: the open shrub now carves the wolf map. The C1 compare becomes meaningful. Class height and climb fix overhang and step mismatches for free. This is how Unity (NavMesh agent types) and Unreal (supported agents) handle multiple sizes: one navmesh per agent type. The existing `RoutePlausibilityScan` and per-step gate stay as they are, as the exact final check.
 - **Cons:** Continuous size is quantized; tolerance depends on class spacing. Bake time and memory scale by K (G10 unknown). Dynamic changes need a rebake per class, or per tile per class (G7). Capabilities (climb, swim, crush) multiply maps if modelled as maps. Readiness logic becomes per-map.
-- **Crush:** A crushed shrub is removed from the source, and the affected tile is rebaked on every class map. "Crushable **by me**" before crushing is not expressible per creature, because weight isn't a class property. Two options: keep crushables as carving and let the motor crush on contact (pathing is pessimistic), or bake the crushable footprint as a separate high-`travel_cost` region with a CRUSH navigation-layer bit (G3/G4) and let heavy creatures include that bit. See Q3/Q8.
-- **Squeeze / compressibility:** Not native. Approximate by baking a class at `R_k × squeeze_factor` and tagging those regions with cost. This gets complicated fast; see Q1.
-- **Climbing:** Bake `agent_max_slope` / `agent_max_climb` per class. A climbing **trait** becomes a capability overlay (region layer bit, as in Option B) or an extra map per (class, climber), which multiplies maps.
+- **Crush:** A crushed shrub is removed from the source, and the affected tile is rebaked on the class maps that carved it (D4). Crush capability is a **class property** (D6): each size class either crushes a given crush band or not, so crush-capable classes treat those crushables as cost areas instead of carving them, and lighter classes carve them. No weight bands × size classes. Reason: Godot navmeshes have no per-polygon area types (cost and layer bits are per **region**, G3/G4), so "carve for light, cost for heavy" inside one class map would need hole-cut plus separate CRUSH-bit fill regions stitched by edge margin, with Option B's fragility. **Revisit trigger:** a heavy-small or light-large creature whose crush ability differs from its size class. See Q3/Q8.
+- **Squeeze / compressibility:** Not native. Approximate by baking a class at `R_k × squeeze_factor` and tagging those regions with cost. This gets complicated fast. Per D6, compressibility stays **out of class maps** (deferred); `fit_size` obstacle entry is already per class via D5. See Q1.
+- **Slope / climbing (D8):** Bake `agent_max_slope` / `agent_max_climb` per class at a baseline that **matches physics** (walkable range of `floor_max_angle`, with a step limit consistent with `cell_size` so baseline slopes really connect; G11). The bake slope is never raised for climbers. **Steep-ground walkers** (e.g. mountain goats: much steeper slopes, no vertical climbing) use a **slope-variant map**, a separate bake per (size class, slope variant), because slope is bake-time and Godot has no per-polygon area tags. **Climbing features** (boulders, cliffs, ledges) are **off-mesh links** (G12) carrying a reserved CLIMB navigation-layer bit, added to the existing maps with no new bakes. Links are generated per tile at bake time by a ledge detector (height above the walking step limit, within climbable height); boulder tops become islands joined by links. A climbing goat uses the steep variant plus CLIMB links. Only (class, variant) pairs that the world's roster occupies are baked (sparse). Terminology: a **map** is a separate bake; a **navigation layer** is one of 32 filter bits on regions / links within a map.
 - **Runtime size change:** Switch maps at class thresholds, with hysteresis (same idea as §8d). Replan on switch.
-- **Dynamic obstacles:** Tiles: the playfield is split into T regions per class, and a change rebakes the covering tile(s) × K. The depletion hull swap needs the same path, or a decision that depleted hull changes don't matter for pathing (Q3).
-- **Migration cost:** Medium. Bake code in `main_3d.gd` (app-shell), readiness per map, the seam (M5) across ~7 motor call sites, and fixture support for building K classes. There is no scoring change.
+- **Dynamic obstacles:** Tiles: the playfield is split into T regions per class, and a change rebakes the covering tile(s) × K. The depletion hull swap needs the same path, or a decision that depleted hull changes don't matter for pathing (Q3). Staleness is asymmetric (D4): a stale map after a crush is conservative, but a stale map after a regrowth or hull swap is optimistic.
+- **Industry precedent (D1 rationale):** Unreal "Supported Agents" and Unity "Agent Types" both ship tiled per-agent-size Recast navmeshes at large world scale, typically with 2–4 classes.
+- **Migration cost:** Medium. Bake code moves out of `main_3d.gd` into the Layer-1 maps service in `environment/navigation/` (D10), readiness per map, the seam (M5) across ~7 motor call sites, and fixture support for building K classes. There is no scoring change.
 
 ### 5.2 Option B — One fine navmesh (smallest radius) + navigation layers for "small-only" regions
 
@@ -184,7 +201,8 @@
 
 - **Pros:** Continuous radius on one mesh. Exact size semantics if clearance is computed correctly.
 - **Cons:** Correct corridor clearance on arbitrary triangulations is hard. Portal width is not corridor clearance. The standard fix is a local-clearance triangulation (Kallmann's LCT), which Godot doesn't produce. It replaces Godot's pathfinder entirely, so it needs a custom A*, funnel and closest-point, probably in C++ for performance. Dynamic updates still rebake Godot's mesh, then re-annotate. It inherits the navmesh's single slope / climb / height, so capabilities still need layers.
-- **Verdict:** Highest effort for a result that Option D gets more simply.
+- **Concrete scalable form:** a clearance-annotated **constrained Delaunay triangulation**. Examples are Demyen & Buro's TRA* (2006) and Kallmann's Local Clearance Triangulations (LCT, 2010 / 2014). These answer "does radius r fit" exactly per query, with cost that scales with world size better than a grid. They would be custom C++ / GDExtension, and they are 2.5D (one walkable surface per XZ point).
+- **Verdict (revised 2026-09-30):** Not chosen. It is the **fallback** if quantised classes (D1), even with the local layer (D2), prove inadequate **and** the world stays 2.5D (Q9). Q5 (C++) also gates it.
 
 ### 5.4 Option D — Clearance / distance field on a fine grid + custom grid pathfinder
 
@@ -193,23 +211,26 @@
 - **Pros:** Continuous radius **and** every capability dimension in one structure, evaluated per query. No combinatorial maps. Local dynamic updates: re-run brushfire within `max_radius` of the change, which is cheap, so crush latency is ~one frame. Aligns with the existing `EnvironmentGridBaked` / `EnvironmentCellData` Mode A/B concepts (§2b) and could finally give them callers. Runtime size change is free: the next query uses the new r.
 - **Cons:** Custom pathfinder, smoothing and closest-point. At 200 × 204 m with 0.5 m cells that is ~163k cells. A GDScript A* per query is likely too slow at more than a few creatures, so this probably needs C++ / GDExtension (Q5). `AStarGrid2D` (G9) is engine-native but has global solidity, so it only helps as one grid per size class (a Grid-A hybrid). 2.5D assumes single-level terrain: no bridges, caves or overhangs; see Q9. Grid resolution trades memory against the thin-obstacle error. The existing 4 m grid is unusable for this; it needs a new fine layer. Loses Godot navmesh tooling (debug draw, `NavigationAgent3D`) unless mirrored.
 - **Migration cost:** High: new subsystem, rasterizer from colliders, pathfinder, and tests. The seam (M5) keeps motor call sites unchanged.
+- **Status (2026-09-30):** Kept as an alternative. It is **no longer the recommended escape hatch**; D2 replaced it in Phase 4 with the local refinement layer (§5.8). A whole-world fine grid scales with world area, and the world is expected to grow significantly (D1).
 
 ### 5.5 Option E — Status quo + smarter live repair (baseline)
 
 **Shape.** Keep one map. Improve repair. Possible repairs: bake at the **smallest** radius so small creatures stop losing gaps; extend the route scan to sweep layer 1 too; fix the start-overlap bug; on a scan truncation, requery with the blocking spot excluded (needs `excluded_regions`, G5, which only works at region granularity, so it's ineffective on one big region); add more detour candidates.
 
+- **Stuck watchdog with a per-agent region blacklist** (considered 2026-09-30): when a creature makes no progress, add the offending region (tile) to that creature's `excluded_regions` for later path queries (G5), with expiry. Tiling (D4) makes regions small enough for this to be useful. This folds into the §8e escape hatch as a last-resort repair. It does not replace class maps.
 - **Pros:** No new infrastructure. The start-overlap fix and telemetry are worth doing anyway.
 - **Cons:** It doesn't fix the root cause. Whichever radius is baked, one side of the size range gets wrong routes. Repair is reactive, one path at a time, with no alternative-route search, so gap traps become retry loops whose cost grows with clutter. Every new trait adds more repair heuristics. The C1 compare stays blind to ghost obstacles. **Not scalable.**
 
 ### 5.6 Hybrids
 
-- **H1 (recommended shape, provisional): A now, with a seam that allows D later.** Phase 0 builds the per-creature `PassabilityProfile` plus a `NavRouter` seam (M5) over the current single map. Phase 1 swaps in per-class maps behind it. If Q2 / Q3 / Q5 answers push toward continuous sizes, fast dynamics or many creatures, Phase 4 replaces the router backend with D. No motor call site changes a second time.
-- **H2: A for size, B-style layers for capabilities.** Size classes are maps. Binary capabilities (climb-steep, swim, crush-heavy) are region navigation-layer bits within each class map. This avoids size × capability map multiplication for binary traits. It needs capability regions baked as separate regions (for example, steep-slope patches), and that is fiddly (see B's cons).
+- **H1 (superseded 2026-09-30 by H4): A now, with a seam that allows D later.** Phase 0 builds the per-creature `PassabilityProfile` plus a `NavRouter` seam (M5) over the current single map. Phase 1 swaps in per-class maps behind it. In this version, Phase 4 replaced the router backend with D if Q2 / Q3 / Q5 pushed toward continuous sizes, fast dynamics or many creatures. The seam is kept in H4. Only the Phase 4 backend changed.
+- **H4 (chosen, D1 + D2): tiled class maps (A) + optional local exact-refinement layer.** Phases 0–1 as in H1, with tiling in Phase 1 (D4). Phase 4 adds the local layer (§5.8) behind the same `NavRouter` seam, which is Layer 2 in `creature/motor/` (D10), so call sites don't know it exists. It is switchable and budgeted, and it **only adds, never fixes** (D3).
+- **H2: A for size, B-style layers for capabilities.** Size classes are maps. Binary capabilities (swim, crush-heavy) are region navigation-layer bits within each class map. This avoids size × capability map multiplication for binary traits. It needs capability regions baked as separate regions, and that is fiddly (see B's cons). **Amended by D8:** slope bands can **not** be region overlays, because separately baked regions erode at their own boundaries and leave gaps up to 2× `agent_radius` that `edge_connection_margin` cannot stitch; steep ground is a slope-variant map instead. Climbing uses **links** (G12) with a CLIMB layer bit, not regions.
 - **H3: Grid-A.** Option D's clearance field, but pathfinding through one `AStarGrid2D` per size class (solidity = `clearance < R_k`). Engine-native A*, local updates via `set_point_solid`, no GDExtension. Still quantized to classes; capabilities via `weight_scale` or extra grids.
 
 ### 5.7 Keep or change the navmesh-coarse / shape-cast-enforcement split?
 
-With A / H1 the split **stays, but the roles sharpen**:
+With A / H4 the split **stays, but the roles sharpen**:
 - The navmesh (per class) becomes the **route** truth for static geometry, including ghost hulls. It's no longer "coarse" in the sense of being wrong about size.
 - The per-creature route scan becomes a **residual** check for continuous-radius error inside a class (`R_k − r`), dynamic changes since the last bake, and future Mode-B `movement_impact` accumulation (decision 22).
 - The per-step gate stays the exact final authority (decision 16).
@@ -217,21 +238,103 @@ With A / H1 the split **stays, but the roles sharpen**:
 
 With D, the grid becomes the single route and passability truth. The shape-cast stays only as the physical contact gate.
 
+**Open option, not decided: navmesh-constrained movement.** Detour's `moveAlongSurface` and Unreal's NavWalking movement mode clamp each tick's motion to the navmesh surface. Physics is then used only for contact and hits. The Godot approximation is to clamp the post-move position with `map_get_closest_point` on the creature's class map (G1). This removes the planner-vs-physics mismatch **by construction**, because a creature cannot stand anywhere its own map says is closed.
+- **Why it fits here:** creatures don't collide with each other (§1), so there is no crowd push-off to preserve, and nothing needs physics to shove a creature off the mesh.
+- **What it requires:** **everything** that blocks must be in the bake (ghost hulls, solids, per-class inclusion per D5). Anything left out becomes walk-through. Dynamic changes are only as fresh as the last tile rebake, so D4's asymmetric staleness applies directly to movement, not just to routes. It interacts with the local layer (§5.8): a squeeze taken off the class map would need the clamp to use the local layer's corridor or a smaller class's map there.
+- **Relation to decision 16:** it would replace the per-step ghost shape-cast gate as the primary enforcement for static obstacles. That is a larger change to decision 16 than this plan otherwise makes.
+
+### 5.8 Local exact-refinement layer (chosen Phase 4 hybrid, D2 / D3)
+
+**Home (D10).** The layer lives in the Layer-2 `NavRouter` (`creature/motor/`, owner creature-motor), because it needs the creature's live radius and state. It reads Layer-1 maps (`environment/navigation/`) only through plain-value queries, e.g. the smallest-class walkability check in step 4.
+
+**Shape.** Near the creature, inside a window of radius `W` (≈ 30–50 m, configurable), build a per-creature **inflated-obstacle (configuration-space) visibility graph**:
+1. Collect the convex hulls physics already uses inside the window: boulders, solid shrubs, and ghost-layer open-shrub `MobBlocker` hulls. Apply the D5 inclusion rules at the creature's own size.
+2. Project each hull to XZ and grow it by the creature's **live** radius r (Minkowski sum with a disc, approximated by a polygon offset). Merge overlapping grown hulls.
+3. Nodes are the grown-hull vertices plus start and exit. Edges are mutually visible node pairs. A* over this graph gives the shortest path at exactly radius r.
+4. **Splice:** replace the class path's section inside the window with the local path, from the creature to the point where the class path leaves the window (or to the target if it is inside). Accept only if all of these hold: it is shorter by a margin, every local segment lies over walkable ground (checked against the **smallest** class map, which covers slope and step limits the 2D graph can't see), and `RoutePlausibilityScan` passes it.
+
+**Cost** scales with (queries per frame) × (obstacle corners in the window)², **not** with world size. That is why it survives as a local layer when the naive global version doesn't (§5.9).
+
+**Hard requirement: it only adds, it never fixes (D3).** The class navmesh plus the existing shape-cast enforcement must always yield a correct, non-stuck path **on their own**. The local layer only upgrades routes that are already valid. With the layer OFF, routes are class-quantised but never broken. No correctness path may depend on it: no fix for a class-map bug, no gap-trap escape and no dead-end recovery may be routed through it.
+
+**Controls** (config section `navigation` in `game_config.json`, owned by app-shell; key names are proposals):
+
+| Proposed key | Purpose |
+|---|---|
+| `navigation.local_refinement.enabled` | Master switch. `false` means class-quantised routes only. |
+| `navigation.local_refinement.trigger_radius_ratio` | Trigger gate, part 1: run only when `r ≤ ratio × R_k`, meaning the creature is well below its class radius. |
+| (bake-time flag, no key) | Trigger gate, part 2: run only when the class route passes within the window of a gap flagged **"closed for this class, open for smaller"**. Flags come from each class bake: obstacle pairs whose hull-to-hull gap `g` satisfies `g < 2·R_k`, with `g` recorded. A creature qualifies only if `2r ≤ g`. |
+| `navigation.local_refinement.max_queries_per_physics_frame` | Per-physics-frame query budget. Requests over budget wait in a **time-sliced queue**. The creature follows its class route meanwhile. |
+| `navigation.local_refinement.max_ms_per_physics_frame` | Hard time cap that sits alongside the query budget. |
+| `navigation.local_refinement.window_radius_m` | Window radius `W` (proposal 40). |
+| `navigation.local_refinement.cache_radius_bucket_m` | Result cache keyed by (obstacle cluster, radius bucket). The radius rounds **up** to its bucket, so the cache stays conservative. Entries are invalidated on crush, regrowth or hull swap within the cluster. |
+| `navigation.local_refinement.priority` | Priority / LOD ordering of the queue: creatures in flight, then in pursuit, then near the camera or player. Idle, distant creatures come last or never. |
+| `navigation.local_refinement.species_opt_out` | Per-species opt-out, as a list of species ids. The alternative is a species archetype export; the implementing slice picks one. |
+
+**Telemetry:** queries per frame, ms spent per frame, queue depth, and upgrades accepted vs rejected (with the rejection reason: not shorter, off walkable ground, scan failed).
+
+**Tests** run the gap-trap and erosion scenarios **both ways**. OFF: the creature is slower (it detours) but not stuck. ON: it takes the squeeze.
+
+**Limits:** it is 2D inside the window (Q9). Cost areas (Mode B, crush cost) aren't modelled; the local graph sees only hard hulls. Its freshness is live within the window, because it reads current hulls rather than the bake.
+
+### 5.9 Other alternatives considered (2026-09-30)
+
+| Alternative | What it is | Verdict |
+|---|---|---|
+| Naive per-query obstacle inflation + visibility graph | Configuration-space VG over **all** obstacles for every query | Exact for any radius, and dynamic. But global per-query cost grows ~n² in obstacle corners, and it is 2D only, so it doesn't scale to a large, dense world. **Survives only as the local layer (§5.8).** |
+| Clearance-annotated CDT (TRA*, LCT) | See §5.3 | The concrete scalable form of exact per-radius pathing. The fallback if quantised classes prove inadequate **and** the world stays 2.5D (Q9). |
+| Navmesh-constrained movement | See §5.7 | Open option, not decided. Fits well because creatures don't collide with each other. |
+| Width-based path radius | Path radius ≈ half the shoulder width (industry practice) instead of a capsule that encloses the model. The wolf's `collision_capsule_radius` is 7.0, capsule height 15.3 and `creature_size` 6.0 (`creature/species/wolf_archetype.tres` lines 19-21, verified 2026-09-30). | Would shrink erosion and the number of classes needed. Open: **Q10**. |
+| Soft vegetation | Foliage is costly but passable for large animals, not a hard blocker. Common in games. | Removes the gap trap for those obstacles outright. Interacts with Mode B `fit_size` (D5). Open: **Q11**. |
+| Stuck watchdog + per-agent region blacklist | `excluded_regions` on path queries (G5) | Folded into Option E and the §8e escape hatch (§5.5). |
+| RVO / ORCA, context steering, flow fields | Local avoidance and crowd steering | Not applicable: they address creature-vs-creature and crowd movement, not static size passability. |
+| HPA* | Hierarchical abstraction for speed | Speed only. It doesn't change passability semantics. |
+| Dijkstra flee maps (Brogue-style) | A distance-from-threat field, descended to flee | A possible future alternative to flee-candidate probing (`_flee_candidate_probe`). Not in scope here. |
+
 ---
 
-## 6. Provisional recommendation (pending Q1–Q5)
+## 6. Recommendation (backbone decided 2026-09-30; details pending)
 
-**H1: Option A with 2–3 size classes behind a new `NavRouter` seam, ghost hulls baked into every class map, and Option D kept as the planned escape hatch.** Rationale:
+**H4: tiled Option A with K = 3 size classes for now (D9; industry practice is 2–4), with the maps in a creature-agnostic Layer-1 service (`environment/navigation/`) behind a new Layer-2 `NavRouter` seam (`creature/motor/`, D10), obstacles included per class by the D5 rules, and an optional, switchable, budgeted local exact-refinement layer in Phase 4 (§5.8).** Option D is kept as an alternative (§5.4), not the planned escape hatch. LCT (§5.3) is the fallback if quantisation proves inadequate and the world stays 2.5D. Rationale:
 
 1. The two concrete failures are erosion and the gap trap. Both come from *one radius for everyone* and *ghost hulls missing from pathing*. A fixes both with native Godot features and no custom pathfinder.
-2. The seam (Phase 0) has value under every option and is the only part that touches all motor call sites. After it lands, switching the backend from A to D (or H3) is a local change.
-3. A's weak points (continuous size, fast dynamics, capability combinatorics) are exactly what Q2, Q3 and Q1 decide. If the answers are "few classes, slow or rare changes, few binary traits", A is enough. If they are "continuous growth, frequent crush, many traits", commit to D early and treat A as the interim.
+2. The seam (Phase 0) has value under every option and is the only part that touches all motor call sites. The local layer and any later backend change sit behind it.
+3. The playfield is a small, controlled dev environment today. The world and its object count will grow significantly. Tiled per-agent-size Recast navmeshes are what Unreal and Unity ship at that scale. Global continuous exactness isn't required (D1). Where it pays off, the local layer supplies it at a cost that doesn't grow with the world (D2).
+4. Tiling now (D4) keeps crush and regrowth a local rebake instead of a later re-architecture.
 
-**Would change the recommendation:**
-- Q2 = truly continuous sizes with small erosion tolerance → **D** (or H3 for a native-only path).
-- Q3 = sub-second path reaction to crush and regrowth at many sites → **D**. Tile rebakes × K classes are unlikely to meet it (G10 to measure).
-- Q5 = no C++ ever **and** Q2 continuous → **H3**. Accept some quantization.
-- Q6 = "never bake ghost hulls" → A still fixes erosion but **not** the gap trap. Fixing the trap would then need open shrubs moved to a separate high-cost region layer, or D.
+**Would still change the recommendation:**
+- Class-quantisation error proves unacceptable even with the local layer, and Q9 = single-level → **LCT (§5.3)**, gated on Q5.
+- Q3 = sub-second path reaction to crush and regrowth at many sites → measure tile rebakes × K (G10) first. If that misses, lean harder on the shape-cast plus the local layer for the stale window before reconsidering D.
+- Q6 = "never bake ghost hulls" → A still fixes erosion but **not** the gap trap. D5 implies baking them; see Q6.
+- Q10 / Q11 answers may shrink K, or remove the gap trap for vegetation entirely.
+
+### 6.1 Decision log
+
+| # | Date | Decision (user, in conversation) | Consequence in this doc |
+|---|---|---|---|
+| D1 | 2026-09-30 | **Size classes, each with its own navmesh (Option A), are the global backbone.** Fixed classes; a creature uses the smallest class that fits (round up, conservative). Continuous exactness is **not** required globally. Rationale: the playfield is a small, controlled dev environment, the world and object count will grow significantly, and tiled per-agent-size Recast navmeshes are what Unreal ("Supported Agents") and Unity ("Agent Types") ship at scale, typically with 2–4 classes. | Q2 partially answered. §5.1, §6, §8 Phase 1. |
+| D2 | 2026-09-30 | **Phase 4 replaces "Option D grid backend" with an OPTIONAL local exact-refinement layer**: a per-creature inflated-obstacle visibility graph near the creature (window ~30–50 m), built from the same convex hulls physics uses and grown by the live radius. It takes exact squeezes the class map closed. Cost scales with (queries/frame × local obstacle density), not world size. D stays in §5 as an alternative. | §5.4 status, §5.6 H4, §5.8, §8 Phase 4, §8.1 H4 column. |
+| D3 | 2026-09-30 | **The local layer is switchable and budgeted, and it only adds, never fixes (hard requirement).** Class navmesh + shape-cast enforcement must always yield a correct, non-stuck path on their own. Controls: master switch, trigger gating, per-frame query budget with a time-sliced queue, window radius, result cache, priority/LOD, per-species opt-out. Config section `navigation` (app-shell, `game_config.json`). Telemetry and both-ways tests. It sits behind the `NavRouter` seam. | §5.8, §7, §10, §11. |
+| D4 | 2026-09-30 | **Crush is planned now (not implemented), so tiling moves into Phase 1.** Retrofitting tiles onto monolithic per-class bakes is expensive. (a) A baked obstacle can't be removed individually; the rebake unit is a region or tile (G7). (b) **Asymmetric staleness:** after a crush the stale map says "blocked" (conservative, harmless). After a regrowth or hull swap the stale map says "open" while physics blocks (dangerous). The shape-cast and local layer cover that window, and regrowth rebakes get priority. (c) **Crush-capable classes don't carve crushables:** crushables are cost areas (`travel_cost`) for crush-capable classes, and carve only for the classes that can't crush them. A crush then rebakes only where the shrub was carved. *(Amended 2026-10-01 by D6: crush capability is a class property, not separate weight bands × classes.)* Crush **semantics** stay out of scope. | §1, §5.1, §8 Phases 1–2, §10, Q3/Q8 notes. |
+| D5 | 2026-09-30 | **Per-class obstacle inclusion via `passible` / `fit_size`** (semantics: `environment/environment_cell_data.gd`, [ENVIRONMENT_MODEL_PLAN property catalog](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md)). **Mode A** (`passible == false`): carve as solid in a class's map **unless** the class's max `creature_size` ≤ `fit_size`. In that case the interior is enterable and is not carved. `fit_size` null / 0 / invalid means nobody enters, so the obstacle carves for every class; that is today's case for boulders and open-shrub hulls. **Mode B** (`passible == true` + active `movement_impact`): never carved. It is a cost area for classes whose sizes reach `fit_size` (Mode B's strict `<` exempts smaller bodies) and free for smaller classes. Gaps **between** obstacles stay governed by each class's `agent_radius` erosion; `fit_size` governs **entering** the obstacle itself. | §5.1, §5.8 step 1, §8 Phase 1, Q6 note, new Q12. |
+| D6 | 2026-10-01 | **Q1 answered: which passability dimensions vary per creature in pathing.** Radius: per class (D1). Height: per-class `agent_height` (class max height). Slope / climb: class baseline derived from physics, with the **door left open** for per-creature variability (a stat, skill or trait may climb steeper slopes, or past slope X there may be a speed penalty or fall risk), not designed now. `PassabilityProfile.max_slope` / `max_climb` are **derived** fields, never hard-coded at call sites; the router computes its `navigation_layers` mask from the profile at query time. **Crush is tied to size for now: crush capability is a class property** (each class crushes a given crush band or not); no weight bands × size classes, because Godot cost / layer bits are per region, not per polygon (§5.1). Revisit trigger: a heavy-small or light-large creature. Climbing trait, swim and compressibility: **deferred**; Phase 0 reserves capability bits for climb and swim. "Squeeze" split: `fit_size` entry is per class via D5 (no new work); compressibility stays out of class maps. *(Amended 2026-10-01 by D8: the slope / climb "door" is now structured as slope-variant maps + CLIMB off-mesh links. The earlier "slope-band overlay regions with layer bits" option is rejected, because separately baked regions erode at their own boundaries and leave gaps up to 2× `agent_radius` that `edge_connection_margin` cannot stitch. `travel_cost` slope bands are replaced by motor-side cost, D8.6.)* | §5.1 crush / squeeze / climbing bullets, D4 amended, Q1 answer, Q8 direction, §8 Phases 0, 1, 3. |
+| D7 | 2026-10-01 | **No authored per-creature or per-species navmesh class or layer assignment.** Class membership and any `navigation_layers` mask are **derived at runtime** from the creature's size / traits against the class table in config. Inserting a new class between two existing sizes needs only a config change (class table); no edits to creature instances, species `.tres` or templates. Runtime hysteresis state is fine (derived, not authored). Whatever Q12 decides as the canonical size measure, membership is computed, never stored as authored data. | §8 Phases 0–1, Q12 note. |
+| D8 | 2026-10-01 | **Slope and climbing structure.** (1) **Baseline slope / climb per class matches physics**: the walkable range of `floor_max_angle` (50° today, §2.1), with a step limit consistent with `cell_size` so baseline slopes really are connected (today's 0.15 m climb at 0.25 m cells caps the effective slope at a suspected ~31°, G11). The bake slope is **not** raised to accommodate climbers. (2) **Steep-ground walkers** (e.g. mountain goats: no vertical climbing, much steeper slopes) → **slope-variant maps**: a separate bake per (size class, slope variant), because slope is bake-time. There is no cheaper Godot form: no per-polygon area tags, and "bake permissive, filter per creature" violates D3. (3) **Climbing features** (boulders, cliffs, ledges) → **off-mesh links** (`NavigationLink3D`, G12) carrying a reserved **CLIMB navigation-layer bit**, added to the existing maps (no new bakes). Links are generated per tile at bake time by a **ledge detector** (height above the walking step limit, within climbable height); boulder tops become islands joined by links. A climbing goat uses the steep variant + CLIMB links. (4) **Sparse baking:** only (size class, slope variant) pairs that some species in the world's roster occupies are baked (extends today's spawn-plan-derived radius in `_duel_max_capsule_radius()`; enabled by D7). *(Amended 2026-10-01 by D10: `main_3d.gd` hands the roster's sizes / traits to Layer 1 as plain values at bake kick-off, Layer 1 maps them to occupied pairs, and `_duel_max_capsule_radius()` is retired.)* Worst case K classes × V variants maps (illustrative: 8 × 2 = 16; today K = 3, D9); typically far fewer. Terminology: **maps** are separate bakes; **navigation layers** are the 32 filter bits on regions / links within a map. (5) **The router reports link traversal:** `NavRouter` exposes which path segments cross links (via `path_types` / `path_owner_ids`, G12) so the motor can later switch movement mode. Climb movement itself is out of scope. (6) **"Slower above X" / fall risk:** inside the walkable range this is cost, not passability. Motor-side speed reduction from the floor normal is possible now (`creature_motor_stack.gd` ~544 reads `floor_below_slope_deg`). Pathing slope cost would need a custom polygon search (deferred, behind `NavRouter`). Fall risk is motor / physics. (7) **Rejected:** "bake each class at its most permissive member's slope" (superseded by (2)); "bake at 90° and filter slope in our code", because filtering only truncates the one returned path and cannot reroute (the gap-trap failure class; the motor picks candidates, queries `map_get_path`, then `RoutePlausibilityScan` truncates, `motor_planner.gd` ~3264 / ~3339, caller-verified 2026-10-01), because slope / climb / height filters are part of how layer-1 obstacles (boulders, solid shrubs, cliffs, playfield edge) are carved today (G11), so loosening them makes obstacle tops and sides walkable, and because the default path would depend on extra code (inverts D3). **Consequence:** obstacles are removed from the bake **explicitly** (projected obstructions, G8, under the D5 hull rules), decoupled from slope / climb thresholds. | Header, §2.1, §5.0 G11–G12, §5.1 slope / climbing bullet, §5.6 H2, D6 amended, §7, §8 Phases 0, 1, 3, §8.1, Q1 answer, §10, §11. |
+| D9 | 2026-10-01 | **Q2 partially answered: K = 3 size classes for now.** **small**: rabbit, fox. **medium**: wolf. **large**: mastodon (no archetype exists yet; reserved class). Species names here are **descriptive, for design discussion only**: per D7, actual membership is derived at runtime from each creature's size against the config class table, never authored per species. Per D8 sparse baking, the large class is **not baked** while no large species is in the roster. "For now": adding a class later is config-only (D7). Facts (verified 2026-10-01, `creature/species/*.tres`): only `rabbit_archetype.tres` (`creature_size` 1.7, `collision_capsule_radius` 0.6, height 2.0) and `wolf_archetype.tres` (6.0 / 7.0 / 15.3) exist; there is no fox or mastodon archetype. The fox's live radius 2.343 comes from the PHYSICS_SQUEEZE slice 4 changelog (source unverified, §3.1). The rabbit's live radius is unmeasured (§3.1). **Class boundaries (`R_k`) stay open**, gated on Q10 (path radius vs enclosing capsule) and Q12 (size↔radius canonical). *Provisional illustration only, not decided:* small must cover the fox's live 2.343 → `R_small` ≥ 2.5 m after voxel snap-up; medium covers the wolf's live 7.03 → `R_medium` = 7.25 m. | Header, §3.1 (fox source note), §6, D8 example, §8 Phase 1, Q2 answer + narrowed question, §10 map-count risk. |
+| D10 | 2026-10-01 | **Navigation code ownership: two-layer split.** **Layer 1, navigation maps service** (`environment/navigation/`, new folder created in Phase 1, owner **environment-world**): bake (moved out of `main_3d.gd` `_bake_playfield_navmesh` ~605, readiness ~684 and `get_navigation_map_rid` ~551, caller-verified 2026-10-01), tiling, size classes × slope variants (D8 / D9), explicit obstacle carving, link generation (ledge detector), sparse pair baking, per-map / per-tile readiness, tile rebakes (crush / regrowth / hull swap), and the **size → class lookup** against the config class table (the single source of class boundaries, D7). Its query API is **creature-agnostic**: plain values only (e.g. `query_path(class_id, variant_id, layer_mask, from, to)`, `closest_point(...)`, link-crossing info in results), with no creature bodies or state, so non-motor consumers (spawn placement, AI) can reuse it and fixtures can test it. `main_3d.gd` (app-shell) keeps only the bake kick-off and the handle hand-off. At kick-off it gathers the spawn roster and hands Layer 1 the required sizes / traits as plain values (e.g. a list of radii / sizes plus slope-variant needs); Layer 1 maps them to occupied (class, variant) pairs via its size → class lookup, replacing and retiring today's precursor `_duel_max_capsule_radius()` (amends D8 (4)). **Layer 2, creature-facing path service** (the `NavRouter` / M5 seam, `creature/motor/`, owner **creature-motor**): the single entry point for all motor call sites. It translates a creature's `PassabilityProfile` into a Layer-1 query and then applies creature-specific logic: `RoutePlausibilityScan` (existing), the Phase 4 local exact-refinement layer (live radius, window hulls, priority/LOD, per-frame budget queue), future per-creature slope cost / limits, and the stuck watchdog / per-creature region blacklist. New functionality lands here. **Split rule:** anything that needs a creature body or creature state goes in the motor layer; anything that needs only plain values plus maps goes in the environment layer. **`PassabilityProfile`** is built by **creature-entity** from traits (live radius, size, slope variant, CLIMB / SWIM bits), using Layer 1's size → class lookup. Names (`NavRouter`, `NavigationMaps`) are proposals. | Header, §2 entry, §2.4 migration note, §5.1 migration cost, §5.6 H4, §5.8 home, §6, §6.2, §8 Phases 0–4 (content + owners), §8 docs to sync. Resolves the open Phase 3 ownership left by D8. |
+
+### 6.2 Code ownership layers (D10)
+
+| | Layer 1: navigation maps service | Layer 2: creature-facing path service |
+|---|---|---|
+| Path | `environment/navigation/` (new; created in Phase 1) | `creature/motor/` |
+| Owner (routing) | environment-world | creature-motor |
+| Provisional name | `NavigationMaps` (proposal) | `NavRouter` (proposal) |
+| Owns | Bake (from `main_3d.gd`), tiling, class × slope-variant maps, explicit obstacle carving, ledge detector + links, sparse pair baking, per-map / per-tile readiness, tile rebakes, size → class lookup against the config class table | Single M5 entry point for motor call sites; profile → Layer-1 query translation; `RoutePlausibilityScan`; Phase 4 local layer; future per-creature slope cost / limits; stuck watchdog / region blacklist; link-traversal reaction hand-off to the motor |
+| Inputs | Plain values: class id, variant id, layer mask, points | A creature's `PassabilityProfile`, body and state |
+| Consumers | Layer 2; non-motor consumers (spawn placement, AI); headless fixtures | Motor call sites (§2.4) |
+
+**Split rule:** needs a creature body or creature state → Layer 2; needs only plain values plus maps → Layer 1. `PassabilityProfile` is built by creature-entity from traits, using Layer 1's size → class lookup. `main_3d.gd` (app-shell) keeps only the bake kick-off and the handle hand-off.
 
 ---
 
@@ -251,6 +354,13 @@ With D, the grid becomes the single route and passability truth. The shape-cast 
 - [ ] **Readiness:** `is_navigation_ready()` is true only when **every** class map passes the closest-point check. A 0-polygon class map fails loudly and does not report ready.
 - [ ] **Fixtures:** `tests/motor_path_fixture.gd` builds single-class (default, unchanged behaviour) **and** multi-class layouts synchronously. The full suite stays green.
 - [ ] **Route scan start-overlap:** `RoutePlausibilityScan` reports a start-overlap as blocked (or escaping, per §8e), matching `ShelterEnclosureProbe` (decision 33).
+- [ ] **Tile-ready bake (D4):** Phase 1 class maps are baked per tile. A synthetic change rebakes only the covering tile(s) on the affected class maps, and paths cross tile seams without gaps.
+- [ ] **Stale-open window (D4):** after a synthetic regrowth or hull swap, and before the rebake lands, no creature wedges. The shape-cast (and the local layer when ON) covers the window. Regrowth rebakes are queued ahead of crush rebakes.
+- [ ] **Local layer OFF (D3):** with `navigation.local_refinement.enabled = false`, the gap-trap and erosion scenarios complete **without** getting stuck, taking the class-quantised detour.
+- [ ] **Local layer ON (D3):** with the layer enabled, the same scenarios take the squeeze. Per-frame query count and ms stay within the configured budget. Telemetry reports upgrades accepted.
+- [ ] **Baseline slope agreement (D8):** every terrain sample whose slope is ≤ `floor_max_angle` (and that is not inside an obstacle footprint) is covered by its class map, measured headless. No disconnected slope fragments from a step-limit / cell-size mismatch.
+- [ ] **Obstacle carving decoupled from slope (D8):** after explicit obstacle removal replaces slope / climb-based carving, no class map has polygons on obstacle tops or sides (boulders, solid shrubs, cliffs, playfield edge), measured headless.
+- [ ] **Sparse baking (D8):** the bake builds exactly the (size class, slope variant) pairs occupied by the world's roster, and no others (log + headless check).
 
 ---
 
@@ -258,42 +368,45 @@ With D, the grid becomes the single route and passability truth. The shape-cast 
 
 | Phase | Content | Gated on | Owner (routing) |
 |---|---|---|---|
-| **0 — Seam + hygiene** | (a) `PassabilityProfile` per creature: live radius, height, max_climb, max_slope, weight, capability bits. (b) `NavRouter` / `PassabilityService`: `path(profile, from, to)`, `closest_point(profile, p)`, `map_for(profile)`, `is_ready()`, backed by the **current single map** (no behaviour change). (c) Migrate every §2.4 call site onto it. (d) Route-scan start-overlap fix. (e) `scan_truncated_static` telemetry. (f) Promote the gap-trap scenario to a headless regression test (expected red until Phase 1). (g) Record `agent_max_slope` vs `floor_max_angle` and the live rabbit radius. | user approval only | creature-motor; app-shell (main_3d accessor); test-harness |
-| **1 — Class maps (A)** | K classes from config (Q2). Parse once and bake K times async (G8). Ghost hulls in the source (Q6). Per-class height / climb / slope. Readiness across all maps. Fixture multi-class builder. Class selection with hysteresis. | Q1, Q2, Q6 | app-shell (bake), creature-motor (router), test-harness |
-| **2 — Dynamics** | Tile the playfield into regions per class (G7). Local rebake on crush / regrowth / hull swap. Latency telemetry against T_dyn. Crushable representation per Q8. | Q3, Q8 | app-shell, environment-world, assets-pack (shrub events) |
-| **3 — Capabilities** | Climb / swim / crush-heavy as navigation-layer overlays (H2) or per-query rules. Squeeze per Q1. | Q1 (+ trait design docs) | creature-entity (profile), app-shell (bake) |
-| **4 — Grid backend (D / H3), conditional** | Fine 2.5D grid + brushfire clearance + pathfinder behind `NavRouter`; C++ per Q5. Retire class maps if D supersedes them. | Q2, Q3, Q5, Q9; Phase 0–1 metrics | new GDExtension domain (needs a specialist row), environment-world |
+| **0 — Seam + hygiene** | (a) `PassabilityProfile` per creature: live radius, height, max_climb, max_slope, weight, capability bits. All fields are **derived** (class defaults + future stat / skill / trait modifiers), never hard-coded at call sites (D6). Capability bits for **climb** and **swim** are reserved now, unused (D6), and a **CLIMB navigation-layer bit** is reserved for links (D8). (b) **`NavRouter` (Layer 2, `creature/motor/`, D10; name is a proposal)**: `path(profile, from, to)`, `closest_point(profile, p)`, `map_for(profile)`, `is_ready()`, backed by the **current single map** through a thin `main_3d.gd` accessor (no behaviour change). The Layer-1 maps service (provisionally `NavigationMaps`, `environment/navigation/`, also a proposal) doesn't exist yet in Phase 0. The router computes the query's `navigation_layers` mask from the profile at query time, so overlays can be added later without changing call sites (D6 / D7). Path results expose which segments cross off-mesh links (D8.5), unused until climb links exist. (c) Migrate every §2.4 call site onto it. (d) Route-scan start-overlap fix. (e) `scan_truncated_static` telemetry. (f) Promote the gap-trap scenario to a headless regression test (expected red until Phase 1). (g) Record the effective `agent_max_slope` (engine default) and run the terrain slope measurement (§11; confirms or denies the suspected ~31° step-limit cap vs `floor_max_angle` 50°), plus the live rabbit radius. | user approval only | creature-motor (router skeleton over the current single map + call-site migration); creature-entity (`PassabilityProfile`); app-shell (thin `main_3d.gd` accessor only); test-harness |
+| **1 — Tiled class maps (A, D1 / D4)** | **Extract the bake** out of `main_3d.gd` (`_bake_playfield_navmesh`, readiness, `get_navigation_map_rid`) into the new Layer-1 maps service in `environment/navigation/` (D10); `main_3d.gd` keeps only the bake kick-off and the handle hand-off. Layer 1 owns the size → class lookup against the config class table. The router moves onto Layer-1 handles. K classes from config: K = 3 for now (small / medium / large, D9), large unbaked until a large species is in the roster (D8.4); boundaries per Q2 remainder, Q10, Q12. **Tiled from the start** (D4): per-class regions per tile via `filter_baking_aabb` + `border_size` (G7), with tile size set by G10 measurements. Parse once and bake per class and tile async (G8). Obstacle inclusion per class by the D5 rules (ghost hulls included per Q6). Per-class height; per-class baseline climb / slope **matched to physics** (capsule geometry + `floor_max_angle`) so navmesh and physics agree (D6 / D8), including fixing the step-limit / cell-size mismatch so baseline slopes stay connected (G11). **Explicit obstacle removal** (projected obstructions, G8, under the D5 hull rules), decoupled from slope / climb thresholds (D8). **Sparse baking:** only occupied (size class, slope variant) pairs (D8.4). At bake kick-off `main_3d.gd` gathers the spawn roster and hands Layer 1 the required sizes / traits as plain values (e.g. a list of radii / sizes plus slope-variant needs); Layer 1 maps them to occupied (class, variant) pairs via its size → class lookup. This replaces today's precursor `_duel_max_capsule_radius()`, which is retired (D10); in Phase 1 the variant is always the baseline. Crush capability as a class property (D6). Bake-time "closed for class, open for smaller" gap flags (feeds §5.8 trigger gating). Readiness across all maps and tiles. Fixture multi-class builder. Class selection with hysteresis, **derived at runtime** from the config class table (D7); no authored class or layer on creatures, species or templates. | Q2 remainder, Q6, Q12 | environment-world (extract bake to `environment/navigation/`, tiles, classes); app-shell (config class table, `main_3d.gd` hand-off); creature-motor (router onto Layer 1); test-harness |
+| **2 — Dynamics** | Local tile rebake on crush / regrowth / hull swap on the class maps that carve the object (D4). Regrowth and hull swap get priority. Latency telemetry against T_dyn. Crushable representation per Q8 (D4 / D6 direction: cost area for crush-capable classes, carve for the rest). | Q3, Q8 | environment-world (Layer-1 tile rebakes); assets-pack (shrub change events); test-harness |
+| **3 — Capabilities** | **Steep slope (D8):** slope-variant maps, one bake per occupied (size class, steep variant) pair; the router picks the variant from the profile. `floor_max_angle` is per body, so physics enforces the matching slope, set from the profile. **Climbing (D8):** off-mesh links (G12) with the CLIMB layer bit, generated per tile at bake time by a ledge detector (height above the walking step limit, within climbable height), added to existing maps; boulder tops become link-joined islands. The router reports link segments; climb **movement** is out of scope. Swim as a navigation-layer overlay (H2) or per-query rule, using the bit reserved in Phase 0 (deferred, D6). Compressibility (deferred, D6): out of class maps; possibly local layer `r × factor` in the window, or live enforcement only. **"Slower above X"** is motor-side speed from the floor normal (D8.6); pathing slope cost needs a custom polygon search (deferred, behind `NavRouter`, Layer 2). Fall risk is motor / physics, not pathing. Ledge detector, links, steep variants and link-crossing info in query results are Layer 1; the link reaction (climb mode) and "slower above X" are Layer 2 (D10). | trait design docs | environment-world (ledge detector, links, steep variants, link-crossing in query results); creature-motor (link reaction / climb mode, slower-above-X); creature-entity (profile bits); app-shell (config); test-harness |
+| **4 — Local exact-refinement layer (optional, D2 / D3)** | §5.8: windowed inflated-obstacle visibility graph inside the Layer-2 `NavRouter` (`creature/motor/`, D10). Master switch, trigger gating, per-frame budget + time-sliced queue, window, cache, priority/LOD, species opt-out. Config section `navigation` in `game_config.json`. Telemetry. Gap-trap and erosion tests both OFF and ON. **Only adds, never fixes.** | Phase 0–1 metrics (quantisation cost observed); Q9 for window 2D validity | creature-motor (local layer in the router); app-shell (config keys); test-harness |
 
-**Docs to sync when phases ship (flag for `project-docs`):** [ENVIRONMENT_MODEL_PLAN §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) (bake sources / erosion), [PHYSICS_SQUEEZE decision 22](PHYSICS_SQUEEZE.md) (if Q6 reverses "never bake the ghost layer"), [CREATURE_MOVEMENT_V3 §3.1](CREATURE_MOVEMENT_V3.md) (substep via router), [PLANT_ECOLOGY_PLAN `crush_weight` row](PLANT_ECOLOGY_PLAN.md).
+Option D (grid backend) and LCT (§5.3) are no longer scheduled phases. They stay as alternatives if Phase 0–4 metrics show class quantisation plus the local layer is inadequate.
+
+**Docs to sync when phases ship (flag for `project-docs`):** [ENVIRONMENT_MODEL_PLAN §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) (bake sources / erosion / tiling), `game_config.json` `navigation` section (Phase 4 keys; wherever config keys are documented), [PHYSICS_SQUEEZE decision 22](PHYSICS_SQUEEZE.md) (if Q6 reverses "never bake the ghost layer"), [CREATURE_MOVEMENT_V3 §3.1](CREATURE_MOVEMENT_V3.md) (substep via router), [PLANT_ECOLOGY_PLAN `crush_weight` row](PLANT_ECOLOGY_PLAN.md). **When `environment/navigation/` is created (Phase 1, D10):** register it in the [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) topic tables and update [ENVIRONMENT_MODEL_PLAN §6.3.1](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md), because bake ownership moves from `main_3d.gd` to the Layer-1 maps service.
 
 ### 8.1 Evaluation matrix
 
 Scores: ✔ handles well · ~ partial / with work · ✘ does not handle. Costs are relative.
 
-| Concern | A class maps | B fine + layers | C annotated navmesh | D grid clearance | E status quo+ | H1 (A → D seam) |
-|---|---|---|---|---|---|---|
-| Erosion (M2) | ✔ within class tolerance | ~ class bands, fragile | ✔ | ✔ exact to cell | ✘ one side always loses | ✔ |
-| Gap trap (M3) | ✔ if Q6 = bake hulls | ~ | ✔ if hulls in mesh | ✔ | ✘ retry loops | ✔ |
-| Continuous size | ~ quantized | ~ quantized | ✔ | ✔ | ✘ | ~ → ✔ |
-| Runtime size change (M4) | ✔ map switch + hysteresis | ✔ mask switch | ✔ | ✔ free | ~ | ✔ |
-| Crush | ~ tile rebake × K; pre-crush per-creature weight awkward | ~ | ~ rebake + re-annotate | ✔ local brushfire, per-creature weight | ~ reactive | ~ → ✔ |
-| Squeeze / compressibility | ✘ / ~ extra classes | ~ | ~ | ✔ `r × factor` at a cost | ~ route scan only | ~ → ✔ |
-| Climbing / slope trait | ~ per class, overlays | ✔ as overlay | ~ | ✔ per-query rule | ✘ | ~ → ✔ |
-| Height / overhang | ✔ per class | ~ | ✘ single height | ~ 2.5D, no overhangs | ✘ | ✔ |
-| Dynamic obstacles latency | ~ tile rebake (G10) | ✘ re-diff | ✘ | ✔ ~frame | ~ | ~ → ✔ |
-| C1 compare meaningful | ✔ | ~ | ✔ | ✔ | ✘ | ✔ |
-| Test fixtures | ~ multi-class builder | ✘ complex | ✘ | ~ new fixture type | ✔ unchanged | ~ |
-| Engine-native | ✔ | ✔ + script geometry | ✘ custom A* | ✘ (✔ if H3) | ✔ | ✔ now |
-| C++ likely needed | no | no | yes | likely (not for H3) | no | only in Phase 4 |
-| Implementation cost | M | H | VH | H | L | M now, H later |
-| Migration cost vs current code | M (bake + seam) | H | VH | H (seam absorbs call sites) | L | M, then local |
-| Main risk | bake time × K; map count growth with traits | seam connectivity | clearance correctness | perf, 2.5D limit | root cause untouched | two backends to maintain until D lands |
+| Concern | A class maps | B fine + layers | C annotated navmesh | D grid clearance | E status quo+ | H1 (A → D seam; superseded) | **H4 (tiled A + local layer; chosen)** |
+|---|---|---|---|---|---|---|---|
+| Erosion (M2) | ✔ within class tolerance | ~ class bands, fragile | ✔ | ✔ exact to cell | ✘ one side always loses | ✔ | ✔ class tolerance; exact in window when ON |
+| Gap trap (M3) | ✔ if Q6 = bake hulls | ~ | ✔ if hulls in mesh | ✔ | ✘ retry loops | ✔ | ✔ (D5 inclusion) |
+| Continuous size | ~ quantized | ~ quantized | ✔ | ✔ | ✘ | ~ → ✔ | ~ globally; ✔ in window |
+| Runtime size change (M4) | ✔ map switch + hysteresis | ✔ mask switch | ✔ | ✔ free | ~ | ✔ | ✔ map switch; local layer uses live r |
+| Crush | ~ tile rebake × K; pre-crush per-creature weight awkward | ~ | ~ rebake + re-annotate | ✔ local brushfire, per-creature weight | ~ reactive | ~ → ✔ | ~ tile rebake on carving classes only (D4); crush as class property (D6) |
+| Squeeze / compressibility | ✘ / ~ extra classes | ~ | ~ | ✔ `r × factor` at a cost | ~ route scan only | ~ → ✔ | ~ possible in window (`r × factor`) |
+| Climbing / slope trait | ~ per class, overlays | ~ climb as overlay; slope bands leave seam gaps (D8) | ~ | ✔ per-query rule | ✘ | ~ → ✔ | ~ steep slope: sparse slope-variant maps; climbing: CLIMB links on existing maps (D8) |
+| Height / overhang | ✔ per class | ~ | ✘ single height | ~ 2.5D, no overhangs | ✘ | ✔ | ✔ per class (window is 2D) |
+| Dynamic obstacles latency | ~ tile rebake (G10) | ✘ re-diff | ✘ | ✔ ~frame | ~ | ~ → ✔ | ~ tile rebake; live hulls in window |
+| C1 compare meaningful | ✔ | ~ | ✔ | ✔ | ✘ | ✔ | ✔ |
+| Scales with world size | ✔ tiled | ~ | ✔ | ✘ grid area | ✔ | ~ | ✔ local cost independent of world |
+| Test fixtures | ~ multi-class builder | ✘ complex | ✘ | ~ new fixture type | ✔ unchanged | ~ | ~ multi-class + OFF/ON runs |
+| Engine-native | ✔ | ✔ + script geometry | ✘ custom A* | ✘ (✔ if H3) | ✔ | ✔ now | ✔ (local layer in script; perf to verify) |
+| C++ likely needed | no | no | yes | likely (not for H3) | no | only in Phase 4 | no (unless budget demands) |
+| Implementation cost | M | H | VH | H | L | M now, H later | M now, M later |
+| Migration cost vs current code | M (bake + seam) | H | VH | H (seam absorbs call sites) | L | M, then local | M, then local |
+| Main risk | bake time × K; map count growth with traits | seam connectivity | clearance correctness | perf, 2.5D limit | root cause untouched | two backends to maintain until D lands | local-layer budget blowout; OFF path rotting untested |
 
 ---
 
 ## 9. Open questions (answer in place)
 
-Each question gives the context, options and consequences, then one `<<Question>>` marker to answer. Q1–Q5 gate the recommendation. Q6–Q9 are narrower and follow from them.
+Each question gives the context, options and consequences, then one `<<Question>>` marker to answer. The backbone is decided (§6.1). Q1 is answered (D6, 2026-10-01). Q2's class count is answered (D9, 2026-10-01); its boundaries remain open. Q2–Q5 now tune it rather than choose it. Q6–Q9 are narrower. Q10–Q12 were added 2026-09-30.
 
 ### Q1 — Which passability dimensions vary per creature?
 
@@ -306,7 +419,19 @@ Each question gives the context, options and consequences, then one `<<Question>
 | Squeeze / compressibility (Mode A `fit_size`) | `EnvironmentCellData` supports it, zero callers | extra reduced-radius classes (A, costly) or `r × factor` (D, cheap) | exact radius only |
 | Swim / terrain kind | not implemented | capability overlay (layer bit) or grid flag | n/a |
 
-<<Question: Q1 — Which of radius, height/overhang, slope/climb (including a climbing trait), crush weight, squeeze/compressibility and swim must vary per creature in pathing, and which only in live enforcement or not at all? Each dimension that must vary in pathing adds either maps/overlays (Option A) or pushes toward the grid backend (Option D).>>
+**Answer (user, 2026-10-01; D6–D7):**
+
+| Dimension | Outcome |
+|---|---|
+| Radius | Varies; drives the class maps (D1). |
+| Height / overhang | Per-class `agent_height` = class max height (free under A). Caveat: the wolf's enclosing capsule is 15.3 m tall (Q10). |
+| Slope / step | Class baseline **matches physics** (capsule geometry + `floor_max_angle`, step limit consistent with `cell_size`), so navmesh and physics agree (D6 / D8). `PassabilityProfile.max_slope` / `max_climb` are derived fields; `floor_max_angle` is per body, so physics can enforce per creature. Steeper-slope walkers use **slope-variant maps**, sparse per occupied (class, variant) pair (D8). "Slower above X" is motor-side cost from the floor normal, not passability (D8). Fall risk is motor / physics, not pathing. |
+| Climbing trait | Structure decided (D8): **off-mesh links** with a reserved CLIMB navigation-layer bit, generated by a bake-time ledge detector on existing maps; the router reports link traversal. Climb movement deferred. Capability bit reserved in `PassabilityProfile` (Phase 0). |
+| Crush | Tied to size for now: a **class property** (each class crushes a given crush band or not). No weight bands × classes, because cost and layer bits are per region (§5.1). Revisit trigger: a heavy-small or light-large creature. |
+| Squeeze | The row conflated two things. `fit_size` obstacle entry is already per class via D5 (no new work). Compressibility is deferred and stays out of class maps (later: local layer `r × factor` in the window, or live enforcement only). |
+| Swim | Deferred. Capability bit reserved in `PassabilityProfile` (Phase 0). |
+
+Class membership and any layer mask are derived at runtime from config, never authored per creature or species (D7).
 
 ### Q2 — Size model: few fixed classes or continuous sizes?
 
@@ -315,7 +440,21 @@ Each question gives the context, options and consequences, then one `<<Question>
 - **Continuous (any radius, growth mid-life):** only C or D give exact results. A can only approximate with many classes.
 - **Rounding policy:** conservative round-up (never routes a creature through a gap it can't fit; may deny gaps near the class edge) vs nearest (smaller loss; relies on the route scan to catch misfits). This plan assumes round-up.
 
-<<Question: Q2 — Should sizes be treated as a few fixed classes (how many, and where are the boundaries relative to the current roster), or as continuous (growth, magic, many species)? What erosion tolerance per creature is acceptable, in metres or as a fraction of radius? Is conservative round-up the right rounding policy?>>
+**Answer (user, 2026-09-30, partial; D1):** fixed classes, each with its own navmesh. A creature uses the **smallest class that fits**, with **conservative round-up**. Continuous exactness is **not** required globally; the optional local layer (§5.8) supplies exactness near the creature where it pays off. Industry practice is 2–4 classes.
+
+**Answer (user, 2026-10-01, partial; D9):** **K = 3 size classes for now.**
+
+| Class | Descriptive members (design discussion only) | Notes |
+|---|---|---|
+| small | rabbit, fox | Rabbit archetype 0.6 declared radius (live unmeasured); fox has no archetype, live 2.343 (source unverified, §3.1). |
+| medium | wolf | Wolf archetype 7.0 declared, live ≈ 7.03. |
+| large | mastodon | Reserved. No archetype exists; not baked while no large species is in the roster (D8.4). |
+
+Membership is **derived at runtime** from size against the config class table (D7); the species names above are not authored data. Adding a class later is config-only.
+
+*Provisional illustration only (not decided):* `R_small` ≥ 2.5 m (fox live 2.343 snapped up to a 0.25 m voxel), `R_medium` = 7.25 m (wolf live 7.03 snapped up). Under conservative round-up, a rabbit at its declared 0.6 m would then lose up to ~1.9 m per side to small-class erosion. That is the kind of tolerance the remaining question must bound.
+
+<<Question: Q2 (remainder) — Where are the class boundaries (`R_k` for small / medium / large) relative to the current roster, and what erosion tolerance per creature (`R_k − r`) is acceptable before the local layer is expected to cover the difference? Gated on Q10 (path radius vs enclosing capsule) and Q12 (size↔radius canonical), plus the live rabbit radius and the fox radius source (§3.1).>>
 
 ### Q3 — World dynamism: what changes at runtime, how often, and how fast must paths react?
 
@@ -328,19 +467,23 @@ Candidates: crush (an obstacle removed, possibly permanent), regrowth (an obstac
 | Near-instant (same or next frame) | D (local brushfire), or keep the shape-cast as the only enforcement for dynamic things and accept stale routes |
 | Hull swap "doesn't matter for pathing" | no rebake on depletion; the per-step gate + escape hatch (§8e) covers it |
 
+**Note (2026-09-30, D4):** tiling is in Phase 1 regardless of this answer, so the answer only sets tile size, rebake priority and T_dyn. Staleness is asymmetric: crush is conservative while stale, but regrowth and hull swaps are optimistic while stale, so they are the latency that matters.
+
 <<Question: Q3 — Which obstacles change at runtime (crush, regrowth, depletion hull swap, terrain edits, other), roughly how often per minute in a busy scene, and what is the maximum acceptable time (T_dyn) from the change to paths reflecting it? Can the depletion hull swap be ignored by pathing?>>
 
 ### Q4 — Where does per-creature passability truth live?
 
 - **(a) Status quo:** navmesh coarse and species-blind; per-creature shape-cast is the truth (decision 22). Consequence: the failures in §3 persist, and every new trait adds repair heuristics (Option E).
-- **(b) Pathing holds static truth per class; shape-cast is the residual and final gate (A / H1).** Decision 22's route scan stays but should rarely truncate (metric in §7). This amends decision 22's premise that the navmesh is species-blind.
+- **(b) Pathing holds static truth per class; shape-cast is the residual and final gate (A / H4).** Decision 22's route scan stays but should rarely truncate (metric in §7). This amends decision 22's premise that the navmesh is species-blind.
 - **(c) Pathing holds full per-creature truth, static and dynamic (D).** The shape-cast is only the physical contact gate.
 
-<<Question: Q4 — Keep the navmesh as species-blind coarse routing with per-creature truth enforced live by shape-casts (status quo), move static per-creature truth into pathing with shape-casts as the residual/final gate (Option A/H1), or move all per-creature truth into pathing (Option D)?>>
+**Note (2026-09-30):** D1 and D3 imply (b). The class navmesh plus shape-cast enforcement is the correctness baseline, and the local layer only upgrades routes. Navmesh-constrained movement (§5.7) would be a variant of (b) that moves static enforcement onto the navmesh. Left open for explicit confirmation.
+
+<<Question: Q4 — Keep the navmesh as species-blind coarse routing with per-creature truth enforced live by shape-casts (status quo), move static per-creature truth into pathing with shape-casts as the residual/final gate (Option A/H4), or move all per-creature truth into pathing (Option D)?>>
 
 ### Q5 — Performance budget and language
 
-The facts that decide A vs D: bake cost × K (G10), per-query A* cost on ~163k grid cells, and map sync cost. The agent role includes C++. A GDExtension adds a build toolchain, CI and a platform matrix, and needs a new specialist routing row.
+The facts that decide A vs D: bake cost × K (G10), per-query A* cost on ~163k grid cells, and map sync cost. **Note (2026-09-30):** A is chosen (D1), so Q5 now sets the Phase 1 tile / bake budget and the local layer's per-frame budget (§5.8). It also decides whether the LCT fallback (§5.3) or a C++ local layer is available if needed. The agent role includes C++. A GDExtension adds a build toolchain, CI and a platform matrix, and needs a new specialist routing row.
 
 <<Question: Q5 — Target creature count on screen (now, and the design ceiling), target hardware (min-spec CPU), frame budget for navigation in ms, and whether C++/GDExtension is acceptable for a pathfinding backend (yes now / yes later if metrics demand it / never)?>>
 
@@ -349,6 +492,8 @@ The facts that decide A vs D: bake cost × K (G10), per-query A* cost on ~163k g
 [Decision 22](PHYSICS_SQUEEZE.md) / §8a rejected baking the ghost layer "because a single shared bake can't express a per-species fact". With per-class maps that reason no longer applies. Hulls are solid for everyone (§2.2), and erosion by `R_k` yields exactly the class's passable gaps. Physics would still not enforce them (they stay out of movement masks), so decision 16's query enforcement is untouched.
 - **Yes:** fixes the gap trap and the C1 blindness. Amends decision 22's wording (not its intent).
 - **No:** A fixes erosion only. The gap trap needs a separate mechanism: an open-shrub region with high cost, or D.
+
+**Implication recorded (2026-09-30, D5):** the class-map direction implies baking hulls **per class according to the `passible` / `fit_size` rules**: Mode A carves unless the class fits, and Mode B is a cost area, never carved. Hulls with no valid `fit_size` (today's open shrubs and boulders) carve every class. The formal answer is left to the user. Q11 (soft vegetation) could turn open shrubs into Mode B cost areas instead.
 
 <<Question: Q6 — With per-class maps, may ghost-layer hulls (open shrubs, later boulders) be baked into every class map's source geometry while staying off every movement mask? This amends decision 22's "never bake the ghost layer" wording.>>
 
@@ -365,13 +510,37 @@ The facts that decide A vs D: bake cost × K (G10), per-query A* cost on ~163k g
 - **(b) Separate cost region + CRUSH layer bit:** creatures above `crush_weight` include the bit and pay `travel_cost`. Per-shrub weight thresholds need per-threshold bits, so use a few weight bands.
 - **(c) Don't carve at all:** the per-step gate stops light creatures, and the route scan must learn about layer 1. This reintroduces gap-trap risk for light creatures.
 
-<<Question: Q8 — How should an uncrushed but crushable shrub appear in pathing: carve until crushed, a cost region usable only by heavy-enough creatures, or not carved at all? How many distinct crush-weight bands are expected?>>
+**Direction (2026-09-30, D4; amended 2026-10-01, D6):** a per-class mix of (a) and (b). Crush capability is a **class property** (D6): crushables carve for classes that can't crush them and are cost areas for crush-capable classes, so a crush rebakes only the maps that carved it. No separate weight bands × classes and no per-creature CRUSH layer bit inside a class map. Revisit if a heavy-small or light-large creature appears.
+
+<<Question: Q8 — With crush as a class property (D6), how many distinct crush bands (shrub `crush_weight` tiers) are expected, and which classes crush which band? For a crush-capable class, is a crushable a `travel_cost` area (cost region) or simply not carved?>>
 
 ### Q9 — Terrain topology: is the playfield single-level (2.5D)?
 
 Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhangs or multi-level terrain break that and favour navmesh-based options.
 
-<<Question: Q9 — Will any playfield have multi-level walkable geometry (bridges, caves, ledges above walkable ground, overhangs creatures walk under)? If yes, grid backends (D/H3) need a layered grid or are ruled out.>>
+**Note (2026-09-30):** Q9 now also decides whether **LCT (§5.3) stays viable** as the fallback for exact per-radius pathing. The local layer's visibility graph (§5.8) is 2D as well. On multi-level terrain its window would need per-level filtering, or it would have to switch off where levels overlap.
+
+<<Question: Q9 — Will any playfield have multi-level walkable geometry (bridges, caves, ledges above walkable ground, overhangs creatures walk under)? If yes, grid backends (D/H3) and the LCT fallback need a layered structure or are ruled out, and the local layer needs per-level filtering.>>
+
+### Q10 — Path radius: enclosing capsule or body width?
+
+The wolf's `collision_capsule_radius` is 7.0 (live ≈ 7.03), its capsule height is 15.3 and its `creature_size` is 6.0 (`creature/species/wolf_archetype.tres` lines 19-21, verified 2026-09-30). A 7 m radius is wider than the whole body's longest dimension, which suggests the capsule was sized to **enclose** the model. Industry practice is to set the path radius to about **half the shoulder width**. A width-based path radius would shrink erosion for large creatures, might reduce the number of classes (Q2), and could remove some gap traps outright. It could be a separate `path_radius` used only by pathing, with the collision capsule left alone. The alternative is to resize the capsule itself.
+
+<<Question: Q10 — Was the wolf's collision_capsule_radius of 7.0 chosen to enclose the model? Should pathing use a width-based radius (about half shoulder width), either as a separate path_radius or by resizing the capsule, instead of the enclosing capsule radius?>>
+
+### Q11 — Soft vegetation for large creatures?
+
+Many games make foliage costly but passable for large animals instead of a hard blocker. For open shrubs this would remove the gap trap entirely for large classes: they walk through at a cost, and only small classes route around the hull, or through it if it fits (Mode A). This maps onto **Mode B** (`passible == true` + `movement_impact` + `fit_size`, D5): a cost area for classes ≥ `fit_size`, free for smaller ones. It changes decision 16's premise that open-shrub hulls are solid for everyone (§2.2).
+
+<<Question: Q11 — What is the design intent for open shrubs vs large creatures: a hard blocker for everyone (today), or costly-but-passable for large creatures (Mode B style)? If passable, which obstacle kinds qualify (open shrubs only, or other vegetation too)?>>
+
+### Q12 — `fit_size` vs class radius: which is canonical?
+
+`fit_size` compares against `creature_size`, the **longest body dimension** ([CREATURE_ATTRIBUTES_USAGE.md](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)). Class maps are keyed by **capsule radius** (`R_k`). The D5 rules need each class to define both a max radius (for erosion) and a max `creature_size` (for `fit_size` compares), with an explicit mapping. For the wolf the two diverge sharply: radius 7.0 against `creature_size` 6.0 (Q10). If they are defined independently, a creature could fall into different classes by radius and by size.
+
+**Constraint (2026-10-01, D7):** whichever measure Q12 makes canonical, class membership is **computed at runtime** from the creature's live size / traits against the config class table, never stored as authored data on creatures, species `.tres` or templates.
+
+<<Question: Q12 — Class definitions need an explicit size↔radius mapping. Which is canonical for class membership: capsule (or path) radius, with max creature_size derived; creature_size, with radius derived; or both declared per class, with a creature's class being the smallest class that satisfies both?>>
 
 ---
 
@@ -379,14 +548,20 @@ Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhan
 
 | Risk | Mitigation |
 |---|---|
-| Bake time × K classes stalls startup or rebakes | Measure G10 in Phase 0. Async bakes. Parse once (G8). Tile regions (G7). |
-| Map count explodes with size × capability | Capabilities as layer overlays (H2), not maps. Revisit D if the overlay count grows. |
+| Bake time × K classes stalls startup or rebakes | Measure G10 in Phase 0. Async bakes. Parse once (G8). Tile regions from Phase 1 (G7, D4). |
+| Tiles retrofitted late onto monolithic bakes (expensive rework when crush lands) | Phase 1 is tiled from the start (D4). Crush semantics stay out of scope; only the structure is ready. |
+| Stale-open window after regrowth / hull swap routes creatures into physics blocks | Regrowth and hull-swap rebakes get priority over crush (D4). The shape-cast route scan and per-step gate cover the window. The local layer reads live hulls when ON. |
+| Local-layer budget blowout (many creatures × dense obstacle windows) | Master switch, per-frame query + ms budget with a time-sliced queue, trigger gating, cache, priority/LOD, species opt-out (§5.8). Telemetry on queries/frame and ms. |
+| Fallback path rots untested because the local layer usually covers it | "Only adds, never fixes" (D3). Gap-trap and erosion tests run **both OFF and ON** (§7, §11). The OFF run must never get stuck. |
+| Map count explodes with size × capability | Capabilities as layer overlays (H2) or links (climbing, D8), not maps. Revisit D if the overlay count grows. |
+| Map count grows K classes × V slope variants (D8; illustrative 8 × 2 = 16; today K = 3, D9) | Sparse baking of occupied pairs only (D8.4). Keep K small (Q2). Measure bake time per map (G10). |
+| Climb-link generation quality (missed ledges, links onto unreachable tops, link spam on rough terrain) | Ledge detector thresholds tied to the walking step limit and climbable height. Headless fixture with a boulder and a cliff. Link traversal is reported by the router, so bad links show up in telemetry. |
 | Class switching flickers for a creature near a boundary | Hysteresis band. Switch only on consideration ticks (mirrors §8d). |
 | One class map empty or not synced; silent fallback like decision 46 B | Per-map readiness. A 0-polygon class map fails loudly. A headless test per class. |
 | The route scan masks a class-map bug | `scan_truncated_static` telemetry with an alarm threshold (§7). |
 | Earlier tuning rested on an empty navmesh (§3.3) | Re-run the decision-44, c1 and c44 smokes after Phase 1. Treat earlier live evidence as void. |
 | Seam migration regresses motor behaviour | Phase 0 is behaviour-neutral by construction (same single map). Full suite A/B before and after. |
-| GDExtension toolchain burden (Phase 4) | Only if Q5 allows. H3 as the native-only fallback. |
+| GDExtension toolchain burden (LCT fallback or C++ local layer) | Only if Q5 allows and metrics demand it. Phase 4 is designed to be script-feasible first. |
 
 ---
 
@@ -397,7 +572,12 @@ Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhan
 - Per-class bake produces polygons; ghost hulls carve only where the class radius can't fit (two-class fixture: a gap between two hulls wider than 2·R_small and narrower than 2·R_large).
 - Class selection with hysteresis on a runtime radius change.
 - Route-scan start-overlap regression (sibling of the decision 33 shelter probe test).
-- Tile rebake latency after a synthetic crush (Phase 2).
+- Tile rebake latency after a synthetic crush (Phase 2), and the stale-open window after a synthetic regrowth / hull swap (no wedge before the rebake lands).
+- Tile-seam continuity: a path across a tile boundary on every class map (Phase 1).
+- Per-class inclusion (D5): a Mode A obstacle with `fit_size` between two class sizes carves the larger class only. A Mode B obstacle carves no class and is a cost area for classes ≥ `fit_size`.
+- Local layer (Phase 4): the gap-trap and erosion scenarios run **OFF** (slower detour, never stuck) and **ON** (takes the squeeze, within budget). Cache invalidation on a synthetic crush / regrowth / hull swap.
+- **Terrain slope measurement (D8; proposed, not yet run):** a read-only headless script (owner test-harness) over the current playfield: a slope histogram of the terrain; per slope bin, whether the current bake covers it (confirms or denies the suspected ~31° step-limit cap, G11); and what happens to boulders, solid shrubs and the playfield edge when `agent_max_slope` / `agent_max_climb` are raised (do obstacle tops / sides become walkable). Feeds §2.1 and Phase 0 (g).
+- Baseline slope agreement, obstacle-free tops / sides, and sparse pair baking (§7 D8 items), Phase 1.
 
 **Manual:** re-run the [decision 44 smoke](PHYSICS_SQUEEZE.md#decision-44-live-smoke-test), `spawn_layout_c1_smoke.json` and `spawn_layout_c44_smoke.json` on the new pathing. Add an open-shrub gap-trap layout.
 
@@ -410,6 +590,8 @@ Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhan
 - [CREATURE_MOVEMENT_V3.md §3 / §3.1](CREATURE_MOVEMENT_V3.md): substep rule and headless fixture.
 - [CREATURE_MOVEMENT_V3_CLEANUP.md C1](CREATURE_MOVEMENT_V3_CLEANUP.md#c1--pursuit-contact-geometry-stall-fox): straight-vs-rotated compare.
 - [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md): `crush_weight`, `fit_size`, `movement_impact`.
+- [ENVIRONMENT_MODEL_PLAN.md property catalog](../Definitive_Features/ENVIRONMENT_MODEL_PLAN.md) and `environment/environment_cell_data.gd`: `passible` / `fit_size` Mode A / B semantics (D5).
+- [CREATURE_ATTRIBUTES_USAGE.md](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md): `creature_size` = longest body dimension (Q12).
 - [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md): "Shared navmesh bake erodes by the largest creature's radius", "Crushable shrubs vs the navmesh bake", "Climbing as a skill/trait".
 
 ---
@@ -419,3 +601,8 @@ Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhan
 | Date | Change |
 |------|--------|
 | 2026-09-30 | Created (design only, status `design`). Captures the evidence (erosion, gap trap 9/17, empty-navmesh history), current bake facts, obstacle/passability inventory, single-map call-site seam, Godot capability notes (unverified against 4.7), options A–E plus hybrids H1–H3, evaluation matrix, acceptance metrics, phased plan, and questions Q1–Q9 for the user. Provisional recommendation: H1 (per-class maps behind a `NavRouter` seam, ghost hulls baked per class, grid backend as the planned escape hatch), pending Q1–Q5. Takes over the per-size navmesh `<<Question>>` from PHYSICS_SQUEEZE decision 46 B. |
+| 2026-09-30 | Recorded user decisions D1–D5 (§6.1). D1: tiled per-size-class navmeshes (Option A) are the backbone, with round-up class selection; Q2 partially answered. D2: Phase 4 is now an optional local exact-refinement layer (§5.8), replacing the Option D grid backend, which stays as an alternative. D3: the local layer is switchable and budgeted, and only adds, never fixes (config section `navigation`, telemetry, OFF/ON tests). D4: crush planned structurally, so tiling moves into Phase 1; asymmetric staleness; crush-capable classes treat crushables as cost areas. D5: per-class obstacle inclusion via `passible` / `fit_size`. Added the alternatives analysis (§5.9; TRA* / LCT under §5.3; navmesh-constrained movement as an open option in §5.7; stuck watchdog under §5.5). Recommendation §6 → H4. §7, §8, §8.1 (H4 column, world-size row), §10 and §11 updated. Notes added on Q3–Q6, Q8 and Q9 (Q9 now also gates LCT). New questions Q10 (width-based path radius), Q11 (soft vegetation) and Q12 (size↔radius canonical mapping). |
+| 2026-10-01 | Recorded user decisions D6–D7 (§6.1). D6 answers Q1: radius and height per class; slope / climb at a physics-derived class baseline with the door left open for per-creature variability (derived `PassabilityProfile` fields, router-computed layer mask, future slope-band overlays / cost); crush is a class property (no weight bands × classes; revisit trigger noted); climbing trait, swim and compressibility deferred with climb / swim capability bits reserved; "squeeze" split into `fit_size` entry (D5) vs compressibility. D7: class membership and layer masks derived at runtime from the config class table, never authored per creature / species. Updated header, §2.1 slope / climb rows (grep facts; slope still to verify), §5.1 crush / squeeze / climbing bullets, D4 (amended), §8 Phases 0–3, §8.1 crush cell, Q1 (answered), Q8 (direction and question narrowed), Q12 (D7 constraint). |
+| 2026-10-01 | Recorded user decision D8 (§6.1): slope / climb baseline matches physics; steep-ground walkers via sparse slope-variant maps per occupied (class, variant) pair; climbing via off-mesh links with a reserved CLIMB navigation-layer bit from a bake-time ledge detector; router reports link traversal; "slower above X" is motor-side cost; obstacle removal made explicit, decoupled from slope / climb. Rejected: "bake at 90° and filter in code", "most permissive member's slope", and slope-band overlay regions (D6 amended). §2.1 now records caller-verified facts (`floor_max_angle` 50° in both kinematic templates, `agent_max_slope` unset → default believed 45°, climb snapped to 0.15 m) and the suspected ~31° effective cap. Added G11–G12, updated §5.1, §5.6 H2, §7 (three items), §8 Phases 0 / 1 / 3, §8.1 slope row, Q1 answer, §10 (two risks), §11 (terrain slope measurement). |
+| 2026-10-01 | Recorded user decision D9 (§6.1): Q2 partially answered, K = 3 size classes for now (small: rabbit, fox; medium: wolf; large: mastodon, reserved and unbaked until rostered). Membership stays runtime-derived (D7); species names are descriptive. Boundaries and erosion tolerance remain open (Q2 remainder narrowed; gated on Q10 / Q12); provisional `R_k` illustration recorded. Recorded verified archetype facts (only rabbit and wolf archetypes exist; no fox or mastodon) and corrected §3.1's "fox 0.7" fallback, which has no `.tres` source; added a comment to confirm the source of the fox live radius 2.343. Sourcing note qualified: the 2026-09-30 pass did not re-read code, but specific facts were caller-verified 2026-10-01 and dated in place (also marked the D8 `motor_planner.gd` ~3264 / ~3339 reference). Updated header, §6 (K = 3), D8 and §10 map-count examples, §8 Phase 1, §9 intro. |
+| 2026-10-01 | Recorded user decision D10 (§6.1, new §6.2): navigation code ownership is a two-layer split. Layer 1 is a creature-agnostic navigation maps service in `environment/navigation/` (new, Phase 1; environment-world; provisional name `NavigationMaps`). It owns the bake (moved from `main_3d.gd` ~551 / ~605 / ~684, caller-verified), tiles, class × variant maps, obstacle carving, links, readiness, rebakes and the size → class lookup. Layer 2 is the creature-facing `NavRouter` in `creature/motor/` (creature-motor), the M5 entry point holding the route scan, the local layer, per-creature slope logic and the stuck watchdog. creature-entity builds `PassabilityProfile`. Updated header, §2 entry note, §2.4 (migration target; map handle replaced by Layer-1 handles behind the router), §5.1 migration cost, §5.6 H4 and §5.8 (local layer lives in Layer 2), §6, §8 Phase 0 (b) naming and Phase 1 / 3 / 4 content, the §8 owner column for all phases (this resolves the Phase 3 ownership left open by D8), and §8 docs to sync (index + ENVIRONMENT_MODEL_PLAN §6.3.1 when the folder is created). Roster hand-off clarified: `main_3d.gd` passes the roster's sizes / traits to Layer 1 as plain values at bake kick-off, Layer 1 derives the occupied (class, variant) pairs, and `_duel_max_capsule_radius()` is retired. This is folded into the D10 row and §8 Phase 1, with an amendment note on D8 (4). |
