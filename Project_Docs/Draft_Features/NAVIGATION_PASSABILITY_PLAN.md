@@ -8,7 +8,7 @@
 >
 > **Decision 2026-10-01 (user, in conversation; §6.1 D8).** Slope and climbing structure: each class's baseline slope / climb **matches physics** (the bake slope is never raised for climbers); steep-ground walkers get **slope-variant maps** (one bake per occupied (size class, slope variant) pair, **sparse**); climbing features (boulders, cliffs, ledges) become **off-mesh links** carrying a reserved CLIMB navigation-layer bit on the existing maps; the `NavRouter` reports link traversal; "slower above X" is motor cost, not passability. Obstacles are removed from the bake **explicitly**, decoupled from slope / climb thresholds.
 >
-> **Decision 2026-10-01 (user, in conversation; §6.1 D9).** Q2 partially answered: **K = 3 size classes for now** (small: rabbit, fox; medium: wolf; large: mastodon, reserved, no archetype yet). Species names are descriptive only; membership is derived at runtime (D7), and the large class is not baked while no large species is in the roster (D8 sparse baking). Class **boundaries** (`R_k`) and the acceptable erosion tolerance stay open (Q2 remainder, gated on Q10 / Q12).
+> **Decision 2026-10-01 (user, in conversation; §6.1 D9).** Q2 partially answered: **K = 3 size classes for now** (small: rabbit, fox; medium: wolf; large: mastodon, reserved, no archetype yet). Species names are descriptive only; membership is derived at runtime (D7), and the large class is not baked while no large species is in the roster (D8 sparse baking). Class **boundaries** (`R_k`) and the acceptable erosion tolerance stay open (Q2 remainder; Q10 / Q12 are answered, so it is now gated only on the B20 dimensions landing).
 >
 > **Decision 2026-10-01 (user, in conversation; §6.1 D10).** Navigation code ownership is a **two-layer split**. **Layer 1**, a creature-agnostic navigation maps service in `environment/navigation/` (new folder, created in Phase 1; owner `environment-world`), owns bake, tiling, class / variant maps, obstacle carving, links, readiness, tile rebakes and the size → class lookup. **Layer 2**, the creature-facing `NavRouter` in `creature/motor/` (owner `creature-motor`), is the single M5 entry point and holds all creature-specific path logic. `creature-entity` builds the `PassabilityProfile`. `main_3d.gd` keeps only bake kick-off and the handle hand-off. §8 phase owners are updated to match.
 >
@@ -406,7 +406,7 @@ Scores: ✔ handles well · ~ partial / with work · ✘ does not handle. Costs 
 
 ## 9. Open questions (answer in place)
 
-Each question gives the context, options and consequences, then one `<<Question>>` marker to answer. The backbone is decided (§6.1). Q1 is answered (D6, 2026-10-01). Q2's class count is answered (D9, 2026-10-01); its boundaries remain open. Q2–Q5 now tune it rather than choose it. Q6–Q9 are narrower. Q10–Q12 were added 2026-09-30.
+Each question gives the context, options and consequences, then one `<<Question>>` marker to answer. The backbone is decided (§6.1). Q1 is answered (D6, 2026-10-01). Q2's class count is answered (D9, 2026-10-01); its boundaries remain open. Q2–Q5 now tune it rather than choose it. Q6–Q9 are narrower. Q10–Q12 were added 2026-09-30; Q10 and Q12 are answered (2026-10-01, in CREATURE_BODY_DIMENSIONS B17 / §4.10); Q11 is open.
 
 ### Q1 — Which passability dimensions vary per creature?
 
@@ -454,7 +454,7 @@ Membership is **derived at runtime** from size against the config class table (D
 
 *Provisional illustration only (not decided):* `R_small` ≥ 2.5 m (fox live 2.343 snapped up to a 0.25 m voxel), `R_medium` = 7.25 m (wolf live 7.03 snapped up). Under conservative round-up, a rabbit at its declared 0.6 m would then lose up to ~1.9 m per side to small-class erosion. That is the kind of tolerance the remaining question must bound.
 
-<<Question: Q2 (remainder) — Where are the class boundaries (`R_k` for small / medium / large) relative to the current roster, and what erosion tolerance per creature (`R_k − r`) is acceptable before the local layer is expected to cover the difference? Gated on Q10 (path radius vs enclosing capsule) and Q12 (size↔radius canonical), plus the live rabbit radius and the fox radius source (§3.1).>>
+<<Question: Q2 (remainder) — Where are the class boundaries (`R_k` for small / medium / large) relative to the current roster, and what erosion tolerance per creature (`R_k − r`) is acceptable before the local layer is expected to cover the difference? Q10 (body radius, B1 / B5) and Q12 (B17) are answered in CREATURE_BODY_DIMENSIONS; set the boundaries after the B20 dimensions land. Also needs the live rabbit radius and the fox radius source (§3.1).>>
 
 ### Q3 — World dynamism: what changes at runtime, how often, and how fast must paths react?
 
@@ -522,13 +522,13 @@ Option D and H3 assume one walkable surface per XZ cell. Bridges, caves, overhan
 
 <<Question: Q9 — Will any playfield have multi-level walkable geometry (bridges, caves, ledges above walkable ground, overhangs creatures walk under)? If yes, grid backends (D/H3) and the LCT fallback need a layered structure or are ruled out, and the local layer needs per-level filtering.>>
 
-### Q10 — Path radius: enclosing capsule or body width?
+### Q10 — Path radius: enclosing capsule or body width? (answered 2026-10-01)
 
-> **2026-10-01:** Design moved to [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md); Q10/Q12 answers pending there (§4.10).
+> **Answered 2026-10-01** in [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.10 and decision B17 (with B1, B5, B16). Yes, the 7.0 radius came from half the model's length. Pathing uses the width-based **body radius** (width / 2 × 1.10); there is one radius, the resized movement capsule, and no separate `path_radius`. With the B20 design-intent dimensions the wolf radius becomes about 0.72. The question text below is kept for context.
 
 The wolf's `collision_capsule_radius` is 7.0 (live ≈ 7.03), its capsule height is 15.3 and its `creature_size` is 6.0 (`creature/species/wolf_archetype.tres` lines 19-21, verified 2026-09-30). A 7 m radius is wider than the whole body's longest dimension, which suggests the capsule was sized to **enclose** the model. Industry practice is to set the path radius to about **half the shoulder width**. A width-based path radius would shrink erosion for large creatures, might reduce the number of classes (Q2), and could remove some gap traps outright. It could be a separate `path_radius` used only by pathing, with the collision capsule left alone. The alternative is to resize the capsule itself.
 
-<<Question: Q10 — Was the wolf's collision_capsule_radius of 7.0 chosen to enclose the model? Should pathing use a width-based radius (about half shoulder width), either as a separate path_radius or by resizing the capsule, instead of the enclosing capsule radius?>>
+Question (answered, see the note above): was the wolf's collision_capsule_radius of 7.0 chosen to enclose the model, and should pathing use a width-based radius (about half shoulder width), either as a separate path_radius or by resizing the capsule?
 
 ### Q11 — Soft vegetation for large creatures?
 
@@ -536,15 +536,15 @@ Many games make foliage costly but passable for large animals instead of a hard 
 
 <<Question: Q11 — What is the design intent for open shrubs vs large creatures: a hard blocker for everyone (today), or costly-but-passable for large creatures (Mode B style)? If passable, which obstacle kinds qualify (open shrubs only, or other vegetation too)?>>
 
-### Q12 — `fit_size` vs class radius: which is canonical?
+### Q12 — `fit_size` vs class radius: which is canonical? (answered 2026-10-01)
 
-> **2026-10-01:** Design moved to [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md); Q10/Q12 answers pending there (BQ12).
+> **Answered 2026-10-01** in [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) decision B17 (BQ12, §4.10): option 3. Each class declares both a max body radius and a max `creature_size`, and a creature's class is the smallest class satisfying both. `creature_size` is `max(L, W, H)` on live dimensions (B11). The numeric class boundaries stay open (Q2 remainder), to be set only after the B20 dimensions land. The question text below is kept for context.
 
 `fit_size` compares against `creature_size`, the **longest body dimension** ([CREATURE_ATTRIBUTES_USAGE.md](../Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md)). Class maps are keyed by **capsule radius** (`R_k`). The D5 rules need each class to define both a max radius (for erosion) and a max `creature_size` (for `fit_size` compares), with an explicit mapping. For the wolf the two diverge sharply: radius 7.0 against `creature_size` 6.0 (Q10). If they are defined independently, a creature could fall into different classes by radius and by size.
 
 **Constraint (2026-10-01, D7):** whichever measure Q12 makes canonical, class membership is **computed at runtime** from the creature's live size / traits against the config class table, never stored as authored data on creatures, species `.tres` or templates.
 
-<<Question: Q12 — Class definitions need an explicit size↔radius mapping. Which is canonical for class membership: capsule (or path) radius, with max creature_size derived; creature_size, with radius derived; or both declared per class, with a creature's class being the smallest class that satisfies both?>>
+Question (answered, see the note above): class definitions need an explicit size↔radius mapping. Options were capsule (or path) radius canonical; `creature_size` canonical; or both declared per class, with a creature's class the smallest class that satisfies both. Chosen: the last (B17).
 
 ---
 
@@ -611,3 +611,4 @@ Many games make foliage costly but passable for large animals instead of a hard 
 | 2026-10-01 | Recorded user decision D9 (§6.1): Q2 partially answered, K = 3 size classes for now (small: rabbit, fox; medium: wolf; large: mastodon, reserved and unbaked until rostered). Membership stays runtime-derived (D7); species names are descriptive. Boundaries and erosion tolerance remain open (Q2 remainder narrowed; gated on Q10 / Q12); provisional `R_k` illustration recorded. Recorded verified archetype facts (only rabbit and wolf archetypes exist; no fox or mastodon) and corrected §3.1's "fox 0.7" fallback, which has no `.tres` source; added a comment to confirm the source of the fox live radius 2.343. Sourcing note qualified: the 2026-09-30 pass did not re-read code, but specific facts were caller-verified 2026-10-01 and dated in place (also marked the D8 `motor_planner.gd` ~3264 / ~3339 reference). Updated header, §6 (K = 3), D8 and §10 map-count examples, §8 Phase 1, §9 intro. |
 | 2026-10-01 | Recorded user decision D10 (§6.1, new §6.2): navigation code ownership is a two-layer split. Layer 1 is a creature-agnostic navigation maps service in `environment/navigation/` (new, Phase 1; environment-world; provisional name `NavigationMaps`). It owns the bake (moved from `main_3d.gd` ~551 / ~605 / ~684, caller-verified), tiles, class × variant maps, obstacle carving, links, readiness, rebakes and the size → class lookup. Layer 2 is the creature-facing `NavRouter` in `creature/motor/` (creature-motor), the M5 entry point holding the route scan, the local layer, per-creature slope logic and the stuck watchdog. creature-entity builds `PassabilityProfile`. Updated header, §2 entry note, §2.4 (migration target; map handle replaced by Layer-1 handles behind the router), §5.1 migration cost, §5.6 H4 and §5.8 (local layer lives in Layer 2), §6, §8 Phase 0 (b) naming and Phase 1 / 3 / 4 content, the §8 owner column for all phases (this resolves the Phase 3 ownership left open by D8), and §8 docs to sync (index + ENVIRONMENT_MODEL_PLAN §6.3.1 when the folder is created). Roster hand-off clarified: `main_3d.gd` passes the roster's sizes / traits to Layer 1 as plain values at bake kick-off, Layer 1 derives the occupied (class, variant) pairs, and `_duel_max_capsule_radius()` is retired. This is folded into the D10 row and §8 Phase 1, with an amendment note on D8 (4). |
 | 2026-10-01 | Q10 and Q12: added cross-links. Their design moved to the new draft [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) (authored L / W / H, width-based body radius, decisions B1–B5); the answers are pending there. No other changes. |
+| 2026-10-02 | Q10 and Q12 marked answered (cross-link only). The 2026-10-01 "pending there" notes were stale: the answers were recorded 2026-10-01 in [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.10 and decision B17 (BQ12; Q10 via B1 / B5 / B16). Removed the two `<<Question>>` markers (Q10, Q12) and updated the Q2-remainder gating wording. Class boundaries (`R_k`, class max `creature_size`) stay open until the B20 dimensions land. |
