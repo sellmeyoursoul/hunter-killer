@@ -1,0 +1,14 @@
+{
+  "_comment": "Shared body-dimension check tolerances (CREATURE_BODY_DIMENSIONS B8, B10, B18, B22). Read by tools/measure_body_dimensions.gd and, by relative path, the HK-models Blender checklist. Tolerances only: design-intent dimensions belong to species archetypes.",
+  "version": 1,
+  "proportion_warn_fraction": 0.10,
+  "proportion_warn_fraction_comment": "Per-axis relative deviation of a model's uniformly-fitted L/W/H vs the archetype above which a warning is logged (B8).",
+  "proportion_fail_fraction": 0.20,
+  "proportion_fail_fraction_comment": "Per-axis relative deviation above which a production model fails (art bug, tool exits non-zero). Placeholder models report warn instead (B8, B13).",
+  "variety_stretch_fraction": 0.10,
+  "variety_stretch_fraction_comment": "Allowed per-instance variety stretch per axis (+/-), applied after a passing fit (B8).",
+  "origin_position_tolerance_fraction": 0.02,
+  "origin_position_tolerance_fraction_comment": "Allowed pivot offset from the B10 convention (ground contact, XZ-centred on the rest-pose AABB), as a fraction of body length, applied to each of the X, Y and Z offsets.",
+  "forward_axis": [0, 0, 1],
+  "forward_axis_comment": "Model-forward convention in Godot terms: +Z (B22, supersedes B4). In Blender the nose points along -Y."
+}
