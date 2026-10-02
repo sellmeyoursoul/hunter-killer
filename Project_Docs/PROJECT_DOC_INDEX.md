@@ -55,6 +55,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 |------|-------|
 | [Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md](Draft_Features/AI_INT_CONVERSATION_SCOPE_PLAN.md) | AI / conversation scope (in progress). |
 | [Draft_Features/CM_V3_MULTI_MOBS.md](Draft_Features/CM_V3_MULTI_MOBS.md) | **Multi-predator support** (investigation, not started) — scene/spawn structure, HUD observability, flee direction blending needed before more than one live predator per encounter is possible; companion to [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md §9](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md)'s learned evasive-turn-bias sketch. |
+| [Draft_Features/CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) | **Creature body dimensions** (design, not started): authored `body_length`/`width`/`height` are canonical and the model conforms (uniform scale + proportion check); width-based movement radius (+10% margin) vs length-based reach extent; facing invariant (no strafing when width ≤ length); art-pipeline alignment with the external HK-models pipeline (Rodin `bbox_condition`, −Z forward convention); decisions B1–B5, open BQ1–BQ12. Spun out of [NAVIGATION_PASSABILITY_PLAN.md](Draft_Features/NAVIGATION_PASSABILITY_PLAN.md) Q10/Q12. |
 | [Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md](Draft_Features/CREATURE_EVOLUTION_AND_MOTOR_GENOME.md) | Evolution + motor genome. |
 | [Draft_Features/CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Canonical:** motivation tree Tier-1/2, **`CreatureDefinition`** traits (−100…+100), goal-kind rollup, habitual **`believed_goal_*`** modulation + strategy-class **`<<Question>>`** Actions **1–3**. Consumed by [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) + [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md). |
 | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Creature memory** (working → definitive): goal-aligned beliefs (food, danger, mates, shelter); success-pattern backends + **§14** tuning; read **[CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md)** first for Tier-2 / traits / replay semantics. |
@@ -118,6 +119,10 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 |----------|------|
 | [.cursor/rules/core.mdc](../.cursor/rules/core.mdc) | Agent hub (`alwaysApply`); stub: [AGENTS.md](../.cursor/rules/AGENTS.md). |
 | [.cursor/rules/*.mdc](../.cursor/rules/) | Scoped rules: `gdscript`, `logging`, `agentic-runtime-ai`, `assets`, `project-docs`. Stubs: [focus/](../.cursor/rules/focus/). |
+| [../../HK-models/3d_modeling_v1.md](../../HK-models/3d_modeling_v1.md) | **External art pipeline (HK-models):** 2D concept → 3D model stages (Rodin/Hunyuan generation, cleanup, texturing, rigging, glTF export). Must stay aligned with [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) (game units, rest-pose AABB dims, −Z forward, ground-centre origin, proportion tolerances). Changes on either side → review the other. |
+| [../../HK-models/shared_parts.md](../../HK-models/shared_parts.md) | External shared parts library (eyes, teeth, claws) for the art pipeline. |
+
+The external `HK-models` paths are outside this repo; keep them in sync manually when either side moves.
 
 ---
 
