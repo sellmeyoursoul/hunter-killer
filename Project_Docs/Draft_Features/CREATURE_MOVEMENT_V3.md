@@ -2566,7 +2566,7 @@ effective_latch_ticks = clamp(
 
 | Step | Behavior |
 |------|----------|
-| **Planner** | Existing `_can_eat_now` — within the size-scaled eat range (`eat_range()` / `_eat_range_for`, B28; was **`eat_action_max_distance`**), facing aligned, `step_instance_id` = prey body id |
+| **Planner** | Existing `_can_eat_now` — within the size-scaled eat range (`eat_range()` / `_eat_range_for`, B28; was **`eat_action_max_distance`**) measured as **ground-plane XZ distance** (`MotorPlane.horizontal_distance`; vertical offset ignored; `EatGate … xz_dist=…` log; `debug_eat_gate_snapshot["eat_dist_to_ultimate"]` is the same XZ metric), facing aligned, `step_instance_id` = prey body id |
 | **Stack** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) `_try_complete_eat` — if `instance_from_id` is prey **`CharacterBody3D`** (diet-valid for predator), call prey grant API; bushes unchanged (`try_grant_engine_creature`) |
 | **Prey body** | New grant method on [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (e.g. `try_grant_as_prey_to`) — one-shot: predator `add_calories_from_prey` + **`notify_food_consumption_outcome`** (§6.2 memory writes) + prey `_apply_defeat_local` + `hit` (duel round end via [`main_3d.gd`](../../main_3d.gd)) |
 | **Memory** | Same adapter path as plant EAT: **`record_observation`** (`nutrition_yield`) + locale salient write; **`stimulus_kind_id`** = prey **`species_id`** ([`awareness_zone_scan._stimulus_kind_for_creature`](../../creature/motor/awareness_zone_scan.gd)) — supports multiple prey species without per-scene bush-style ids |
@@ -2640,7 +2640,7 @@ effective_latch_ticks = clamp(
 - **Flight resume (D13):** `avoid_hostiles` until natural end; post-Flight `find_food` uses normal planner order; moving-prey consult remains latch-gated only (D8).
 - **Carnivore-only (2026-07-09):** omnivore pursuit, plant-vs-prey bind, and omnivore duel smoke **out of scope** this slice.
 - **Persistence bridge only (D8):** no ambient hunt-from-memory; post-latch revisit to last prey position deferred.
-- **Prey capture via `EAT` (D11):** meal + defeat on successful `EAT` within the size-scaled eat range (B28, [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7; originally **`eat_action_max_distance`** **5**); full §6.2 memory writes on prey meals; `MobHitbox` contact predation disabled (node left for later removal).
+- **Prey capture via `EAT` (D11):** meal + defeat on successful `EAT` within the size-scaled eat range (B28, ground-plane XZ distance, [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7; originally **`eat_action_max_distance`** **5**); full §6.2 memory writes on prey meals; `MobHitbox` contact predation disabled (node left for later removal).
 - **Hunt debug (D12):** engagement latch + inventory step mode on carnivore F10 HUD during pursuit.
 - **No V2 latch revival by shape:** legacy `goal_visibility_latch.gd` stays retired; latch numerics re-homed under **`creature_motor_v3`** planner state (D2, D10).
 - **`change_stability` on pursuit only (D10):** modulates engagement latch duration at arm — not hub `trait_goal_mul` / general tactic modulator.

@@ -14879,6 +14879,10 @@ func _run_body_dimensions_phase1_tests() -> void:
   await _test_body_dims_visual_fit_production_uniform_vs_placeholder_per_axis()
   await _test_body_dims_eat_gate_matches_b20_numbers()
   _test_eat_range_pure_function_cases()
+  await _test_eat_range_ignores_vertical_offset_when_xz_overlaps()
+  await _test_eat_range_xz_boundary_is_independent_of_y()
+  await _test_eat_gate_snapshot_reports_xz_distance()
+  await _test_select_action_eats_vertically_offset_in_range_target()
   await _test_eat_range_fraction_override_changes_gate()
   await _test_eat_arrival_tolerance_clamps_to_eat_range_for_food_steps()
   await _test_eat_gate_log_throttles_once_per_step_instance()
@@ -15238,6 +15242,145 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
   await process_frame
   var gate_long: float = (_MotorPlanner as GDScript).call("_eat_range_for", wolf, long_prey.get_instance_id(), motor_v3)
   _assert(is_equal_approx(gate_long, 4.5 + 1.5 + 0.385), "eat gate target term is body radius, independent of prey length (B27)")
+  main.queue_free()
+  await process_frame
+
+
+## 2026-10-05: the eat gate measures ground-plane (XZ) distance, so a body stacked far above/below its
+## target at identical XZ is in range for every shipped eater (Y never enters the comparison).
+func _test_eat_range_ignores_vertical_offset_when_xz_overlaps() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var motor_v3 := _motor_v3_test_params()
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
+  var fox := _bd_spawn_shipped(main, 1, Vector3(0, 1, 200))
+  var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
+  await process_frame
+  var planner := _MotorPlanner as GDScript
+  var pairs := {
+    "wolf->rabbit": [wolf, rabbit.get_instance_id()],
+    "fox->rabbit": [fox, rabbit.get_instance_id()],
+    "rabbit->plant": [rabbit, 0],
+  }
+  for label in pairs.keys():
+    var eater := pairs[label][0] as CharacterBody3D
+    var tid: int = pairs[label][1]
+    var gate: float = planner.call("_eat_range_for", eater, tid, motor_v3)
+    for dy in [7.0, 12.0, gate + 25.0, -(gate + 25.0)]:
+      # Act
+      var target := eater.global_position + Vector3(0.0, dy, 0.0)
+      var in_range := bool(planner.call("_is_within_eat_range", eater, target, motor_v3, 0.0, tid))
+      # Assert
+      _assert(in_range, "%s identical XZ at dy=%.2f (gate %.2f) is in eat range" % [label, dy, gate])
+  main.queue_free()
+  await process_frame
+
+
+## No 3D leakage: XZ distance just inside the gate is in range and just outside is out of range, for any Y offset.
+func _test_eat_range_xz_boundary_is_independent_of_y() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var motor_v3 := _motor_v3_test_params()
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
+  var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
+  await process_frame
+  var planner := _MotorPlanner as GDScript
+  var tid := rabbit.get_instance_id()
+  var gate: float = planner.call("_eat_range_for", wolf, tid, motor_v3)
+  for dy in [0.0, 7.0, 30.0, -30.0]:
+    var inside := wolf.global_position + Vector3(gate - 0.02, dy, 0.0)
+    var outside := wolf.global_position + Vector3(gate + 0.02, dy, 0.0)
+    var diag_inside := wolf.global_position + Vector3((gate - 0.02) * 0.6, dy, (gate - 0.02) * 0.8)
+    # Act / Assert
+    _assert(
+      bool(planner.call("_is_within_eat_range", wolf, inside, motor_v3, 0.0, tid)),
+      "XZ gate-0.02 with dy=%.1f is in range" % dy,
+    )
+    _assert(
+      bool(planner.call("_is_within_eat_range", wolf, diag_inside, motor_v3, 0.0, tid)),
+      "diagonal XZ gate-0.02 with dy=%.1f is in range" % dy,
+    )
+    _assert(
+      not bool(planner.call("_is_within_eat_range", wolf, outside, motor_v3, 0.0, tid)),
+      "XZ gate+0.02 with dy=%.1f is out of range" % dy,
+    )
+  main.queue_free()
+  await process_frame
+
+
+## `debug_eat_gate_snapshot["eat_dist_to_ultimate"]` reports the XZ distance (Y ignored), matching the gate metric.
+func _test_eat_gate_snapshot_reports_xz_distance() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var motor_v3 := _motor_v3_test_params()
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
+  var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
+  await process_frame
+  var ultimate := wolf.global_position + Vector3(3.0, 9.0, 4.0)
+  var state: Dictionary = _MotorPlanner.new_state()
+  state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = rabbit.get_instance_id()
+  # Act
+  var snap: Dictionary = (_MotorPlanner as GDScript).call(
+    "debug_eat_gate_snapshot", {"body": wolf}, state, ultimate, motor_v3
+  )
+  # Assert
+  _assert(
+    is_equal_approx(float(snap["eat_dist_to_ultimate"]), 5.0),
+    "snapshot eat_dist_to_ultimate is the XZ distance 5.0, not 3D (got %.3f)" % float(snap["eat_dist_to_ultimate"]),
+  )
+  _assert(bool(snap["eat_within_range"]), "snapshot eat_within_range true for the stacked in-range target")
+  main.queue_free()
+  await process_frame
+
+
+## select_action still commits EAT for a target stacked 10 m above the eater at an in-gate XZ offset (facing arc is XZ).
+func _test_select_action_eats_vertically_offset_in_range_target() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  _motor_v3_test_floor(main)
+  var motor_v3 := _motor_v3_test_params()
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
+  var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
+  await process_frame
+  wolf.set_physics_process(false)
+  wolf.last_move_direction = Vector3(1.0, 0.0, 0.0)
+  var delta := 1.0 / 60.0
+  var ultimate := wolf.global_position + Vector3(2.0, 10.0, 0.0)
+  var state := _MotorPlanner.new_state()
+  state["goal_kind"] = _GkReg.GK_FIND_FOOD
+  state["step_goal"] = ultimate
+  state["step_goal_set"] = true
+  state["step_ultimate_pos"] = ultimate
+  state["step_ultimate_pos_set"] = true
+  state["step_instance_id"] = rabbit.get_instance_id()
+  state["step_source"] = &"live"
+  var ctx := {
+    "body": wolf,
+    "motor_v3": motor_v3,
+    "incumbent": {"goal_kind": _GkReg.GK_FIND_FOOD},
+    "scan": {"food_split": {"ready": [], "unready": []}, "threat_samples": []},
+    "threat_samples": [],
+    "flight_fast_path_active": false,
+    "refresh_step_objective": false,
+    "eye_height": 1.0,
+    "map_rid": RID(),
+    "physics_tick": 1,
+    "memory_adapter": null,
+    "now_ms": Time.get_ticks_msec(),
+    "delta": delta,
+  }
+  # Act
+  var can_eat: bool = (_MotorPlanner as GDScript).call("_can_eat_now", wolf, ultimate, state, motor_v3, delta, ctx)
+  var act := _MotorPlanner.select_action(ctx, state)
+  # Assert
+  _assert(can_eat, "_can_eat_now true for a target 10 m above at XZ 2 m inside the gate")
+  _assert(act == _MotorAction.EAT, "select_action returns EAT for the vertically offset in-range target")
   main.queue_free()
   await process_frame
 

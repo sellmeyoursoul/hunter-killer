@@ -4198,8 +4198,9 @@ static func _flee_objective(
   state["flee_blend_dir_prev_set"] = true
   # CLEANUP RT1 follow-up (2026-08-12): was `awareness_radius * 0.5` — on a small (playfield-
   # scaled-down) arena that put the flee waypoint only halfway to the edge of the creature's own
-  # (already-shrunk) awareness disc, well inside the fox's fixed, unscaled `eat_action_max_distance`
-  # bite range — the rabbit took a token hop and was immediately back in striking range. Flee to the
+  # (already-shrunk) awareness disc, well inside the fox's bite range (now the size-scaled
+  # `eat_range`, formerly a fixed `eat_action_max_distance`) — the rabbit took a token hop and was
+  # immediately back in striking range. Flee to the
   # full edge of the awareness disc instead; `awareness_radius` itself already scales down with
   # playfield size (`scale_creature_motor_v3_for_playfield`), so this stays proportionate as arenas
   # grow.
@@ -4290,9 +4291,11 @@ static func _eat_arrival_tolerance(
 
 
 ## True when [param body] is within its size-scaled eat range ([method _eat_range_for]) of
-## [param target] (centre to target position, 3D). [param delta] kept for call-site stability;
-## unused. [param target_instance_id] (live prey) adds that body's radius; omitted / unresolvable
-## (a plant, a stale id) adds 0.
+## [param target] measured on the ground plane (XZ via [method MotorPlane.horizontal_distance]; Y
+## ignored, 2026-10-05 decision: footprints overlapping under/over each other are always in range,
+## even where a rounded capsule's 3D centre distance would be too far). [param delta] kept for
+## call-site stability; unused. [param target_instance_id] (live prey) adds that body's radius;
+## omitted / unresolvable (a plant, a stale id) adds 0.
 static func _is_within_eat_range(
   body: CharacterBody3D,
   target: Vector3,
@@ -4300,11 +4303,15 @@ static func _is_within_eat_range(
   _delta: float,
   target_instance_id: int = 0,
 ) -> bool:
-  return body.global_position.distance_to(target) <= _eat_range_for(body, target_instance_id, motor_v3)
+  return (
+    _MotorPlane.horizontal_distance(body.global_position, target)
+    <= _eat_range_for(body, target_instance_id, motor_v3)
+  )
 
 
-## Debug-only (once per EAT commit, see [method select_action]): eater species, centre distance,
-## and the eat gate it passed. Logged through [code]_OLogSafe[/code]; one short line, no PII.
+## Debug-only (once per EAT commit, see [method select_action]): eater species, ground-plane (XZ)
+## distance to the eat target, and the eat gate it passed. Logged through [code]_OLogSafe[/code];
+## one short line, no PII.
 static func _log_eat_commit(
   body: CharacterBody3D,
   state: Dictionary,
@@ -4320,15 +4327,16 @@ static func _log_eat_commit(
   if def_v is Resource:
     species = StringName(str((def_v as Resource).get("species_id")).strip_edges())
   _OLogSafe.debug(
-    "EatGate species=%s centre_dist=%.2f gate=%.2f" % [
-      species, body.global_position.distance_to(eat_tgt), _eat_range_for(body, iid, motor_v3),
+    "EatGate species=%s xz_dist=%.2f gate=%.2f" % [
+      species, _MotorPlane.horizontal_distance(body.global_position, eat_tgt),
+      _eat_range_for(body, iid, motor_v3),
     ],
     false,
     "MotorEat",
   )
 
 
-## Find-food EAT gate: ultimate within the size-scaled eat range ([method _eat_range_for]) + facing arc + non-zero
+## Find-food EAT gate: ultimate within the size-scaled eat range ([method _eat_range_for], ground-plane XZ distance) + facing arc + non-zero
 ## [code]step_instance_id[/code] + no solid on the eater's own [code]collision_mask[/code] standing
 ## between it and the target (C18 — straight-line range alone let a predator "bite" through an
 ## impassable barrier like a species-only `MobBlocker` refuge wall).
@@ -4374,7 +4382,8 @@ static func debug_eat_gate_snapshot(
   }
   if body == null or eat_tgt.length_squared() < 1e-8:
     return out
-  out["eat_dist_to_ultimate"] = body.global_position.distance_to(eat_tgt)
+  ## Ground-plane (XZ) distance, the same metric `_is_within_eat_range` gates on.
+  out["eat_dist_to_ultimate"] = _MotorPlane.horizontal_distance(body.global_position, eat_tgt)
   out["eat_within_range"] = _is_within_eat_range(
     body, eat_tgt, motor_v3, 0.0, int(state.get("step_instance_id", 0))
   )

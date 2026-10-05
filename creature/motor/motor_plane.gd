@@ -310,8 +310,9 @@ static func _apply_terrain_scaled_invariant_airborne_ticks(
 ## Motor distance keys that are tuned as fixed world-meter contracts (action ranges, arrival
 ## gates) rather than perception/exploration distances — these must NOT scale with playfield
 ## size, or they shrink below what's survivable against live, evasive targets on small
-## playfields. [code]eat_action_max_distance[/code] is the fixed 5m EAT capture range (bug:
-## previously scaled down to ~0.5m on small duel arenas, making prey capture nearly impossible);
+## playfields. [code]eat_action_max_distance[/code] is the legacy fixed 5m EAT capture range (kept
+## as the [code]arrival_tolerance[/code] fallback only; the EAT gate itself is now the size-scaled
+## [code]MotorPlanner.eat_range[/code], 2026-10-05, and is not playfield-scaled);
 ## [code]arrival_tolerance[/code] is the shared arrival-gate fallback for the same range family.
 const _UNSCALED_MOTOR_DISTANCE_KEYS := [
   "eat_action_max_distance",
