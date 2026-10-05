@@ -1,13 +1,14 @@
 extends Node3D
 ## Debug scene: shows rabbit, fox and wolf mounted exactly as the game mounts them, each heading
 ## world -Z (the game's current forward), so a human can confirm which way each model's nose points.
-## Run: open res://tools/facing_check_3d.tscn and press F5 ("Run Current Scene").
+## Run: open res://tools/facing_check_3d.tscn and press F6 ("Run Current Scene").
 ## Mount path reused: archetype body_scene -> CreatureRoot3D deferred _mount_visual_from_definition
 ## (species mesh file / wolf 3x wrapper / capsule fit) -> CreatureKinematicBody3D._sync_visual_facing
 ## (yaw_from_horizontal_dir(last_move_direction) + template visual_yaw_offset_rad).
 ## No archetype .tres exists for the fox, so it is a duplicate of the wolf archetype with fox
 ## species_id / pack root (carnivore template, same as the game would use).
-## Camera keys: 1 = front 3/4 view, 2 = side view (from -X), 3 = top-down.
+## Camera keys: 1 = front 3/4 view, 2 = side view (from -X), 3 = top-down, 4/5/6 = rabbit/fox/wolf close-up.
+## Run with F6 (Run Current Scene); F5 runs the project's main scene instead.
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _HEADING := Vector3(0.0, 0.0, -1.0)
@@ -52,6 +53,12 @@ func _unhandled_input(event: InputEvent) -> void:
         _set_camera_view(2)
       KEY_3:
         _set_camera_view(3)
+      KEY_4:
+        _set_camera_view(4)
+      KEY_5:
+        _set_camera_view(5)
+      KEY_6:
+        _set_camera_view(6)
 
 
 ## Instantiates the definition's body_scene exactly like main_3d does and records it.
@@ -71,6 +78,7 @@ func _finalize_creatures() -> void:
     var root: Node3D = e["root"]
     var def: CreatureDefinition = e["def"]
     var body := root.get_node("Body") as CharacterBody3D
+    body.visible = true  # Body is hidden until a duel round starts; show it here.
     body.set_physics_process(false)
     body.set_process(false)
     body.velocity = Vector3.ZERO
@@ -229,7 +237,7 @@ func _build_hud() -> void:
   var layer := CanvasLayer.new()
   add_child(layer)
   var hint := Label.new()
-  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nCamera: 1 front 3/4, 2 side, 3 top-down"
+  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nCamera: 1 front 3/4, 2 side, 3 top-down, 4 rabbit close-up, 5 fox close-up, 6 wolf close-up"
   hint.position = Vector2(12, 8)
   hint.add_theme_font_size_override("font_size", 20)
   hint.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -243,14 +251,26 @@ func _build_hud() -> void:
   layer.add_child(_report)
 
 
-## Positions the camera for preset [param which] (1 front 3/4, 2 side, 3 top-down).
+## Positions the camera for preset [param which] (1 front 3/4, 2 side, 3 top-down, 4/5/6 close-up of
+## rabbit / fox / wolf from the front-left, so the nose and the -Z arrow are both visible).
 func _set_camera_view(which: int) -> void:
   var target := Vector3(5.0, 0.0, -5.0)
-  var pos := Vector3(5.0, 60.0, -100.0)
+  var pos := Vector3(5.0, 40.0, -70.0)
   match which:
     2:
       pos = Vector3(-120.0, 45.0, -5.0)
     3:
       pos = Vector3(5.0, 150.0, -4.9)
+    4, 5, 6:
+      var center := Vector3(-45.0, 1.0, 0.0)
+      var dist := 9.0
+      if which == 5:
+        center = Vector3(0.0, 1.0, 0.0)
+        dist = 12.0
+      elif which == 6:
+        center = Vector3(55.0, 3.0, 0.0)
+        dist = 28.0
+      target = center
+      pos = center + Vector3(-0.6, 0.55, -1.0).normalized() * dist
   _camera.global_position = pos
   _camera.look_at(target, Vector3.UP)
