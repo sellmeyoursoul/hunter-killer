@@ -35,7 +35,11 @@ func _ready() -> void:
   _spawn(rabbit, Vector3(-45.0, 0.0, 0.0))
   _spawn(fox, Vector3(0.0, 0.0, 0.0))
   _spawn(wolf, Vector3(55.0, 0.0, 0.0))
-  _set_camera_view(1)
+  var first_view := 1
+  for a in OS.get_cmdline_user_args():
+    if a.begins_with("view="):
+      first_view = a.substr(5).to_int()
+  _set_camera_view(first_view)
   ## Mount is deferred inside CreatureRoot3D; wait, then face and annotate.
   await get_tree().process_frame
   await get_tree().process_frame
@@ -59,6 +63,12 @@ func _unhandled_input(event: InputEvent) -> void:
         _set_camera_view(5)
       KEY_6:
         _set_camera_view(6)
+      KEY_7:
+        _set_camera_view(7)
+      KEY_8:
+        _set_camera_view(8)
+      KEY_9:
+        _set_camera_view(9)
 
 
 ## Instantiates the definition's body_scene exactly like main_3d does and records it.
@@ -237,7 +247,7 @@ func _build_hud() -> void:
   var layer := CanvasLayer.new()
   add_child(layer)
   var hint := Label.new()
-  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nCamera: 1 front 3/4, 2 side, 3 top-down, 4 rabbit close-up, 5 fox close-up, 6 wolf close-up"
+  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nCamera: 1 front 3/4, 2 side, 3 top-down, 4 rabbit close-up, 5 fox close-up, 6 wolf close-up, 7/8/9 top-down rabbit/fox/wolf"
   hint.position = Vector2(12, 8)
   hint.add_theme_font_size_override("font_size", 20)
   hint.add_theme_color_override("font_outline_color", Color.BLACK)
@@ -261,6 +271,17 @@ func _set_camera_view(which: int) -> void:
       pos = Vector3(-120.0, 45.0, -5.0)
     3:
       pos = Vector3(5.0, 150.0, -4.9)
+    7, 8, 9:
+      var tc := Vector3(-45.0, 0.0, 0.0)
+      var th := 12.0
+      if which == 8:
+        tc = Vector3(0.0, 0.0, 0.0)
+        th = 16.0
+      elif which == 9:
+        tc = Vector3(55.0, 0.0, 0.0)
+        th = 40.0
+      target = tc
+      pos = tc + Vector3(0.0, th, 0.01)
     4, 5, 6:
       var center := Vector3(-45.0, 1.0, 0.0)
       var dist := 9.0
