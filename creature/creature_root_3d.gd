@@ -13,7 +13,7 @@ var _motor_stack: RefCounted
 const _SPECIES_MESH_FILE: Dictionary = {
   &"rabbit": "rabbit.blend",
   &"fox": "fox.blend",
-  &"wolf": "wolf_3d.tscn",
+  &"wolf": "wolf.blend",
 }
 
 @export var definition: Variant

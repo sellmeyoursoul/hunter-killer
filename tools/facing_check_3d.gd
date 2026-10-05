@@ -3,10 +3,10 @@ extends Node3D
 ## a selectable world heading (game forward = +Z, B22; default heading here is -Z), so a human can confirm which way each model's nose points.
 ## Run: open res://tools/facing_check_3d.tscn and press F6 ("Run Current Scene").
 ## Mount path reused: archetype body_scene -> CreatureRoot3D deferred _mount_visual_from_definition
-## (species mesh file / wolf 3x wrapper / capsule fit) -> CreatureKinematicBody3D._sync_visual_facing
+## (species mesh file / placeholder per-axis fit / capsule shape) -> CreatureKinematicBody3D._sync_visual_facing
 ## (yaw_from_horizontal_dir(last_move_direction) + template visual_yaw_offset_rad).
-## No archetype .tres exists for the fox, so it is a duplicate of the wolf archetype with fox
-## species_id / pack root (carnivore template, same as the game would use).
+## All three creatures load their real archetypes (rabbit / fox / wolf `*_archetype.tres`, authored
+## body dimensions, carnivore template for fox and wolf), same as the game would use.
 ## Camera keys: 1 = front 3/4 view, 2 = side view (from -X), 3 = top-down, 4/5/6 = rabbit/fox/wolf close-up.
 ## Run with F6 (Run Current Scene); F5 runs the project's main scene instead.
 
@@ -32,11 +32,7 @@ func _ready() -> void:
   _build_hud()
   var rabbit := load("res://creature/species/rabbit_archetype.tres") as CreatureDefinition
   var wolf := load("res://creature/species/wolf_archetype.tres") as CreatureDefinition
-  var fox: CreatureDefinition = wolf.duplicate() as CreatureDefinition
-  fox.species_id = &"fox"
-  fox.display_name = "Fox"
-  fox.asset_pack_root = "res://assets/creatures/fox"
-  fox.creature_size = 3.0
+  var fox := load("res://creature/species/fox_archetype.tres") as CreatureDefinition
   _spawn(rabbit, Vector3(-45.0, 0.0, 0.0))
   _spawn(fox, Vector3(0.0, 0.0, 0.0))
   _spawn(wolf, Vector3(55.0, 0.0, 0.0))

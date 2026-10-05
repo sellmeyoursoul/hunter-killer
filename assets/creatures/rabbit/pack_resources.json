@@ -1,5 +1,6 @@
 {
-  "notes": "Herbivore duel pack — flee from threat + forage; hybrid awareness (rear disk + forward cone extension). Phase 3 playtest: 2× awareness vs ship baseline (revert Phase 7). Phase 3 refinement: occluded-in-zone plants write goal belief without live seek.",
+  "notes": "Herbivore duel pack — flee from threat + forage; hybrid awareness (rear disk + forward cone extension). Phase 3 playtest: 2× awareness vs ship baseline (revert Phase 7). Phase 3 refinement: occluded-in-zone plants write goal belief without live seek. Placeholder model (B13/B19): per-axis fit + re-centre at mount until a production model replaces it.",
+  "placeholder_model": true,
   "creature_motor": {
     "plant_awareness_requires_los": false,
     "motor_intent_cost_chaos": 2.8,

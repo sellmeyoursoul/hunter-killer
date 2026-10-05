@@ -49,8 +49,8 @@
 | Parse mode | `PARSED_GEOMETRY_STATIC_COLLIDERS`, `geometry_collision_mask = 1` |
 | Source | `SOURCE_GEOMETRY_GROUPS_WITH_CHILDREN`, group `playfield_navmesh_source` on `_playfield_root` (terrain + `Obstacles3D`) and `FoodPlants` |
 | Voxel | `cell_size` 0.25, `cell_height` 0.15 |
-| `agent_radius` | largest `collision_capsule_radius` in the spawn plan, rounded up to a voxel: wolf 7.03 → **7.25 m** |
-| `agent_height` | 2.0 requested → **2.10 m** (the wolf capsule is ~15 m tall; its centre is ~7.7 m up) |
+| `agent_radius` | largest body radius in the spawn plan (`main_3d.gd` `_duel_max_capsule_radius()`: authored `body_width / 2 × (1 + width_margin)`), rounded up to a voxel: wolf **0.715 → 0.75 m** since CREATURE_BODY_DIMENSIONS Phase 2 (2026-10-05). The 7.03 → 7.25 m figures in §3.1 and below are the pre-Phase-2 values (evidence, historical). |
+| `agent_height` | 2.0 requested → **2.10 m** (the wolf capsule is now 3.0 m tall with its centre 1.5 m up, was ~15 m / ~7.7 m pre-Phase 2) |
 | `agent_max_climb` | 0.25 requested → **0.15 m** (`floorf(0.25/0.15 + 0.001) × 0.15`, snapped **down** to `cell_height`), one value for every creature (`main_3d.gd` `_bake_playfield_navmesh` ~lines 605–644, caller-verified 2026-10-01) |
 | `agent_max_slope` | **Not set** in `_bake_playfield_navmesh` (caller-verified 2026-10-01), so the bake uses the `NavigationMesh` engine default, believed **45°** (**verify**). |
 | Physics slope (`floor_max_angle`) | **50°** (`0.8726646259972418` rad) in both `creature/templates/creature_herbivore_kinematic_3d.tscn` (line 22) and `creature_carnivore_kinematic_3d.tscn` (line 20); `floor_snap_length` 0.35 (caller-verified 2026-10-01). |
@@ -101,6 +101,8 @@
 ## 3. Evidence: observed failures
 
 ### 3.1 Erosion (the shared mesh is eroded for the wolf, so small creatures pay)
+
+> Figures in this section (7.03 / 7.25 m, ~15 m wolf capsule) are the **pre-Phase-2 observations**; the wolf radius is now 0.715 m (erosion 0.75 m). See [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.8 "Phase 2 landed state".
 
 - `agent_radius` 7.25 m applies to **every** creature's queries.
 - The rabbit loses gaps and edge strips it physically fits through.

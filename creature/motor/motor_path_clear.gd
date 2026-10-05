@@ -12,7 +12,8 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const MIN_HOP_DISTANCE := 2.0
 ## How far above / below a body's position [method nav_query_origin] searches for the navmesh
 ## surface under it. Above: the navmesh can sit slightly above a short body's origin. Below: must
-## exceed any creature's centre height (wolf ~7.7 m) plus terrain slop.
+## exceed any creature's origin height above the surface plus terrain slop (authored-dimension bodies
+## have their origin at the feet, so this is generous; legacy bodies sit at the capsule centre).
 const NAV_QUERY_ABOVE := 1.0
 const NAV_QUERY_BELOW := 60.0
 

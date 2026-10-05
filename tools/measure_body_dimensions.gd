@@ -13,14 +13,13 @@ extends SceneTree
 
 const _SPEC_PATH := "res://tools/body_dimension_spec.json"
 const _MeshWorldAabb3D := preload("res://environment/mesh_world_aabb_3d.gd")
+const _PackRes := preload("res://pack_resource_resolver.gd")
 
-## TODO: replace with archetype reads (body_length/width/height) once Phase 1/2 land.
-## Design-intent dimensions in game units (B20). Axes: L = Z extent, W = X extent, H = Y extent.
-## "placeholder" mirrors the future pack_resources.json flag (B19); TODO read it from the pack.
-const _DESIGN_INTENT := {
-  "rabbit": {"length": 1.7, "width": 0.7, "height": 1.4, "placeholder": true},
-  "fox": {"length": 2.0, "width": 0.4, "height": 0.9, "placeholder": true},
-  "wolf": {"length": 6.0, "width": 1.3, "height": 3.0, "placeholder": true},
+## Species key -> archetype resource carrying the authored design-intent dimensions (B20).
+const _ARCHETYPE_PATHS := {
+  "rabbit": "res://creature/species/rabbit_archetype.tres",
+  "fox": "res://creature/species/fox_archetype.tres",
+  "wolf": "res://creature/species/wolf_archetype.tres",
 }
 
 ## Shipped models: label, species key, scene path.
@@ -28,7 +27,6 @@ const _SHIPPED: Array = [
   ["rabbit raw", "rabbit", "res://assets/creatures/rabbit/rabbit.blend"],
   ["fox raw", "fox", "res://assets/creatures/fox/fox.blend"],
   ["wolf raw", "wolf", "res://assets/creatures/wolf/wolf.blend"],
-  ["wolf as-mounted (3x wrapper)", "wolf", "res://assets/creatures/wolf/wolf_3d.tscn"],
 ]
 
 var _spec: Dictionary = {}
@@ -61,7 +59,7 @@ func _load_spec() -> Dictionary:
 
 
 ## Measures one model and prints its report block.
-## [param label] display name; [param species] key into _DESIGN_INTENT ("" = no comparison);
+## [param label] display name; [param species] key into _ARCHETYPE_PATHS ("" = no comparison);
 ## [param path] resource path of the model scene.
 func _report(label: String, species: String, path: String) -> void:
   print("")
@@ -86,15 +84,35 @@ func _report(label: String, species: String, path: String) -> void:
   print("  raw  L(z)=%.3f  W(x)=%.3f  H(y)=%.3f" % [length, width, height])
   _report_pivot(mn, mx, length)
   _report_forward(m, size)
-  if _DESIGN_INTENT.has(species):
+  var intent := design_intent(species)
+  if not intent.is_empty():
     if width > length:
       print("  design comparison below assumes a 90 deg yaw fix: L := X extent %.3f, W := Z extent %.3f" % [width, length])
-      _report_design(_DESIGN_INTENT[species], width, length, height)
+      _report_design(intent, width, length, height)
     else:
-      _report_design(_DESIGN_INTENT[species], length, width, height)
+      _report_design(intent, length, width, height)
   else:
     print("  design intent: none (model-first proposal) body_length=%.3f body_width=%.3f body_height=%.3f" % [length, width, height])
   root.free()
+
+
+## Design-intent dimensions for [param species], read from its archetype (authored body_length /
+## body_width / body_height, B20) and the pack's placeholder flag (B19, pack_resources.json).
+## Returns {length, width, height, placeholder}, or an empty Dictionary for an unknown species, a
+## missing archetype, or an archetype without all three authored dimensions.
+func design_intent(species: String) -> Dictionary:
+  if not _ARCHETYPE_PATHS.has(species):
+    return {}
+  var def := load(String(_ARCHETYPE_PATHS[species])) as Resource
+  if def == null:
+    return {}
+  var l := float(def.get("body_length"))
+  var w := float(def.get("body_width"))
+  var h := float(def.get("body_height"))
+  if l <= 0.0 or w <= 0.0 or h <= 0.0:
+    return {}
+  var manifest: Dictionary = _PackRes.load_pack_root(String(def.get("asset_pack_root")))
+  return {"length": l, "width": w, "height": h, "placeholder": manifest.get("placeholder_model", false) == true}
 
 
 ## Computes the rest-pose AABB (model space), plus the vertex centroid, for [param root].

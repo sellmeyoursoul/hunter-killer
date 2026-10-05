@@ -120,6 +120,40 @@ func _spawn_carnivore_body(main: Node3D, pos: Vector3) -> CharacterBody3D:
   body.global_position = pos
   return body
 
+## Test fixture: scales a mounted wolf up by [param factor] through the runtime size path
+## ([code]apply_effective_creature_size[/code], decision 5) so it stays a clearly "oversized" body next
+## to a rabbit. The authored wolf (body-dimensions B20: r 0.715, h 3.0) is no longer big enough on its
+## own for the squeeze / ghost-layer fit tests that need a capsule the obstacle gaps cannot admit.
+## Must run after the deferred definition mount (one physics frame after spawn).
+func _enlarge_wolf_fixture(wolf: CharacterBody3D, factor: float) -> void:
+  wolf.apply_effective_creature_size(wolf.creature_size * factor)
+
+## Like [method _spawn_carnivore_body] but with a caller-built [param definition] (programmatic
+## fixture, e.g. a duplicated archetype with different authored dimensions).
+func _spawn_carnivore_body_with_definition(
+  main: Node3D, pos: Vector3, definition: Resource
+) -> CharacterBody3D:
+  var creature_root := _instantiate_carnivore_root()
+  creature_root.set("definition", definition)
+  main.add_child(creature_root)
+  var body := creature_root.get_node("Body") as CharacterBody3D
+  _setup_carnivore_body(body)
+  body.global_position = pos
+  return body
+
+## Programmatic fixture: the wolf archetype duplicated with authored dimensions that reproduce the
+## pre-Phase-2 oversized wolf capsule (W 12.8 -> r 7.04, H 15.3, L 15.0). [code]reach_override[/code]
+## 6.0 keeps the eat gate (5 + 6 = 11 m) independent of the large length. Used by the wolf-sized-body
+## planner regressions (silent stall, collapsed route scan) whose bug signature needs a body wider
+## than navmesh portal clearance, which the authored wolf (r 0.715) is not.
+func _tall_wolf_definition() -> Resource:
+  var tall_def: Resource = (_WolfArchetypeRes as Resource).duplicate()
+  tall_def.set("body_width", 12.8)
+  tall_def.set("body_height", 15.3)
+  tall_def.set("body_length", 15.0)
+  tall_def.set("reach_override", 6.0)
+  return tall_def
+
 func _spawn_food_bush(main: Node3D, pos: Vector3) -> Node3D:
   var scene: PackedScene = load(_SolidShrub3DScenePath) as PackedScene
   _assert(scene != null, "solid_shrub_3d loads")
@@ -751,40 +785,45 @@ func _test_creature_3d_predation_contact() -> void:
   floor_body.queue_free()
 
 
-## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18): `eat_action_max_distance` is a
-## fixed 5m world-meter constant, measured center-to-center — fine while every predator's own body
-## was small relative to it, but a wolf's own live capsule radius (~7m post-decision-14 scaling)
-## now exceeds that flat constant outright. Live repro: 3 wolves visibly overlapping a rabbit,
-## never eating it. Fixed by adding each body's own live capsule radius as a reach bonus
-## (`_eat_reach_radius_bonus`) so the gate means "reach beyond simple contact," not "reach from body
-## center." This test proves both halves: the old flat gate really would have rejected a
-## wolf-vs-rabbit contact distance, and the fixed gate accepts it.
+## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18) + body-dimensions B27 (2026-10-05):
+## `eat_action_max_distance` is a fixed 5m world-meter constant, measured center-to-center, so a
+## large predator needs its own size added or it never reaches a prey it visibly overlaps. The gate
+## is `eat_action_max_distance + eater get_reach_extent() + target get_body_radius()`. With the
+## authored dimensions (Phase 2) a wolf's reach is 4.5 and a rabbit's body radius 0.385, so the
+## gate is ~9.9: a rabbit 7 m away is out of the old flat range but inside the scaled one, and a
+## rabbit just past the scaled gate is still rejected.
 func _test_eat_range_scales_with_predator_body_size() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var wolf := _spawn_carnivore_body(main, Vector3.ZERO)
   var rabbit := _spawn_herbivore_body(main, Vector3.ZERO)
   await physics_frame
-  var wolf_r: float = wolf.get_collision_capsule_radius()
-  var rabbit_r: float = rabbit.get_collision_capsule_radius()
-  # Capsules just touching — the closest a wolf and rabbit body visually "overlap" before this.
-  rabbit.global_position = Vector3(wolf_r + rabbit_r - 0.1, 1.0, 0.0)
-  wolf.global_position = Vector3.ZERO
+  var wolf_reach: float = wolf.get_reach_extent()
+  var rabbit_r: float = rabbit.get_body_radius()
   var motor_v3 := _motor_v3_test_params()
   var flat_max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
-  var contact_dist := wolf.global_position.distance_to(rabbit.global_position)
+  var scaled_gate := flat_max_dist + wolf_reach + rabbit_r
+  wolf.global_position = Vector3.ZERO
+  var near_dist := flat_max_dist + 2.0
+  rabbit.global_position = Vector3(near_dist, 0.0, 0.0)
   _assert(
-    contact_dist > flat_max_dist,
-    "sanity check: wolf-vs-rabbit capsule contact distance exceeds the old flat eat range (%.2f > %.2f)"
-    % [contact_dist, flat_max_dist],
+    wolf_reach > 2.0 and near_dist < scaled_gate,
+    "sanity check: wolf reach (%.2f) pushes the gate (%.2f) past the old flat range plus 2 m" % [wolf_reach, scaled_gate],
   )
+  var flat_within: bool = wolf.global_position.distance_to(rabbit.global_position) <= flat_max_dist
+  _assert(not flat_within, "sanity check: the rabbit at %.2f m is outside the old flat eat range (%.2f)" % [near_dist, flat_max_dist])
   var within_range: bool = (_MotorPlanner as GDScript).call(
     "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
   )
   _assert(
     within_range,
-    "a wolf-scale predator's own body size extends its eat range past simple flat contact distance",
+    "a wolf-scale predator's own reach extends its eat range past the flat constant",
   )
+  rabbit.global_position = Vector3(scaled_gate + 0.5, 0.0, 0.0)
+  var beyond: bool = (_MotorPlanner as GDScript).call(
+    "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
+  )
+  _assert(not beyond, "a rabbit just past flat + wolf reach + rabbit radius is still out of eat range")
   main.queue_free()
 
 
@@ -960,75 +999,85 @@ func _test_creature_pack_motor_overlays() -> void:
   _assert(str(rabbit_def.get("display_name")) == "Rabbit", "rabbit display_name for HUD")
   _assert(str(wolf_def.get("display_name")) == "Wolf", "wolf display_name for HUD")
 
-## PHYSICS_SQUEEZE.md §3 decision 14 / §9 slice 4 (2026-09-18): the wolf archetype needs a genuine
-## size gap over fox to be a usable squeeze-mechanic test subject — model geometry and declared
-## profile both scaled ~3x. `wolf_3d.tscn` wraps `wolf.blend` (still the placeholder mesh shared
-## with fox at the raw geometry level) in a `Transform3D` scaled 3x, so the mesh-AABB-derived live
-## capsule radius (`apply_visual_fit`, legacy mode) comes out ~3x fox's, not just the
-## declared `.tres` fallback fields used when no visual is mounted.
+## PHYSICS_SQUEEZE.md §3 decision 14 / §9 slice 4 (2026-09-18) + body-dimensions Phase 2 (B13 / B20):
+## the wolf archetype needs a genuine size gap over fox to be a usable squeeze-mechanic test subject.
+## Originally a 3x wrapper scene around `wolf.blend` provided it; the wrapper is gone, so the gap now comes from
+## the authored dimensions (wolf 6.0 / 1.3 / 3.0 vs fox 2.0 / 0.4 / 0.9, L / W / H), asserted on the
+## archetypes and again on the live bodies (radius, height, reach, creature_size).
 func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
   var wolf_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
-  _assert(wolf_def != null, "wolf archetype loads")
+  var fox_def: Resource = load("res://creature/species/fox_archetype.tres") as Resource
+  _assert(wolf_def != null and fox_def != null, "wolf and fox archetypes load")
+  if wolf_def == null or fox_def == null:
+    return
+  for axis in ["body_length", "body_width", "body_height"]:
+    var ratio := float(wolf_def.get(axis)) / maxf(float(fox_def.get(axis)), 1e-6)
+    _assert(
+      ratio > 2.9 and ratio < 3.5,
+      "wolf %s is ~3x fox's (got %.3f)" % [axis, ratio],
+    )
+  var main := Node3D.new()
+  root.add_child(main)
+  var wolf := _spawn_carnivore_body_with_definition(main, Vector3.ZERO, wolf_def)
+  var fox := _spawn_carnivore_body_with_definition(main, Vector3(30.0, 0.0, 0.0), fox_def)
+  await process_frame
   _assert(
-    float(wolf_def.get("creature_size")) > 2.5 * 2.0,
-    "wolf creature_size is roughly 3x fox's 2.0",
+    is_equal_approx(wolf.creature_size / fox.creature_size, 3.0),
+    "wolf creature_size is exactly 3x fox's (%.2f vs %.2f)" % [wolf.creature_size, fox.creature_size],
   )
+  var radius_ratio: float = wolf.get_body_radius() / fox.get_body_radius()
+  _assert(radius_ratio > 2.9 and radius_ratio < 3.5, "wolf live body radius is ~3x fox's (got %.3f)" % radius_ratio)
   _assert(
-    float(wolf_def.get("collision_capsule_radius")) > 2.5 * 0.7,
-    "wolf declared capsule_radius is roughly 3x fox's declared 0.7",
+    is_equal_approx(wolf.get_reach_extent() / fox.get_reach_extent(), 3.0),
+    "wolf live reach extent is 3x fox's (both are 0.75 x length)",
   )
-  # Orphan (never-in-tree) instances must be freed explicitly — these two were leaking a full
-  # visual scene each (mesh + the .blend's bundled preview Camera3D/OmniLight3D) at exit.
-  var fox_visual := (load("res://assets/creatures/fox/fox.blend") as PackedScene).instantiate()
-  var wolf_visual := (load("res://assets/creatures/wolf/wolf_3d.tscn") as PackedScene).instantiate()
-  var fox_aabb := _StaticObstacleCollision.world_mesh_aabb(fox_visual)
-  var wolf_aabb := _StaticObstacleCollision.world_mesh_aabb(wolf_visual)
-  fox_visual.free()
-  wolf_visual.free()
-  _assert(
-    bool(fox_aabb.get("valid", false)) and bool(wolf_aabb.get("valid", false)),
-    "fox and wolf visual meshes produce valid AABBs",
-  )
-  var ratio := float(wolf_aabb.get("xz_radius", 0.0)) / maxf(float(fox_aabb.get("xz_radius", 1.0)), 1e-6)
-  _assert(
-    ratio > 2.9 and ratio < 3.1,
-    "wolf_3d.tscn's mesh footprint is ~3x fox's raw mesh footprint (got %.3f)" % ratio,
-  )
-  # PHYSICS_SQUEEZE.md §3 decision 25 follow-up (2026-09-18): `wolf.blend`'s own mesh pivot isn't
-  # at its visual center (raw local AABB center ~(0.8, 0.95, 4.76), not origin) — the same class of
-  # off-center-pivot defect found on `open_shrub_3d` (decision 25 Tier 2's cluster-tuning fix), just
-  # smaller in absolute terms at fox scale. `wolf_3d.tscn`'s 3x scale wrapper tripled that offset to
-  # ~14 units in Z, which the legacy-mode `apply_visual_fit()` then read as the real capsule's
-  # center — badly decoupling the body's actual collision shape from `global_position` and driving
-  # a live spawn-placement bug (wolves spawning off-floor and free-falling under gravity for dozens
-  # of ticks, confirmed via manual playtest). Fixed by compensating the wrapper's own translation so
-  # the *scaled* mesh's center lands back at the wrapper's own origin, same fix shape as the shrub.
-  var wolf_center: Vector3 = wolf_aabb.get("center", Vector3.ONE)
-  _assert(
-    wolf_center.length() < 0.1,
-    "wolf_3d.tscn's scaled mesh is centered on its own node origin, not offset by the raw mesh's off-center pivot (got %s)"
-    % str(wolf_center),
-  )
+  var height_ratio: float = wolf.get_collision_capsule_height() / fox.get_collision_capsule_height()
+  _assert(height_ratio > 2.9 and height_ratio < 3.5, "wolf live capsule height is ~3x fox's (got %.3f)" % height_ratio)
+  main.queue_free()
+  await process_frame
 
 
-## End-to-end sibling of the AABB-centering check above: spawns a real wolf through the full
-## `CreatureRoot3D` mount pipeline and confirms `apply_visual_fit()`'s resulting
-## `CollisionShape3D.position` — the thing that actually decoupled the wolf's real physics extent
-## from `global_position` and drove the live spawn-placement/free-fall bug — stays near zero, not
-## the ~14-unit Z offset the uncompensated wrapper produced.
+## End-to-end sibling of the archetype check above: a real wolf through the full `CreatureRoot3D` mount
+## pipeline. The wolf mounts `wolf.blend` directly (the 3x wrapper scene and its pivot compensation are
+## gone; `placeholder_model: true` makes `apply_visual_fit` stretch per-axis and re-centre). The
+## model's raw pivot is off-centre, so this pins the placeholder contract: Visual footprint XZ-centred
+## on the body origin, bottom at Y = 0, body origin at the feet, and the real CollisionShape3D not
+## offset from the origin in XZ (its centre sits half the capsule height above the feet) -- the
+## property whose violation once drove a wolf spawn-placement / free-fall bug.
 func _test_wolf_body_collision_shape_not_offset_from_origin() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var wolf := _spawn_carnivore_body(main, Vector3.ZERO)
-  await physics_frame
+  await process_frame
+  var visual := wolf.get_node_or_null("Visual") as Node3D
+  _assert(visual != null, "wolf mounts a Visual")
+  _assert(
+    visual != null and visual.scene_file_path.ends_with("wolf.blend"),
+    "wolf Visual is mounted straight from wolf.blend (no wrapper scene)",
+  )
   var col := wolf.get_node_or_null("CollisionShape3D") as CollisionShape3D
   _assert(col != null, "wolf body has a CollisionShape3D")
   if col != null:
+    var cap := col.shape as CapsuleShape3D
+    _assert(cap != null, "wolf body collision shape is a capsule")
     _assert(
-      col.position.length() < 0.5,
-      "wolf's real CollisionShape3D sits near the body's own origin, not offset by the mesh's pivot (got %s)"
-      % str(col.position),
+      Vector2(col.position.x, col.position.z).length() < 0.01,
+      "wolf's real CollisionShape3D is not offset from the body origin in XZ (got %s)" % str(col.position),
     )
+    if cap != null:
+      _assert(
+        is_equal_approx(col.position.y, cap.height * 0.5),
+        "wolf capsule sits on the feet: shape centre is half its height above the body origin (got y=%.3f)" % col.position.y,
+      )
+  if visual != null:
+    var m := _CreatureMeshFootprint.mesh_aabb_in_body_local(wolf, visual)
+    _assert(bool(m.get("valid", false)), "wolf Visual yields a mesh AABB")
+    var piv: Vector3 = m.get("pivot_offset", Vector3.ONE)
+    _assert(
+      Vector2(piv.x, piv.z).length() < 0.05,
+      "wolf placeholder Visual footprint is XZ-centred on the body origin (offset %s)" % str(piv),
+    )
+    _assert(absf(piv.y) < 0.05, "wolf placeholder Visual bottom sits at Y = 0 (offset %s)" % str(piv))
   main.queue_free()
   await process_frame
 
@@ -2383,6 +2432,10 @@ func _test_motor_planner_select_action_shelter_arrival_is_wait() -> void:
   _shelter_test_blocker_ring(main, anchor, 2.0)
   await physics_frame
   var state := _MotorPlanner.new_state()
+  # goal_kind pre-bound so `_sync_step_objective` keeps the bound "precise" candidate instead of
+  # resetting it; without this the outcome hinged on whether the nomination ring probe happened to
+  # read enclosed for the occupant's capsule size (rabbit body shrank in body-dimensions Phase 2).
+  state["goal_kind"] = _GkReg.GK_SHELTER
   state["step_source"] = &"precise"
   state["shelter_candidate_instance_id"] = 424244
   state["shelter_candidate_anchor"] = anchor
@@ -6608,11 +6661,23 @@ func _test_motor_tall_capsule_live_pursuit_no_silent_stall_on_real_navmesh() -> 
   var prey_pos := Vector3(35.0, 1.0, 20.0)
   var start_xz := Vector3(20.5, 0.0, 1.0)
   _assert(await _await_nav_path(map_rid, start_xz, prey_pos), "tall-capsule pursuit fixture answers path queries")
-  var body := _spawn_carnivore_body(main, start_xz + Vector3(0.0, 9.0, 0.0))
+  # Body-dimensions Phase 2: the authored wolf (r 0.715, h 3.0) is far smaller than the 7 m-radius body
+  # this regression was found with, and the silent stall needs a body wider than the navmesh portal
+  # clearance. Built programmatically from the wolf archetype with dimensions that reproduce the old
+  # size class (W 12.8 -> r 7.04, H 15.3); `reach_override` (6.0, so the eat gate is 11 m, as before)
+  # keeps the gate independent of the scaled-up length while still exceeding the 7.7 m pinned origin
+  # height (the gate is a 3D distance, so a near-contact reach could never fire).
+  var tall_def := _tall_wolf_definition()
+  var body := _spawn_carnivore_body_with_definition(main, start_xz + Vector3(0.0, 0.5, 0.0), tall_def)
+  await physics_frame
   var cap_h := float(body.call("get_collision_capsule_height"))
   var cap_r := float(body.call("get_collision_capsule_radius"))
   _assert(cap_r > 6.0 and cap_h > 14.0, "fixture body is wolf-sized (r=%.2f h=%.2f)" % [cap_r, cap_h])
-  var resting_y := cap_h * 0.5
+  # The bug signature needs the body origin ~7.7 m above the floor (the elevated navmesh polygon B reads
+  # as closer in 3D than the floor under the body). Authored-dimension bodies keep their origin at the
+  # feet, so this fixture pins the origin at the old wolf's centre height explicitly; the planner logic
+  # under test (path-start snapping vs. a high origin) is the same for any body whose origin is that high.
+  var resting_y := 7.7
   body.global_position = start_xz + Vector3(0.0, resting_y, 0.0)
   body.current_calories = 2.0
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
@@ -6713,7 +6778,9 @@ func _test_motor_planner_pursuit_detour_gives_up_when_route_scan_collapses_onto_
   var creature_xz := Vector3.ZERO
   var prey_pos := Vector3(15.0, 1.0, 0.0)
   _assert(await _await_nav_path(map_rid, creature_xz, prey_pos), "flat explicit navmesh answers path queries")
-  var body := _spawn_carnivore_body(main, Vector3(0.0, 8.0, 0.0))
+  # Wolf-sized fixture body (r ~7). Authored bodies keep their origin at the feet, so the origin sits
+  # at the floor and the 15.3 m capsule rises from it through the 3 m ghost wall's height band.
+  var body := _spawn_carnivore_body_with_definition(main, Vector3(0.0, 0.2, 0.0), _tall_wolf_definition())
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   await physics_frame
   var detour_wp := Vector3(0.0, 0.0, 8.0)
@@ -9239,6 +9306,9 @@ func _test_locomotion_executor_move_blocked() -> void:
   wall.global_position = Vector3(1.2, 1.0, 0.0)
   var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.set_use_v3_action_calories(true)
+  # Fed explicitly: a body with 0 calories is starvation-defeated on its first action, which disables
+  # its collision shape and lets it walk straight through the wall (and the floor).
+  body.current_calories = 50.0
   body.last_move_direction = _MotorPlane.HORIZONTAL_RIGHT
   await physics_frame
   # Drive move ticks until the body presses the wall (planner emits MOVE repeatedly).
@@ -12061,14 +12131,19 @@ func _test_creature_spawn_floor_settle() -> void:
   _assert(herb_scene != null, "herbivore 3d scene loads for spawn grounding")
   var creature_root := herb_scene.instantiate() as Node3D
   var body := creature_root.get_node("Body") as CharacterBody3D
+  var cs := body.get_node("CollisionShape3D") as CollisionShape3D
+  var cap := cs.shape as CapsuleShape3D
+  _assert(cap != null, "unmounted herbivore template carries a capsule shape")
   var bottom_offset := _PlayfieldBounds3D.capsule_half_height_on_body(body)
+  # Godot 4 capsule height is TOTAL height (hemispheres included): the bottom sits height / 2 below the
+  # shape centre, and the shape node's own Y offset is subtracted (no extra `+ radius`).
   _assert(
-    is_equal_approx(bottom_offset, 0.95),
-    "capsule bottom offset includes cylindrical half-height and hemisphere radius",
+    is_equal_approx(bottom_offset, cap.height * 0.5 - cs.position.y),
+    "capsule bottom offset is half the total capsule height minus the shape node's Y offset",
   )
   var surface_y := 1.25
   var root_y := _PlayfieldBounds3D.root_global_y_for_surface(body, surface_y)
-  var capsule_bottom_y := root_y + body.position.y - bottom_offset
+  var capsule_bottom_y := root_y + body.position.y + cs.position.y - cap.height * 0.5
   _assert(
     is_equal_approx(capsule_bottom_y, surface_y),
     "root_global_y_for_surface places capsule bottom on walkable surface_y",
@@ -13554,8 +13629,8 @@ func _test_ghost_obstacle_query_open_shrub_size_gated() -> void:
   # drift out of sync with.
   var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
-  wolf.apply_effective_creature_size(5.0)
   await physics_frame
+  _enlarge_wolf_fixture(wolf, 5.0)
   var rabbit_radius: float = rabbit.get_collision_capsule_radius()
   var wolf_radius: float = wolf.get_collision_capsule_radius()
   _assert(
@@ -13680,8 +13755,8 @@ func _test_route_plausibility_scan_truncates_blocked_path() -> void:
 
   var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
-  wolf.apply_effective_creature_size(5.0)
   await physics_frame
+  _enlarge_wolf_fixture(wolf, 5.0)
   var rabbit_radius: float = rabbit.get_collision_capsule_radius()
   var rabbit_height: float = rabbit.get_collision_capsule_height()
   var wolf_radius: float = wolf.get_collision_capsule_radius()
@@ -13755,8 +13830,8 @@ func _test_route_plausibility_scan_detour_forcing_flag() -> void:
 
   var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
   var wolf := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
-  wolf.apply_effective_creature_size(5.0)
   await physics_frame
+  _enlarge_wolf_fixture(wolf, 5.0)
   var rabbit_radius: float = rabbit.get_collision_capsule_radius()
   var rabbit_height: float = rabbit.get_collision_capsule_height()
   var wolf_radius: float = wolf.get_collision_capsule_radius()
@@ -13820,8 +13895,8 @@ func _test_apply_route_plausibility_scan_truncates_probe() -> void:
   var xz_radius := float(aabb.get("xz_radius", 0.5))
 
   var wolf := _spawn_carnivore_body(main, mesh_center + Vector3(-10.0, 0.0, 0.0))
-  wolf.apply_effective_creature_size(5.0)
   await physics_frame
+  _enlarge_wolf_fixture(wolf, 5.0)
   var wolf_radius: float = wolf.get_collision_capsule_radius()
   var lateral := xz_radius + 0.3 * wolf_radius
   var full_path := PackedVector3Array([
@@ -14283,10 +14358,8 @@ func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
   )
   rabbit.call("_clamp_playfield_position")
   wolf.call("_clamp_playfield_position")
-  # Body-dimensions Phase 1: the eat gate is wolf reach extent (0.75 x length) + rabbit body radius, so the
-  # unmigrated (legacy 15.3 m tall) wolf is only 'in reach' when both bodies stand at the same height; the
-  # test is about the planar clamp, so level the rabbit's Y to the wolf's.
-  rabbit.global_position.y = wolf.global_position.y
+  # Phase 2: both bodies are authored-dimension (origin at the feet), so each stand height is 0 and the two
+  # are already level; the Phase 1 workaround that levelled the rabbit's Y to a 15.3 m legacy wolf is gone.
   var motor_v3 := _motor_v3_test_params()
   var in_reach := bool(
     (_MotorPlanner as GDScript).call(
@@ -14405,6 +14478,10 @@ func _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit() -> void:
   var rabbit := _spawn_herbivore_body(food_root, Vector3(1000.0, 1.0, 1000.0))
   var wolf := _spawn_carnivore_body(food_root, Vector3(1000.0, 1.0, -1000.0))
   await physics_frame
+  # Body-dimensions Phase 2: the authored wolf (r 0.715) is deliberately small enough to use these gaps
+  # (B20: the old 7 m wolf radius "mostly disappears"), so the "a big predator stays out" half of this
+  # test uses the enlarged fixture (r ~3.6), the size class the retuned ring was verified against.
+  _enlarge_wolf_fixture(wolf, 5.0)
   var rabbit_radius: float = rabbit.get_collision_capsule_radius()
   var rabbit_height: float = rabbit.get_collision_capsule_height()
   var wolf_radius: float = wolf.get_collision_capsule_radius()
@@ -14808,6 +14885,10 @@ func _run_body_dimensions_phase1_tests() -> void:
   await _test_body_dims_size_change_keeps_body_scale_one()
   await _test_body_dims_visual_fit_production_uniform_vs_placeholder_per_axis()
   await _test_body_dims_eat_gate_matches_b20_numbers()
+  await _test_body_dims_fox_archetype_authored_dimensions()
+  await _test_body_dims_shipped_packs_flag_placeholder_and_mount_per_axis()
+  await _test_body_dims_spawn_on_surface_places_feet_at_surface()
+  _test_body_dims_species_mesh_files_resolve_and_wolf_wrapper_gone()
 
 
 ## Builds a [CreatureDefinition] copy of [param base] with authored dimensions (length, width, height).
@@ -15164,3 +15245,165 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
   _assert(is_equal_approx(bonus_long, 4.5 + 0.385), "eat gate target term is body radius, independent of prey length (B27)")
   main.queue_free()
   await process_frame
+
+
+func _test_body_dims_fox_archetype_authored_dimensions() -> void:
+  # Arrange
+  var fox_def: Resource = load("res://creature/species/fox_archetype.tres") as Resource
+  _assert(fox_def != null, "fox archetype loads")
+  if fox_def == null:
+    return
+  _assert(str(fox_def.get("species_id")) == "fox", "fox archetype species_id is fox")
+  _assert(str(fox_def.get("asset_pack_root")) == "res://assets/creatures/fox", "fox archetype points at the fox pack")
+  _assert(
+    int(fox_def.get("feeding_mode")) == _CreatureDefinition.FeedingMode.CARNIVORE,
+    "fox archetype is a carnivore",
+  )
+  _assert(
+    is_equal_approx(float(fox_def.get("body_length")), 2.0)
+    and is_equal_approx(float(fox_def.get("body_width")), 0.4)
+    and is_equal_approx(float(fox_def.get("body_height")), 0.9),
+    "fox archetype carries the B20 authored dimensions 2.0 / 0.4 / 0.9 (L / W / H)",
+  )
+  var main := Node3D.new()
+  root.add_child(main)
+  # Act: the carnivore template with the real archetype.
+  var fox := _spawn_carnivore_body_with_definition(main, Vector3.ZERO, fox_def)
+  await process_frame
+  # Assert
+  var cap := (fox.get_node("CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+  _assert(is_equal_approx(fox.get_body_radius(), 0.22), "fox body radius = 0.4/2*1.10 = 0.22 (got %.4f)" % fox.get_body_radius())
+  _assert(is_equal_approx(cap.radius, 0.22), "fox capsule radius is 0.22")
+  _assert(is_equal_approx(fox.get_collision_capsule_height(), 0.9), "fox capsule height is 0.9 (no clamp: 2r = 0.44)")
+  _assert(is_equal_approx(cap.height, 0.9), "fox capsule shape height is 0.9")
+  _assert(is_equal_approx(fox.get_reach_extent(), 1.5), "fox reach = 0.75 x 2.0 = 1.5 (got %.4f)" % fox.get_reach_extent())
+  _assert(is_equal_approx(fox.creature_size, 2.0), "fox creature_size = max(L, W, H) = 2.0")
+  _assert(
+    fox.get_body_dimensions().is_equal_approx(Vector3(0.4, 0.9, 2.0)),
+    "fox live dimensions are (W, H, L) = (0.4, 0.9, 2.0)",
+  )
+  main.queue_free()
+  await process_frame
+
+
+## Spawns the shipped species [param species_index] (0 rabbit, 1 fox, 2 wolf) from its real archetype
+## at [param pos] and returns the body; fox and wolf use the carnivore template, rabbit the herbivore one.
+func _bd_spawn_shipped(main: Node3D, species_index: int, pos: Vector3) -> CharacterBody3D:
+  var paths := [
+    "res://creature/species/rabbit_archetype.tres",
+    "res://creature/species/fox_archetype.tres",
+    "res://creature/species/wolf_archetype.tres",
+  ]
+  var def: Resource = load(paths[species_index]) as Resource
+  if species_index == 0:
+    return _bd_spawn(main, def, false, pos)
+  return _spawn_carnivore_body_with_definition(main, pos, def)
+
+
+## The three shipped packs carry `placeholder_model: true` (B19) and, mounted through the real
+## `CreatureRoot3D` pipeline from their archetypes, each Visual is fitted per-axis so its rest-pose
+## AABB equals the authored (W, H, L) within 1% (B13).
+func _test_body_dims_shipped_packs_flag_placeholder_and_mount_per_axis() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var species_names := ["rabbit", "fox", "wolf"]
+  for i in 3:
+    var species: String = species_names[i]
+    var manifest: Dictionary = _PackRes.load_pack_root("res://assets/creatures/%s" % species)
+    _assert(
+      manifest.get("placeholder_model", false) == true,
+      "%s pack_resources.json flags placeholder_model: true (B19)" % species,
+    )
+    var body := _bd_spawn_shipped(main, i, Vector3(40.0 * float(i), 0.0, 0.0))
+    await process_frame
+    var visual := body.get_node_or_null("Visual") as Node3D
+    _assert(visual != null, "%s mounts a Visual from its pack model" % species)
+    if visual == null:
+      continue
+    var live: Vector3 = body.get_body_dimensions()
+    var m := _CreatureMeshFootprint.mesh_aabb_in_body_local(body, visual)
+    var fitted: Vector3 = m.get("size", Vector3.ZERO)
+    _assert(
+      absf(fitted.x / live.x - 1.0) < 0.01 and absf(fitted.y / live.y - 1.0) < 0.01 and absf(fitted.z / live.z - 1.0) < 0.01,
+      "%s placeholder Visual is fitted per-axis: AABB %s equals authored (W, H, L) %s within 1%%" % [species, str(fitted), str(live)],
+    )
+    var sv := visual.scale
+    _assert(
+      not (is_equal_approx(sv.x, sv.y) and is_equal_approx(sv.y, sv.z)),
+      "%s placeholder fit is non-uniform (per-axis), got %s" % [species, str(sv)],
+    )
+    _assert(body.scale.is_equal_approx(Vector3.ONE), "%s body scale stays ONE after the fit" % species)
+  main.queue_free()
+  await process_frame
+
+
+## Spawn grounding (Phase 2): with the shape node at `position.y = height / 2` the capsule bottom is
+## the body origin, so `root_global_y_for_surface` must put the capsule bottom -- and the re-centred
+## placeholder Visual's feet -- exactly on the surface, with no hover.
+func _test_body_dims_spawn_on_surface_places_feet_at_surface() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var species_names := ["rabbit", "fox", "wolf"]
+  var surface_y := 3.25
+  for i in 3:
+    var species: String = species_names[i]
+    var body := _bd_spawn_shipped(main, i, Vector3(40.0 * float(i), 0.0, 0.0))
+    await process_frame
+    var creature_root := body.get_parent() as Node3D
+    # Act
+    var root_y := _PlayfieldBounds3D.root_global_y_for_surface(body, surface_y)
+    creature_root.global_position.y = root_y
+    # Assert: capsule bottom on the surface.
+    var cs := body.get_node("CollisionShape3D") as CollisionShape3D
+    var cap := cs.shape as CapsuleShape3D
+    var bottom_y := body.global_position.y + cs.position.y - cap.height * 0.5
+    _assert(
+      is_equal_approx(bottom_y, surface_y),
+      "%s capsule bottom sits on the surface, no hover (bottom %.4f vs surface %.4f)" % [species, bottom_y, surface_y],
+    )
+    _assert(
+      is_equal_approx(_PlayfieldBounds3D.capsule_half_height_on_body(body), 0.0),
+      "%s authored-dimension capsule offset is 0 (shape rests on the body origin)" % species,
+    )
+    # Assert: the Visual's feet are on the surface too.
+    var vis_aabb := _StaticObstacleCollision.world_mesh_aabb(body.get_node("Visual"))
+    var vis_min: Vector3 = vis_aabb.get("min", Vector3.ZERO)
+    _assert(
+      absf(vis_min.y - surface_y) < 0.02,
+      "%s Visual bottom sits on the surface (%.4f vs %.4f)" % [species, vis_min.y, surface_y],
+    )
+  main.queue_free()
+  await process_frame
+
+
+func _test_body_dims_species_mesh_files_resolve_and_wolf_wrapper_gone() -> void:
+  var files: Dictionary = _CreatureRoot3D._SPECIES_MESH_FILE
+  _assert(str(files.get(&"wolf", "")) == "wolf.blend", "wolf species mesh file is wolf.blend (wrapper retired)")
+  for species in [&"rabbit", &"fox", &"wolf"]:
+    var path := "res://assets/creatures/%s/%s" % [species, str(files.get(species, ""))]
+    _assert(ResourceLoader.exists(path), "_SPECIES_MESH_FILE[%s] resolves to an existing file (%s)" % [species, path])
+  var retired := "wolf_3d" + ".tscn"
+  _assert(
+    not ResourceLoader.exists("res://assets/creatures/wolf/" + retired),
+    "the retired wolf wrapper scene is gone from the wolf pack",
+  )
+  var offenders: Array[String] = []
+  for dir_path in ["res://tests", "res://tools"]:
+    _collect_files_mentioning(dir_path, retired, offenders)
+  _assert(offenders.is_empty(), "no references to the retired wolf wrapper scene under tests/ or tools/ (found %s)" % str(offenders))
+
+
+## Recursively appends to [param out] every text file under [param dir_path] (gd / tscn / json / py /
+## md) whose contents contain [param needle].
+func _collect_files_mentioning(dir_path: String, needle: String, out: Array[String]) -> void:
+  var dir := DirAccess.open(dir_path)
+  if dir == null:
+    return
+  for sub in dir.get_directories():
+    _collect_files_mentioning("%s/%s" % [dir_path, sub], needle, out)
+  for f in dir.get_files():
+    if f.get_extension() not in ["gd", "tscn", "json", "py", "md"]:
+      continue
+    var path := "%s/%s" % [dir_path, f]
+    if FileAccess.get_file_as_string(path).contains(needle):
+      out.append(path)

@@ -1,4 +1,4 @@
-[gd_resource type="Resource" script_class="CreatureDefinition" format=3 uid="uid://vvq74xitj5v8"]
+[gd_resource type="Resource" script_class="CreatureDefinition" format=3]
 
 [ext_resource type="Script" uid="uid://nvhv7s3mwyv2" path="res://creature/definition/creature_definition.gd" id="1_def"]
 [ext_resource type="Script" uid="uid://bqvxaitbcnhhc" path="res://creature/definition/locomotion_profile.gd" id="2_loco"]
@@ -11,13 +11,13 @@ acceleration = 28.0
 
 [resource]
 script = ExtResource("1_def")
-species_id = &"wolf"
-display_name = "Wolf"
-asset_pack_root = "res://assets/creatures/wolf"
+species_id = &"fox"
+display_name = "Fox"
+asset_pack_root = "res://assets/creatures/fox"
 feeding_mode = 1
 caloric_needs = 120
-body_length = 6.0
-body_width = 1.3
-body_height = 3.0
+body_length = 2.0
+body_width = 0.4
+body_height = 0.9
 locomotion_profile = SubResource("sub_loco")
 body_scene = ExtResource("3_body_scene")

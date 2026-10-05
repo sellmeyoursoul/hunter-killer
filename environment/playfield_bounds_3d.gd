@@ -196,12 +196,17 @@ static func motor_position_from_world(world_pos: Vector3) -> Vector2:
   return _MotorPlane.from_vec3(world_pos)
 
 
-## Distance from [param body] origin to capsule bottom (hemisphere included) for duel spawn grounding.
+## Distance from [param body] origin down to the capsule bottom (hemisphere included) for duel spawn grounding.
+## [member CapsuleShape3D.height] is TOTAL height including both caps in Godot 4, so a capsule centred on the
+## shape node bottoms out [code]height / 2[/code] below the shape centre; the shape node's local Y offset
+## is then subtracted. Authored-dimensions bodies place the shape at [code]position.y = height / 2[/code]
+## (feet at body origin), giving 0; legacy centred capsules ([code]position.y = 0[/code]) give [code]height / 2[/code].
+## Assumes the shape node has no rotation/scale. Falls back to 0.95 when no capsule shape is found.
 static func capsule_half_height_on_body(body: CharacterBody3D) -> float:
   var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs != null and cs.shape is CapsuleShape3D:
     var cap := cs.shape as CapsuleShape3D
-    return cap.height * 0.5 + cap.radius
+    return cap.height * 0.5 - cs.position.y
   return 0.95
 
 
