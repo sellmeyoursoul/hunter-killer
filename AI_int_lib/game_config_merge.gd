@@ -544,6 +544,10 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "threat_awareness_hysteresis_ticks": 3,
     ## EAT contact range in world meters to ultimate (not nav [code]step_goal[/code]).
     "eat_action_max_distance": 5.0,
+    ## Body-dimensions (CREATURE_BODY_DIMENSIONS §4.2): fractional clearance padding added to body width (>= 0).
+    "width_margin": 0.10,
+    ## Body-dimensions (§4.2): fraction of reach added as extra margin (>= 0).
+    "reach_margin_fraction": 0.25,
     ## Full front arc for EAT facing (half-angle = arc/2; default 90° → ±45°).
     "eat_facing_arc_deg": 90.0,
     ## Facing revolutions in eat range without EAT before one rearward break tick.

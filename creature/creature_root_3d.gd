@@ -6,6 +6,7 @@ const _DefScript := preload("res://creature/definition/creature_definition.gd")
 const _CreatureMotorStack := preload("res://creature/motor/creature_motor_stack.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _PackRes := preload("res://pack_resource_resolver.gd")
 
 var _motor_stack: RefCounted
 
@@ -138,6 +139,8 @@ func _mount_visual_from_definition() -> void:
   _attach_visual_scene(ps, mount)
 
 
+## Mounts [param ps] as the body's [code]Visual[/code] and asks the body to fit it to the authored dimensions
+## (uniform fit for production models, per-axis fit + origin re-centre for placeholders, B13 / B19).
 func _attach_visual_scene(ps: PackedScene, mount: Node) -> void:
   var inst := ps.instantiate() as Node3D
   if inst == null:
@@ -146,8 +149,27 @@ func _attach_visual_scene(ps: PackedScene, mount: Node) -> void:
   _disable_collision_recursive(inst)
   mount.add_child(inst)
   var body := mount as CharacterBody3D
-  if body != null and body.has_method(&"apply_capsule_footprint_from_visual"):
-    body.call(&"apply_capsule_footprint_from_visual", inst)
+  if body != null and body.has_method(&"apply_visual_fit"):
+    body.call(&"apply_visual_fit", inst, _is_placeholder_model())
+
+
+## True when the definition's pack flags its model as a placeholder (B19): key
+## [code]placeholder_model: true[/code] in the pack's [code]pack_resources.json[/code], present only on
+## deviation (absent = production). Reads the manifest directly, not through the shared-resource resolver.
+func _is_placeholder_model() -> bool:
+  if definition == null:
+    return false
+  var pack_root := str(definition.get("asset_pack_root")).strip_edges()
+  if pack_root.is_empty():
+    return false
+  return _pack_flags_placeholder(pack_root)
+
+
+## Reads [code]placeholder_model[/code] from [param pack_root]'s [code]pack_resources.json[/code].
+## Returns false when the manifest or key is missing (production default) or the value is not [code]true[/code].
+static func _pack_flags_placeholder(pack_root: String) -> bool:
+  var manifest: Dictionary = _PackRes.load_pack_root(pack_root)
+  return manifest.get("placeholder_model", false) == true
 
 
 func _disable_collision_recursive(node: Node) -> void:

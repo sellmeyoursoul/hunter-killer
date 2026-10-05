@@ -57,6 +57,30 @@ func get_creature_motor_v3_params() -> Dictionary:
   return cm.duplicate(true)
 
 
+## Body-dimensions width clearance margin ([code]creature_motor_v3.width_margin[/code], default 0.10).
+## Returns the default if missing/non-numeric; clamped to >= 0.
+func get_width_margin() -> float:
+  return _get_v3_nonneg_float("width_margin", 0.10)
+
+
+## Body-dimensions reach margin fraction ([code]creature_motor_v3.reach_margin_fraction[/code], default 0.25).
+## Returns the default if missing/non-numeric; clamped to >= 0.
+func get_reach_margin_fraction() -> float:
+  return _get_v3_nonneg_float("reach_margin_fraction", 0.25)
+
+
+## Reads a numeric [code]creature_motor_v3[/code] key; falls back to [param fallback] when missing,
+## non-numeric, or NaN/inf; result clamped to >= 0.
+func _get_v3_nonneg_float(key: String, fallback: float) -> float:
+  var v: Variant = get_creature_motor_v3_params().get(key, fallback)
+  if typeof(v) != TYPE_FLOAT and typeof(v) != TYPE_INT:
+    return fallback
+  var f := float(v)
+  if is_nan(f) or is_inf(f):
+    return fallback
+  return maxf(f, 0.0)
+
+
 ## Merged [code]playfield_spawn[/code] ([code]seed[/code], [code]locked_layout_path[/code]).
 func get_playfield_spawn_params() -> Dictionary:
   var ps: Variant = _merged.get("playfield_spawn", {})

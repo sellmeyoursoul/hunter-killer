@@ -65,6 +65,35 @@ static func yaw_from_horizontal_dir(dir: Variant, default: Vector3 = MODEL_FORWA
   return wrapf(atan2(d.x, d.z) - atan2(MODEL_FORWARD.x, MODEL_FORWARD.z), -PI, PI)
 
 
+## Facing invariant (CREATURE_BODY_DIMENSIONS §4.5, B5): a body with [code]body_width <= body_length[/code]
+## only travels along +/- facing (never strafes). Pure check, no scene access.
+## [param displacement] applied horizontal displacement or velocity (Y ignored); [param facing]
+## horizontal facing direction (Y ignored, need not be normalized); [param body_width] /
+## [param body_length] live body extents; [param tolerance_rad] max angle between the displacement
+## and the facing axis (either sign). Returns true when the invariant holds: the body is exempt
+## (width > length), the displacement is ~zero (below 1e-6 m), or the displacement is within
+## [param tolerance_rad] of +/- facing. A zero-length facing with non-zero displacement fails.
+## Example: [code]MotorPlane.facing_invariant_holds(Vector3(0, 0, 2), Vector3(0, 0, 1), 1.5, 6.0)[/code]
+## is true; the same displacement with facing (1, 0, 0) is false.
+static func facing_invariant_holds(
+  displacement: Vector3,
+  facing: Vector3,
+  body_width: float,
+  body_length: float,
+  tolerance_rad: float = 0.0175,
+) -> bool:
+  if body_width > body_length:
+    return true
+  var d := Vector3(displacement.x, 0.0, displacement.z)
+  if d.length_squared() < 1e-12:
+    return true
+  var f := Vector3(facing.x, 0.0, facing.z)
+  if f.length_squared() < 1e-12:
+    return false
+  var cos_abs := absf(d.normalized().dot(f.normalized()))
+  return cos_abs >= cos(tolerance_rad) - 1e-6
+
+
 ## Horizontal velocity from motor-plane variant ([code]Vector2[/code] or [code]Vector3[/code]).
 static func read_velocity(v: Variant) -> Vector3:
   return read_pos(v)

@@ -27,9 +27,24 @@ enum FeedingMode {
 @export var perception_radius_scale: float = 1.0
 @export var awareness_cone_half_angle_scale: float = 1.0
 
-## Longest body dimension in **simulation units** (see CREATURE_MODEL basic info).
+## Authored body dimensions in **game units** (CREATURE_BODY_DIMENSIONS.md B1; rest-pose whole-mesh AABB).
+## [member body_length] runs along the facing axis (+Z), [member body_width] across it (X), [member body_height]
+## along Y. A value of 0 means "unset": when any of the three is <= 0 the body falls back to the deprecated
+## [member creature_size] / [member collision_capsule_radius] / [member collision_capsule_height] fields
+## (unmigrated archetypes, Phase 2 migrates them).
+@export var body_length: float = 0.0
+@export var body_width: float = 0.0
+@export var body_height: float = 0.0
+## Optional absolute reach distance from the body centre along facing, in game units at size factor 1
+## (B25). 0 = unset: reach is computed from length and `reach_margin_fraction`.
+@export var reach_override: float = 0.0
+
+## @deprecated Legacy fallback; superseded by [member body_length] / [member body_width] / [member body_height]
+## (live creature_size = max of the live dimensions, B11). Used only while those are unset.
 @export var creature_size: float = 1.0
+## @deprecated Legacy fallback radius; see [member creature_size]. Removed once archetypes are migrated.
 @export var collision_capsule_radius: float = 0.35
+## @deprecated Legacy fallback capsule height; see [member creature_size].
 @export var collision_capsule_height: float = 1.2
 
 ## Motivation traits (-100..100). Live: locale-prior replay (Slot A/B) via [CREATURE_TRAIT_USAGE.md](../../Project_Docs/Definitive_Features/CREATURE_TRAIT_USAGE.md); semantics [CREATURE_GOAL_DRIVERS.md](../../Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md) §3.

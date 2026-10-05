@@ -15,6 +15,8 @@ const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _CreatureMeshFootprint := preload("res://creature/capabilities/creature_mesh_footprint.gd")
+const _BodyDims := preload("res://creature/capabilities/creature_body_dimensions.gd")
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
@@ -37,8 +39,30 @@ var playfield_bounds_min: Vector2 = Vector2.ZERO
 var playfield_bounds_max: Vector2 = Vector2.ZERO
 var creature_size: float = 1.0
 var _base_creature_size: float = 1.0
-var _base_capsule_radius: float = 0.35
-var _base_capsule_height: float = 1.2
+## True until the definition authors body_length / width / height (deprecated radius / height fallback).
+var _legacy_dims: bool = true
+var _legacy_radius: float = 0.35
+var _legacy_height: float = 1.2
+## Authored dimensions at size factor 1 (game units); unused while [member _legacy_dims].
+var _base_length: float = 1.0
+var _base_width: float = 1.0
+var _base_height: float = 1.0
+var _reach_override: float = 0.0
+## Uniform runtime size factor (decision 5): [code]creature_size / _base_creature_size[/code].
+var _size_factor: float = 1.0
+## True once a definition was cached; before that the template's own shapes are left untouched.
+var _shapes_driven: bool = false
+## Legacy mode only: capsule centre measured from the mounted mesh at factor 1 (Vector3) or null.
+var _legacy_capsule_center: Variant = null
+var _visual_base_scale: Vector3 = Vector3.ONE
+var _visual_fit_scale: Vector3 = Vector3.ONE
+var _visual_fitted: bool = false
+## Placeholder re-centre (B19): bottom-centre of the rest-pose AABB in Visual-local space.
+var _visual_recentre: bool = false
+var _visual_pivot_local: Vector3 = Vector3.ZERO
+## Species already reported by the once-per-session body-dimension logs (keyed "kind:species").
+static var _logged_once: Dictionary = {}
+static var _fallback_margins: Dictionary = {}
 var caloric_needs: int = 30
 var current_calories: float = 30.0
 ## Stable per-instance identity for logs/debugging (distinct from `definition.species_id`, which is
@@ -122,9 +146,7 @@ func _apply_definition_defaults() -> void:
     caloric_needs = int(cap)
     current_calories = float(caloric_needs)
   _cache_baseline_geometry(def)
-  var sz: Variant = def.get("creature_size")
-  if sz != null:
-    apply_effective_creature_size(float(sz))
+  _refresh_shapes()
   var lp: Variant = def.get("locomotion_profile")
   if lp != null:
     speed = float(lp.get("max_speed"))
@@ -133,7 +155,22 @@ func _apply_definition_defaults() -> void:
     is_hostile = true
 
 
+## Caches authored geometry from [param def]: body_length / width / height when all are > 0, otherwise the
+## deprecated creature_size / collision_capsule_* fallbacks. Resets the runtime size factor to 1.
 func _cache_baseline_geometry(def: Variant) -> void:
+  var ro: Variant = def.get("reach_override")
+  _reach_override = 0.0 if ro == null else maxf(0.0, float(ro))
+  _size_factor = 1.0
+  _shapes_driven = true
+  if _BodyDims.has_authored_dimensions(def):
+    _legacy_dims = false
+    _base_length = float(def.get("body_length"))
+    _base_width = float(def.get("body_width"))
+    _base_height = float(def.get("body_height"))
+    _base_creature_size = _BodyDims.max_dimension(Vector3(_base_width, _base_height, _base_length))
+    creature_size = _base_creature_size
+    return
+  _legacy_dims = true
   var sz_v: Variant = def.get("creature_size")
   var sz := 1.0 if sz_v == null else float(sz_v)
   if sz > 0.0:
@@ -144,30 +181,84 @@ func _cache_baseline_geometry(def: Variant) -> void:
   var ch_v: Variant = def.get("collision_capsule_height")
   var ch := 1.2 if ch_v == null else float(ch_v)
   if cr > 0.0:
-    _base_capsule_radius = cr
+    _legacy_radius = cr
   if ch > 0.0:
-    _base_capsule_height = ch
+    _legacy_height = ch
 
 
-## Scales capsule, mesh, and [member creature_size] together for runtime buffs/debuffs (M4 size sync).
+## Applies a runtime size buff / debuff (decision 5, M8): re-derives every shape from the live dimensions
+## and re-fits the Visual. The CharacterBody3D is never scaled (M3).
+## Params:
+## - size: Target [member creature_size]; the uniform factor is [code]size / base creature size[/code].
 func apply_effective_creature_size(size: float) -> void:
   if size <= 0.0 or _base_creature_size <= 0.0:
     return
-  var factor := size / _base_creature_size
+  _size_factor = size / _base_creature_size
   creature_size = size
-  scale = Vector3.ONE * factor
-  _apply_capsule_scale(factor, "CollisionShape3D")
-  _apply_capsule_scale(factor, "MobHitbox/CollisionShape3D", 1.15)
+  _refresh_shapes()
+  _refit_visual()
 
 
+## Width margin from GameConfig ([code]get_width_margin[/code]); merge default when the autoload is absent.
+func _width_margin() -> float:
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_width_margin"):
+    return float(gc.call(&"get_width_margin"))
+  return _fallback_margin("width_margin")
+
+
+## Reach margin fraction from GameConfig ([code]get_reach_margin_fraction[/code]); merge default when absent.
+func _reach_margin_fraction() -> float:
+  var gc := get_node_or_null("/root/GameConfig")
+  if gc != null and gc.has_method(&"get_reach_margin_fraction"):
+    return float(gc.call(&"get_reach_margin_fraction"))
+  return _fallback_margin("reach_margin_fraction")
+
+
+static func _fallback_margin(key: String) -> float:
+  if _fallback_margins.is_empty():
+    var d: Dictionary = _ConfigMerge.default_creature_motor_v3_params()
+    _fallback_margins["width_margin"] = float(d.get("width_margin", 0.0))
+    _fallback_margins["reach_margin_fraction"] = float(d.get("reach_margin_fraction", 0.0))
+  return float(_fallback_margins.get(key, 0.0))
+
+
+## Live body dimensions as [code]Vector3(width X, height Y, length Z)[/code] in game units (+Z forward):
+## authored dimensions times the uniform size factor. In legacy mode (no authored dimensions) width and
+## height are derived from the deprecated radius / height fields and length is creature_size.
+func get_body_dimensions() -> Vector3:
+  if _legacy_dims:
+    var f := _size_factor
+    var r := _legacy_radius * f
+    var w := 2.0 * r / (1.0 + maxf(0.0, _width_margin()))
+    return Vector3(w, _legacy_height * f, _base_creature_size * f)
+  return Vector3(_base_width, _base_height, _base_length) * _size_factor
+
+
+## Movement-capsule radius: [code]live_width / 2 * (1 + width_margin)[/code] (B5). Body-radius class
+## consumers (path clearance, gap fit, ghost fit) use this.
+func get_body_radius() -> float:
+  if _legacy_dims:
+    return _legacy_radius * _size_factor
+  return _BodyDims.body_radius(_base_width * _size_factor, _width_margin())
+
+
+## Reach extent: distance from the body centre along facing (B25): [code]reach_override * size_factor[/code]
+## when the definition sets one, else [code]live_length * (0.5 + reach_margin_fraction)[/code].
+func get_reach_extent() -> float:
+  return _BodyDims.reach_extent(
+    get_body_dimensions().z, _reach_margin_fraction(), _reach_override, _size_factor
+  )
+
+
+## Alias of [method get_body_radius] kept so older callers still compile.
 func get_collision_capsule_radius() -> float:
-  var factor := creature_size / maxf(_base_creature_size, 1e-6)
-  return _base_capsule_radius * factor
+  return get_body_radius()
 
 
+## Capsule total height (Godot 4 semantics, B24): [code]max(live_height, 2 * body_radius)[/code].
 func get_collision_capsule_height() -> float:
-  var factor := creature_size / maxf(_base_creature_size, 1e-6)
-  return _base_capsule_height * factor
+  return _BodyDims.capsule_height(get_body_dimensions().y, get_body_radius())
 
 
 ## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): public read for [method
@@ -178,64 +269,148 @@ func get_gravity_multiplier() -> float:
   return float(_resolve_locomotion().get("gravity_multiplier"))
 
 
-## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code].
+## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code]:
+## 0.9 x capsule height.
 func get_los_eye_height() -> float:
   return get_collision_capsule_height() * 0.9
 
 
-func _apply_capsule_scale(factor: float, node_path: String, radius_mul: float = 1.0) -> void:
-  var col := get_node_or_null(node_path) as CollisionShape3D
-  if col == null:
+## Re-derives the body capsule and the legacy [code]MobHitbox[/code] capsule (1.15 x body radius, B21)
+## from the live dimensions. The body's own scale is never touched (M3). Logs once per species when the
+## capsule height had to clamp up to 2r (B14 / B24).
+func _refresh_shapes() -> void:
+  if not _shapes_driven:
     return
-  if not (col.shape is CapsuleShape3D):
-    return
-  var fit_radius := _base_capsule_radius * factor * radius_mul
-  var fit_height := maxf(_base_capsule_height * factor, fit_radius * 2.0 + 0.05)
-  var cap := CapsuleShape3D.new()
-  cap.height = fit_height
-  cap.radius = fit_radius
-  col.shape = cap
-
-
-## Resizes body + MobHitbox capsules to match [param visual_root] mesh AABB ([code]CreatureMeshFootprint[/code]).
-## Params:
-## - visual_root: Mounted [code]Visual[/code] subtree (no collision).
-## - inset_ratio: Horizontal shrink on XZ radius (default 0.92).
-## Returns true when capsule dimensions were applied.
-func apply_capsule_footprint_from_visual(visual_root: Node3D, inset_ratio: float = 0.92) -> bool:
-  if visual_root == null:
-    return false
-  var aabb := _CreatureMeshFootprint.mesh_aabb_in_body_local(self, visual_root)
-  if not bool(aabb.get("valid", false)):
-    return false
-  var ratio := clampf(inset_ratio, 0.5, 1.0)
-  _base_capsule_radius = maxf(0.05, float(aabb.get("radius", 0.0)) * ratio)
-  _base_capsule_height = maxf(0.05, float(aabb.get("height", 0.0)))
-  _base_capsule_height = maxf(_base_capsule_height, _base_capsule_radius * 2.0 + 0.05)
-  var center: Vector3 = aabb.get("center", Vector3.ZERO)
+  var r := get_body_radius()
+  var h := get_collision_capsule_height()
+  if not _legacy_dims and _BodyDims.capsule_height_clamped(get_body_dimensions().y, r):
+    _log_once(
+      "clamp",
+      "BodyDims capsule height clamped up to 2r species=%s height=%.2f r=%.2f" % [
+        _species_label(), get_body_dimensions().y, r
+      ],
+    )
+  var has_center := false
+  var center := Vector3.ZERO
+  if _legacy_dims:
+    if _legacy_capsule_center != null:
+      has_center = true
+      center = (_legacy_capsule_center as Vector3) * _size_factor
+  else:
+    has_center = true
+    center = Vector3(0.0, h * 0.5, 0.0)
   var body_col := get_node_or_null("CollisionShape3D") as CollisionShape3D
   if body_col != null:
-    body_col.position = center
+    var body_cap := CapsuleShape3D.new()
+    body_cap.radius = r
+    body_cap.height = h
+    body_col.shape = body_cap
+    if has_center:
+      body_col.position = center
   var hit_col := get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
   if hit_col != null:
-    hit_col.position = center
-  var factor := creature_size / maxf(_base_creature_size, 1e-6)
-  scale = Vector3.ONE * factor
-  if body_col != null:
-    var body_cap := CapsuleShape3D.new()
-    var fit_radius := _base_capsule_radius * factor
-    var fit_height := maxf(_base_capsule_height * factor, fit_radius * 2.0 + 0.05)
-    body_cap.height = fit_height
-    body_cap.radius = fit_radius
-    body_col.shape = body_cap
-  if hit_col != null:
     var hit_cap := CapsuleShape3D.new()
-    var hit_radius := _base_capsule_radius * factor * 1.15
-    var hit_height := maxf(_base_capsule_height * factor, hit_radius * 2.0 + 0.05)
-    hit_cap.height = hit_height
-    hit_cap.radius = hit_radius
+    hit_cap.radius = r * 1.15
+    hit_cap.height = maxf(h, hit_cap.radius * 2.0)
     hit_col.shape = hit_cap
+    if has_center:
+      hit_col.position = center
+
+
+func _species_label() -> String:
+  var def: Variant = _resolve_definition()
+  if def == null:
+    return "unknown"
+  return str(def.get("species_id"))
+
+
+## Logs [param msg] once per (kind, species) per session (OLog hygiene: short, no PII).
+## Params:
+## - kind: Log category key for the once-per-species gate.
+## - as_error: True routes to error level; otherwise info.
+func _log_once(kind: String, msg: String, as_error: bool = false) -> void:
+  var key := "%s:%s" % [kind, _species_label()]
+  if _logged_once.has(key):
+    return
+  _logged_once[key] = true
+  if as_error:
+    _OLogSafe.error(msg, false, "BodyDims")
+  else:
+    _OLogSafe.info(msg, false, "BodyDims")
+
+
+## Fits the mounted [param visual_root] to the authored dimensions and sizes the shapes (CREATURE_BODY_DIMENSIONS
+## section 4.3). Measures the rest-pose AABB before any facing yaw; production = uniform fit on length applied
+## to the Visual node only; placeholder = per-axis fit plus origin re-centre (bottom-centre of the scaled AABB
+## on the body origin, kept through facing yaw). Logs a proportion warning / fail once per species.
+## With no authored dimensions (legacy mode) the Visual is not stretched and the capsule centre follows the mesh.
+## Params:
+## - visual_root: Mounted [code]Visual[/code] child of this body (no collision).
+## - placeholder: True when the pack's pack_resources.json flags the model as a placeholder (B19).
+## Returns true when the mesh was measured and shapes applied.
+func apply_visual_fit(visual_root: Node3D, placeholder: bool = false) -> bool:
+  if visual_root == null:
+    return false
+  var saved_yaw := visual_root.rotation.y
+  visual_root.rotation.y = 0.0
+  _visual_base_scale = visual_root.scale
+  _visual_fit_scale = Vector3.ONE
+  _visual_recentre = false
+  var m := _CreatureMeshFootprint.mesh_aabb_in_body_local(self, visual_root)
+  var pivot_body: Vector3 = m.get("pivot_offset", Vector3.ZERO)
+  var pivot_local := visual_root.transform.affine_inverse() * pivot_body
+  visual_root.rotation.y = saved_yaw
+  if not bool(m.get("valid", false)):
+    return false
+  if _legacy_dims:
+    _legacy_capsule_center = m.get("center", Vector3.ZERO)
+  else:
+    var model_size: Vector3 = m.get("size", Vector3.ZERO)
+    var live := Vector3(_base_width, _base_height, _base_length)
+    _visual_fit_scale = _BodyDims.fit_scale(model_size, live, placeholder)
+    _report_proportions(model_size, live, placeholder)
+    if placeholder:
+      _visual_recentre = true
+      _visual_pivot_local = pivot_local
+  _visual_fitted = true
+  _refit_visual()
+  _refresh_shapes()
   return true
+
+
+## Logs the proportion verdict once per species. Production fail is an error-level art bug (still mounts,
+## B8); placeholder deviation is always info-level (B13).
+func _report_proportions(model_size: Vector3, live: Vector3, placeholder: bool) -> void:
+  var tol := _BodyDims.load_tolerances()
+  var report := _BodyDims.proportion_report(model_size, live, float(tol["warn"]), float(tol["fail"]))
+  var level := int(report["level"])
+  if level == _BodyDims.LEVEL_OK:
+    return
+  var is_fail := level == _BodyDims.LEVEL_FAIL and not placeholder
+  var msg := "BodyFit %s species=%s axis=%s dev=%.0f%% model_whl=(%.2f,%.2f,%.2f) live_whl=(%.2f,%.2f,%.2f)" % [
+    "FAIL" if is_fail else "warn", _species_label(), str(report["worst_axis"]),
+    float(report["worst_dev"]) * 100.0,
+    model_size.x, model_size.y, model_size.z, live.x, live.y, live.z,
+  ]
+  _log_once("fit", msg, is_fail)
+
+
+## Re-applies the Visual scale ([code]base * fit * size_factor[/code]) and the placeholder re-centre.
+func _refit_visual() -> void:
+  if not _visual_fitted:
+    return
+  var visual := get_node_or_null("Visual") as Node3D
+  if visual == null:
+    return
+  visual.scale = _visual_base_scale * _visual_fit_scale * _size_factor
+  _apply_visual_pivot(visual)
+
+
+## Placeholder re-centre: keeps the rest-pose AABB bottom-centre on the body origin for the Visual's
+## current yaw and scale. No-op for production / legacy visuals.
+func _apply_visual_pivot(visual: Node3D) -> void:
+  if _visual_recentre:
+    visual.position = -(visual.basis * _visual_pivot_local)
 
 
 ## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): the diet-role `+8` bit (carnivore-only real
@@ -724,6 +899,7 @@ func _sync_visual_facing() -> void:
   visual.rotation.y = (
     _MotorPlane.yaw_from_horizontal_dir(last_move_direction) + visual_yaw_offset_rad
   )
+  _apply_visual_pivot(visual)
 
 
 func _physics_process(delta: float) -> void:

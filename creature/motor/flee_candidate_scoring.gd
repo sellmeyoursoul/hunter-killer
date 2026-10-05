@@ -47,8 +47,9 @@ static func threat_capsule_radius(sample: Dictionary) -> float:
   if iid == 0:
     return 0.0
   var node := _InstanceIdLookup.resolve(iid)
-  if node != null and node.has_method(&"get_collision_capsule_radius"):
-    return maxf(0.0, float(node.call(&"get_collision_capsule_radius")))
+  # Body-radius class (gap-fit, CREATURE_BODY_DIMENSIONS §4.7), not reach extent.
+  if node != null and node.has_method(&"get_body_radius"):
+    return maxf(0.0, float(node.call(&"get_body_radius")))
   return 0.0
 
 

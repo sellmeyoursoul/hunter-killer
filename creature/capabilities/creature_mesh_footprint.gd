@@ -1,20 +1,25 @@
 extends RefCounted
 class_name CreatureMeshFootprint
-## Capsule footprint derived from a creature [code]Visual[/code] mesh AABB in body-local space.
+## Measuring-only helper (CREATURE_BODY_DIMENSIONS.md B24): rest-pose mesh AABB, size and pivot of a
+## creature [code]Visual[/code] in body-local space. It never decides collision size.
 
 
 const _MeshWorldAabb3D := preload("res://environment/mesh_world_aabb_3d.gd")
 
 
 ## Body-local mesh AABB for [param visual_root] relative to [param body].
+## Returns [code]{valid, min, max, center, size, pivot_offset}[/code]: [code]size[/code] is
+## [code]Vector3(width X, height Y, length Z)[/code]; [code]pivot_offset[/code] is the AABB bottom-centre
+## (centre X, min Y, centre Z) relative to the body origin (zero when the B10 pivot is met).
+## Measure before any facing yaw is applied to the Visual.
 static func mesh_aabb_in_body_local(body: Node3D, visual_root: Node) -> Dictionary:
   var inactive := {
     "valid": false,
     "min": Vector3.ZERO,
     "max": Vector3.ZERO,
     "center": Vector3.ZERO,
-    "radius": 0.0,
-    "height": 0.0,
+    "size": Vector3.ZERO,
+    "pivot_offset": Vector3.ZERO,
   }
   if body == null or visual_root == null:
     return inactive
@@ -51,19 +56,12 @@ static func mesh_aabb_in_body_local(body: Node3D, visual_root: Node) -> Dictiona
   var mx: Vector3 = acc[1]
   if mn.x >= mx.x or mn.z >= mx.z:
     return inactive
-  var sx := mx.x - mn.x
-  var sy := mx.y - mn.y
-  var sz := mx.z - mn.z
-  var radius := maxf(sx, sz) * 0.5
-  var height := sy - 2.0 * radius
-  if height < 0.2:
-    height = maxf(0.2, sy * 0.55)
-  height = maxf(2.0 * radius + 0.05, height)
+  var ctr := (mn + mx) * 0.5
   return {
     "valid": true,
     "min": mn,
     "max": mx,
-    "center": (mn + mx) * 0.5,
-    "radius": radius,
-    "height": height,
+    "center": ctr,
+    "size": mx - mn,
+    "pivot_offset": Vector3(ctr.x, mn.y, ctr.z),
   }

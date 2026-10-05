@@ -4026,8 +4026,9 @@ static func _flee_belief_candidates(
       raw.append({"pos": row["pos"], "bonus": shelter_bonus * float(row["weight"]), "kind": &"shelter"})
   if adapter.has_method(&"consult_choke_point_beliefs"):
     var own_diameter := 0.0
-    if body != null and body.has_method(&"get_collision_capsule_radius"):
-      own_diameter = float(body.call(&"get_collision_capsule_radius")) * 2.0
+    # Body-radius class (gap-fit, CREATURE_BODY_DIMENSIONS §4.7), not reach extent.
+    if body != null and body.has_method(&"get_body_radius"):
+      own_diameter = float(body.call(&"get_body_radius")) * 2.0
     var threat_diameters: Array = []
     for s_v in ctx.get("threat_samples", []):
       if typeof(s_v) == TYPE_DICTIONARY and bool((s_v as Dictionary).get("in_awareness", false)):
@@ -4231,13 +4232,17 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
 ## already reasons about the two bodies' physical extents rather than pretending they're points.
 ## [param target_instance_id] resolves through [code]_InstanceIdLookup[/code] so a stale or
 ## synthetic id contributes nothing without raising an ObjectDB engine error.
+##
+## Body-dimensions B27 (CREATURE_BODY_DIMENSIONS §4.7): bonus = eater [code]get_reach_extent()[/code]
+## (mouth reaches the prey's side) + target [code]get_body_radius()[/code]. Plants have no body radius
+## and contribute 0. [code]eat_action_max_distance[/code] itself stays unscaled.
 static func _eat_reach_radius_bonus(body: CharacterBody3D, target_instance_id: int) -> float:
   var bonus := 0.0
-  if body != null and body.has_method(&"get_collision_capsule_radius"):
-    bonus += float(body.call(&"get_collision_capsule_radius"))
+  if body != null and body.has_method(&"get_reach_extent"):
+    bonus += float(body.call(&"get_reach_extent"))
   var target := _InstanceIdLookup.resolve(target_instance_id)
-  if target != null and target.has_method(&"get_collision_capsule_radius"):
-    bonus += float(target.call(&"get_collision_capsule_radius"))
+  if target != null and target.has_method(&"get_body_radius"):
+    bonus += float(target.call(&"get_body_radius"))
   return bonus
 
 
@@ -4650,9 +4655,11 @@ static func _signed_bearing_error_deg(body: CharacterBody3D, target: Vector3) ->
   return rad_to_deg(atan2(cross, dot))
 
 
+## Navmesh / clearance / ghost-fit agent radius: the body-radius class (§4.7), floored at 0.1;
+## 0.35 when the body exposes no [code]get_body_radius[/code].
 static func _agent_radius(body: CharacterBody3D) -> float:
-  if body.has_method(&"get_collision_capsule_radius"):
-    return maxf(0.1, float(body.call(&"get_collision_capsule_radius")))
+  if body.has_method(&"get_body_radius"):
+    return maxf(0.1, float(body.call(&"get_body_radius")))
   return 0.35
 
 

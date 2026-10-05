@@ -461,6 +461,7 @@ func _run_all() -> void:
   await _test_shrub_mesh_collision_bake()
   await _test_shrub_regrow_hull_rebuild_once_per_state_change()
   await _test_creature_capsule_fits_visual_mesh()
+  await _run_body_dimensions_phase1_tests()
   await _test_creature_3d_predation_contact()
   _test_eat_range_scales_with_predator_body_size()
   _test_playfield_clamp()
@@ -963,7 +964,7 @@ func _test_creature_pack_motor_overlays() -> void:
 ## size gap over fox to be a usable squeeze-mechanic test subject — model geometry and declared
 ## profile both scaled ~3x. `wolf_3d.tscn` wraps `wolf.blend` (still the placeholder mesh shared
 ## with fox at the raw geometry level) in a `Transform3D` scaled 3x, so the mesh-AABB-derived live
-## capsule radius (`apply_capsule_footprint_from_visual`) comes out ~3x fox's, not just the
+## capsule radius (`apply_visual_fit`, legacy mode) comes out ~3x fox's, not just the
 ## declared `.tres` fallback fields used when no visual is mounted.
 func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
   var wolf_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
@@ -997,7 +998,7 @@ func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
   # at its visual center (raw local AABB center ~(0.8, 0.95, 4.76), not origin) — the same class of
   # off-center-pivot defect found on `open_shrub_3d` (decision 25 Tier 2's cluster-tuning fix), just
   # smaller in absolute terms at fox scale. `wolf_3d.tscn`'s 3x scale wrapper tripled that offset to
-  # ~14 units in Z, which `apply_capsule_footprint_from_visual()` then read as the real capsule's
+  # ~14 units in Z, which the legacy-mode `apply_visual_fit()` then read as the real capsule's
   # center — badly decoupling the body's actual collision shape from `global_position` and driving
   # a live spawn-placement bug (wolves spawning off-floor and free-falling under gravity for dozens
   # of ticks, confirmed via manual playtest). Fixed by compensating the wrapper's own translation so
@@ -1011,7 +1012,7 @@ func _test_wolf_archetype_scaled_3x_relative_to_fox() -> void:
 
 
 ## End-to-end sibling of the AABB-centering check above: spawns a real wolf through the full
-## `CreatureRoot3D` mount pipeline and confirms `apply_capsule_footprint_from_visual()`'s resulting
+## `CreatureRoot3D` mount pipeline and confirms `apply_visual_fit()`'s resulting
 ## `CollisionShape3D.position` — the thing that actually decoupled the wolf's real physics extent
 ## from `global_position` and drove the live spawn-placement/free-fall bug — stays near zero, not
 ## the ~14-unit Z offset the uncompensated wrapper produced.
@@ -14245,7 +14246,7 @@ func _test_motor_plane_footprint_is_radius_on_both_axes() -> void:
 ## east/west one, so a rabbit pinned on the north edge could sit outside a wolf's eat reach even
 ## with the wolf pinned on the same edge (probable cause of the C1 "both stuck" north-edge repro).
 ## Clamps a real rabbit and a real wolf into the NW corner (checks each body's Z limit equals its
-## X limit), then pins both on the north edge (world -Z), the wolf 8 m along it, and checks the
+## X limit), then pins both on the north edge (world -Z), the wolf 2 m along it, and checks the
 ## rabbit is inside the wolf's real eat reach (`MotorPlanner._is_within_eat_range`).
 func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
   var main := Node3D.new()
@@ -14278,10 +14279,14 @@ func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
     0.0, (rabbit_cs.shape as CapsuleShape3D).height * 0.5 - rabbit_cs.position.y, -70.0
   )
   wolf.global_position = Vector3(
-    8.0, (wolf_cs.shape as CapsuleShape3D).height * 0.5 - wolf_cs.position.y, -70.0
+    2.0, (wolf_cs.shape as CapsuleShape3D).height * 0.5 - wolf_cs.position.y, -70.0
   )
   rabbit.call("_clamp_playfield_position")
   wolf.call("_clamp_playfield_position")
+  # Body-dimensions Phase 1: the eat gate is wolf reach extent (0.75 x length) + rabbit body radius, so the
+  # unmigrated (legacy 15.3 m tall) wolf is only 'in reach' when both bodies stand at the same height; the
+  # test is about the planar clamp, so level the rabbit's Y to the wolf's.
+  rabbit.global_position.y = wolf.global_position.y
   var motor_v3 := _motor_v3_test_params()
   var in_reach := bool(
     (_MotorPlanner as GDScript).call(
@@ -14598,9 +14603,21 @@ func _test_creature_capsule_fits_visual_mesh() -> void:
     var cs := body.get_node_or_null("CollisionShape3D") as CollisionShape3D
     _assert(cs != null and cs.shape is CapsuleShape3D, "%s body keeps capsule collider" % tag)
     var cap := cs.shape as CapsuleShape3D
+    # Body-dimensions Phase 1 (B24): the mesh AABB is measuring-only; the capsule follows the body's
+    # live dimensions (get_body_radius / capsule height), never the mesh.
+    var mesh_size: Vector3 = local_aabb.get("size", Vector3.ZERO)
     _assert(
-      cap.radius >= float(local_aabb.get("radius", 0.0)) * 0.85,
-      "%s capsule radius tracks visual mesh width" % tag,
+      mesh_size.x > 0.0 and mesh_size.y > 0.0 and mesh_size.z > 0.0,
+      "%s mesh AABB reports a positive (W, H, L) size" % tag,
+    )
+    _assert(
+      is_equal_approx(cap.radius, body.get_body_radius()),
+      "%s capsule radius equals get_body_radius (%.3f vs %.3f)" % [tag, cap.radius, body.get_body_radius()],
+    )
+    _assert(
+      cap.height >= 2.0 * cap.radius - 1e-4
+      and is_equal_approx(cap.height, body.get_collision_capsule_height()),
+      "%s capsule height equals get_collision_capsule_height and is >= 2r" % tag,
     )
     creature_root.queue_free()
   main.queue_free()
@@ -14773,3 +14790,377 @@ func _test_repro_rabbit_cornered_north_wall_live_pursuit() -> void:
   _assert(wolf_live_ticks > 0, "repro setup: wolf perceives rabbit as live food at least once")
 
   main.queue_free()
+
+
+# ---------------------------------------------------------------------------------------------------
+# Body dimensions Phase 1 (Project_Docs/Draft_Features/CREATURE_BODY_DIMENSIONS.md §4.1-4.5, §4.7, B27)
+# ---------------------------------------------------------------------------------------------------
+
+const _BodyDims := preload("res://creature/capabilities/creature_body_dimensions.gd")
+
+func _run_body_dimensions_phase1_tests() -> void:
+  _test_body_dims_config_defaults()
+  _test_body_dims_helper_math()
+  _test_body_dims_proportion_report_thresholds()
+  _test_body_dims_facing_invariant()
+  await _test_body_dims_radius_height_reach_from_authored_dimensions()
+  await _test_body_dims_legacy_mode_when_any_dimension_unset()
+  await _test_body_dims_size_change_keeps_body_scale_one()
+  await _test_body_dims_visual_fit_production_uniform_vs_placeholder_per_axis()
+  await _test_body_dims_eat_gate_matches_b20_numbers()
+
+
+## Builds a [CreatureDefinition] copy of [param base] with authored dimensions (length, width, height).
+func _bd_def(base: Resource, species: StringName, l: float, w: float, h: float, reach_override: float = 0.0) -> Resource:
+  var d := base.duplicate() as Resource
+  d.set("species_id", species)
+  d.set("body_length", l)
+  d.set("body_width", w)
+  d.set("body_height", h)
+  d.set("reach_override", reach_override)
+  return d
+
+
+## Spawns a creature body whose definition is [param def]; carnivore template when [param carnivore].
+func _bd_spawn(main: Node3D, def: Resource, carnivore: bool, pos: Vector3) -> CharacterBody3D:
+  var scene: PackedScene = load(_Carnivore3DScenePath if carnivore else _Herbivore3DScenePath) as PackedScene
+  var creature_root := scene.instantiate() as Node3D
+  creature_root.set("definition", def)
+  main.add_child(creature_root)
+  var body := creature_root.get_node("Body") as CharacterBody3D
+  if carnivore:
+    _setup_carnivore_body(body)
+  else:
+    _setup_herbivore_body(body)
+  body.global_position = pos
+  return body
+
+
+## Replaces the mounted Visual with a box mesh of [param size] (W, H, L) whose AABB centre sits at
+## [param offset] in Visual space (a deliberately off-convention pivot). Returns the new Visual.
+func _bd_install_box_visual(body: CharacterBody3D, size: Vector3, offset: Vector3) -> Node3D:
+  var old := body.get_node_or_null("Visual")
+  if old != null:
+    body.remove_child(old)
+    old.free()
+  var visual := Node3D.new()
+  visual.name = "Visual"
+  var mi := MeshInstance3D.new()
+  var box := BoxMesh.new()
+  box.size = size
+  mi.mesh = box
+  mi.position = offset
+  visual.add_child(mi)
+  body.add_child(visual)
+  return visual
+
+
+func _test_body_dims_config_defaults() -> void:
+  # Arrange / Act
+  var v3: Dictionary = _Merge.default_creature_motor_v3_params()
+  # Assert
+  _assert(is_equal_approx(float(v3.get("width_margin", -1.0)), 0.10), "merge default width_margin is 0.10")
+  _assert(
+    is_equal_approx(float(v3.get("reach_margin_fraction", -1.0)), 0.25),
+    "merge default reach_margin_fraction is 0.25",
+  )
+  var gc := root.get_node_or_null("GameConfig")
+  if gc != null:
+    _assert(is_equal_approx(float(gc.call(&"get_width_margin")), 0.10), "GameConfig.get_width_margin default 0.10")
+    _assert(
+      is_equal_approx(float(gc.call(&"get_reach_margin_fraction")), 0.25),
+      "GameConfig.get_reach_margin_fraction default 0.25",
+    )
+
+
+func _test_body_dims_helper_math() -> void:
+  # body radius = W/2 * (1 + margin)
+  _assert(is_equal_approx(_BodyDims.body_radius(0.7, 0.10), 0.385), "body radius = W/2*(1+margin) (rabbit 0.385)")
+  _assert(is_equal_approx(_BodyDims.body_radius(1.3, 0.10), 0.715), "body radius wolf = 0.715")
+  _assert(is_equal_approx(_BodyDims.body_radius(2.0, 0.0), 1.0), "body radius with zero margin is W/2")
+  # capsule height = max(H, 2r), clamp flag
+  _assert(is_equal_approx(_BodyDims.capsule_height(1.4, 0.385), 1.4), "capsule height keeps H when H >= 2r")
+  _assert(is_equal_approx(_BodyDims.capsule_height(0.4, 0.385), 0.77), "capsule height clamps up to 2r for a low body")
+  _assert(_BodyDims.capsule_height_clamped(0.4, 0.385), "capsule_height_clamped true when H < 2r")
+  _assert(not _BodyDims.capsule_height_clamped(1.4, 0.385), "capsule_height_clamped false when H >= 2r")
+  _assert(not _BodyDims.capsule_height_clamped(0.77, 0.385), "capsule_height_clamped false at exactly H == 2r")
+  # reach: default 0.75 * L, override replaces (scaled by size factor)
+  _assert(is_equal_approx(_BodyDims.reach_extent(6.0, 0.25, 0.0, 1.0), 4.5), "default reach wolf = 0.75*6 = 4.5")
+  _assert(is_equal_approx(_BodyDims.reach_extent(1.7, 0.25, 0.0, 1.0), 1.275), "default reach rabbit = 1.275")
+  _assert(is_equal_approx(_BodyDims.reach_extent(2.0, 0.25, 0.0, 1.0), 1.5), "default reach fox = 1.5")
+  _assert(is_equal_approx(_BodyDims.reach_extent(6.0, 0.25, 2.0, 1.0), 2.0), "reach_override replaces computed reach")
+  _assert(is_equal_approx(_BodyDims.reach_extent(12.0, 0.25, 2.0, 2.0), 4.0), "reach_override scales with size factor")
+  # creature_size = max(L, W, H); vectors are (W, H, L)
+  _assert(is_equal_approx(_BodyDims.max_dimension(Vector3(1.3, 3.0, 6.0)), 6.0), "max_dimension picks length when longest")
+  _assert(is_equal_approx(_BodyDims.max_dimension(Vector3(0.5, 2.2, 1.0)), 2.2), "max_dimension picks height for a tall body")
+  _assert(is_equal_approx(_BodyDims.max_dimension(Vector3(3.0, 1.0, 2.0)), 3.0), "max_dimension picks width when widest")
+  # fit scale
+  var model := Vector3(2.0, 1.0, 4.0)
+  var live := Vector3(0.7, 1.4, 1.7)
+  var uni: Vector3 = _BodyDims.fit_scale(model, live, false)
+  _assert(uni.is_equal_approx(Vector3.ONE * 0.425), "production fit is uniform on length (live_L / model_L)")
+  var per: Vector3 = _BodyDims.fit_scale(model, live, true)
+  _assert(per.is_equal_approx(Vector3(0.35, 1.4, 0.425)), "placeholder fit is per-axis (W, H, L)")
+  _assert(
+    _BodyDims.fit_scale(Vector3(0.0, 1.0, 1.0), live, true) == Vector3.ONE,
+    "fit_scale returns ONE for a degenerate model size",
+  )
+  # authored dimensions detection
+  var d := _CreatureDefinition.new()
+  _assert(not _BodyDims.has_authored_dimensions(d), "default definition has no authored dimensions")
+  d.body_length = 1.0
+  d.body_width = 1.0
+  _assert(not _BodyDims.has_authored_dimensions(d), "two of three dimensions is not authored")
+  d.body_height = 1.0
+  _assert(_BodyDims.has_authored_dimensions(d), "all three > 0 is authored")
+  _assert(not _BodyDims.has_authored_dimensions(null), "null definition is not authored")
+  var tol: Dictionary = _BodyDims.load_tolerances()
+  _assert(
+    is_equal_approx(float(tol["warn"]), 0.10) and is_equal_approx(float(tol["fail"]), 0.20),
+    "load_tolerances reads warn 0.10 / fail 0.20 from the shared spec",
+  )
+
+
+func _test_body_dims_proportion_report_thresholds() -> void:
+  var live := Vector3(1.0, 1.0, 2.0)
+  var warn := 0.10
+  var fail := 0.20
+  # Each case: model width / height deviates by the stated fraction (length matches, so s = 1).
+  var ok_r: Dictionary = _BodyDims.proportion_report(Vector3(1.05, 1.0, 2.0), live, warn, fail)
+  _assert(int(ok_r["level"]) == _BodyDims.LEVEL_OK, "5 percent deviation is OK")
+  var at_warn: Dictionary = _BodyDims.proportion_report(Vector3(1.0999, 1.0, 2.0), live, warn, fail)
+  _assert(int(at_warn["level"]) == _BodyDims.LEVEL_OK, "just under 10 percent is still OK (warn is > 10; avoids float noise at exactly 0.10)")
+  var warn_r: Dictionary = _BodyDims.proportion_report(Vector3(1.15, 1.0, 2.0), live, warn, fail)
+  _assert(int(warn_r["level"]) == _BodyDims.LEVEL_WARN, "15 percent deviation warns")
+  _assert(str(warn_r["worst_axis"]) == "width", "worst axis reported as width")
+  var at_fail: Dictionary = _BodyDims.proportion_report(Vector3(1.0, 1.1999, 2.0), live, warn, fail)
+  _assert(int(at_fail["level"]) == _BodyDims.LEVEL_WARN, "just under 20 percent is warn, not fail (fail is > 20)")
+  var fail_r: Dictionary = _BodyDims.proportion_report(Vector3(1.0, 1.25, 2.0), live, warn, fail)
+  _assert(int(fail_r["level"]) == _BodyDims.LEVEL_FAIL, "25 percent deviation fails")
+  _assert(str(fail_r["worst_axis"]) == "height", "worst axis reported as height")
+  # The check is made after the uniform length fit: a model that is just uniformly bigger is fine.
+  var scaled: Dictionary = _BodyDims.proportion_report(Vector3(5.0, 5.0, 10.0), live, warn, fail)
+  _assert(int(scaled["level"]) == _BodyDims.LEVEL_OK, "uniformly larger model passes after the length fit")
+
+
+func _test_body_dims_facing_invariant() -> void:
+  var fwd := Vector3(0.0, 0.0, 1.0)
+  # Parallel (either sign) holds for a long narrow body.
+  _assert(_MotorPlane.facing_invariant_holds(Vector3(0, 0, 2.0), fwd, 1.5, 6.0), "forward along facing holds")
+  _assert(_MotorPlane.facing_invariant_holds(Vector3(0, 0, -2.0), fwd, 1.5, 6.0), "backward along facing holds")
+  _assert(_MotorPlane.facing_invariant_holds(Vector3(0, 5.0, 2.0), fwd, 1.5, 6.0), "Y component is ignored")
+  _assert(_MotorPlane.facing_invariant_holds(Vector3.ZERO, fwd, 1.5, 6.0), "zero displacement holds")
+  _assert(_MotorPlane.facing_invariant_holds(Vector3(0, 0, 2), Vector3(0, 0, 3.0), 1.5, 6.0), "facing need not be normalized")
+  # Strafing violates it.
+  _assert(not _MotorPlane.facing_invariant_holds(Vector3(2.0, 0, 0), fwd, 1.5, 6.0), "pure strafe violates")
+  _assert(not _MotorPlane.facing_invariant_holds(Vector3(1.0, 0, 1.0), fwd, 1.5, 6.0), "45 degree diagonal violates")
+  _assert(not _MotorPlane.facing_invariant_holds(Vector3(2.0, 0, 0), fwd, 6.0, 6.0), "width == length is not exempt")
+  _assert(not _MotorPlane.facing_invariant_holds(Vector3(0, 0, 2), Vector3.ZERO, 1.5, 6.0), "zero facing with motion violates")
+  # Tolerance.
+  var slight := Vector3(sin(deg_to_rad(0.5)), 0.0, cos(deg_to_rad(0.5)))
+  _assert(_MotorPlane.facing_invariant_holds(slight, fwd, 1.5, 6.0), "0.5 degrees is inside the default tolerance")
+  var off5 := Vector3(sin(deg_to_rad(5.0)), 0.0, cos(deg_to_rad(5.0)))
+  _assert(not _MotorPlane.facing_invariant_holds(off5, fwd, 1.5, 6.0), "5 degrees is outside the default tolerance")
+  _assert(
+    _MotorPlane.facing_invariant_holds(off5, fwd, 1.5, 6.0, deg_to_rad(10.0)),
+    "5 degrees is inside a 10 degree tolerance",
+  )
+  # Exempt: a crab-like body wider than long may strafe.
+  _assert(_MotorPlane.facing_invariant_holds(Vector3(2.0, 0, 0), fwd, 6.0, 1.5), "width > length is exempt")
+
+
+func _test_body_dims_radius_height_reach_from_authored_dimensions() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  # Rabbit B20 (L 1.7, W 0.7, H 1.4): radius 0.385, height 1.4, reach 1.275, size 1.7.
+  var rabbit := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_rabbit", 1.7, 0.7, 1.4), false, Vector3(0, 1, 0))
+  await process_frame
+  var rcap := (rabbit.get_node("CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+  _assert(is_equal_approx(rabbit.get_body_radius(), 0.385), "authored rabbit body radius = 0.7/2*1.10 (got %.4f)" % rabbit.get_body_radius())
+  _assert(is_equal_approx(rcap.radius, 0.385), "authored rabbit capsule radius follows body radius")
+  _assert(is_equal_approx(rcap.height, 1.4), "authored rabbit capsule height = body_height (got %.4f)" % rcap.height)
+  _assert(is_equal_approx(rabbit.get_collision_capsule_radius(), rabbit.get_body_radius()), "capsule radius accessor aliases body radius")
+  _assert(is_equal_approx(rabbit.get_reach_extent(), 1.275), "authored rabbit reach = 0.75*L (got %.4f)" % rabbit.get_reach_extent())
+  _assert(is_equal_approx(rabbit.creature_size, 1.7), "rabbit creature_size = max(L,W,H) = 1.7")
+  _assert(rabbit.get_body_dimensions().is_equal_approx(Vector3(0.7, 1.4, 1.7)), "get_body_dimensions is (W, H, L)")
+  _assert(is_equal_approx(rabbit.get_los_eye_height(), 0.9 * 1.4), "LoS eye height = 0.9 * capsule height")
+  # Wolf: reach and size.
+  var wolf := _bd_spawn(main, _bd_def(_WolfArchetypeRes, &"bd_wolf", 6.0, 1.3, 3.0), true, Vector3(20, 1, 0))
+  await process_frame
+  _assert(is_equal_approx(wolf.get_body_radius(), 0.715), "authored wolf body radius = 0.715")
+  _assert(is_equal_approx(wolf.get_reach_extent(), 4.5), "authored wolf reach = 4.5")
+  _assert(is_equal_approx(wolf.creature_size, 6.0), "wolf creature_size = 6.0")
+  # Tall body: creature_size follows height; reach_override replaces computed reach.
+  var tall := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_tall", 1.0, 0.5, 2.2, 3.3), false, Vector3(40, 1, 0))
+  await process_frame
+  _assert(is_equal_approx(tall.creature_size, 2.2), "tall body creature_size = H (max of L, W, H)")
+  _assert(is_equal_approx(tall.get_reach_extent(), 3.3), "reach_override replaces the computed reach")
+  # Low body: capsule height clamps up to 2r.
+  var low := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_low", 2.0, 0.7, 0.4), false, Vector3(60, 1, 0))
+  await process_frame
+  var lcap := (low.get_node("CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+  _assert(is_equal_approx(lcap.height, 0.77), "low body capsule height clamps to 2r = 0.77 (got %.4f)" % lcap.height)
+  _assert(lcap.height >= 2.0 * lcap.radius - 1e-5, "clamped capsule is a valid Godot 4 capsule (height >= 2r)")
+  _assert(is_equal_approx(low.get_collision_capsule_height(), 0.77), "get_collision_capsule_height reports the clamp")
+  _assert(is_equal_approx(low.get_los_eye_height(), 0.9 * 0.77), "LoS eye height uses the clamped capsule height")
+  _assert(is_equal_approx(low.get_body_dimensions().y, 0.4), "live body height stays authored; only the capsule clamps")
+  main.queue_free()
+  await process_frame
+
+
+func _test_body_dims_legacy_mode_when_any_dimension_unset() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var def := _RabbitArchetypeRes.duplicate() as Resource
+  def.set("body_length", 1.7)
+  def.set("body_width", 0.7)
+  def.set("body_height", 0.0)
+  var body := _bd_spawn(main, def, false, Vector3(0, 1, 0))
+  await process_frame
+  _assert(
+    is_equal_approx(body.get_body_radius(), float(def.get("collision_capsule_radius"))),
+    "legacy mode radius = deprecated collision_capsule_radius when any body dimension is <= 0",
+  )
+  _assert(is_equal_approx(body.creature_size, float(def.get("creature_size"))), "legacy mode creature_size = deprecated field")
+  main.queue_free()
+  await process_frame
+
+
+func _test_body_dims_size_change_keeps_body_scale_one() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_rabbit", 1.7, 0.7, 1.4), false, Vector3(0, 1, 0))
+  await process_frame
+  var r0: float = body.get_body_radius()
+  var reach0: float = body.get_reach_extent()
+  var dims0: Vector3 = body.get_body_dimensions()
+  # Act: double the size.
+  body.apply_effective_creature_size(3.4)
+  var cap := (body.get_node("CollisionShape3D") as CollisionShape3D).shape as CapsuleShape3D
+  # Assert
+  _assert(body.scale.is_equal_approx(Vector3.ONE), "body scale stays ONE after a size change (got %s)" % str(body.scale))
+  _assert(is_equal_approx(body.get_body_radius(), 2.0 * r0), "body radius doubles with size factor 2")
+  _assert(is_equal_approx(cap.radius, 2.0 * r0), "capsule shape radius re-derived at size factor 2")
+  _assert(is_equal_approx(cap.height, 2.0 * 1.4), "capsule shape height re-derived at size factor 2")
+  _assert(is_equal_approx(body.get_reach_extent(), 2.0 * reach0), "reach scales with size factor 2")
+  _assert(body.get_body_dimensions().is_equal_approx(2.0 * dims0), "live dimensions scale uniformly")
+  _assert(is_equal_approx(body.creature_size, 3.4), "creature_size reflects the effective size")
+  # Shrink below baseline.
+  body.apply_effective_creature_size(0.85)
+  _assert(body.scale.is_equal_approx(Vector3.ONE), "body scale stays ONE after shrinking")
+  _assert(is_equal_approx(body.get_body_radius(), 0.5 * r0), "body radius halves with size factor 0.5")
+  main.queue_free()
+  await process_frame
+
+
+func _test_body_dims_visual_fit_production_uniform_vs_placeholder_per_axis() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var def := _bd_def(_RabbitArchetypeRes, &"bd_fit", 1.7, 0.7, 1.4)
+  var model := Vector3(2.0, 1.0, 4.0)
+  var offset := Vector3(1.0, 5.0, 3.0)
+  # --- Production: uniform fit on length, no re-centre.
+  var prod := _bd_spawn(main, def, false, Vector3(0, 1, 0))
+  await process_frame
+  var pv := _bd_install_box_visual(prod, model, offset)
+  var pos_before := pv.position
+  _assert(prod.apply_visual_fit(pv, false), "production apply_visual_fit measures the mounted Visual")
+  _assert(pv.scale.is_equal_approx(Vector3.ONE * 0.425), "production Visual scale is uniform live_L/model_L (got %s)" % str(pv.scale))
+  _assert(pv.position.is_equal_approx(pos_before), "production fit does not re-centre the Visual")
+  var pm := _CreatureMeshFootprint.mesh_aabb_in_body_local(prod, pv)
+  var psize: Vector3 = pm["size"]
+  _assert(is_equal_approx(psize.z, 1.7), "production fitted length equals authored length")
+  _assert(
+    is_equal_approx(psize.x, 2.0 * 0.425) and is_equal_approx(psize.y, 1.0 * 0.425),
+    "production fitted W / H keep model proportions (not stretched to the authored W / H)",
+  )
+  _assert(prod.scale.is_equal_approx(Vector3.ONE), "production fit leaves body scale at ONE")
+  # --- Placeholder: per-axis fit hits all three dimensions, origin re-centred to bottom-centre.
+  var ph := _bd_spawn(main, def, false, Vector3(30, 1, 0))
+  await process_frame
+  var hv := _bd_install_box_visual(ph, model, offset)
+  _assert(ph.apply_visual_fit(hv, true), "placeholder apply_visual_fit measures the mounted Visual")
+  _assert(
+    hv.scale.is_equal_approx(Vector3(0.35, 1.4, 0.425)),
+    "placeholder Visual scale is per-axis (W, H, L) (got %s)" % str(hv.scale),
+  )
+  var hm := _CreatureMeshFootprint.mesh_aabb_in_body_local(ph, hv)
+  var hsize: Vector3 = hm["size"]
+  _assert(hsize.is_equal_approx(Vector3(0.7, 1.4, 1.7)), "placeholder fitted AABB equals authored (W, H, L) (got %s)" % str(hsize))
+  var piv: Vector3 = hm["pivot_offset"]
+  _assert(piv.length() < 1e-3, "placeholder fit re-centres AABB bottom-centre on the body origin (offset %s)" % str(piv))
+  _assert(ph.scale.is_equal_approx(Vector3.ONE), "placeholder fit leaves body scale at ONE")
+  # Re-centre survives a facing yaw applied after the fit, then a size change re-fits.
+  hv.rotation.y = PI * 0.5
+  ph.apply_effective_creature_size(3.4)
+  var hm2 := _CreatureMeshFootprint.mesh_aabb_in_body_local(ph, hv)
+  var piv2: Vector3 = hm2["pivot_offset"]
+  _assert(piv2.length() < 1e-3, "placeholder re-centre is kept through yaw and a size change (offset %s)" % str(piv2))
+  # A grossly mismatched model still mounts for both kinds (placeholder: never a failure; production:
+  # art bug logged but not fatal) and a production model is never stretched to hide the mismatch.
+  var bad := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_badfit", 1.7, 0.1, 5.0), false, Vector3(60, 1, 0))
+  await process_frame
+  var bv := _bd_install_box_visual(bad, model, Vector3.ZERO)
+  _assert(bad.apply_visual_fit(bv, true), "placeholder with a > 20 percent proportion deviation still mounts")
+  var rep: Dictionary = _BodyDims.proportion_report(model, Vector3(0.1, 5.0, 1.7), 0.10, 0.20)
+  _assert(int(rep["level"]) == _BodyDims.LEVEL_FAIL, "that deviation would FAIL a production model")
+  var bad_prod := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_badprod", 1.7, 0.1, 5.0), false, Vector3(90, 1, 0))
+  await process_frame
+  var bpv := _bd_install_box_visual(bad_prod, model, Vector3.ZERO)
+  _assert(bad_prod.apply_visual_fit(bpv, false), "production with a > 20 percent deviation still mounts")
+  _assert(bpv.scale.is_equal_approx(Vector3.ONE * 0.425), "production model is never stretched to hide a mismatch")
+  main.queue_free()
+  await process_frame
+
+
+func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var motor_v3 := _motor_v3_test_params()
+  motor_v3["eat_action_max_distance"] = 5.0
+  var wolf := _bd_spawn(main, _bd_def(_WolfArchetypeRes, &"bd_wolf", 6.0, 1.3, 3.0), true, Vector3(0, 1, 0))
+  var fox := _bd_spawn(main, _bd_def(_WolfArchetypeRes, &"bd_fox", 2.0, 0.4, 0.9), true, Vector3(0, 1, 200))
+  var rabbit := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_rabbit", 1.7, 0.7, 1.4), false, Vector3(0, 1, 400))
+  var plant := Node3D.new()
+  main.add_child(plant)
+  await process_frame
+  var gates := {
+    "wolf->rabbit": [wolf, rabbit.get_instance_id(), 5.0 + 4.5 + 0.385],
+    "fox->rabbit": [fox, rabbit.get_instance_id(), 5.0 + 1.5 + 0.385],
+    "rabbit->plant": [rabbit, plant.get_instance_id(), 5.0 + 1.275],
+  }
+  for label in gates.keys():
+    var row: Array = gates[label]
+    var eater := row[0] as CharacterBody3D
+    var tid: int = row[1]
+    var expect_gate: float = row[2]
+    var bonus: float = (_MotorPlanner as GDScript).call("_eat_reach_radius_bonus", eater, tid)
+    _assert(
+      is_equal_approx(5.0 + bonus, expect_gate),
+      "%s eat gate = %.3f (got %.3f)" % [label, expect_gate, 5.0 + bonus],
+    )
+    # Boundary behaviour through the real gate: just inside eats, just outside does not.
+    var inside := eater.global_position + Vector3(expect_gate - 0.02, 0.0, 0.0)
+    var outside := eater.global_position + Vector3(expect_gate + 0.02, 0.0, 0.0)
+    _assert(
+      bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, inside, motor_v3, 1.0 / 60.0, tid)),
+      "%s target just inside the gate is in eat range" % label,
+    )
+    _assert(
+      not bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, outside, motor_v3, 1.0 / 60.0, tid)),
+      "%s target just outside the gate is out of eat range" % label,
+    )
+  # Rounded figures from the design doc (B27).
+  var wr: float = 5.0 + float((_MotorPlanner as GDScript).call("_eat_reach_radius_bonus", wolf, rabbit.get_instance_id()))
+  var fr: float = 5.0 + float((_MotorPlanner as GDScript).call("_eat_reach_radius_bonus", fox, rabbit.get_instance_id()))
+  var pr: float = 5.0 + float((_MotorPlanner as GDScript).call("_eat_reach_radius_bonus", rabbit, plant.get_instance_id()))
+  _assert(absf(wr - 9.89) < 0.01, "wolf->rabbit gate ~9.89 (got %.3f)" % wr)
+  _assert(absf(fr - 6.89) < 0.01, "fox->rabbit gate ~6.89 (got %.3f)" % fr)
+  _assert(absf(pr - 6.275) < 0.01, "rabbit->plant gate ~6.275 (got %.3f)" % pr)
+  # Target side is body radius, not reach extent: a long prey does not over-credit the gate.
+  var long_prey := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_longprey", 8.0, 0.7, 1.4), false, Vector3(0, 1, 600))
+  await process_frame
+  var bonus_long: float = (_MotorPlanner as GDScript).call("_eat_reach_radius_bonus", wolf, long_prey.get_instance_id())
+  _assert(is_equal_approx(bonus_long, 4.5 + 0.385), "eat gate target term is body radius, independent of prey length (B27)")
+  main.queue_free()
+  await process_frame

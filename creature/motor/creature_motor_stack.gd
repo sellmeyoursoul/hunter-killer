@@ -347,7 +347,7 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
   var interval := maxi(1, int(_motor_v3.get("choke_probe_interval_ticks", 3)))
   if _physics_tick_count % interval != 0:
     return
-  var radius := float(_body.call(&"get_collision_capsule_radius")) if _body.has_method(&"get_collision_capsule_radius") else 0.0
+  var radius := float(_body.call(&"get_body_radius")) if _body.has_method(&"get_body_radius") else 0.0
   if radius <= 0.0:
     return
   var space := _body.get_world_3d().direct_space_state
@@ -1550,7 +1550,7 @@ func _maybe_observe_shelter_opportunistically() -> void:
   var probe_radius := float(_motor_v3.get("shelter_enclosure_probe_radius", 2.5))
   var blocker_mask := int(_motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
   ## Stage A (decision 13/33): self-radius shape-cast sweep, same as the active nomination path.
-  var agent_r := maxf(0.1, float(_body.call(&"get_collision_capsule_radius"))) if _body.has_method(&"get_collision_capsule_radius") else 0.35
+  var agent_r := maxf(0.1, float(_body.call(&"get_body_radius"))) if _body.has_method(&"get_body_radius") else 0.35
   var agent_h := maxf(0.2, float(_body.call(&"get_collision_capsule_height"))) if _body.has_method(&"get_collision_capsule_height") else 1.2
   var frac := _ShelterProbe.enclosure_fraction(
     space, pos, probe_radius, blocker_mask, 1.0, _ShelterProbe.RING_SAMPLES, [], agent_r, agent_h,

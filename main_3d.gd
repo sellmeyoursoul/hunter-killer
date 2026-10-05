@@ -5,6 +5,7 @@ const _Brand := preload("res://product_brand.gd")
 const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _ConfigMerge := preload("res://AI_int_lib/game_config_merge.gd")
+const _BodyDimensions := preload("res://creature/capabilities/creature_body_dimensions.gd")
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 const _GroundSampler := preload("res://environment/playfield_ground_sampler.gd")
 const _Perimeter := preload("res://environment/playfield_perimeter_boulders.gd")
@@ -554,11 +555,22 @@ func get_navigation_map_rid() -> RID:
   return RID()
 
 
+## Largest movement-capsule radius (m) across the spawn plan, floored at 0.35.
+## Per definition: when [method CreatureBodyDimensions.has_authored_dimensions] is true the radius is
+## [code]body_width / 2 * (1 + GameConfig.get_width_margin())[/code] (same derivation as the kinematic
+## body's get_body_radius(), at size factor 1); otherwise the deprecated
+## [member CreatureDefinition.collision_capsule_radius] fallback is used.
+## Example: authored width 1.0, margin 0.1 -> 0.55.
 func _duel_max_capsule_radius() -> float:
   var r := 0.35
+  var margin: float = GameConfig.get_width_margin()
   for plan_entry in _creature_spawn_plan:
     var def: CreatureDefinition = plan_entry.get("definition")
-    if def != null:
+    if def == null:
+      continue
+    if _BodyDimensions.has_authored_dimensions(def):
+      r = maxf(r, _BodyDimensions.body_radius(float(def.body_width), margin))
+    else:
       r = maxf(r, float(def.collision_capsule_radius))
   return r
 
