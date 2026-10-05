@@ -1,6 +1,6 @@
 extends Node3D
 ## Debug scene: shows rabbit, fox and wolf mounted exactly as the game mounts them, each heading
-## world -Z (the game's current forward), so a human can confirm which way each model's nose points.
+## a selectable world heading (game forward = +Z, B22; default heading here is -Z), so a human can confirm which way each model's nose points.
 ## Run: open res://tools/facing_check_3d.tscn and press F6 ("Run Current Scene").
 ## Mount path reused: archetype body_scene -> CreatureRoot3D deferred _mount_visual_from_definition
 ## (species mesh file / wolf 3x wrapper / capsule fit) -> CreatureKinematicBody3D._sync_visual_facing
@@ -11,9 +11,13 @@ extends Node3D
 ## Run with F6 (Run Current Scene); F5 runs the project's main scene instead.
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
-const _HEADING := Vector3(0.0, 0.0, -1.0)
+## Selectable headings (name -> world direction); H cycles, `heading=` user arg picks the first.
+const _HEADING_NAMES: Array[String] = ["-z", "+x", "+z", "-x", "+x-z", "+x+z", "-x+z", "-x-z"]
 const _CONE_HALF_ANGLE := deg_to_rad(40.0)
 
+var _heading_idx := 0
+var _heading := Vector3(0.0, 0.0, -1.0)
+var _annotations: Array[Node] = []
 var _entries: Array[Dictionary] = []
 var _camera: Camera3D
 var _report: Label
@@ -24,6 +28,7 @@ func _ready() -> void:
   _build_environment()
   _build_ground()
   _build_axes()
+  _annotations.clear()  # axis arrows are permanent; only per-heading annotations get rebuilt
   _build_hud()
   var rabbit := load("res://creature/species/rabbit_archetype.tres") as CreatureDefinition
   var wolf := load("res://creature/species/wolf_archetype.tres") as CreatureDefinition
@@ -39,6 +44,16 @@ func _ready() -> void:
   for a in OS.get_cmdline_user_args():
     if a.begins_with("view="):
       first_view = a.substr(5).to_int()
+    elif a.begins_with("heading="):
+      var hn := a.substr(8).to_lower().replace(" ", "")
+      if hn == "x":
+        hn = "+x"
+      elif hn == "z":
+        hn = "+z"
+      var hi := _HEADING_NAMES.find(hn)
+      if hi >= 0:
+        _heading_idx = hi
+  _heading = _heading_dir(_heading_idx)
   _set_camera_view(first_view)
   ## Mount is deferred inside CreatureRoot3D; wait, then face and annotate.
   await get_tree().process_frame
@@ -69,6 +84,25 @@ func _unhandled_input(event: InputEvent) -> void:
         _set_camera_view(8)
       KEY_9:
         _set_camera_view(9)
+      KEY_H:
+        _heading_idx = (_heading_idx + 1) % _HEADING_NAMES.size()
+        _heading = _heading_dir(_heading_idx)
+        _finalize_creatures()
+
+
+## Unit world direction for heading preset [param idx] of [constant _HEADING_NAMES].
+func _heading_dir(idx: int) -> Vector3:
+  var n: String = _HEADING_NAMES[idx]
+  var v := Vector3.ZERO
+  if n.contains("+x"):
+    v.x = 1.0
+  if n.contains("-x"):
+    v.x = -1.0
+  if n.contains("+z"):
+    v.z = 1.0
+  if n.contains("-z"):
+    v.z = -1.0
+  return v.normalized()
 
 
 ## Instantiates the definition's body_scene exactly like main_3d does and records it.
@@ -83,7 +117,11 @@ func _spawn(def: CreatureDefinition, pos: Vector3) -> void:
 
 ## After the deferred mount: freezes physics, applies the body's own facing path, adds annotations.
 func _finalize_creatures() -> void:
-  var lines: Array[String] = []
+  for n in _annotations:
+    if is_instance_valid(n):
+      n.queue_free()
+  _annotations.clear()
+  var lines: Array[String] = ["heading %s = %s" % [_HEADING_NAMES[_heading_idx], _heading]]
   for e in _entries:
     var root: Node3D = e["root"]
     var def: CreatureDefinition = e["def"]
@@ -92,10 +130,10 @@ func _finalize_creatures() -> void:
     body.set_physics_process(false)
     body.set_process(false)
     body.velocity = Vector3.ZERO
-    body.set("last_move_direction", _HEADING)
+    body.set("last_move_direction", _heading)
     body.call("_sync_visual_facing")
     var visual := body.get_node_or_null("Visual") as Node3D
-    var expect_yaw := _MotorPlane.yaw_from_horizontal_dir(_HEADING) + float(body.get("visual_yaw_offset_rad"))
+    var expect_yaw := _MotorPlane.yaw_from_horizontal_dir(_heading) + float(body.get("visual_yaw_offset_rad"))
     var yaw_txt := "NO VISUAL"
     if visual != null:
       yaw_txt = "visual.rotation.y=%.4f (expected %.4f)" % [visual.rotation.y, expect_yaw]
@@ -116,9 +154,9 @@ func _annotate(center: Vector3, radius: float, species: String) -> void:
   var length := maxf(12.0, radius * 4.0)
   var origin := Vector3(center.x, 0.15, center.z)
   _add_wedge(origin, length, Color(1.0, 0.8, 0.1, 0.30))
-  _add_arrow(origin + Vector3(0, 0.3, 0), _HEADING, length * 1.1, Color(1.0, 0.1, 0.1), maxf(0.35, radius * 0.12))
+  _add_arrow(origin + Vector3(0, 0.3, 0), _heading, length * 1.1, Color(1.0, 0.1, 0.1), maxf(0.35, radius * 0.12))
   var label := Label3D.new()
-  label.text = "%s\ngame forward = -Z" % species.capitalize()
+  label.text = "%s\nheading %s (game forward = +Z)" % [species.capitalize(), _HEADING_NAMES[_heading_idx]]
   label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
   label.no_depth_test = true
   label.pixel_size = 0.04
@@ -126,11 +164,12 @@ func _annotate(center: Vector3, radius: float, species: String) -> void:
   label.outline_size = 16
   label.position = Vector3(center.x, radius * 3.0 + 6.0, center.z)
   add_child(label)
+  _annotations.append(label)
 
 
 ## Flat translucent sector on XZ centred on the heading (same triangle fan as the awareness overlay).
 func _add_wedge(origin: Vector3, reach: float, color: Color) -> void:
-  var centre_angle := atan2(_HEADING.z, _HEADING.x)
+  var centre_angle := atan2(_heading.z, _heading.x)
   var a0 := centre_angle - _CONE_HALF_ANGLE
   var a1 := centre_angle + _CONE_HALF_ANGLE
   var st := SurfaceTool.new()
@@ -148,6 +187,7 @@ func _add_wedge(origin: Vector3, reach: float, color: Color) -> void:
   mi.material_override = _unshaded(color)
   mi.position = origin
   add_child(mi)
+  _annotations.append(mi)
 
 
 ## Arrow (cylinder shaft + cone head) from [param from] along unit [param dir].
@@ -175,6 +215,7 @@ func _add_arrow(from: Vector3, dir: Vector3, length: float, color: Color, thickn
   head.material_override = _unshaded(color)
   arrow.add_child(head)
   add_child(arrow)
+  _annotations.append(arrow)
   return arrow
 
 
@@ -189,12 +230,12 @@ func _unshaded(color: Color) -> StandardMaterial3D:
   return m
 
 
-## World axes: -Z (blue) and +X (green), drawn left of the creatures.
+## World axes: +Z (blue, game forward) and +X (green), drawn left of the creatures.
 func _build_axes() -> void:
   var o := Vector3(-80.0, 0.3, 25.0)
-  _add_arrow(o, Vector3(0, 0, -1), 30.0, Color(0.2, 0.4, 1.0), 0.5)
+  _add_arrow(o, Vector3(0, 0, 1), 30.0, Color(0.2, 0.4, 1.0), 0.5)
   _add_arrow(o, Vector3(1, 0, 0), 30.0, Color(0.2, 1.0, 0.3), 0.5)
-  _add_axis_label("-Z (game forward)", o + Vector3(0, 2, -34))
+  _add_axis_label("+Z (game forward)", o + Vector3(0, 2, 34))
   _add_axis_label("+X", o + Vector3(34, 2, 0))
 
 
@@ -247,7 +288,8 @@ func _build_hud() -> void:
   var layer := CanvasLayer.new()
   add_child(layer)
   var hint := Label.new()
-  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nCamera: 1 front 3/4, 2 side, 3 top-down, 4 rabbit close-up, 5 fox close-up, 6 wolf close-up, 7/8/9 top-down rabbit/fox/wolf"
+  hint.text = "Does each nose point along its arrow? Report per species: correct / backwards / sideways (left or right).\nH cycles heading (or heading=-z|+x|+z|-x|+x-z|... user arg). Game forward = +Z.
+Camera: 1 front 3/4, 2 side, 3 top-down, 4 rabbit close-up, 5 fox close-up, 6 wolf close-up, 7/8/9 top-down rabbit/fox/wolf"
   hint.position = Vector2(12, 8)
   hint.add_theme_font_size_override("font_size", 20)
   hint.add_theme_color_override("font_outline_color", Color.BLACK)

@@ -103,7 +103,7 @@ static func _pick_explore_dir(
   var baseline := float(motor_v3.get("explore_empty_map_unexplored_baseline", 0.5))
   var spawn_u := spawn_facing
   if spawn_u.length_squared() < 1e-12:
-    spawn_u = _MotorPlane.HORIZONTAL_FORWARD
+    spawn_u = _MotorPlane.MODEL_FORWARD
   else:
     spawn_u = spawn_u.normalized()
 
@@ -144,7 +144,7 @@ static func _pick_explore_dir(
       best_score = score
       best_dir = dir
   if best_dir.length_squared() < 1e-12:
-    return _MotorPlane.HORIZONTAL_FORWARD
+    return _MotorPlane.MODEL_FORWARD
   return best_dir.normalized()
 
 
@@ -174,9 +174,9 @@ static func _scan_explore_waypoint_avoiding_collapse(
   for _i in _COLLAPSE_RETRY_MAX:
     if not bool(_planner_call("_route_scan_collapsed_onto_self", [creature_pos, raw, scanned, motor_v3])):
       break
-    var dir: Vector3 = (state.get("explore_dir", _MotorPlane.HORIZONTAL_FORWARD) as Vector3)
+    var dir: Vector3 = (state.get("explore_dir", _MotorPlane.MODEL_FORWARD) as Vector3)
     if dir.length_squared() < 1e-8:
-      dir = _MotorPlane.HORIZONTAL_FORWARD
+      dir = _MotorPlane.MODEL_FORWARD
     dir = dir.normalized().rotated(Vector3.UP, deg_to_rad(_COLLAPSE_RETRY_ROTATE_DEG)).normalized()
     state["explore_dir"] = dir
     raw = creature_pos + dir * reach
@@ -208,7 +208,7 @@ static func _spawn_facing(ctx: Dictionary) -> Vector3:
     var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
     if facing.length_squared() > 1e-12:
       return facing.normalized()
-  return _MotorPlane.HORIZONTAL_FORWARD
+  return _MotorPlane.MODEL_FORWARD
 
 
 static func _coverage_for_goal(

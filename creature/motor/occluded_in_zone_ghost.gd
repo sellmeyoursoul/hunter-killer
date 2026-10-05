@@ -30,7 +30,7 @@ static func project_ghosts(
   if beliefs.is_empty():
     return out
   var creature_pos: Vector3 = zone_ctx.get("creature_pos", Vector3.ZERO)
-  var facing: Vector3 = zone_ctx.get("facing", Vector3.FORWARD)
+  var facing: Vector3 = zone_ctx.get("facing", _MotorPlane.MODEL_FORWARD)
   var eye_h := float(zone_ctx.get("eye_height", 1.0))
   var motor_v3: Dictionary = zone_ctx.get("motor_v3", {})
   var area_only := bool(zone_ctx.get("area_only", false))
@@ -113,7 +113,7 @@ static func project_facing_lost_threat_ghosts(
   if beliefs.is_empty():
     return out
   var creature_pos: Vector3 = zone_ctx.get("creature_pos", Vector3.ZERO)
-  var facing: Vector3 = zone_ctx.get("facing", Vector3.FORWARD)
+  var facing: Vector3 = zone_ctx.get("facing", _MotorPlane.MODEL_FORWARD)
   var motor_v3: Dictionary = zone_ctx.get("motor_v3", {})
   var area_only := bool(zone_ctx.get("area_only", false))
   var area_r := float(motor_v3.get("awareness_radius", 1500.0))

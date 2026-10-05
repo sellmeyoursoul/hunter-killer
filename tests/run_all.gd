@@ -13083,8 +13083,18 @@ func _test_motor_plane_yaw_from_facing() -> void:
   ]
   for d in dirs:
     var yaw: float = _MotorPlane.yaw_from_horizontal_dir(d)
-    var rebuilt := Vector3(sin(yaw), 0.0, -cos(yaw))
-    _assert(rebuilt.is_equal_approx(d), "yaw_from_horizontal_dir round-trips 8-way direction %s" % d)
+    ## Real engine rotation (not a hand-written inverse): Visual.rotation.y = yaw must carry the model nose onto d.
+    var rotated: Vector3 = Basis(Vector3.UP, yaw) * _MotorPlane.MODEL_FORWARD
+    _assert(rotated.is_equal_approx(d), "Basis(UP, yaw) * MODEL_FORWARD faces 8-way direction %s (got %s)" % [d, rotated])
+  _assert(
+    is_zero_approx(_MotorPlane.yaw_from_horizontal_dir(_MotorPlane.MODEL_FORWARD)),
+    "yaw_from_horizontal_dir(MODEL_FORWARD) == 0",
+  )
+  _assert(_MotorPlane.MODEL_FORWARD.is_equal_approx(Vector3(0.0, 0.0, 1.0)), "MODEL_FORWARD is +Z (B22)")
+  _assert(
+    is_zero_approx(_MotorPlane.yaw_from_horizontal_dir(Vector3.ZERO)),
+    "zero direction falls back to MODEL_FORWARD (yaw 0)",
+  )
 
 func _test_nav_path_hint_first_waypoint_invalid_map() -> void:
   var wp := _NavHint.first_waypoint_world(RID(), Vector3.ZERO, Vector3(10, 0, 0), 0.35)

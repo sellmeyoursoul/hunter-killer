@@ -23,7 +23,7 @@ floor_max_angle = 0.8726646259972418
 floor_snap_length = 0.35
 safe_margin = 0.15
 script = ExtResource("2")
-visual_yaw_offset_rad = 1.5707963267948966
+visual_yaw_offset_rad = 4.71238898038469
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body"]
 shape = SubResource("caps")

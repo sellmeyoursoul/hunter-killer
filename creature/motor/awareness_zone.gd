@@ -31,7 +31,7 @@ static func effective_reach_toward(
   if dist < 1e-6:
     return area_r + cone_extra
   var dir := to_target / dist
-  var face := _MotorPlane.read_dir(facing, _MotorPlane.HORIZONTAL_FORWARD)
+  var face := _MotorPlane.read_dir(facing, _MotorPlane.MODEL_FORWARD)
   var angle := acos(clampf(face.dot(dir), -1.0, 1.0))
   var in_sphere := dist <= area_r
   var in_cone := angle <= half_angle and dist <= area_r + cone_extra

@@ -14,8 +14,9 @@ const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
 const HORIZONTAL_ZERO := Vector3.ZERO
 ## World +X (motor "right" / east).
 const HORIZONTAL_RIGHT := Vector3(1.0, 0.0, 0.0)
-## World −Z (motor "forward" / north in 3D playfields).
-const HORIZONTAL_FORWARD := Vector3(0.0, 0.0, -1.0)
+## Single source of truth (B22/B23) for the game's model-forward axis: world +Z. Default facing,
+## fallback directions and the Visual yaw formula all derive from this one constant.
+const MODEL_FORWARD := Vector3(0.0, 0.0, 1.0)
 
 
 ## True when [param node] is a 3D physics body the ENGINE motor can drive.
@@ -55,10 +56,13 @@ static func read_dir(v: Variant, default: Vector3 = HORIZONTAL_RIGHT) -> Vector3
   return Vector3(p.x, 0.0, p.z).normalized()
 
 
-## Y rotation (radians) so a mesh whose default forward is −Z aligns with horizontal [param dir].
-static func yaw_from_horizontal_dir(dir: Variant, default: Vector3 = HORIZONTAL_FORWARD) -> float:
+## Y rotation (radians, Godot convention: +Y counter-clockwise from above) that rotates
+## [constant MODEL_FORWARD] onto horizontal [param dir]; wrapped to (-PI, PI].
+## Invariant: yaw_from_horizontal_dir(MODEL_FORWARD) == 0 and
+## Basis(Vector3.UP, yaw) * MODEL_FORWARD ~= dir.
+static func yaw_from_horizontal_dir(dir: Variant, default: Vector3 = MODEL_FORWARD) -> float:
   var d := read_dir(dir, default)
-  return atan2(d.x, -d.z)
+  return wrapf(atan2(d.x, d.z) - atan2(MODEL_FORWARD.x, MODEL_FORWARD.z), -PI, PI)
 
 
 ## Horizontal velocity from motor-plane variant ([code]Vector2[/code] or [code]Vector3[/code]).

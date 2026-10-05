@@ -417,7 +417,7 @@ static func _tick_had_meaningful_progress(
 static func _apply_explore_stuck_replan(state: Dictionary) -> void:
   var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
   if explore.length_squared() < 1e-8:
-    explore = _MotorPlane.HORIZONTAL_FORWARD
+    explore = _MotorPlane.MODEL_FORWARD
   state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
   state["explore_waypoint"] = Vector3.ZERO
   state["explore_waypoint_set"] = false
@@ -703,7 +703,7 @@ static func _rim_escape_explore_dir(body: CharacterBody3D, motor_v3: Dictionary)
   var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
   if facing.length_squared() > 1e-12:
     return facing.normalized()
-  return _MotorPlane.HORIZONTAL_FORWARD
+  return _MotorPlane.MODEL_FORWARD
 
 
 ## Clear explore latch and pick an interior bearing after rim clamp (avoids scan ↔ tangent loop).
@@ -2299,7 +2299,7 @@ static func _try_nominate_shelter_candidate(
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
   if space == null:
     return false
-  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.HORIZONTAL_FORWARD).normalized()
+  var facing := _MotorPlane.read_dir(body.get("last_move_direction"), _MotorPlane.MODEL_FORWARD).normalized()
   var probe_center := creature_pos + facing * float(motor_v3.get("shelter_probe_lookahead_dist", 3.0))
   var probe_radius := float(motor_v3.get("shelter_enclosure_probe_radius", 2.5))
   var blocker_mask := int(motor_v3.get("shelter_enclosure_blocker_mask", _GhostObstacleQuery.GHOST_LAYER_MASK))
@@ -3126,7 +3126,7 @@ static func _maintain_explore_latch(
       else:
         var explore: Vector3 = state.get("explore_dir", Vector3.ZERO)
         if explore.length_squared() < 1e-8:
-          explore = _MotorPlane.HORIZONTAL_FORWARD
+          explore = _MotorPlane.MODEL_FORWARD
         state["explore_dir"] = explore.rotated(Vector3.UP, deg_to_rad(60.0)).normalized()
       state["explore_waypoint"] = Vector3.ZERO
       state["explore_waypoint_set"] = false
@@ -3492,7 +3492,7 @@ static func _mint_flee_waypoint(
     # normally happen since entry requires an acute threat, but stay defensive): fall back to
     # spawn-facing, matching `_flee_objective`'s own co-located-threat fallback below.
     # CLEANUP C16 (2026-08-12): unlike the main candidate-scored mint path below, this branch has no
-    # threat position to compute an "away" bearing from at all — `HORIZONTAL_FORWARD` is a fixed
+    # threat position to compute an "away" bearing from at all — `MODEL_FORWARD` is a fixed
     # compass direction with zero awareness of nearby geometry, so it can (and did, live: a rabbit
     # spawned 10 units off the map edge) point straight at a wall. Clamp to the direction's own
     # measured reach same as the main path, so this bootstrapping-only fallback can't overshoot past
@@ -3500,7 +3500,7 @@ static func _mint_flee_waypoint(
     # reconsideration has real threat data to steer by.
     var fallback_dist := float(motor_v3.get("awareness_radius", 150.0))
     var fallback_probe := _apply_route_plausibility_scan(
-      _flee_candidate_probe(ctx.get("map_rid", RID()), creature_pos, _MotorPlane.HORIZONTAL_FORWARD, fallback_dist),
+      _flee_candidate_probe(ctx.get("map_rid", RID()), creature_pos, _MotorPlane.MODEL_FORWARD, fallback_dist),
       ctx,
       body,
     )
@@ -4157,7 +4157,7 @@ static func _flee_objective(
     var away := creature_pos - _threat_world_pos(sample, creature_pos)
     away.y = 0.0
     if away.length_squared() < 1e-8:
-      away = _MotorPlane.HORIZONTAL_FORWARD
+      away = _MotorPlane.MODEL_FORWARD
     else:
       away = away.normalized()
     var dist := float(sample.get("gate_dist", INF))
@@ -4172,7 +4172,7 @@ static func _flee_objective(
     # prefer; `_mint_flee_waypoint`'s 6-candidate reachability scoring downstream picks the
     # best-reaching direction regardless of how degenerate this seed is, so this only needs to hand
     # it *something* horizontal, not a "correct" escape direction.
-    blended = _MotorPlane.HORIZONTAL_FORWARD
+    blended = _MotorPlane.MODEL_FORWARD
   var away_dir := blended.normalized()
   if contributor_count > 1:
     var smoothing := clampf(float(motor_v3.get("flee_bearing_smoothing", 0.35)), 0.0, 1.0)
@@ -4208,7 +4208,7 @@ static func _initial_explore_dir(ctx: Dictionary) -> Vector3:
     var facing := _MotorPlane.read_dir(body.get("last_move_direction"), Vector3.ZERO)
     if facing.length_squared() > 1e-12:
       return facing.normalized()
-  return _MotorPlane.HORIZONTAL_FORWARD
+  return _MotorPlane.MODEL_FORWARD
 
 
 ## World point used for EAT distance/facing — prefers [code]step_ultimate_pos[/code], else [param step_goal].

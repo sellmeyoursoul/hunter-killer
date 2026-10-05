@@ -968,7 +968,7 @@ func _refresh_danger_samples(area_only: bool) -> void:
 
 func _build_zone_ctx(area_only: bool) -> Dictionary:
   var creature_pos := _body.global_position if _body != null else Vector3.ZERO
-  var facing: Vector3 = _body.get("last_move_direction") if _body != null else Vector3.FORWARD
+  var facing: Vector3 = _body.get("last_move_direction") if _body != null else _MotorPlane.MODEL_FORWARD
   var eye_h := 1.0
   var space: PhysicsDirectSpaceState3D = null
   if _body != null and _body.is_inside_tree():
