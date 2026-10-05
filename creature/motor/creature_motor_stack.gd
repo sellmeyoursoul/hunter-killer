@@ -25,6 +25,7 @@ const _StatMath := preload("res://creature/stat_math.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
+const _NavRouter := preload("res://creature/motor/nav_router.gd")
 
 
 var _body: CharacterBody3D
@@ -64,6 +65,10 @@ var _use_scan_test_override: bool = false
 var _env_grid_test_override: Variant = null
 var _use_env_grid_test_override: bool = false
 var _memory_adapter: _MemoryAdapter
+## Layer-2 path service for this body (NAVIGATION_PASSABILITY_PLAN D10): the only navigation handle the
+## planner sees (via ctx `nav_router`). Built lazily once the body is in the tree; carries the
+## `scan_truncated_static` telemetry counters.
+var _nav_router: _NavRouter
 var _last_outcome: _ActionOutcome
 ## Debug-only: this tick's planner ctx (body/space_state/eye_height), kept for
 ## `get_debug_snapshot`'s `debug_eat_gate_snapshot` call — not consulted by any decision logic.
@@ -360,10 +365,15 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
   var now_ms := Time.get_ticks_msec()
   var merge_radius := diameter * float(_motor_v3.get("choke_merge_radius_factor", 1.0))
   var pos := _body.global_position
+  ## Side rays ride at capsule-centre height: feet-origin bodies would graze the terrain otherwise.
+  var ray_lift := (
+    float(_body.call(&"get_capsule_center_offset_y"))
+    if _body.has_method(&"get_capsule_center_offset_y") else 0.0
+  )
   var passed: Dictionary = _choke_tracker.call(
     "update", space, pos, heading, max_half,
     diameter * float(_motor_v3.get("choke_pass_min_travel_factor", 1.0)),
-    int(_motor_v3.get("choke_exit_samples", 3)), exclude,
+    int(_motor_v3.get("choke_exit_samples", 3)), exclude, ray_lift,
   )
   if not passed.is_empty():
     _memory_adapter.record_choke_point_confirmation(
@@ -375,7 +385,7 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
     stat_obs = int((def_v as _CreatureDefinition).stat_observation)
   var lookahead := radius * float(_motor_v3.get("choke_observe_lookahead_factor", 6.0))
   var seen: Dictionary = _ChokeProbe.observe_ahead(
-    space, pos, heading, lookahead, lookahead, max_half, stat_obs, _motor_v3, exclude
+    space, pos, heading, lookahead, lookahead, max_half, stat_obs, _motor_v3, exclude, ray_lift
   )
   if not seen.is_empty():
     _memory_adapter.record_choke_point_observation(
@@ -702,6 +712,8 @@ func get_debug_snapshot() -> Dictionary:
     ahc = _memory_adapter.avoid_hostiles_cell_count(_motor_v3)
   return {
     "flee_memory_debug": flee_mem_dbg,
+    "nav_path_queries": int(get_nav_telemetry().get("path_queries", 0)),
+    "nav_scan_truncated_static": int(get_nav_telemetry().get("scan_truncated_static", 0)),
     "flee_pick_kind": str(ps.get("flee_pick_kind", "")),
     "flee_pick_effective": float(ps.get("flee_pick_effective", 0.0)),
     "avoid_hostiles_cell_count": ahc,
@@ -1242,10 +1254,7 @@ func _build_context() -> Dictionary:
 
 
 func _build_planner_context(hub_ctx: Dictionary, delta: float) -> Dictionary:
-  var map_rid := RID()
-  var main := _resolve_main()
-  if main != null and main.has_method(&"get_navigation_map_rid"):
-    map_rid = main.call(&"get_navigation_map_rid") as RID
+  var nav := get_nav_router()
   var space: PhysicsDirectSpaceState3D = null
   var eye_h := 1.0
   if _body != null and _body.is_inside_tree():
@@ -1264,7 +1273,7 @@ func _build_planner_context(hub_ctx: Dictionary, delta: float) -> Dictionary:
       "threat_samples": _threat_samples,
       "food_map_confidence": _food_map_confidence,
     },
-    "map_rid": map_rid,
+    "nav_router": nav,
     "space_state": space,
     "eye_height": eye_h,
     "physics_tick": _physics_tick_count,
@@ -1275,6 +1284,29 @@ func _build_planner_context(hub_ctx: Dictionary, delta: float) -> Dictionary:
     "calorie_ratio": _calorie_ratio(),
     "delta": delta,
   }
+
+
+## This body's [NavRouter], created on first use and rebound to the current main node each call (the body may
+## enter the tree after the stack is built). Never null. Headless fixtures can swap the map source with
+## [method set_nav_router].
+func get_nav_router() -> _NavRouter:
+  if _nav_router == null:
+    _nav_router = _NavRouter.for_body(_body)
+  _nav_router.set_main(_resolve_main())
+  return _nav_router
+
+
+## Replaces this stack's router (test seam: `NavRouter.for_map(fixture_map_rid, body)`). A fixed-map router
+## ignores the main node. Pass null to revert to the main-bound router.
+func set_nav_router(router: _NavRouter) -> void:
+  _nav_router = router
+
+
+## Navigation telemetry for this body: `{path_queries, scan_truncated_static, ratio}` (plan section 7).
+func get_nav_telemetry() -> Dictionary:
+  if _nav_router == null:
+    return {"path_queries": 0, "scan_truncated_static": 0, "ratio": 0.0}
+  return _nav_router.telemetry_snapshot()
 
 
 func _resolve_main() -> Node:
@@ -1552,8 +1584,14 @@ func _maybe_observe_shelter_opportunistically() -> void:
   ## Stage A (decision 13/33): self-radius shape-cast sweep, same as the active nomination path.
   var agent_r := maxf(0.1, float(_body.call(&"get_body_radius"))) if _body.has_method(&"get_body_radius") else 0.35
   var agent_h := maxf(0.2, float(_body.call(&"get_collision_capsule_height"))) if _body.has_method(&"get_collision_capsule_height") else 1.2
+  ## Origin-to-capsule-centre offset (authored bodies: agent_h / 2) — the ring must sit at the true
+  ## capsule centre, not a fixed 1.0 m.
+  var centre_y := (
+    float(_body.call(&"get_capsule_center_offset_y")) if _body.has_method(&"get_capsule_center_offset_y")
+    else 0.0
+  )
   var frac := _ShelterProbe.enclosure_fraction(
-    space, pos, probe_radius, blocker_mask, 1.0, _ShelterProbe.RING_SAMPLES, [], agent_r, agent_h,
+    space, pos, probe_radius, blocker_mask, centre_y, _ShelterProbe.RING_SAMPLES, [], agent_r, agent_h,
   )
   if frac < float(_motor_v3.get("shelter_enclosure_detect_threshold", 0.5)):
     return

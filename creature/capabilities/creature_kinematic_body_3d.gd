@@ -16,6 +16,7 @@ const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _CreatureMeshFootprint := preload("res://creature/capabilities/creature_mesh_footprint.gd")
 const _BodyDims := preload("res://creature/capabilities/creature_body_dimensions.gd")
+const _PassabilityProfile := preload("res://creature/capabilities/passability_profile.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _CreatureVitalsMath := preload("res://creature/capabilities/creature_vitals_math.gd")
 const _CreaturePredationMath := preload("res://creature/capabilities/creature_predation_math.gd")
@@ -54,6 +55,8 @@ var _size_factor: float = 1.0
 var _shapes_driven: bool = false
 ## Legacy mode only: capsule centre measured from the mounted mesh at factor 1 (Vector3) or null.
 var _legacy_capsule_center: Variant = null
+## Lazily built [PassabilityProfile]; cleared by [method _refresh_shapes].
+var _passability_profile: Variant = null
 var _visual_base_scale: Vector3 = Vector3.ONE
 var _visual_fit_scale: Vector3 = Vector3.ONE
 var _visual_fitted: bool = false
@@ -269,6 +272,40 @@ func get_gravity_multiplier() -> float:
   return float(_resolve_locomotion().get("gravity_multiplier"))
 
 
+## Local Y of the body capsule's centre above the body origin (the [code]CollisionShape3D[/code]'s
+## position.y). Authored bodies put the feet at the origin so this is [code]capsule_height / 2[/code];
+## legacy mesh-centred bodies use the measured centre. Falls back to the derived value when the shape
+## node is missing. Use with [method get_capsule_center_world] for any shape query that takes the capsule
+## centre (ghost fit, route scans, enclosure probes).
+## Returns the offset in game units (can be 0 for a legacy body whose capsule is centred on the origin).
+func get_capsule_center_offset_y() -> float:
+  var body_col := get_node_or_null("CollisionShape3D") as CollisionShape3D
+  if body_col != null:
+    return body_col.position.y
+  if _legacy_dims:
+    if _legacy_capsule_center != null:
+      return (_legacy_capsule_center as Vector3).y * _size_factor
+    return 0.0
+  return get_collision_capsule_height() * 0.5
+
+
+## World-space centre of the body capsule: [code]global_position + UP * get_capsule_center_offset_y()[/code]
+## (the body is never rotated off-axis or scaled, M3). Pass this, not [member global_position], as the
+## [code]at[/code] / [code]from[/code] argument of capsule shape queries.
+## Example: [code]GhostObstacleQuery.capsule_overlaps_ghost_layer(space, body.get_capsule_center_world(), r, h)[/code]
+func get_capsule_center_world() -> Vector3:
+  return global_position + Vector3.UP * get_capsule_center_offset_y()
+
+
+## Cached [PassabilityProfile] for this body (radius, height, size, slope / climb limits, weight, capability
+## bits), derived from live body state. Rebuilt lazily after [method apply_effective_creature_size] or any
+## shape re-derivation. Pure data: no navigation queries.
+func get_passability_profile() -> Variant:
+  if _passability_profile == null:
+    _passability_profile = _PassabilityProfile.from_body(self)
+  return _passability_profile
+
+
 ## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code]:
 ## 0.9 x capsule height.
 func get_los_eye_height() -> float:
@@ -279,6 +316,7 @@ func get_los_eye_height() -> float:
 ## from the live dimensions. The body's own scale is never touched (M3). Logs once per species when the
 ## capsule height had to clamp up to 2r (B14 / B24).
 func _refresh_shapes() -> void:
+  _passability_profile = null
   if not _shapes_driven:
     return
   var r := get_body_radius()
@@ -776,13 +814,15 @@ func _clamp_velocity_to_ghost_fit(delta: float) -> bool:
   var radius := get_collision_capsule_radius()
   var height := get_collision_capsule_height()
   var self_rid := [get_rid()]
-  var next_pos := global_position + Vector3(velocity.x, 0.0, velocity.z) * delta
+  # Queries take the capsule CENTRE (authored bodies have feet at the origin, centre at h/2).
+  var center_now := get_capsule_center_world()
+  var next_pos := center_now + Vector3(velocity.x, 0.0, velocity.z) * delta
   var blocked := _GhostObstacleQuery.capsule_overlaps_ghost_layer(
     space_state, next_pos, radius, height, self_rid,
   )
   if not blocked:
     return false
-  if _GhostObstacleQuery.escaping_overlap(space_state, global_position, next_pos, radius, height, self_rid):
+  if _GhostObstacleQuery.escaping_overlap(space_state, center_now, next_pos, radius, height, self_rid):
     return false
   velocity.x = 0.0
   velocity.z = 0.0

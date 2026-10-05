@@ -4,6 +4,7 @@ class_name MotorExploreSeek
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
+const _NavRouter := preload("res://creature/motor/nav_router.gd")
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 
@@ -166,10 +167,10 @@ static func _scan_explore_waypoint_avoiding_collapse(
   waypoint: Vector3,
   reach: float,
 ) -> Vector3:
-  var map_rid: RID = ctx.get("map_rid", RID())
+  var nav := _NavRouter.from_ctx(ctx)
   var raw := waypoint
   var scanned: Vector3 = _planner_call(
-    "_route_scanned_endpoint", [ctx, body, map_rid, creature_pos, raw]
+    "_route_scanned_endpoint", [ctx, body, nav, creature_pos, raw]
   )
   for _i in _COLLAPSE_RETRY_MAX:
     if not bool(_planner_call("_route_scan_collapsed_onto_self", [creature_pos, raw, scanned, motor_v3])):
@@ -180,7 +181,7 @@ static func _scan_explore_waypoint_avoiding_collapse(
     dir = dir.normalized().rotated(Vector3.UP, deg_to_rad(_COLLAPSE_RETRY_ROTATE_DEG)).normalized()
     state["explore_dir"] = dir
     raw = creature_pos + dir * reach
-    scanned = _planner_call("_route_scanned_endpoint", [ctx, body, map_rid, creature_pos, raw])
+    scanned = _planner_call("_route_scanned_endpoint", [ctx, body, nav, creature_pos, raw])
   return scanned
 
 

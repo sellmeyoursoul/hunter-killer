@@ -17,6 +17,9 @@ const BLOCKER_MASK := 1 | _GhostObstacleQuery.GHOST_LAYER_MASK
 ## *both* sides hit something within [param max_half] — one open side means it's not a gap, just a
 ## wall (or open ground). `width` = left + right clearance from the centerline (both clamped to
 ## [param max_half] when unbounded, so `width` is then only meaningful as "at least this wide").
+## [param ray_lift] raises the side rays above [param at] (a body-origin / feet point for authored bodies,
+## so rays at `at` graze the terrain): pass the body's `get_capsule_center_offset_y()`. Only the ray origin
+## moves; [param at] (the stored mouth position) is untouched. Default `0.0` keeps legacy callers unchanged.
 static func measure_width(
   space_state: PhysicsDirectSpaceState3D,
   at: Vector3,
@@ -24,6 +27,7 @@ static func measure_width(
   max_half: float,
   exclude_rids: Array = [],
   mask: int = BLOCKER_MASK,
+  ray_lift: float = 0.0,
 ) -> Dictionary:
   var out := {"left": max_half, "right": max_half, "width": max_half * 2.0, "bounded": false}
   if space_state == null or max_half <= 0.0:
@@ -32,8 +36,9 @@ static func measure_width(
   if flat.length_squared() < 1e-8:
     return out
   var lateral := flat.normalized().cross(Vector3.UP).normalized()
-  var left := _side_clearance(space_state, at, lateral, max_half, exclude_rids, mask)
-  var right := _side_clearance(space_state, at, -lateral, max_half, exclude_rids, mask)
+  var origin := at + Vector3.UP * ray_lift
+  var left := _side_clearance(space_state, origin, lateral, max_half, exclude_rids, mask)
+  var right := _side_clearance(space_state, origin, -lateral, max_half, exclude_rids, mask)
   out["left"] = left
   out["right"] = right
   out["width"] = left + right
@@ -83,12 +88,13 @@ static func observe_ahead(
   stat_observation: int,
   motor_v3: Dictionary,
   exclude_rids: Array = [],
+  ray_lift: float = 0.0,
 ) -> Dictionary:
   var flat := Vector3(heading.x, 0.0, heading.z)
   if flat.length_squared() < 1e-8 or lookahead <= 0.0:
     return {}
   var mouth := pos + flat.normalized() * lookahead
-  var m := measure_width(space_state, mouth, heading, max_half, exclude_rids)
+  var m := measure_width(space_state, mouth, heading, max_half, exclude_rids, BLOCKER_MASK, ray_lift)
   if not bool(m.get("bounded", false)):
     return {}
   var frac := observe_noise_frac(stat_observation, motor_v3)

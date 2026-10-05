@@ -13,8 +13,16 @@ class_name GhostObstacleQuery
 ## like their visual footprint, never added to any creature's real movement mask.
 const GHOST_LAYER_MASK := 16
 
+## POINT CONVENTION (Stage A capsule-centre fix, CREATURE_BODY_DIMENSIONS.md §8): every point
+## parameter here ([param at], [param from], [param to], [param body_pos], [param next_pos]) is a
+## BODY-ORIGIN point (feet for authored bodies, i.e. what `global_position` / a navmesh path
+## holds). The capsule is placed at that point lifted by [param centre_offset_y] — the local Y of
+## the capsule centre above the body origin (`get_capsule_center_offset_y()` on the creature body;
+## `height / 2` for authored bodies, `0.0` for a capsule centred on its origin). The default `0.0`
+## keeps centred-capsule callers unchanged; callers with an authored body must pass the offset.
 
-## True when a capsule of [param radius]/[param height] centered at [param at] overlaps anything
+
+## True when a capsule of [param radius]/[param height] whose centre is [param at] + (0, [param centre_offset_y], 0) overlaps anything
 ## on the ghost layer — i.e. a body this size does not fit there. Point-in-place check (not a
 ## motion sweep) — correct for a per-tick pre-move gate, where the tested point is this tick's
 ## proposed destination and per-tick displacement is small relative to obstacle scale.
@@ -24,6 +32,7 @@ static func capsule_overlaps_ghost_layer(
   radius: float,
   height: float,
   exclude_rids: Array = [],
+  centre_offset_y: float = 0.0,
 ) -> bool:
   if space_state == null or radius <= 0.0:
     return false
@@ -33,7 +42,7 @@ static func capsule_overlaps_ghost_layer(
   var query := PhysicsShapeQueryParameters3D.new()
   query.shape = shape
   query.collision_mask = GHOST_LAYER_MASK
-  query.transform = Transform3D(Basis(), at)
+  query.transform = Transform3D(Basis(), at + Vector3(0.0, centre_offset_y, 0.0))
   for rid in exclude_rids:
     if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
       query.exclude.append(rid as RID)
@@ -45,7 +54,9 @@ static func capsule_overlaps_ghost_layer(
 ## (`PhysicsDirectSpaceState3D.cast_motion`), not a discretized point-sample walk. `1.0` means the
 ## whole segment is clear; `0.0` means the capsule is blocked right at [param from]. Caveat:
 ## `cast_motion` reports a capsule that already overlaps a ghost shape at [param from] as fully
-## clear (`1.0`), so a start-overlap is NOT detected here (see [method capsule_overlaps_ghost_layer]). Used by [RoutePlausibilityScan] to walk a multi-segment navmesh path and
+## clear (`1.0`), so a start-overlap is NOT detected here (see [method capsule_overlaps_ghost_layer]).
+## [param from]/[param to] are body-origin points; the capsule centre rides [param centre_offset_y]
+## above them (see the point convention at the top of this file). Used by [RoutePlausibilityScan] to walk a multi-segment navmesh path and
 ## find the first point along it a given creature's own capsule can't actually clear.
 static func sweep_capsule_along_segment(
   space_state: PhysicsDirectSpaceState3D,
@@ -55,6 +66,7 @@ static func sweep_capsule_along_segment(
   height: float,
   exclude_rids: Array = [],
   mask: int = GHOST_LAYER_MASK,
+  centre_offset_y: float = 0.0,
 ) -> float:
   if space_state == null or radius <= 0.0:
     return 1.0
@@ -67,7 +79,7 @@ static func sweep_capsule_along_segment(
   var query := PhysicsShapeQueryParameters3D.new()
   query.shape = shape
   query.collision_mask = mask
-  query.transform = Transform3D(Basis(), from)
+  query.transform = Transform3D(Basis(), from + Vector3(0.0, centre_offset_y, 0.0))
   query.motion = motion
   for rid in exclude_rids:
     if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
@@ -99,10 +111,11 @@ static func escaping_overlap(
   radius: float,
   height: float,
   exclude_rids: Array = [],
+  centre_offset_y: float = 0.0,
 ) -> bool:
   if space_state == null or radius <= 0.0:
     return false
-  var overlaps := _overlapping_shapes(space_state, body_pos, radius, height, exclude_rids)
+  var overlaps := _overlapping_shapes(space_state, body_pos, radius, height, exclude_rids, centre_offset_y)
   if overlaps.is_empty():
     return false
   for hit_v in overlaps:
@@ -124,6 +137,7 @@ static func _overlapping_shapes(
   radius: float,
   height: float,
   exclude_rids: Array,
+  centre_offset_y: float = 0.0,
 ) -> Array:
   var shape := CapsuleShape3D.new()
   shape.radius = radius
@@ -131,7 +145,7 @@ static func _overlapping_shapes(
   var query := PhysicsShapeQueryParameters3D.new()
   query.shape = shape
   query.collision_mask = GHOST_LAYER_MASK
-  query.transform = Transform3D(Basis(), at)
+  query.transform = Transform3D(Basis(), at + Vector3(0.0, centre_offset_y, 0.0))
   for rid in exclude_rids:
     if typeof(rid) == TYPE_RID and (rid as RID).is_valid():
       query.exclude.append(rid as RID)

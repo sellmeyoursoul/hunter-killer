@@ -496,6 +496,7 @@ func _run_all() -> void:
   await _test_shrub_regrow_hull_rebuild_once_per_state_change()
   await _test_creature_capsule_fits_visual_mesh()
   await _run_body_dimensions_phase1_tests()
+  await _run_nav_phase0_tests()
   await _test_creature_3d_predation_contact()
   _test_eat_range_scales_with_predator_body_size()
   _test_playfield_clamp()
@@ -15670,3 +15671,728 @@ func _collect_files_mentioning(dir_path: String, needle: String, out: Array[Stri
     var path := "%s/%s" % [dir_path, f]
     if FileAccess.get_file_as_string(path).contains(needle):
       out.append(path)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Navigation Phase 0 (Project_Docs/Draft_Features/NAVIGATION_PASSABILITY_PLAN.md section 8 Phase 0, sections 7 / 11)
+# capsule-centre fix, PassabilityProfile, NavRouter, route-scan start-overlap, scan_truncated_static,
+# choke ray_lift, gap-trap scenario.
+# ---------------------------------------------------------------------------------------------------
+
+const _PassabilityProfileScr := preload("res://creature/capabilities/passability_profile.gd")
+const _NavRouterScr := preload("res://creature/motor/nav_router.gd")
+
+func _run_nav_phase0_tests() -> void:
+  await _test_nav0_capsule_centre_offset_is_half_height_for_shipped_species()
+  await _test_nav0_capsule_centre_tracks_runtime_size_change()
+  await _test_nav0_ghost_fit_clamp_tests_the_full_capsule_upper_half()
+  await _test_nav0_ghost_fit_clamp_ignores_obstacle_below_feet()
+  await _test_nav0_shelter_probe_uses_capsule_centre_offset()
+  await _test_nav0_route_scan_uses_capsule_centre_offset()
+  await _test_nav0_planner_route_scan_blocks_on_wolf_head_height_obstacle()
+  await _test_nav0_passability_profile_derivations_for_shipped_species()
+  await _test_nav0_passability_profile_cache_identity_and_invalidation()
+  _test_nav0_passability_profile_defaults_and_capabilities()
+  await _test_nav0_nav_router_for_map_matches_direct_server_queries()
+  await _test_nav0_nav_router_construction_seams()
+  await _test_nav0_nav_router_without_map_degrades()
+  _test_nav0_nav_router_navigation_layers_follow_capabilities()
+  await _test_nav0_route_scan_start_overlap_none_escaping_blocked()
+  await _test_nav0_scan_truncated_static_counts_planner_truncations()
+  await _test_nav0_choke_ray_lift_lifts_ray_origin_only()
+  await _test_nav0_gap_trap_wolf_wedge_rate()
+
+
+## Static ghost-layer box (query-only obstacle) centred at [param center] in world space.
+func _nav0_ghost_box(parent: Node3D, center: Vector3, size: Vector3) -> StaticBody3D:
+  var body := StaticBody3D.new()
+  var shape := BoxShape3D.new()
+  shape.size = size
+  var col := CollisionShape3D.new()
+  col.shape = shape
+  body.add_child(col)
+  body.collision_layer = _GhostObstacleQuery.GHOST_LAYER_MASK
+  body.collision_mask = 0
+  parent.add_child(body)
+  body.global_position = center
+  return body
+
+
+func _nav0_species_name(i: int) -> String:
+  return ["rabbit", "fox", "wolf"][i]
+
+
+func _test_nav0_capsule_centre_offset_is_half_height_for_shipped_species() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  for i in 3:
+    var origin := Vector3(300.0 + 20.0 * float(i), 0.0, 300.0)
+    # Act
+    var body := _bd_spawn_shipped(main, i, origin)
+    await physics_frame
+    var h: float = body.get_collision_capsule_height()
+    # Assert
+    var sp := _nav0_species_name(i)
+    _assert(
+      absf(body.global_position.x - origin.x) < 1e-3 and absf(body.global_position.z - origin.z) < 1e-3,
+      "%s stays at its spawn XZ" % sp,
+    )
+    _assert(
+      is_equal_approx(body.get_capsule_center_offset_y(), h * 0.5),
+      "%s capsule centre offset is height / 2 (got %.4f for h=%.4f)" % [sp, body.get_capsule_center_offset_y(), h],
+    )
+    _assert(
+      body.get_capsule_center_world().is_equal_approx(body.global_position + Vector3.UP * (h * 0.5)),
+      "%s capsule centre world is origin + h / 2 (got %s)" % [sp, str(body.get_capsule_center_world())],
+    )
+    var col := body.get_node("CollisionShape3D") as CollisionShape3D
+    _assert(
+      is_equal_approx(col.position.y, body.get_capsule_center_offset_y()),
+      "%s offset reads the CollisionShape3D's own local Y" % sp,
+    )
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_capsule_centre_tracks_runtime_size_change() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var origin := Vector3(340.0, 0.0, 300.0)
+  for i in 3:
+    var body := _bd_spawn_shipped(main, i, origin + Vector3(0.0, 0.0, 20.0 * float(i)))
+    await physics_frame
+    var before: float = body.get_capsule_center_offset_y()
+    # Act
+    body.apply_effective_creature_size(body.creature_size * 2.0)
+    var h_after: float = body.get_collision_capsule_height()
+    # Assert
+    var sp := _nav0_species_name(i)
+    _assert(h_after > 0.0 and before > 0.0, "%s has a positive capsule before and after the size change" % sp)
+    _assert(
+      is_equal_approx(body.get_capsule_center_offset_y(), h_after * 0.5),
+      "%s capsule centre offset follows apply_effective_creature_size (h/2 of the new height)" % sp,
+    )
+    _assert(
+      body.get_capsule_center_offset_y() > before + 1e-4,
+      "%s capsule centre rose after doubling creature size (%.3f -> %.3f)" % [sp, before, body.get_capsule_center_offset_y()],
+    )
+    _assert(
+      body.get_capsule_center_world().is_equal_approx(body.global_position + Vector3.UP * (h_after * 0.5)),
+      "%s capsule centre world rides the new offset" % sp,
+    )
+  main.queue_free()
+  await process_frame
+
+
+## Pre-fix the ghost-fit clamp placed the capsule centre at the body origin (feet), so a ghost obstacle
+## in the upper half of a tall body (wolf: h 3.0, y 1.5..3.0 above the feet) was never seen.
+func _test_nav0_ghost_fit_clamp_tests_the_full_capsule_upper_half() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var feet := Vector3(400.0, 0.0, 400.0)
+  var wolf := _bd_spawn_shipped(main, 2, feet)
+  await physics_frame
+  var r: float = wolf.get_collision_capsule_radius()
+  var h: float = wolf.get_collision_capsule_height()
+  _assert(h > 2.5, "precondition: authored wolf is tall enough to have an upper half above 1.5 m (h=%.2f)" % h)
+  _nav0_ghost_box(main, feet + Vector3(3.0, 2.4, 0.0), Vector3(1.0, 0.6, 1.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var next_origin := feet + Vector3(3.0, 0.0, 0.0)
+  _assert(
+    not _GhostObstacleQuery.capsule_overlaps_ghost_layer(space, next_origin, r, h, [wolf.get_rid()]),
+    "precondition: the pre-fix query (capsule centred ON the feet) does not see an obstacle at y 2.1..2.7",
+  )
+  # Act
+  wolf.velocity = Vector3(10.0, 0.0, 0.0)
+  var clamped: bool = wolf.call("_clamp_velocity_to_ghost_fit", 0.3)
+  # Assert
+  _assert(clamped, "ghost-fit clamp reports a block for an obstacle in the wolf's upper half")
+  _assert(is_zero_approx(wolf.velocity.x) and is_zero_approx(wolf.velocity.z), "wolf horizontal velocity zeroed by the upper-half obstacle")
+  # Control: moving away from the obstacle is unaffected.
+  wolf.velocity = Vector3(-10.0, 0.0, 0.0)
+  var away: bool = wolf.call("_clamp_velocity_to_ghost_fit", 0.3)
+  _assert(not away and is_equal_approx(wolf.velocity.x, -10.0), "moving away from the upper-half obstacle is not clamped")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_ghost_fit_clamp_ignores_obstacle_below_feet() -> void:
+  # Arrange: a ghost slab entirely under the feet; a feet-centred capsule (pre-fix) would have overlapped it.
+  var main := Node3D.new()
+  root.add_child(main)
+  var feet := Vector3(440.0, 0.0, 400.0)
+  var wolf := _bd_spawn_shipped(main, 2, feet)
+  await physics_frame
+  _nav0_ghost_box(main, feet + Vector3(3.0, -1.0, 0.0), Vector3(1.0, 0.6, 1.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  _assert(
+    _GhostObstacleQuery.capsule_overlaps_ghost_layer(
+      space, feet + Vector3(3.0, 0.0, 0.0), wolf.get_collision_capsule_radius(),
+      wolf.get_collision_capsule_height(), [wolf.get_rid()],
+    ),
+    "precondition: a feet-centred capsule overlaps the under-floor slab (pre-fix false block)",
+  )
+  # Act
+  wolf.velocity = Vector3(10.0, 0.0, 0.0)
+  var clamped: bool = wolf.call("_clamp_velocity_to_ghost_fit", 0.3)
+  # Assert
+  _assert(not clamped and is_equal_approx(wolf.velocity.x, 10.0), "an obstacle wholly below the feet does not block the wolf")
+  main.queue_free()
+  await process_frame
+
+
+## Decision 33 style doorway probe with the capsule-centre offset: one ring sample along +X.
+func _test_nav0_shelter_probe_uses_capsule_centre_offset() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var feet := Vector3(480.0, 0.0, 400.0)
+  var mask := _GhostObstacleQuery.GHOST_LAYER_MASK
+  # Tall body r 0.5 / h 4.0: centre offset 2.0. Obstacle at head height (y 3.2..3.8) 3 m along +X.
+  _nav0_ghost_box(main, feet + Vector3(3.0, 3.5, 0.0), Vector3(0.6, 0.6, 3.0))
+  # Low obstacle (y 0.1..0.5) 3 m along +X, probed with a raised capsule.
+  var low_feet := Vector3(520.0, 0.0, 400.0)
+  _nav0_ghost_box(main, low_feet + Vector3(3.0, 0.3, 0.0), Vector3(0.6, 0.4, 3.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  # Act
+  var head_with_offset := _ShelterProbe.enclosure_fraction(space, feet, 5.0, mask, 2.0, 1, [], 0.5, 4.0)
+  var head_feet_centred := _ShelterProbe.enclosure_fraction(space, feet, 5.0, mask, 0.0, 1, [], 0.5, 4.0)
+  var low_raised := _ShelterProbe.enclosure_fraction(space, low_feet, 5.0, mask, 3.0, 1, [], 0.5, 2.0)
+  var low_feet_centred := _ShelterProbe.enclosure_fraction(space, low_feet, 5.0, mask, 0.0, 1, [], 0.5, 2.0)
+  # Assert
+  _assert(is_equal_approx(head_with_offset, 1.0), "head-height obstacle blocks a tall body probed with its centre offset")
+  _assert(is_equal_approx(head_feet_centred, 0.0), "the same probe with the capsule centred on the feet misses the head-height obstacle")
+  _assert(is_equal_approx(low_raised, 0.0), "a low obstacle under a raised capsule (y 2..4) does not block")
+  _assert(is_equal_approx(low_feet_centred, 1.0), "a feet-centred capsule (y -1..1) does hit the low obstacle")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_route_scan_uses_capsule_centre_offset() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var o := Vector3(560.0, 0.0, 400.0)
+  _nav0_ghost_box(main, o + Vector3(5.0, 3.5, 0.0), Vector3(0.6, 0.6, 3.0))
+  var low_o := Vector3(560.0, 0.0, 440.0)
+  _nav0_ghost_box(main, low_o + Vector3(5.0, 0.3, 0.0), Vector3(0.6, 0.4, 3.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var path := PackedVector3Array([o, o + Vector3(10.0, 0.0, 0.0)])
+  var low_path := PackedVector3Array([low_o, low_o + Vector3(10.0, 0.0, 0.0)])
+  # Act
+  var tall_offset := _RouteScan.scan_path(space, path, 0.5, 4.0, [], -1.0, -1.0, 2.0)
+  var tall_feet := _RouteScan.scan_path(space, path, 0.5, 4.0)
+  var raised := _RouteScan.scan_path(space, low_path, 0.5, 2.0, [], -1.0, -1.0, 3.0)
+  var raised_feet := _RouteScan.scan_path(space, low_path, 0.5, 2.0)
+  # Assert
+  _assert(bool(tall_offset.get("blocked", false)), "head-height obstacle truncates a tall body's scan when its centre offset is passed")
+  _assert(
+    absf(float(tall_offset.get("reach", 0.0)) - 4.2) < 0.4,
+    "tall-body reach stops about one radius short of the obstacle face (got %.2f)" % float(tall_offset.get("reach", 0.0)),
+  )
+  _assert(not bool(tall_feet.get("blocked", false)), "the same scan with a feet-centred capsule misses the head-height obstacle")
+  _assert(not bool(raised.get("blocked", false)), "a low obstacle under a raised capsule does not truncate the scan")
+  _assert(bool(raised_feet.get("blocked", false)), "a feet-centred capsule hits the low obstacle")
+  main.queue_free()
+  await process_frame
+
+
+## Planner wiring: `_apply_route_plausibility_scan` passes the real wolf's capsule-centre offset.
+func _test_nav0_planner_route_scan_blocks_on_wolf_head_height_obstacle() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var feet := Vector3(640.0, 0.0, 400.0)
+  var wolf := _bd_spawn_shipped(main, 2, feet)
+  await physics_frame
+  _nav0_ghost_box(main, feet + Vector3(6.0, 2.4, 0.0), Vector3(0.6, 0.6, 4.0))
+  await physics_frame
+  var path := PackedVector3Array([feet, feet + Vector3(12.0, 0.0, 0.0)])
+  var probe := {"reach": 12.0, "endpoint": path[1], "path": path}
+  var ctx := {"space_state": main.get_world_3d().direct_space_state}
+  # Act
+  var scanned: Dictionary = (_MotorPlanner as GDScript).call("_apply_route_plausibility_scan", probe, ctx, wolf)
+  # Assert
+  _assert(
+    float(scanned.get("reach", 12.0)) < 8.0,
+    "an obstacle in the wolf's upper half truncates its planner route scan (reach %.2f)" % float(scanned.get("reach", 12.0)),
+  )
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_passability_profile_derivations_for_shipped_species() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  for i in 3:
+    var body := _bd_spawn_shipped(main, i, Vector3(700.0 + 20.0 * float(i), 0.0, 400.0))
+    await physics_frame
+    var sp := _nav0_species_name(i)
+    # Act
+    var p = body.get_passability_profile()
+    # Assert
+    _assert(p != null, "%s exposes a passability profile" % sp)
+    _assert(is_equal_approx(p.radius, body.get_body_radius()), "%s profile radius == get_body_radius" % sp)
+    _assert(is_equal_approx(p.height, body.get_collision_capsule_height()), "%s profile height == capsule height" % sp)
+    _assert(is_equal_approx(p.creature_size, body.creature_size), "%s profile creature_size == body creature_size" % sp)
+    _assert(is_equal_approx(p.max_slope, body.floor_max_angle), "%s profile max_slope == floor_max_angle" % sp)
+    var expected_climb: float = (
+      body.floor_snap_length if body.floor_snap_length > 0.0 else _PassabilityProfileScr.DEFAULT_MAX_CLIMB
+    )
+    _assert(is_equal_approx(p.max_climb, expected_climb), "%s profile max_climb == floor_snap_length when > 0 else the class default" % sp)
+    _assert(p.max_climb > 0.0, "%s profile max_climb is positive" % sp)
+    _assert(p.weight > 0.0, "%s profile weight is positive (default until a weight field exists)" % sp)
+    _assert(p.capabilities == _PassabilityProfileScr.CAP_NONE, "%s profile has no capability bits set" % sp)
+    _assert(not p.has_capability(_PassabilityProfileScr.CAP_CLIMB), "%s cannot climb yet" % sp)
+    _assert(not p.has_capability(_PassabilityProfileScr.CAP_SWIM), "%s cannot swim yet" % sp)
+    _assert(p.size_class_key() == &"default", "%s sits in the single default size class" % sp)
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_passability_profile_cache_identity_and_invalidation() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(760.0, 0.0, 400.0))
+  await physics_frame
+  var first = wolf.get_passability_profile()
+  var second = wolf.get_passability_profile()
+  _assert(first == second, "profile is cached: repeated reads return the same instance")
+  var old_radius: float = first.radius
+  # Act
+  wolf.apply_effective_creature_size(wolf.creature_size * 1.5)
+  var third = wolf.get_passability_profile()
+  # Assert
+  _assert(third != first, "apply_effective_creature_size invalidates the cached profile")
+  _assert(is_equal_approx(third.radius, wolf.get_body_radius()), "rebuilt profile radius matches the new body radius")
+  _assert(third.radius > old_radius + 1e-4, "rebuilt profile reflects the larger body (%.3f -> %.3f)" % [old_radius, third.radius])
+  _assert(is_equal_approx(third.height, wolf.get_collision_capsule_height()), "rebuilt profile height matches the new capsule")
+  _assert(wolf.get_passability_profile() == third, "the rebuilt profile is cached again")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_passability_profile_defaults_and_capabilities() -> void:
+  # Arrange / Act
+  var p = _PassabilityProfileScr.from_body(null)
+  # Assert
+  _assert(p.radius == 0.0 and p.height == 0.0, "null body yields a zero-size default profile")
+  _assert(is_equal_approx(p.max_climb, _PassabilityProfileScr.DEFAULT_MAX_CLIMB), "default max_climb is the class default")
+  _assert(is_equal_approx(p.max_slope, _PassabilityProfileScr.DEFAULT_MAX_SLOPE), "default max_slope is the class default")
+  _assert(p.size_class_key() == &"default", "default profile is the default size class")
+  _assert(not p.has_capability(_PassabilityProfileScr.CAP_NONE), "CAP_NONE (0) is never reported as a held capability")
+  p.capabilities = _PassabilityProfileScr.CAP_CLIMB | _PassabilityProfileScr.CAP_SWIM
+  _assert(p.has_capability(_PassabilityProfileScr.CAP_CLIMB), "CLIMB bit reads back when set")
+  _assert(p.has_capability(_PassabilityProfileScr.CAP_SWIM), "SWIM bit reads back when set")
+  p.capabilities = _PassabilityProfileScr.CAP_SWIM
+  _assert(not p.has_capability(_PassabilityProfileScr.CAP_CLIMB), "CLIMB bit stays clear when only SWIM is set")
+
+
+func _test_nav0_nav_router_for_map_matches_direct_server_queries() -> void:
+  # Arrange: blocked fixture so the path has a bend.
+  var main := Node3D.new()
+  root.add_child(main)
+  var built := _MotorPathFixture.build_blocked(main)
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(await _MotorPathFixture.await_nav_ready(built), "nav0 router fixture navmesh synced")
+  var router = _NavRouterScr.for_map(map_rid)
+  var from := Vector3(5.0, 0.0, 20.0)
+  var to := Vector3(35.0, 0.0, 20.0)
+  var direct: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, from, to, true, 1)
+  # Act
+  var result: Dictionary = router.path(null, from, to, false)
+  var snapped: Dictionary = router.path(null, Vector3(5.0, 1.0, 20.0), to)
+  # Assert
+  _assert(direct.size() >= 3, "precondition: the centre wall forces a bent direct path (%d points)" % direct.size())
+  var pts: PackedVector3Array = result["points"]
+  _assert(pts.size() == direct.size(), "router path has the same point count as the direct server path")
+  var same := pts.size() == direct.size()
+  for i in mini(pts.size(), direct.size()):
+    same = same and pts[i].is_equal_approx(direct[i])
+  _assert(same, "router path points equal the direct NavigationServer3D.map_get_path result")
+  _assert(bool(result["reachable"]), "path ending at the requested goal reports reachable")
+  _assert((result["link_segments"] as PackedInt32Array).is_empty(), "link_segments is empty until climb links exist")
+  _assert((snapped["points"] as PackedVector3Array).size() >= 2, "snap_origin path from a point above the floor still resolves")
+  _assert(router.path_queries == 2, "path_queries counts each path call that reached a map (got %d)" % router.path_queries)
+  var far := Vector3(3.0, 0.0, 45.0)
+  var expected_closest: Vector3 = NavigationServer3D.map_get_closest_point(map_rid, far)
+  _assert(router.closest_point(null, far).is_equal_approx(expected_closest), "closest_point equals the direct server query")
+  _assert(router.closest_point(null, far).z < 40.5, "closest_point of an off-floor point lands on the floor edge")
+  var on_mesh := Vector3(10.0, 0.0, 10.0)
+  _assert(Vector2(router.closest_point(null, on_mesh).x - on_mesh.x, router.closest_point(null, on_mesh).z - on_mesh.z).length() < 0.3, "closest_point of a walkable point is itself")
+  _assert(router.has_map() and router.is_ready(), "fixed-map router reports has_map and is_ready")
+  _assert(router.map_for(null) == map_rid, "map_for returns the bound map in Phase 0")
+  var snap_t: Dictionary = router.telemetry_snapshot()
+  _assert(int(snap_t["path_queries"]) == 2 and int(snap_t["scan_truncated_static"]) == 0, "telemetry snapshot mirrors the counters")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_nav_router_construction_seams() -> void:
+  # Arrange
+  var main := Node3D.new()
+  root.add_child(main)
+  var built := _MotorPathFixture.build_open(main)
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(await _MotorPathFixture.await_nav_ready(built), "nav0 seam fixture navmesh synced")
+  var wolf := _bd_spawn_shipped(main, 2, Vector3(800.0, 0.0, 400.0))
+  await physics_frame
+  # Act / Assert: coerce
+  var from_rid = _NavRouterScr.coerce(map_rid)
+  _assert(from_rid != null and from_rid.has_map() and from_rid.map_for(null) == map_rid, "coerce(RID) wraps the raw map")
+  var existing = _NavRouterScr.for_map(map_rid)
+  _assert(_NavRouterScr.coerce(existing) == existing, "coerce(router) returns the same instance")
+  var from_null = _NavRouterScr.coerce(null)
+  _assert(from_null != null and not from_null.has_map(), "coerce(null) yields a router with no map")
+  # from_ctx legacy ctx["map_rid"]
+  var ctx := {"map_rid": map_rid}
+  var wrapped = _NavRouterScr.from_ctx(ctx)
+  _assert(wrapped.has_map() and wrapped.map_for(null) == map_rid, "from_ctx wraps legacy ctx[map_rid]")
+  _assert(ctx.get("nav_router") == wrapped, "from_ctx caches the wrapper into ctx[nav_router]")
+  _assert(_NavRouterScr.from_ctx(ctx) == wrapped, "a second from_ctx call returns the cached router (counters persist)")
+  var explicit := {"nav_router": existing, "map_rid": RID()}
+  _assert(_NavRouterScr.from_ctx(explicit) == existing, "ctx[nav_router] wins over legacy ctx[map_rid]")
+  _assert(not _NavRouterScr.from_ctx({}).has_map(), "an empty ctx yields a router with no map")
+  # profile binding
+  var bound = _NavRouterScr.for_map(map_rid, wolf)
+  _assert(bound.profile() == wolf.get_passability_profile(), "a body-bound router answers with the body's cached profile")
+  var unbound = _NavRouterScr.for_map(map_rid)
+  _assert(unbound.profile().radius == 0.0, "an unbound router answers with the default profile")
+  # for_body resolves the map through a main node
+  var stub := _TerrainTestMainStub.new()
+  main.add_child(stub)
+  stub.set("_fixture_map_rid", map_rid)
+  var via_main = _NavRouterScr.for_body(wolf, stub)
+  _assert(via_main.has_map() and via_main.map_for(null) == map_rid, "for_body resolves the map via main.get_navigation_map_rid()")
+  var res: Dictionary = via_main.path(null, Vector3(5.0, 0.0, 5.0), Vector3(35.0, 0.0, 35.0))
+  _assert((res["points"] as PackedVector3Array).size() >= 2, "a main-bound router answers path queries")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_nav_router_without_map_degrades() -> void:
+  # Arrange
+  var router = _NavRouterScr.for_map(RID())
+  var from := Vector3(1.0, 0.0, 2.0)
+  # Act
+  var result: Dictionary = router.path(null, from, Vector3(9.0, 0.0, 9.0))
+  # Assert
+  _assert((result["points"] as PackedVector3Array).is_empty() and not bool(result["reachable"]), "no map: empty path, not reachable")
+  _assert(router.path_queries == 0, "no map: path_queries does not count a query that never reached a map")
+  _assert(router.closest_point(null, from) == from, "no map: closest_point returns the input")
+  _assert(router.query_origin(null, from) == from, "no map: query_origin returns the input")
+  _assert(not router.has_map() and not router.is_ready(), "no map: has_map and is_ready are false")
+  _assert(is_zero_approx(router.scan_truncated_static_ratio()), "ratio is 0.0 before any path query")
+  await process_frame
+
+
+func _test_nav0_nav_router_navigation_layers_follow_capabilities() -> void:
+  # Arrange
+  var router = _NavRouterScr.for_map(RID())
+  var plain = _PassabilityProfileScr.from_body(null)
+  var climber = _PassabilityProfileScr.from_body(null)
+  climber.capabilities = _PassabilityProfileScr.CAP_CLIMB
+  var swimmer = _PassabilityProfileScr.from_body(null)
+  swimmer.capabilities = _PassabilityProfileScr.CAP_SWIM
+  # Act / Assert
+  _assert(router.navigation_layers_for(null) == _NavRouterScr.NAV_LAYER_WALK, "no profile queries the walk layer only")
+  _assert(router.navigation_layers_for(plain) == _NavRouterScr.DEFAULT_QUERY_LAYERS, "a plain profile queries the default layers")
+  _assert(router.navigation_layers_for(plain) == 1, "the default query mask is bit 1 (Godot's default navigation_layers)")
+  _assert(
+    router.navigation_layers_for(climber) == (_NavRouterScr.NAV_LAYER_WALK | _NavRouterScr.NAV_LAYER_CLIMB),
+    "CAP_CLIMB adds the CLIMB layer bit (value 2)",
+  )
+  _assert(router.navigation_layers_for(swimmer) == 1, "CAP_SWIM alone does not change the Phase 0 mask")
+
+
+## Route-scan start-overlap (plan section 7 / 11, sibling of the decision 33 shelter probe test): a capsule that
+## already overlaps a ghost hull at the path start is `blocked` unless the first segment leaves it.
+func _test_nav0_route_scan_start_overlap_none_escaping_blocked() -> void:
+  # Arrange: 4 m cube hull centred on x = o.x (spans x -2..2).
+  var main := Node3D.new()
+  root.add_child(main)
+  var o := Vector3(840.0, 0.0, 400.0)
+  _nav0_ghost_box(main, o + Vector3(0.0, 2.0, 0.0), Vector3(4.0, 4.0, 4.0))
+  # A second, thin hull 9 m along +X gives the escaping scan a real truncation point (x 8.5..9.5 -> stop ~8.0).
+  _nav0_ghost_box(main, o + Vector3(9.0, 1.0, 0.0), Vector3(1.0, 2.0, 4.0))
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var r := 0.5
+  var h := 2.0
+  var centre_y := 1.0
+  var inside := o + Vector3(1.0, 0.0, 0.0)
+  # Act
+  var blocked_scan := _RouteScan.scan_path(space, PackedVector3Array([inside, o + Vector3(-10.0, 0.0, 0.0)]), r, h, [], -1.0, -1.0, centre_y)
+  var escaping_scan := _RouteScan.scan_path(space, PackedVector3Array([inside, o + Vector3(7.0, 0.0, 0.0), o + Vector3(12.0, 0.0, 0.0)]), r, h, [], -1.0, -1.0, centre_y)
+  var clear_start := o + Vector3(0.0, 0.0, 30.0)
+  var none_scan := _RouteScan.scan_path(space, PackedVector3Array([clear_start, clear_start + Vector3(10.0, 0.0, 0.0)]), r, h, [], -1.0, -1.0, centre_y)
+  var escape_clear := _RouteScan.scan_path(space, PackedVector3Array([inside, o + Vector3(4.0, 0.0, 0.0)]), r, h, [], -1.0, -1.0, centre_y)
+  # Assert
+  _assert(blocked_scan.get("start_overlap") == &"blocked", "overlapping start whose first segment drives deeper -> blocked")
+  _assert(bool(blocked_scan.get("blocked", false)) and is_zero_approx(float(blocked_scan.get("reach", -1.0))), "blocked start-overlap reports reach 0")
+  var bp: PackedVector3Array = blocked_scan.get("path", PackedVector3Array())
+  _assert(bp.size() == 2 and bp[0].is_equal_approx(inside) and bp[1].is_equal_approx(inside), "blocked start-overlap path collapses to [p0, p0]")
+  _assert(escaping_scan.get("start_overlap") == &"escaping", "overlapping start whose first segment leaves the hull -> escaping")
+  _assert(bool(escaping_scan.get("blocked", false)), "the escaping scan still truncates at the next real hull")
+  var reach_e := float(escaping_scan.get("reach", 0.0))
+  _assert(
+    reach_e > 6.6 and reach_e < 7.4,
+    "escaping reach counts the distance walked inside the overlap (path start -> stop before hull 2: %.2f)" % reach_e,
+  )
+  var rp: Vector3 = escaping_scan.get("reach_point", Vector3.ZERO)
+  _assert(rp.x > o.x + 7.0 and rp.x < o.x + 8.5, "escaping reach point lies beyond the first hull and before the second (dx=%.2f)" % (rp.x - o.x))
+  _assert(none_scan.get("start_overlap") == &"none" and not bool(none_scan.get("blocked", false)), "clear start -> none, unblocked")
+  _assert(is_equal_approx(float(none_scan.get("reach", 0.0)), 10.0), "clear start reports the full path length")
+  _assert(escape_clear.get("start_overlap") == &"escaping" and not bool(escape_clear.get("blocked", false)), "escaping with nothing further ahead is not blocked")
+  _assert(is_equal_approx(float(escape_clear.get("reach", 0.0)), 3.0), "escaping unblocked reach equals the full path length (%.2f)" % float(escape_clear.get("reach", 0.0)))
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_scan_truncated_static_counts_planner_truncations() -> void:
+  # Arrange: same geometry as _test_route_scanned_endpoint_truncates_blocked_target.
+  var main := Node3D.new()
+  root.add_child(main)
+  var built := _MotorPathFixture.build_open(main)
+  var map_rid: RID = built.get("map_rid", RID())
+  _assert(await _MotorPathFixture.await_nav_ready(built), "nav0 truncation fixture navmesh synced")
+  var shrub_scene: PackedScene = load(_OpenShrub3DScenePath) as PackedScene
+  var shrub := shrub_scene.instantiate() as Node3D
+  main.add_child(shrub)
+  shrub.global_position = Vector3(20.0, 1.0, 20.0)
+  await _await_shrub_collision_bake()
+  var visual := shrub.get_node_or_null("Visual/ReadyVisual") as Node3D
+  var mesh_center: Vector3 = _StaticObstacleCollision.world_mesh_aabb(visual).get("center", shrub.global_position)
+  var wolf := _spawn_carnivore_body(main, mesh_center + Vector3(-10.0, 0.0, 0.0))
+  await physics_frame
+  var router = _NavRouterScr.for_map(map_rid, wolf)
+  var ctx := {"space_state": main.get_world_3d().direct_space_state, "nav_router": router}
+  var from := mesh_center + Vector3(-10.0, 0.0, 0.0)
+  # Act: blocked target (straight through the shrub), then a clear one.
+  (_MotorPlanner as GDScript).call("_route_scanned_endpoint", ctx, wolf, router, from, mesh_center + Vector3(10.0, 0.0, 0.0))
+  var after_blocked: int = router.scan_truncated_static
+  var queries_blocked: int = router.path_queries
+  (_MotorPlanner as GDScript).call("_route_scanned_endpoint", ctx, wolf, router, from, from + Vector3(0.0, 0.0, 8.0))
+  # Assert
+  _assert(after_blocked == 1, "a blocked scan through the planner increments scan_truncated_static (got %d)" % after_blocked)
+  _assert(queries_blocked == 1, "the blocked scan used exactly one path query (got %d)" % queries_blocked)
+  _assert(router.scan_truncated_static == 1, "an unblocked scan does not increment scan_truncated_static")
+  _assert(router.path_queries == 2, "path_queries counts both scanned endpoints (got %d)" % router.path_queries)
+  _assert(is_equal_approx(router.scan_truncated_static_ratio(), 0.5), "ratio = truncations / path queries (got %.3f)" % router.scan_truncated_static_ratio())
+  _assert(is_equal_approx(float(router.telemetry_snapshot()["ratio"]), 0.5), "telemetry snapshot carries the same ratio")
+  # Legacy ctx (raw map RID, no router): the planner adopts a wrapper and counts on it.
+  var legacy_ctx := {"space_state": main.get_world_3d().direct_space_state, "map_rid": map_rid}
+  (_MotorPlanner as GDScript).call("_route_scanned_endpoint", legacy_ctx, wolf, map_rid, from, mesh_center + Vector3(10.0, 0.0, 0.0))
+  var adopted = legacy_ctx.get("nav_router")
+  _assert(adopted != null and adopted.scan_truncated_static == 1, "legacy ctx[map_rid] callers still get truncations counted on an adopted router")
+  main.queue_free()
+  await process_frame
+
+
+func _test_nav0_choke_ray_lift_lifts_ray_origin_only() -> void:
+  # Arrange: two walls floating at y 1..3 (rays at the feet pass under them), 3.6 m apart, z -5..5.
+  var main := Node3D.new()
+  root.add_child(main)
+  var o := Vector3(900.0, 0.0, 400.0)
+  for side in [-1.0, 1.0]:
+    var wall := StaticBody3D.new()
+    var shape := BoxShape3D.new()
+    shape.size = Vector3(0.4, 2.0, 10.0)
+    var col := CollisionShape3D.new()
+    col.shape = shape
+    wall.add_child(col)
+    wall.collision_layer = 1
+    wall.collision_mask = 0
+    main.add_child(wall)
+    wall.global_position = o + Vector3(side * 2.0, 2.0, 0.0)
+  await physics_frame
+  var space := main.get_world_3d().direct_space_state
+  var heading := Vector3(0.0, 0.0, 1.0)
+  # Act
+  var low := _ChokePointProbe.measure_width(space, o, heading, 7.0)
+  var lifted := _ChokePointProbe.measure_width(space, o, heading, 7.0, [], _ChokePointProbe.BLOCKER_MASK, 1.5)
+  var tracker_flat := _ChokePointTracker.new()
+  var tracker_lift := _ChokePointTracker.new()
+  var flat_result := {}
+  var lift_result := {}
+  for i in 25:
+    var pos := o + Vector3(0.0, 0.0, -12.0 + float(i))
+    var f: Dictionary = tracker_flat.update(space, pos, heading, 7.0, 3.0, 2, [])
+    var l: Dictionary = tracker_lift.update(space, pos, heading, 7.0, 3.0, 2, [], 1.5)
+    if not f.is_empty():
+      flat_result = f
+    if not l.is_empty():
+      lift_result = l
+  # Assert
+  _assert(not bool(low.get("bounded", true)), "rays at the feet pass under the floating walls (unbounded)")
+  _assert(bool(lifted.get("bounded", false)), "rays lifted to y=1.5 hit both walls (bounded)")
+  _assert(absf(float(lifted.get("width", 0.0)) - 3.6) < 0.05, "lifted width is the wall-face gap 3.6 (got %.3f)" % float(lifted.get("width", 0.0)))
+  _assert(flat_result.is_empty(), "an unlifted tracker never confirms the elevated gap")
+  _assert(not lift_result.is_empty(), "a lifted tracker confirms the elevated gap")
+  var mouth: Vector3 = lift_result.get("mouth", Vector3(1.0, 1.0, 1.0))
+  _assert(is_zero_approx(mouth.y - o.y), "stored mouth keeps the body-origin height (ray_lift is not baked into it): y=%.3f" % mouth.y)
+  _assert(is_zero_approx(mouth.x - o.x), "stored mouth keeps the sampled lateral position")
+  _assert(absf(float(lift_result.get("width", 0.0)) - 3.6) < 0.05, "confirmed width is the real opening")
+  main.queue_free()
+  await process_frame
+
+
+# --- Gap trap (NAVIGATION_PASSABILITY_PLAN.md sections 3.2 / 7 / 8 Phase 0 (f); PHYSICS_SQUEEZE decision 46 B) ---
+
+## Seeded runs per gap-trap measurement (plan section 7 target: 0 wedges in >= 30 runs).
+const _GAP_TRAP_RUNS := 30
+## Hard cap per run (physics ticks at 60 Hz).
+## Runs for the legacy-size variant (the original observation was 9 of 17).
+const _GAP_TRAP_LEGACY_RUNS := 17
+const _GAP_TRAP_MAX_TICKS := 900
+## True while the legacy-size (r 7.04) scenario is red: the test then prints GAP_TRAP stats without asserting the
+## wedge count (expected failure until Phase 1, plan section 8). Flip to false once it passes.
+const _GAP_TRAP_LEGACY_KNOWN_RED := false
+const _GAP_TRAP_SOLID := Vector3(75.0, 0.0, 30.0)
+const _GAP_TRAP_OPEN := Vector3(65.0, 0.0, 20.0)
+
+
+## Builds the gap-trap world under [param main]: a 100 x 100 floor, the solid shrub at (75, 30) carving the
+## navmesh (baked with [param agent_radius]: shipped wolf 0.75 = ceil(0.715 / 0.25) * 0.25 as `main_3d.gd`
+## computes it) and the open shrub at (65, 20) on the ghost layer only (invisible to the navmesh).
+## Returns `{map_rid, solid, open}` ([param solid] / [param open] are the shrub nodes).
+func _nav0_build_gap_trap_world(main: Node3D, agent_radius: float) -> Dictionary:
+  var nav_region := NavigationRegion3D.new()
+  main.add_child(nav_region)
+  var floor_body := StaticBody3D.new()
+  floor_body.collision_layer = 1
+  var floor_shape := BoxShape3D.new()
+  floor_shape.size = Vector3(100.0, 0.2, 100.0)
+  var floor_col := CollisionShape3D.new()
+  floor_col.shape = floor_shape
+  floor_body.add_child(floor_col)
+  floor_body.position = Vector3(50.0, -0.1, 50.0)
+  nav_region.add_child(floor_body)
+  var solid := (load(_SolidShrub3DScenePath) as PackedScene).instantiate() as Node3D
+  nav_region.add_child(solid)
+  solid.global_position = _GAP_TRAP_SOLID
+  var open := (load(_OpenShrub3DScenePath) as PackedScene).instantiate() as Node3D
+  main.add_child(open)
+  open.global_position = _GAP_TRAP_OPEN
+  await _await_shrub_collision_bake()
+  await physics_frame
+  var nm := NavigationMesh.new()
+  nm.agent_radius = agent_radius
+  nm.agent_height = 2.0
+  nm.cell_size = 0.25
+  nm.cell_height = 0.25
+  nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
+  nm.geometry_source_geometry_mode = NavigationMesh.SOURCE_GEOMETRY_ROOT_NODE_CHILDREN
+  nm.geometry_collision_mask = 1
+  nav_region.navigation_mesh = nm
+  nav_region.bake_navigation_mesh(false)
+  var map_rid := nav_region.get_navigation_map()
+  NavigationServer3D.map_set_active(map_rid, true)
+  NavigationServer3D.map_set_cell_height(map_rid, 0.25)
+  NavigationServer3D.region_set_navigation_mesh(nav_region.get_rid(), nm)
+  var ready := await _MotorPathFixture.await_region_nav_ready(nav_region)
+  _assert(ready, "gap-trap navmesh synced to the map")
+  return {"map_rid": map_rid, "solid": solid, "open": open}
+
+
+## One seeded gap-trap run: a hungry wolf starts north-west of the gap and chases a stationary live prey on the
+## far (south-east) side, so the straight line crosses the gap midpoint (70, 25). Seed jitters the start point
+## (+-2 m) and heading. Returns `{reached, wedged, ticks, min_dist, max_stall}`. A run is `wedged` when the
+## wolf's net displacement stays under 0.5 m across a 120-tick trailing window for more than 30 consecutive
+## ticks before it reaches the prey, or when it has not reached the prey within the tick cap.
+func _nav0_gap_trap_run(main: Node3D, map_rid: RID, seed_value: int, definition: Resource) -> Dictionary:
+  var rng := RandomNumberGenerator.new()
+  rng.seed = seed_value
+  var start := Vector3(58.0 + rng.randf_range(-2.0, 2.0), 0.0, 37.0 + rng.randf_range(-2.0, 2.0))
+  var prey_pos := Vector3(82.0, 0.0, 13.0)
+  var wolf := _spawn_carnivore_body_with_definition(main, start, definition)
+  wolf.current_calories = 2.0
+  var heading := Vector3(1.0, 0.0, -1.0).rotated(Vector3.UP, rng.randf_range(-0.6, 0.6))
+  wolf.last_move_direction = heading.normalized()
+  await physics_frame
+  var stack := _motor_stack_test_configure(wolf)
+  stack.set_debug_assert_motor_invariants_enabled_for_test(false)
+  stack.set_nav_router(_NavRouterScr.for_map(map_rid, wolf))
+  const PREY_IID := 88101
+  var stall := _MotorStallDetector.Tracker.new(120, 0.5)
+  var min_dist := INF
+  var reached := false
+  var ticks := 0
+  for tick_i in _GAP_TRAP_MAX_TICKS:
+    ticks = tick_i + 1
+    stack.set_live_scan_for_test(_motor_pursuit_pinch_live_scan(prey_pos + Vector3(0.0, 1.0, 0.0), PREY_IID))
+    stack.tick(1.0 / 60.0)
+    _motor_pursuit_pinch_ypin(wolf, start.y)
+    stall.sample(wolf.global_position)
+    var d := _MotorPlane.horizontal_distance(wolf.global_position, prey_pos)
+    min_dist = minf(min_dist, d)
+    if d < 6.0:
+      reached = true
+      break
+    if stall.max_stall_streak > 30:
+      break
+  var wedged := (not reached)
+  wolf.get_parent().queue_free()
+  return {"reached": reached, "wedged": wedged, "ticks": ticks, "min_dist": min_dist, "max_stall": stall.max_stall_streak}
+
+
+func _test_nav0_gap_trap_wolf_wedge_rate() -> void:
+  # Shipped wolf (r 0.715, erosion 0.75): the live configuration. Asserts 0 wedges.
+  var shipped_def: Resource = load("res://creature/species/wolf_archetype.tres") as Resource
+  var shipped := await _nav0_gap_trap_measure("shipped wolf r=0.715", shipped_def, 0.75, _GAP_TRAP_RUNS)
+  _assert(
+    int(shipped["wedged"]) == 0,
+    "gap trap (shipped wolf): wedges in 0 of %d seeded runs (wedged seeds %s)" % [_GAP_TRAP_RUNS, str(shipped["seeds"])],
+  )
+  # Legacy-sized wolf (r 7.04, erosion 7.25): the pre-Phase-2 capsule the plan's 9/17 observation was made with.
+  # Reported only while _GAP_TRAP_LEGACY_KNOWN_RED (expected failure until Phase 1 per-class maps).
+  var legacy := await _nav0_gap_trap_measure("legacy wolf r=7.04", _tall_wolf_definition(), 7.25, _GAP_TRAP_LEGACY_RUNS)
+  if not _GAP_TRAP_LEGACY_KNOWN_RED:
+    _assert(
+      int(legacy["wedged"]) == 0,
+      "gap trap (legacy-size wolf): wedges in 0 of %d seeded runs (wedged seeds %s)" % [_GAP_TRAP_LEGACY_RUNS, str(legacy["seeds"])],
+    )
+
+
+## Runs [constant _GAP_TRAP_RUNS] seeded gap-trap runs for [param definition] on a navmesh eroded by
+## [param agent_radius]; prints one `GAP_TRAP:` summary line and returns `{wedged, reached, seeds}`.
+func _nav0_gap_trap_measure(label: String, definition: Resource, agent_radius: float, runs: int) -> Dictionary:
+  var t0 := Time.get_ticks_msec()
+  var main := Node3D.new()
+  root.add_child(main)
+  var world := await _nav0_build_gap_trap_world(main, agent_radius)
+  var build_ms := Time.get_ticks_msec() - t0
+  var map_rid: RID = world["map_rid"]
+  var probe_path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, Vector3(58.0, 0.0, 37.0), Vector3(82.0, 0.0, 13.0), true)
+  _assert(probe_path.size() >= 2, "gap-trap setup (%s): the navmesh has a path across the scenario" % label)
+  var reached_n := 0
+  var wedged_n := 0
+  var wedged_seeds: Array[int] = []
+  var total_ticks := 0
+  for seed_value in range(1, runs + 1):
+    var res: Dictionary = await _nav0_gap_trap_run(main, map_rid, seed_value, definition)
+    total_ticks += int(res["ticks"])
+    if bool(res["reached"]):
+      reached_n += 1
+    if bool(res["wedged"]):
+      wedged_n += 1
+      wedged_seeds.append(seed_value)
+      print("GAP_TRAP: %s seed=%d wedged min_dist=%.2f max_stall=%d ticks=%d" % [
+        label, seed_value, float(res["min_dist"]), int(res["max_stall"]), int(res["ticks"]),
+      ])
+  print("GAP_TRAP: %s navpath_pts=%d runs=%d wedged=%d reached=%d wedged_seeds=%s total_ticks=%d build_ms=%d total_ms=%d" % [
+    label, probe_path.size(), runs, wedged_n, reached_n, str(wedged_seeds), total_ticks,
+    build_ms, Time.get_ticks_msec() - t0,
+  ])
+  main.queue_free()
+  await process_frame
+  return {"wedged": wedged_n, "reached": reached_n, "seeds": wedged_seeds}

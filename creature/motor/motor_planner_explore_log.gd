@@ -125,6 +125,7 @@ static func format_explore_tick_line(snap: Dictionary, creature_label: String = 
     + eat_dbg
     + thr_dbg
     + flee_mem_suffix(snap)
+    + nav_scan_suffix(snap)
   ) % [
     int(snap.get("physics_tick", 0)),
     _fw(str(snap.get("action", "?")), 6),
@@ -163,6 +164,17 @@ static func flee_mem_suffix(snap: Dictionary) -> String:
   if kind.is_empty():
     kind = "-"
   return " fk=%s ahc=%d" % [kind, int(snap.get("avoid_hostiles_cell_count", -1))]
+
+
+## Route-scan truncation telemetry suffix (NAVIGATION_PASSABILITY_PLAN section 7 `scan_truncated_static`):
+## ` nst=<truncations>/<path queries>` once this creature's router has recorded at least one static-obstacle
+## truncation, else "" (so quiet creatures add nothing to the line). Contains no `%`.
+## Example: ` nst=3/412`.
+static func nav_scan_suffix(snap: Dictionary) -> String:
+  var trunc := int(snap.get("nav_scan_truncated_static", 0))
+  if trunc <= 0:
+    return ""
+  return " nst=%d/%d" % [trunc, int(snap.get("nav_path_queries", 0))]
 
 
 ## Multi-line explore snapshot for on-screen HUD (log file keeps [method format_explore_tick_line]).

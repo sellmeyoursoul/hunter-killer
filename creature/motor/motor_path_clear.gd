@@ -5,6 +5,7 @@ class_name MotorPathClear
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _NavRouter := preload("res://creature/motor/nav_router.gd")
 
 ## Minimum horizontal (XZ) distance, in metres, from the creature to a navmesh path point before
 ## [method resolve_step_objective] will steer at it. This is the same 2 m as the old 3D
@@ -14,34 +15,16 @@ const MIN_HOP_DISTANCE := 2.0
 ## surface under it. Above: the navmesh can sit slightly above a short body's origin. Below: must
 ## exceed any creature's origin height above the surface plus terrain slop (authored-dimension bodies
 ## have their origin at the feet, so this is generous; legacy bodies sit at the capsule centre).
-const NAV_QUERY_ABOVE := 1.0
-const NAV_QUERY_BELOW := 60.0
+const NAV_QUERY_ABOVE := _NavRouter.NAV_QUERY_ABOVE
+const NAV_QUERY_BELOW := _NavRouter.NAV_QUERY_BELOW
 
 
-## Navmesh point to use as the *start* of a path query for a body at [param creature_pos] (its
-## capsule centre). Returns the navmesh surface directly beneath the body, or the nearest navmesh
-## point to that vertical line when the body is off-mesh (for example, inside the agent-radius
-## erosion band next to an obstacle).
-##
-## Tall-capsule fix (2026-09-25): `map_get_path`/`map_get_closest_point` snap the start point
-## by 3D distance. From a wolf's centre ~7.7 m up, that snap lands on whatever surface is nearest
-## in 3D, such as a point 0.62 m uphill on sloped terrain (seen live on decision-44), or a ramp top
-## the body isn't standing on. The funnel then routes from the wrong spot, and the first corner
-## sits under the body or behind it. Returns [param creature_pos] unchanged when [param map_rid]
-## is invalid or the map has no geometry (the server's `Vector3.ZERO` empty-map sentinel).
-## Example: `map_get_path(map, MotorPathClear.nav_query_origin(map, body_pos), target, true)`.
-static func nav_query_origin(map_rid: RID, creature_pos: Vector3) -> Vector3:
-  if not map_rid.is_valid():
-    return creature_pos
-  var hit := NavigationServer3D.map_get_closest_point_to_segment(
-    map_rid,
-    creature_pos + Vector3.UP * NAV_QUERY_ABOVE,
-    creature_pos + Vector3.DOWN * NAV_QUERY_BELOW,
-    false,
-  )
-  if hit == Vector3.ZERO and _MotorPlane.horizontal_distance(creature_pos, hit) > 1e-3:
-    return creature_pos
-  return hit
+## Navmesh point to use as the *start* of a path query for a body at [param creature_pos]; thin static
+## wrapper over [method NavRouter.query_origin]. [param nav] is a [NavRouter] or (legacy / fixture seam) a
+## raw map RID, which is wrapped. See the router for the tall-capsule rationale (2026-09-25).
+## Example: `MotorPathClear.nav_query_origin(nav, body_pos)`.
+static func nav_query_origin(nav: Variant, creature_pos: Vector3) -> Vector3:
+  return _NavRouter.coerce(nav).query_origin(null, creature_pos)
 
 
 ## True when LoS to [param objective] passes the V3 occlusion threshold.
@@ -101,7 +84,7 @@ static func has_clear_contact_path(
 ## Resolves the step objective: the first navmesh path point more than [const MIN_HOP_DISTANCE]
 ## away from [param creature_pos] on the XZ plane. Falls back to [param ultimate] when there's no
 ## map, no path, the target itself is within that distance, or every path point is within it.
-## [param agent_radius] is unused (kept for call-site stability).
+## [param nav] is a [NavRouter] (or a raw map RID, wrapped). [param agent_radius] is unused (kept for call-site stability).
 ##
 ## Hop distance is measured horizontally, not in 3D (2026-09-25 wolf silent-stall fix):
 ## [param creature_pos] is the body's capsule centre, but path points are on the ground. The
@@ -113,17 +96,17 @@ static func has_clear_contact_path(
 ## straight through a corner just because the first bend was close. The query also starts from
 ## [method nav_query_origin] (the surface under the body), not the elevated centre.
 static func resolve_step_objective(
-  map_rid: RID,
+  nav: Variant,
   creature_pos: Vector3,
   ultimate: Vector3,
   _agent_radius: float,
 ) -> Vector3:
-  if not map_rid.is_valid():
+  var router := _NavRouter.coerce(nav)
+  if not router.has_map():
     return ultimate
   if _MotorPlane.horizontal_distance(creature_pos, ultimate) <= MIN_HOP_DISTANCE:
     return ultimate
-  var start := nav_query_origin(map_rid, creature_pos)
-  var path: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, start, ultimate, true)
+  var path: PackedVector3Array = router.path(null, creature_pos, ultimate)["points"]
   if path.size() < 2:
     return ultimate
   for i in range(1, path.size()):

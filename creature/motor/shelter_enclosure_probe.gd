@@ -22,6 +22,12 @@ const RING_SAMPLES := 8
 ## its own capsule always clears it). Passing the *occupant's own* live capsule radius here is
 ## Stage A candidate nomination (self-radius only, no threat involved); Stage B's threat-radius
 ## disqualify gate is a separate, not-yet-built call site (§9 slice 9/10) using this same primitive.
+## [param center] is a BODY-ORIGIN point (feet for authored bodies); [param probe_height] is the
+## origin-to-capsule-centre offset the ring is lifted by (Stage A capsule-centre fix: pass the
+## sweeping body's `get_capsule_center_offset_y()` — `agent_h / 2` for authored bodies — not a
+## fixed 1.0; the 1.0 default only serves the zero-width ray path and legacy/test callers). The
+## overlap check and every sweep use that same lifted origin, so the capsule's centre is exactly
+## at the ring origin.
 ## [param agent_radius] `<= 0.0` (the default) keeps the original zero-width raycast behavior,
 ## unchanged, for any caller not yet opted into the shape-cast sweep.
 static func enclosure_fraction(

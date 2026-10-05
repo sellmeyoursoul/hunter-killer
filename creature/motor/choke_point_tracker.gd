@@ -26,7 +26,8 @@ func reset() -> void:
 ## Feeds one sample. Returns `{}` normally, or `{mouth, width}` on the sample that closes out a
 ## stretch the creature passed through. [param exit_samples] consecutive unbounded samples end a
 ## stretch (hysteresis against a single ray missing); [param min_travel] is how far the exit must be
-## from the entry for it to count as a pass rather than a poke-and-retreat.
+## from the entry for it to count as a pass rather than a poke-and-retreat. [param ray_lift] raises the side
+## rays (body capsule-centre offset; see [method ChokePointProbe.measure_width]); stored positions unchanged.
 func update(
   space_state: PhysicsDirectSpaceState3D,
   pos: Vector3,
@@ -35,8 +36,11 @@ func update(
   min_travel: float,
   exit_samples: int,
   exclude_rids: Array = [],
+  ray_lift: float = 0.0,
 ) -> Dictionary:
-  var m := _Probe.measure_width(space_state, pos, heading, max_half, exclude_rids)
+  var m := _Probe.measure_width(
+    space_state, pos, heading, max_half, exclude_rids, _Probe.BLOCKER_MASK, ray_lift
+  )
   if bool(m.get("bounded", false)):
     _clear_samples = 0
     var w := float(m["width"])
