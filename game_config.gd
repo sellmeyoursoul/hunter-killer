@@ -69,12 +69,6 @@ func get_reach_margin_fraction() -> float:
   return _get_v3_nonneg_float("reach_margin_fraction", 0.25)
 
 
-## Eat-gate range bonus as a fraction of eater live length ([code]creature_motor_v3.eat_range_bonus_fraction[/code], default 0.25).
-## Gate = eater reach + bonus × eater length + target body radius. Default if missing/non-numeric; clamped to >= 0.
-func get_eat_range_bonus_fraction() -> float:
-  return _get_v3_nonneg_float("eat_range_bonus_fraction", 0.25)
-
-
 ## Reads a numeric [code]creature_motor_v3[/code] key; falls back to [param fallback] when missing,
 ## non-numeric, or NaN/inf; result clamped to >= 0.
 func _get_v3_nonneg_float(key: String, fallback: float) -> float:

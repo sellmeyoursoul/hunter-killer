@@ -785,42 +785,37 @@ func _test_creature_3d_predation_contact() -> void:
   floor_body.queue_free()
 
 
-## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18) + body-dimensions B27 (2026-10-05):
-## The eat gate is size-scaled (`MotorPlanner.eat_range` = reach + fraction * length + target radius), not a
-## fixed 5 m constant. A wolf (reach 4.5, length 6, rabbit radius 0.385) gets ~6.4: a rabbit 5.5 m away is
-## out of the old flat range but inside the scaled one, and a rabbit just past the gate is still rejected.
+## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18) + body-dimensions B27/B28 (2026-10-05):
+## The eat gate is size-scaled (`MotorPlanner.eat_range` = eater reach + target radius), not a fixed 5 m
+## constant. A wolf (reach 4.5, rabbit radius 0.385) gets ~4.885 and a rabbit (reach 1.275, plant radius 0)
+## gets ~1.275: the gate follows each eater's own body, and a target just past it is still rejected.
 func _test_eat_range_scales_with_predator_body_size() -> void:
   var main := Node3D.new()
   root.add_child(main)
   var wolf := _spawn_carnivore_body(main, Vector3.ZERO)
-  var rabbit := _spawn_herbivore_body(main, Vector3.ZERO)
+  var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 0.0, 300.0))
   await physics_frame
   var wolf_reach: float = wolf.get_reach_extent()
-  var wolf_len: float = wolf.get_body_dimensions().z
   var motor_v3 := _motor_v3_test_params()
-  var flat_max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
-  var scaled_gate: float = (_MotorPlanner as GDScript).call("_eat_range_for", wolf, rabbit.get_instance_id(), motor_v3)
+  var planner := _MotorPlanner as GDScript
+  var scaled_gate: float = planner.call("_eat_range_for", wolf, rabbit.get_instance_id())
+  var rabbit_gate: float = planner.call("_eat_range_for", rabbit, 0)
   wolf.global_position = Vector3.ZERO
-  var near_dist := flat_max_dist + 0.5
-  rabbit.global_position = Vector3(near_dist, 0.0, 0.0)
   _assert(
-    wolf_reach > 2.0 and wolf_len > 0.0 and near_dist < scaled_gate,
-    "sanity check: wolf reach (%.2f) + length share pushes the gate (%.2f) past the old flat range plus 0.5 m" % [wolf_reach, scaled_gate],
+    wolf_reach > 2.0 and scaled_gate > wolf_reach,
+    "sanity check: wolf reach (%.2f) plus prey radius gives the gate (%.2f)" % [wolf_reach, scaled_gate],
   )
-  var flat_within: bool = wolf.global_position.distance_to(rabbit.global_position) <= flat_max_dist
-  _assert(not flat_within, "sanity check: the rabbit at %.2f m is outside the old flat eat range (%.2f)" % [near_dist, flat_max_dist])
-  var within_range: bool = (_MotorPlanner as GDScript).call(
+  _assert(scaled_gate > rabbit_gate, "a wolf's gate (%.2f) exceeds a rabbit's (%.2f)" % [scaled_gate, rabbit_gate])
+  rabbit.global_position = Vector3(scaled_gate - 0.1, 0.0, 0.0)
+  var within_range: bool = planner.call(
     "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
   )
-  _assert(
-    within_range,
-    "a wolf-scale predator's own reach extends its eat range past the flat constant",
-  )
+  _assert(within_range, "a rabbit just inside the wolf's reach + prey radius is in eat range")
   rabbit.global_position = Vector3(scaled_gate + 0.5, 0.0, 0.0)
-  var beyond: bool = (_MotorPlanner as GDScript).call(
+  var beyond: bool = planner.call(
     "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
   )
-  _assert(not beyond, "a rabbit just past reach + length share + rabbit radius is still out of eat range")
+  _assert(not beyond, "a rabbit just past reach + rabbit radius is out of eat range")
   main.queue_free()
 
 
@@ -8220,10 +8215,10 @@ func _test_motor_replay_fixture_drives_stack_from_capture() -> void:
   ).get("pos", Vector3.ZERO)
   var end_dist := positions[positions.size() - 1].distance_to(last_prey)
   # This fixture's recorded start distance (~12) may sit near a wolf-scale predator's own eat range
-  # (`MotorPlanner._eat_range_for`: reach + fraction * length, prey radius ignored here). A predator
+  # (`MotorPlanner._eat_range_for`: eater reach + target radius, prey radius ignored here). A predator
   # already within its own range on frame one has nothing left to close; settling in place (or
   # drifting slightly with the recorded prey) is success, not a failed chase.
-  var effective_eat_range: float = (_MotorPlanner as GDScript).call("_eat_range_for", body, 0, _motor_v3_test_params())
+  var effective_eat_range: float = (_MotorPlanner as GDScript).call("_eat_range_for", body, 0)
   _assert(
     end_dist < start_dist - 0.05 or start_dist <= effective_eat_range,
     "replay fixture: stack driven from capture closes on the captured prey trajectory (start=%.2f end=%.2f)"
@@ -14883,7 +14878,8 @@ func _run_body_dimensions_phase1_tests() -> void:
   await _test_eat_range_xz_boundary_is_independent_of_y()
   await _test_eat_gate_snapshot_reports_xz_distance()
   await _test_select_action_eats_vertically_offset_in_range_target()
-  await _test_eat_range_fraction_override_changes_gate()
+  await _test_eat_range_grows_with_eater_length_via_reach()
+  await _test_eat_range_reach_override_changes_gate()
   await _test_eat_arrival_tolerance_clamps_to_eat_range_for_food_steps()
   await _test_eat_gate_log_throttles_once_per_step_instance()
   await _test_body_dims_fox_archetype_authored_dimensions()
@@ -15206,9 +15202,9 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
   main.add_child(plant)
   await process_frame
   var gates := {
-    "wolf->rabbit": [wolf, rabbit.get_instance_id(), 4.5 + 0.25 * 6.0 + 0.385],
-    "fox->rabbit": [fox, rabbit.get_instance_id(), 1.5 + 0.25 * 2.0 + 0.385],
-    "rabbit->plant": [rabbit, plant.get_instance_id(), 1.275 + 0.25 * 1.7],
+    "wolf->rabbit": [wolf, rabbit.get_instance_id(), 4.5 + 0.385],
+    "fox->rabbit": [fox, rabbit.get_instance_id(), 1.5 + 0.385],
+    "rabbit->plant": [rabbit, plant.get_instance_id(), 1.275],
   }
   var got_gates := {}
   for label in gates.keys():
@@ -15216,7 +15212,7 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
     var eater := row[0] as CharacterBody3D
     var tid: int = row[1]
     var expect_gate: float = row[2]
-    var gate: float = (_MotorPlanner as GDScript).call("_eat_range_for", eater, tid, motor_v3)
+    var gate: float = (_MotorPlanner as GDScript).call("_eat_range_for", eater, tid)
     got_gates[label] = gate
     _assert(
       is_equal_approx(gate, expect_gate),
@@ -15233,15 +15229,15 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
       not bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, outside, motor_v3, 1.0 / 60.0, tid)),
       "%s target just outside the gate is out of eat range" % label,
     )
-  # Rounded figures at fraction 0.25 with the B20 dimensions.
-  _assert(absf(float(got_gates["wolf->rabbit"]) - 6.385) < 0.01, "wolf->rabbit gate ~6.385 (got %.3f)" % got_gates["wolf->rabbit"])
-  _assert(absf(float(got_gates["fox->rabbit"]) - 2.385) < 0.01, "fox->rabbit gate ~2.385 (got %.3f)" % got_gates["fox->rabbit"])
-  _assert(absf(float(got_gates["rabbit->plant"]) - 1.7) < 0.01, "rabbit->plant gate ~1.7 (got %.3f)" % got_gates["rabbit->plant"])
+  # Rounded figures at reach_margin_fraction 0.25 with the B20 dimensions.
+  _assert(absf(float(got_gates["wolf->rabbit"]) - 4.885) < 0.01, "wolf->rabbit gate ~4.885 (got %.3f)" % got_gates["wolf->rabbit"])
+  _assert(absf(float(got_gates["fox->rabbit"]) - 1.885) < 0.01, "fox->rabbit gate ~1.885 (got %.3f)" % got_gates["fox->rabbit"])
+  _assert(absf(float(got_gates["rabbit->plant"]) - 1.275) < 0.01, "rabbit->plant gate ~1.275 (got %.3f)" % got_gates["rabbit->plant"])
   # Target side is body radius, not reach extent: a long prey does not over-credit the gate.
   var long_prey := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_longprey", 8.0, 0.7, 1.4), false, Vector3(0, 1, 600))
   await process_frame
-  var gate_long: float = (_MotorPlanner as GDScript).call("_eat_range_for", wolf, long_prey.get_instance_id(), motor_v3)
-  _assert(is_equal_approx(gate_long, 4.5 + 1.5 + 0.385), "eat gate target term is body radius, independent of prey length (B27)")
+  var gate_long: float = (_MotorPlanner as GDScript).call("_eat_range_for", wolf, long_prey.get_instance_id())
+  _assert(is_equal_approx(gate_long, 4.5 + 0.385), "eat gate target term is body radius, independent of prey length (B27)")
   main.queue_free()
   await process_frame
 
@@ -15266,7 +15262,7 @@ func _test_eat_range_ignores_vertical_offset_when_xz_overlaps() -> void:
   for label in pairs.keys():
     var eater := pairs[label][0] as CharacterBody3D
     var tid: int = pairs[label][1]
-    var gate: float = planner.call("_eat_range_for", eater, tid, motor_v3)
+    var gate: float = planner.call("_eat_range_for", eater, tid)
     for dy in [7.0, 12.0, gate + 25.0, -(gate + 25.0)]:
       # Act
       var target := eater.global_position + Vector3(0.0, dy, 0.0)
@@ -15288,7 +15284,7 @@ func _test_eat_range_xz_boundary_is_independent_of_y() -> void:
   await process_frame
   var planner := _MotorPlanner as GDScript
   var tid := rabbit.get_instance_id()
-  var gate: float = planner.call("_eat_range_for", wolf, tid, motor_v3)
+  var gate: float = planner.call("_eat_range_for", wolf, tid)
   for dy in [0.0, 7.0, 30.0, -30.0]:
     var inside := wolf.global_position + Vector3(gate - 0.02, dy, 0.0)
     var outside := wolf.global_position + Vector3(gate + 0.02, dy, 0.0)
@@ -15319,7 +15315,7 @@ func _test_eat_gate_snapshot_reports_xz_distance() -> void:
   var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
   await process_frame
-  var ultimate := wolf.global_position + Vector3(3.0, 9.0, 4.0)
+  var ultimate := wolf.global_position + Vector3(2.4, 9.0, 3.2)
   var state: Dictionary = _MotorPlanner.new_state()
   state["step_ultimate_pos"] = ultimate
   state["step_ultimate_pos_set"] = true
@@ -15330,8 +15326,8 @@ func _test_eat_gate_snapshot_reports_xz_distance() -> void:
   )
   # Assert
   _assert(
-    is_equal_approx(float(snap["eat_dist_to_ultimate"]), 5.0),
-    "snapshot eat_dist_to_ultimate is the XZ distance 5.0, not 3D (got %.3f)" % float(snap["eat_dist_to_ultimate"]),
+    is_equal_approx(float(snap["eat_dist_to_ultimate"]), 4.0),
+    "snapshot eat_dist_to_ultimate is the XZ distance 4.0, not 3D (got %.3f)" % float(snap["eat_dist_to_ultimate"]),
   )
   _assert(bool(snap["eat_within_range"]), "snapshot eat_within_range true for the stacked in-range target")
   main.queue_free()
@@ -15385,59 +15381,63 @@ func _test_select_action_eats_vertically_offset_in_range_target() -> void:
   await process_frame
 
 
-## Pure `MotorPlanner.eat_range(reach, length, fraction, target_radius)` contract: additive terms,
-## each clamped to >= 0, gate grows with eater length.
+## Pure `MotorPlanner.eat_range(eater_reach, target_radius)` contract: additive terms, each clamped to >= 0.
 func _test_eat_range_pure_function_cases() -> void:
-  var er := func(r: float, l: float, f: float, t: float) -> float:
-    return (_MotorPlanner as GDScript).call("eat_range", r, l, f, t)
-  _assert(is_equal_approx(er.call(4.5, 6.0, 0.25, 0.385), 6.385), "eat_range wolf->rabbit = 6.385")
-  _assert(is_equal_approx(er.call(1.5, 0.0, 0.25, 0.385), 1.885), "eat_range zero length drops the length share")
-  _assert(is_equal_approx(er.call(1.5, 2.0, 0.0, 0.385), 1.885), "eat_range fraction 0 drops the length share")
-  _assert(is_equal_approx(er.call(2.0, 4.0, 0.5, 0.0), 4.0), "eat_range with no target radius (plant) = reach + share")
-  _assert(is_equal_approx(er.call(-3.0, 4.0, 0.25, 0.5), 1.5), "eat_range clamps negative reach to 0")
-  _assert(is_equal_approx(er.call(1.0, -4.0, 0.25, 0.5), 1.5), "eat_range clamps negative length to 0")
-  _assert(is_equal_approx(er.call(1.0, 4.0, -0.25, 0.5), 1.5), "eat_range clamps negative fraction to 0")
-  _assert(is_equal_approx(er.call(1.0, 4.0, 0.25, -0.5), 2.0), "eat_range clamps negative target radius to 0")
-  _assert(is_equal_approx(er.call(-1.0, -1.0, -1.0, -1.0), 0.0), "eat_range of all-negative inputs is 0")
-  var mouse: float = er.call(0.2, 0.3, 0.25, 0.1)
-  var mastodon: float = er.call(6.0, 9.0, 0.25, 0.1)
-  _assert(mastodon > mouse * 10.0, "eat_range grows with eater size (mouse %.3f, mastodon %.3f)" % [mouse, mastodon])
-  _assert(
-    er.call(2.0, 8.0, 0.25, 0.3) > er.call(2.0, 4.0, 0.25, 0.3),
-    "eat_range increases monotonically with eater length at fixed reach",
-  )
+  var er := func(r: float, t: float) -> float:
+    return (_MotorPlanner as GDScript).call("eat_range", r, t)
+  _assert(is_equal_approx(er.call(4.5, 0.385), 4.885), "eat_range wolf->rabbit = 4.885")
+  _assert(is_equal_approx(er.call(1.5, 0.385), 1.885), "eat_range fox->rabbit = 1.885")
+  _assert(is_equal_approx(er.call(2.0, 0.0), 2.0), "eat_range with no target radius (plant) = reach")
+  _assert(is_equal_approx(er.call(-3.0, 0.5), 0.5), "eat_range clamps negative reach to 0")
+  _assert(is_equal_approx(er.call(1.0, -0.5), 1.0), "eat_range clamps negative target radius to 0")
+  _assert(is_equal_approx(er.call(-1.0, -1.0), 0.0), "eat_range of all-negative inputs is 0")
+  var mouse: float = er.call(0.2, 0.1)
+  var mastodon: float = er.call(6.0, 0.1)
+  _assert(mastodon > mouse * 10.0, "eat_range grows with eater reach (mouse %.3f, mastodon %.3f)" % [mouse, mastodon])
+  _assert(er.call(3.0, 0.3) > er.call(2.0, 0.3), "eat_range increases monotonically with eater reach")
 
 
-## `eat_range_bonus_fraction` is read from the motor_v3 dict per call: the override moves the real gate.
-func _test_eat_range_fraction_override_changes_gate() -> void:
+## Larger eater length gives a larger reach (get_reach_extent) and so a larger real gate; mastodon vs mouse.
+func _test_eat_range_grows_with_eater_length_via_reach() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
+  var mouse := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_mouse", 0.3, 0.1, 0.1), false, Vector3(0, 1, 0))
+  var mastodon := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_mastodon", 9.0, 3.0, 4.0), false, Vector3(0, 1, 200))
+  var prey := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
+  await process_frame
+  var planner := _MotorPlanner as GDScript
+  var g_mouse: float = planner.call("_eat_range_for", mouse, prey.get_instance_id())
+  var g_mast: float = planner.call("_eat_range_for", mastodon, prey.get_instance_id())
+  _assert(mastodon.get_reach_extent() > mouse.get_reach_extent(), "mastodon reach exceeds mouse reach")
+  _assert(g_mast > g_mouse * 5.0, "mastodon gate (%.3f) is far larger than mouse gate (%.3f)" % [g_mast, g_mouse])
+  main.queue_free()
+  await process_frame
+
+
+## `reach_override` on the definition moves the real gate through get_reach_extent (no config fraction involved).
+func _test_eat_range_reach_override_changes_gate() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var base_body := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_ro_base", 2.0, 0.5, 1.0), true, Vector3(0, 1, 0))
+  var long_body := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_ro_long", 2.0, 0.5, 1.0, 7.0), true, Vector3(0, 1, 200))
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
   await process_frame
   var planner := _MotorPlanner as GDScript
   var motor_v3 := _motor_v3_test_params()
+  var tid := rabbit.get_instance_id()
+  var base: float = planner.call("_eat_range_for", base_body, tid)
+  var wide: float = planner.call("_eat_range_for", long_body, tid)
+  _assert(is_equal_approx(base, base_body.get_reach_extent() + 0.385), "gate = computed reach + prey radius (got %.3f)" % base)
+  _assert(is_equal_approx(wide, 7.0 + 0.385), "reach_override 7 sets the gate to 7.385 (got %.3f)" % wide)
+  var probe := long_body.global_position + Vector3(base + 0.5, 0.0, 0.0)
   _assert(
-    is_equal_approx(float(motor_v3.get("eat_range_bonus_fraction", -1.0)), 0.25),
-    "default eat_range_bonus_fraction is 0.25",
+    bool(planner.call("_is_within_eat_range", long_body, probe, motor_v3, 0.0, tid)),
+    "a point past the computed-reach gate is in range once reach_override widens it",
   )
-  var base: float = planner.call("_eat_range_for", wolf, rabbit.get_instance_id(), motor_v3)
-  motor_v3["eat_range_bonus_fraction"] = 0.5
-  var wide: float = planner.call("_eat_range_for", wolf, rabbit.get_instance_id(), motor_v3)
-  motor_v3["eat_range_bonus_fraction"] = 0.0
-  var tight: float = planner.call("_eat_range_for", wolf, rabbit.get_instance_id(), motor_v3)
-  _assert(is_equal_approx(wide - base, 0.25 * 6.0), "fraction 0.5 widens the wolf gate by 0.25 * length (got %.3f)" % (wide - base))
-  _assert(is_equal_approx(tight, 4.5 + 0.385), "fraction 0 leaves reach + target radius (got %.3f)" % tight)
-  var probe := wolf.global_position + Vector3(base + 0.5, 0.0, 0.0)
-  motor_v3["eat_range_bonus_fraction"] = 0.25
+  var probe_b := base_body.global_position + Vector3(base + 0.5, 0.0, 0.0)
   _assert(
-    not bool(planner.call("_is_within_eat_range", wolf, probe, motor_v3, 0.0, rabbit.get_instance_id())),
-    "a point 0.5 m past the 0.25 gate is out of range",
-  )
-  motor_v3["eat_range_bonus_fraction"] = 0.5
-  _assert(
-    bool(planner.call("_is_within_eat_range", wolf, probe, motor_v3, 0.0, rabbit.get_instance_id())),
-    "the same point is in range once the fraction is raised to 0.5",
+    not bool(planner.call("_is_within_eat_range", base_body, probe_b, motor_v3, 0.0, tid)),
+    "the same offset is out of range without the override",
   )
   main.queue_free()
   await process_frame
@@ -15464,11 +15464,11 @@ func _test_eat_arrival_tolerance_clamps_to_eat_range_for_food_steps() -> void:
   var rabbit_plant: float = planner.call(
     "_eat_arrival_tolerance", rabbit, food_state.call(plant.get_instance_id(), _GkReg.GK_FIND_FOOD), motor_v3
   )
-  _assert(is_equal_approx(rabbit_plant, 1.7), "rabbit->plant food step tolerance is the 1.7 gate (got %.3f)" % rabbit_plant)
+  _assert(is_equal_approx(rabbit_plant, 1.275), "rabbit->plant food step tolerance is the 1.275 gate (got %.3f)" % rabbit_plant)
   var wolf_rabbit: float = planner.call(
     "_eat_arrival_tolerance", wolf, food_state.call(rabbit.get_instance_id(), _GkReg.GK_FIND_FOOD), motor_v3
   )
-  _assert(is_equal_approx(wolf_rabbit, 5.0), "wolf->rabbit food step keeps arrival_tolerance 5 under gate 6.385 (got %.3f)" % wolf_rabbit)
+  _assert(is_equal_approx(wolf_rabbit, 4.885), "wolf->rabbit food step clamps arrival_tolerance 5 to gate 4.885 (got %.3f)" % wolf_rabbit)
   var non_food: float = planner.call(
     "_eat_arrival_tolerance", rabbit, food_state.call(plant.get_instance_id(), &"not_food_goal"), motor_v3
   )

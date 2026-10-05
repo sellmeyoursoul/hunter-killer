@@ -17,8 +17,7 @@
   },
   "creature_motor_v3": {
   "width_margin": 0.10,
-  "reach_margin_fraction": 0.25,
-  "eat_range_bonus_fraction": 0.25
+  "reach_margin_fraction": 0.25
   },
   "creature_motor": {
   "mode": "scripted",

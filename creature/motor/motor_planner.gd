@@ -4232,46 +4232,30 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
 
 ## Size-scaled eat range (2026-10-05 decision; supersedes the fixed `eat_action_max_distance` gate,
 ## which let a wolf bite from ~6 units beyond its nose). Pure and testable:
-## [code]eat_range = reach + fraction * length + target_radius[/code], all clamped to >= 0.
-## [param eater_reach] is the eater's [code]get_reach_extent()[/code] (centre to mouth),
-## [param eater_length] its live body length ([code]get_body_dimensions().z[/code]),
-## [param fraction] [code]creature_motor_v3.eat_range_bonus_fraction[/code], and
+## [code]eat_range = reach + target_radius[/code], both clamped to >= 0.
+## [param eater_reach] is the eater's [code]get_reach_extent()[/code] (centre to mouth; already
+## encodes how far past the nose the mouth reaches, so there is no extra bonus tunable) and
 ## [param target_radius] the prey's [code]get_body_radius()[/code] (plants: 0).
-## Example: wolf -> rabbit [code]eat_range(4.5, 6.0, 0.25, 0.385)[/code] = 6.385.
-static func eat_range(
-  eater_reach: float,
-  eater_length: float,
-  fraction: float,
-  target_radius: float,
-) -> float:
-  return maxf(0.0, eater_reach) + maxf(0.0, fraction) * maxf(0.0, eater_length) + maxf(0.0, target_radius)
+## Examples: wolf -> rabbit [code]eat_range(4.5, 0.385)[/code] = 4.885; fox -> rabbit
+## [code]eat_range(1.5, 0.385)[/code] = 1.885; rabbit -> plant [code]eat_range(1.275, 0.0)[/code] = 1.275.
+static func eat_range(eater_reach: float, target_radius: float) -> float:
+  return maxf(0.0, eater_reach) + maxf(0.0, target_radius)
 
 
 ## Per-creature eat range for [param body] against [param target_instance_id] (see [method eat_range]).
-## Reads reach/length from the live body, the fraction from [param motor_v3]
-## ([code]eat_range_bonus_fraction[/code], default 0.25), and the target radius through
+## Reads reach from the live body and the target radius through
 ## [code]_InstanceIdLookup[/code] so a stale or synthetic id (or a plant) contributes 0 without an
 ## ObjectDB error. Single source for the EAT gate and for every approach-arrival that must not
 ## stop short of eating ([method _eat_arrival_tolerance]).
-static func _eat_range_for(
-  body: CharacterBody3D,
-  target_instance_id: int,
-  motor_v3: Dictionary,
-) -> float:
+static func _eat_range_for(body: CharacterBody3D, target_instance_id: int) -> float:
   var reach := 0.0
-  var length := 0.0
-  if body != null:
-    if body.has_method(&"get_reach_extent"):
-      reach = float(body.call(&"get_reach_extent"))
-    if body.has_method(&"get_body_dimensions"):
-      length = float((body.call(&"get_body_dimensions") as Vector3).z)
+  if body != null and body.has_method(&"get_reach_extent"):
+    reach = float(body.call(&"get_reach_extent"))
   var target_radius := 0.0
   var target := _InstanceIdLookup.resolve(target_instance_id)
   if target != null and target.has_method(&"get_body_radius"):
     target_radius = float(target.call(&"get_body_radius"))
-  return eat_range(
-    reach, length, float(motor_v3.get("eat_range_bonus_fraction", 0.25)), target_radius
-  )
+  return eat_range(reach, target_radius)
 
 
 ## Arrival tolerance for the current step: [code]min(arrival_tolerance, eat range)[/code] while the
@@ -4287,25 +4271,25 @@ static func _eat_arrival_tolerance(
   var iid := int(state.get("step_instance_id", 0))
   if iid == 0 or state.get("goal_kind", &"") != _GkReg.GK_FIND_FOOD:
     return tol
-  return minf(tol, _eat_range_for(body, iid, motor_v3))
+  return minf(tol, _eat_range_for(body, iid))
 
 
 ## True when [param body] is within its size-scaled eat range ([method _eat_range_for]) of
 ## [param target] measured on the ground plane (XZ via [method MotorPlane.horizontal_distance]; Y
 ## ignored, 2026-10-05 decision: footprints overlapping under/over each other are always in range,
 ## even where a rounded capsule's 3D centre distance would be too far). [param delta] kept for
-## call-site stability; unused. [param target_instance_id] (live prey) adds that body's radius;
+## call-site stability; unused ([param _motor_v3] likewise). [param target_instance_id] (live prey) adds that body's radius;
 ## omitted / unresolvable (a plant, a stale id) adds 0.
 static func _is_within_eat_range(
   body: CharacterBody3D,
   target: Vector3,
-  motor_v3: Dictionary,
+  _motor_v3: Dictionary,
   _delta: float,
   target_instance_id: int = 0,
 ) -> bool:
   return (
     _MotorPlane.horizontal_distance(body.global_position, target)
-    <= _eat_range_for(body, target_instance_id, motor_v3)
+    <= _eat_range_for(body, target_instance_id)
   )
 
 
@@ -4316,7 +4300,7 @@ static func _log_eat_commit(
   body: CharacterBody3D,
   state: Dictionary,
   eat_tgt: Vector3,
-  motor_v3: Dictionary,
+  _motor_v3: Dictionary,
 ) -> void:
   var iid := int(state.get("step_instance_id", 0))
   if iid == int(state.get("eat_gate_logged_iid", 0)):
@@ -4329,7 +4313,7 @@ static func _log_eat_commit(
   _OLogSafe.debug(
     "EatGate species=%s xz_dist=%.2f gate=%.2f" % [
       species, _MotorPlane.horizontal_distance(body.global_position, eat_tgt),
-      _eat_range_for(body, iid, motor_v3),
+      _eat_range_for(body, iid),
     ],
     false,
     "MotorEat",
