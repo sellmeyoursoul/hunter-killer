@@ -24,6 +24,7 @@ const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
+const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -217,6 +218,8 @@ static func new_state() -> Dictionary:
     "shelter_eval_result": &"",
     "shelter_eval_last_fraction": 0.0,
     "shelter_probe_cooldown_cycles": 0,
+    ## Last `step_instance_id` whose EAT commit was debug-logged (`_log_eat_commit` throttle).
+    "eat_gate_logged_iid": 0,
   }
 
 
@@ -251,6 +254,7 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   if goal_kind == _GkReg.GK_FIND_FOOD:
     if _can_eat_now(body, step_goal, state, motor_v3, delta, ctx):
       state["eat_orbit_turn_deg_accumulated"] = 0.0
+      _log_eat_commit(body, state, _resolve_eat_target_pos(state, step_goal), motor_v3)
       if int(state.get("step_instance_id", 0)) == int(state.get("lost_prey_hint_instance_id", 0)):
         _clear_lost_prey_hint(state)
       return _MotorAction.EAT
@@ -351,9 +355,12 @@ static func _advance_reached_intermediate_hop(
   var ultimate: Vector3 = state.get("step_ultimate_pos", Vector3.ZERO)
   if _MotorPlane.horizontal_distance(step_goal, ultimate) < 1e-3:
     return
-  if not _at_arrival(body, step_goal, motor_v3):
+  ## EAT approach: judge "reached" against min(arrival_tolerance, eat range) so the hop keeps
+  ## advancing until the creature can actually eat (see `_eat_arrival_tolerance`).
+  var hop_tol := _eat_arrival_tolerance(body, state, motor_v3)
+  if _MotorPlane.horizontal_distance(body.global_position, step_goal) > hop_tol:
     return
-  if _at_arrival(body, ultimate, motor_v3):
+  if _MotorPlane.horizontal_distance(body.global_position, ultimate) <= hop_tol:
     return
   var map_rid: RID = ctx.get("map_rid", RID())
   var resolved := _PathClear.resolve_step_objective(
@@ -528,7 +535,7 @@ static func _maybe_apply_fixed_objective_overshoot(
     return
   # XZ distances (2026-09-25): `ultimate`/`step_goal` may be ground-level navmesh points while
   # `global_position` is the capsule centre — see `MotorPlane.horizontal_distance`.
-  var arrival_tol := _arrival_tolerance(motor_v3)
+  var arrival_tol := _eat_arrival_tolerance(body, state, motor_v3)
   var dist_to_ultimate: float = _MotorPlane.horizontal_distance(body.global_position, ultimate)
   if dist_to_ultimate <= arrival_tol:
     return
@@ -1599,7 +1606,8 @@ static func _locale_kind_for_handoff(
   var kind: StringName = locale.get("stimulus_kind_id", &"")
   if kind != &"":
     return kind
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  ## Locale anchor proximity is non-food arrival semantics (not the eater's EAT gate).
+  var eat_max := _arrival_tolerance(motor_v3)
   var anchor: Vector3 = locale.get("anchor", Vector3.ZERO)
   var food_pos: Vector3 = live_food.get("pos", Vector3.ZERO)
   if anchor.length_squared() > 1e-8 and food_pos.distance_to(anchor) <= eat_max:
@@ -2206,7 +2214,9 @@ static func _maybe_locale_arrival_bind_or_clear(
     ultimate_valid = bool(state.get("step_goal_set", false))
   if not ultimate_valid:
     return
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  ## Locale arrival (id-0 STAY at `arrival_tolerance`) is non-food arrival; it only *binds* live
+  ## food, and the live step then approaches under the EAT gate. Must match the STAY tolerance.
+  var eat_max := _arrival_tolerance(motor_v3)
   # XZ (2026-09-25): locale anchors are ground-level points; `creature_pos` is the capsule centre.
   var d: float = _MotorPlane.horizontal_distance(creature_pos, ultimate)
   if d > eat_max:
@@ -4219,39 +4229,70 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
   return step_goal
 
 
-## PHYSICS_SQUEEZE.md §3 decision 14/25 follow-up (2026-09-18): `eat_action_max_distance` is a
-## fixed, deliberately-unscaled world-meter constant (see `motor_plane.gd`'s
-## `_UNSCALED_MOTOR_DISTANCE_KEYS` comment — it was previously bugged the *other* direction,
-## shrinking to ~0.5m on small playfields). That fix assumed predator bodies stay small; a wolf's
-## own live capsule radius (~7m post-decision-14 scaling) now exceeds the flat 5m constant outright
-## — a wolf could drive its own center to the near edge of a rabbit's capsule (already well past
-## simple surface contact) and still fail this gate. Live repro (2026-09-18): 3 wolves visibly
-## overlapping a rabbit, never eating it. Fixed by adding each body's own live capsule radius as a
-## reach bonus on top of the tuned constant — `eat_action_max_distance` now means "reach beyond
-## simple contact," not "reach from body center," matching how `_has_clear_contact_path_for_action`
-## already reasons about the two bodies' physical extents rather than pretending they're points.
-## [param target_instance_id] resolves through [code]_InstanceIdLookup[/code] so a stale or
-## synthetic id contributes nothing without raising an ObjectDB engine error.
-##
-## Body-dimensions B27 (CREATURE_BODY_DIMENSIONS §4.7): bonus = eater [code]get_reach_extent()[/code]
-## (mouth reaches the prey's side) + target [code]get_body_radius()[/code]. Plants have no body radius
-## and contribute 0. [code]eat_action_max_distance[/code] itself stays unscaled.
-static func _eat_reach_radius_bonus(body: CharacterBody3D, target_instance_id: int) -> float:
-  var bonus := 0.0
-  if body != null and body.has_method(&"get_reach_extent"):
-    bonus += float(body.call(&"get_reach_extent"))
+## Size-scaled eat range (2026-10-05 decision; supersedes the fixed `eat_action_max_distance` gate,
+## which let a wolf bite from ~6 units beyond its nose). Pure and testable:
+## [code]eat_range = reach + fraction * length + target_radius[/code], all clamped to >= 0.
+## [param eater_reach] is the eater's [code]get_reach_extent()[/code] (centre to mouth),
+## [param eater_length] its live body length ([code]get_body_dimensions().z[/code]),
+## [param fraction] [code]creature_motor_v3.eat_range_bonus_fraction[/code], and
+## [param target_radius] the prey's [code]get_body_radius()[/code] (plants: 0).
+## Example: wolf -> rabbit [code]eat_range(4.5, 6.0, 0.25, 0.385)[/code] = 6.385.
+static func eat_range(
+  eater_reach: float,
+  eater_length: float,
+  fraction: float,
+  target_radius: float,
+) -> float:
+  return maxf(0.0, eater_reach) + maxf(0.0, fraction) * maxf(0.0, eater_length) + maxf(0.0, target_radius)
+
+
+## Per-creature eat range for [param body] against [param target_instance_id] (see [method eat_range]).
+## Reads reach/length from the live body, the fraction from [param motor_v3]
+## ([code]eat_range_bonus_fraction[/code], default 0.25), and the target radius through
+## [code]_InstanceIdLookup[/code] so a stale or synthetic id (or a plant) contributes 0 without an
+## ObjectDB error. Single source for the EAT gate and for every approach-arrival that must not
+## stop short of eating ([method _eat_arrival_tolerance]).
+static func _eat_range_for(
+  body: CharacterBody3D,
+  target_instance_id: int,
+  motor_v3: Dictionary,
+) -> float:
+  var reach := 0.0
+  var length := 0.0
+  if body != null:
+    if body.has_method(&"get_reach_extent"):
+      reach = float(body.call(&"get_reach_extent"))
+    if body.has_method(&"get_body_dimensions"):
+      length = float((body.call(&"get_body_dimensions") as Vector3).z)
+  var target_radius := 0.0
   var target := _InstanceIdLookup.resolve(target_instance_id)
   if target != null and target.has_method(&"get_body_radius"):
-    bonus += float(target.call(&"get_body_radius"))
-  return bonus
+    target_radius = float(target.call(&"get_body_radius"))
+  return eat_range(
+    reach, length, float(motor_v3.get("eat_range_bonus_fraction", 0.25)), target_radius
+  )
 
 
-## True when [param body] is within [code]eat_action_max_distance[/code] world meters of [param
-## target], plus each body's own live capsule radius (see [method _eat_reach_radius_bonus]).
-## [param delta] kept for call-site stability; unused for the meter range gate. [param
-## target_instance_id], when nonzero and resolvable to a body with its own capsule radius (live
-## prey), is added to the reach the same way; omitted or unresolvable (a plant target, a stale id)
-## contributes nothing extra, leaving that case's existing behavior unchanged.
+## Arrival tolerance for the current step: [code]min(arrival_tolerance, eat range)[/code] while the
+## step is bound to a food instance under GK_FIND_FOOD (an EAT approach), else plain
+## [method _arrival_tolerance]. Keeps "arrived" from ever being declared farther out than the
+## creature's own eat gate (a rabbit's plant gate ~1.7 m is well inside the global 5 m).
+static func _eat_arrival_tolerance(
+  body: CharacterBody3D,
+  state: Dictionary,
+  motor_v3: Dictionary,
+) -> float:
+  var tol := _arrival_tolerance(motor_v3)
+  var iid := int(state.get("step_instance_id", 0))
+  if iid == 0 or state.get("goal_kind", &"") != _GkReg.GK_FIND_FOOD:
+    return tol
+  return minf(tol, _eat_range_for(body, iid, motor_v3))
+
+
+## True when [param body] is within its size-scaled eat range ([method _eat_range_for]) of
+## [param target] (centre to target position, 3D). [param delta] kept for call-site stability;
+## unused. [param target_instance_id] (live prey) adds that body's radius; omitted / unresolvable
+## (a plant, a stale id) adds 0.
 static func _is_within_eat_range(
   body: CharacterBody3D,
   target: Vector3,
@@ -4259,12 +4300,35 @@ static func _is_within_eat_range(
   _delta: float,
   target_instance_id: int = 0,
 ) -> bool:
-  var max_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
-  max_dist += _eat_reach_radius_bonus(body, target_instance_id)
-  return body.global_position.distance_to(target) <= max_dist
+  return body.global_position.distance_to(target) <= _eat_range_for(body, target_instance_id, motor_v3)
 
 
-## Find-food EAT gate: ultimate within [code]eat_action_max_distance[/code] + facing arc + non-zero
+## Debug-only (once per EAT commit, see [method select_action]): eater species, centre distance,
+## and the eat gate it passed. Logged through [code]_OLogSafe[/code]; one short line, no PII.
+static func _log_eat_commit(
+  body: CharacterBody3D,
+  state: Dictionary,
+  eat_tgt: Vector3,
+  motor_v3: Dictionary,
+) -> void:
+  var iid := int(state.get("step_instance_id", 0))
+  if iid == int(state.get("eat_gate_logged_iid", 0)):
+    return
+  state["eat_gate_logged_iid"] = iid
+  var species := &""
+  var def_v: Variant = body.get("definition")
+  if def_v is Resource:
+    species = StringName(str((def_v as Resource).get("species_id")).strip_edges())
+  _OLogSafe.debug(
+    "EatGate species=%s centre_dist=%.2f gate=%.2f" % [
+      species, body.global_position.distance_to(eat_tgt), _eat_range_for(body, iid, motor_v3),
+    ],
+    false,
+    "MotorEat",
+  )
+
+
+## Find-food EAT gate: ultimate within the size-scaled eat range ([method _eat_range_for]) + facing arc + non-zero
 ## [code]step_instance_id[/code] + no solid on the eater's own [code]collision_mask[/code] standing
 ## between it and the target (C18 — straight-line range alone let a predator "bite" through an
 ## impassable barrier like a species-only `MobBlocker` refuge wall).

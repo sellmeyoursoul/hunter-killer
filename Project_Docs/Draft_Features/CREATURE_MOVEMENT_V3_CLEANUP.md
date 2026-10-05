@@ -335,6 +335,8 @@ No dedicated locale-spin repro was run. Marked `done` instead because rabbit foo
 
 Contact / `MobHitbox` predation remains intentionally **inert** (D11). Kill is V3 **`EAT` only** via `_can_eat_now` → `_try_complete_eat` → `try_grant_as_prey_to`.
 
+> **Superseded (2026-10-05, pointer only; C3 history below is kept as written).** The distance bound is no longer the fixed `eat_action_max_distance` (5): `_can_eat_now` uses the size-scaled eat range (`motor_planner.gd` `eat_range()` / `_eat_range_for` = eater `get_reach_extent()` + `eat_range_bonus_fraction` × eater length + target `get_body_radius()`), and food-bound approach steps use `min(arrival_tolerance, eat range)`. See [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7 "Size-scaled eat range (B28)". The facing arc contract (`eat_facing_arc_deg` 90) is unchanged.
+
 | | Distance | Facing |
 |--|----------|--------|
 | **Bug today** | `_can_eat_now` measures to **`step_goal`** (nav substep) and uses a tight facing gate (`0.5 × turn_increment_deg` ≈ ±11.25°) | Misses when capsules overlap prey ultimate but substep/facing fail |

@@ -548,6 +548,9 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "width_margin": 0.10,
     ## Body-dimensions (§4.2): fraction of reach added as extra margin (>= 0).
     "reach_margin_fraction": 0.25,
+    ## Body-dimensions eat gate (§4.7, B27): bonus range as a fraction of eater live length (>= 0);
+    ## gate = eater reach + (this × eater length) + target body radius.
+    "eat_range_bonus_fraction": 0.25,
     ## Full front arc for EAT facing (half-angle = arc/2; default 90° → ±45°).
     "eat_facing_arc_deg": 90.0,
     ## Facing revolutions in eat range without EAT before one rearward break tick.

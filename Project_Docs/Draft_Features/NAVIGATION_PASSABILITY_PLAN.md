@@ -347,7 +347,7 @@ With D, the grid becomes the single route and passability truth. The shape-cast 
 - [ ] **Gap trap:** the (75,30) / (65,20) headless scenario wedges the wolf in **0 of ≥ 30** seeded runs *(tune)*. It was 9/17 before.
 - [ ] **Static-route agreement:** for static obstacles, the fraction of a creature's path queries that its own route scan truncates is ≤ 2% *(tune)*. New telemetry counter `scan_truncated_static` per creature. A high value means the pathing truth and the enforcement truth disagree.
 - [ ] **Erosion tolerance:** for each creature, the extra erosion versus its own radius is ≤ the class tolerance `R_k − r` *(Q2 sets the bound)*. Measure by sampling points that are capsule-clear at radius r and checking whether that creature's map covers them.
-- [ ] **Food access:** each `solid_shrub_3d` has a navigable point for the rabbit's class within the rabbit's effective eat reach (`eat_action_max_distance` + radius bonus, decision 26).
+- [ ] **Food access:** each `solid_shrub_3d` has a navigable point for the rabbit's class within the rabbit's effective eat reach (size-scaled eat range, CREATURE_BODY_DIMENSIONS B28: reach + `eat_range_bonus_fraction` × length + target radius; rabbit→plant ≈ 1.7; was `eat_action_max_distance` + radius bonus, decision 26).
 - [ ] **Decision-44 pocket:** the rabbit's navigable interior width is within one voxel of `21.9 − 2 × R_rabbit_class`.
 - [ ] **C1 compare:** in the c1 smoke and a new open-shrub variant, the straight-vs-rotated reach compare produces non-tied reach at least once in live play (telemetry).
 - [ ] **Dynamic latency:** from a crush / regrowth / hull swap event to every affected class map answering with the new geometry ≤ **T_dyn** (Q3 sets it).

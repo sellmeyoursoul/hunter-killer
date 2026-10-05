@@ -780,7 +780,7 @@ Tune in playtest. Species packs may override. **Note:** shelter-heavy scoring pr
 2. **`goal_source_memory.try_salient_write`** — `find_food` locale prior (unchanged §14.4).
 3. **Instance sync** — refresh `consumable_now` / position on matching `instance_id` when still tracked.
 
-**Planned — prey EAT (post-6d-explore-prey D11):** Same write contract as plants when predator completes `EAT` on a diet-valid prey **`CharacterBody3D`**. **`stimulus_kind_id`** = prey **`CreatureDefinition.species_id`** (live scan convention — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd)); enables kind memory for multiple prey types without per-creature scene keys. Replaces active **`MobHitbox`** contact predation ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) — left inert until later template cleanup). Range: shared **`eat_action_max_distance`** (**5**).
+**Planned — prey EAT (post-6d-explore-prey D11):** Same write contract as plants when predator completes `EAT` on a diet-valid prey **`CharacterBody3D`**. **`stimulus_kind_id`** = prey **`CreatureDefinition.species_id`** (live scan convention — [`awareness_zone_scan.gd`](../../creature/motor/awareness_zone_scan.gd)); enables kind memory for multiple prey types without per-creature scene keys. Replaces active **`MobHitbox`** contact predation ([`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) — left inert until later template cleanup). Range: shared **`eat_action_max_distance`** (**5**) *(superseded 2026-10-05: size-scaled eat range, [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7 B28)*.
 
 **Deferred — variable bite / pool / sharing:** Today plants are static one-bite-full-depletion; schema allows **`believed_calories_per_action`** separate from pool size when [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) lands. V3 wires **`calories_gained`** observation only.
 
@@ -2562,11 +2562,11 @@ effective_latch_ticks = clamp(
 
 **Resolved — G7 prey capture path (2026-07-09):** Wire meal + defeat through V3 **`EAT`** + §6.2 memory writes (D11); disable active `MobHitbox` predation (node inert until later cleanup).
 
-**Resolved — D11 prey capture via V3 EAT (G7, 2026-07-09):** Retire **active** duel predation on prey **`MobHitbox`** contact; wire meal + defeat through V3 **`EAT`** completion (same range gate as plants — §7.2 **`eat_action_max_distance`** **5**; acceptable v1, tune later). **Until combat:** no separate `ATTACK` action — prey kill remains under **`find_food`** / `EAT`.
+**Resolved — D11 prey capture via V3 EAT (G7, 2026-07-09):** Retire **active** duel predation on prey **`MobHitbox`** contact; wire meal + defeat through V3 **`EAT`** completion (same range gate as plants — §7.2 **`eat_action_max_distance`** **5**; acceptable v1, tune later; *superseded 2026-10-05: the gate is now the size-scaled eat range, [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7 B28*). **Until combat:** no separate `ATTACK` action — prey kill remains under **`find_food`** / `EAT`.
 
 | Step | Behavior |
 |------|----------|
-| **Planner** | Existing `_can_eat_now` — within **`eat_action_max_distance`**, facing aligned, `step_instance_id` = prey body id |
+| **Planner** | Existing `_can_eat_now` — within the size-scaled eat range (`eat_range()` / `_eat_range_for`, B28; was **`eat_action_max_distance`**), facing aligned, `step_instance_id` = prey body id |
 | **Stack** | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd) `_try_complete_eat` — if `instance_from_id` is prey **`CharacterBody3D`** (diet-valid for predator), call prey grant API; bushes unchanged (`try_grant_engine_creature`) |
 | **Prey body** | New grant method on [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) (e.g. `try_grant_as_prey_to`) — one-shot: predator `add_calories_from_prey` + **`notify_food_consumption_outcome`** (§6.2 memory writes) + prey `_apply_defeat_local` + `hit` (duel round end via [`main_3d.gd`](../../main_3d.gd)) |
 | **Memory** | Same adapter path as plant EAT: **`record_observation`** (`nutrition_yield`) + locale salient write; **`stimulus_kind_id`** = prey **`species_id`** ([`awareness_zone_scan._stimulus_kind_for_creature`](../../creature/motor/awareness_zone_scan.gd)) — supports multiple prey species without per-scene bush-style ids |
@@ -2629,7 +2629,7 @@ effective_latch_ticks = clamp(
 | Q4 | **Intercept hint (light only)** — optional `last_world_pos + last_velocity × goal_memory_ghost_horizon_sec` objective hint for moving prey memory seek; no full predictive intercept / pursuit disk sampling | [`goal_belief_memory.gd`](../../creature/motor/goal_belief_memory.gd), [`motor_planner.gd`](../../creature/motor/motor_planner.gd) |
 | Q5 | **V3 config ownership** — mover TTL / engagement keys used by this slice live under `creature_motor_v3`; no new reads from legacy `creature_motor` | [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) |
 | Q6 | **Headless** — carnivore does not classify prey as threat; live-prey dropout continues chase from memory; engagement latch outranks under-stocked explore-first remint while valid | [`tests/run_all.gd`](../../tests/run_all.gd) |
-| Q7 | **Prey capture via `EAT` (D11)** — stack completes prey meal at `eat_action_max_distance`; memory adapter writes; legacy `MobHitbox` predation inert | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) |
+| Q7 | **Prey capture via `EAT` (D11)** — stack completes prey meal within the size-scaled eat range (B28; was `eat_action_max_distance`); memory adapter writes; legacy `MobHitbox` predation inert | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`creature_kinematic_body_3d.gd`](../../creature/capabilities/creature_kinematic_body_3d.gd) |
 | Q8 | **Hunt debug HUD (D12)** — snapshot + F10 line expose engagement latch + food inventory step mode | [`creature_motor_stack.gd`](../../creature/motor/creature_motor_stack.gd), [`motor_planner_explore_log.gd`](../../creature/motor/motor_planner_explore_log.gd) |
 
 **Design guardrails (resolved for this slice):**
@@ -2640,7 +2640,7 @@ effective_latch_ticks = clamp(
 - **Flight resume (D13):** `avoid_hostiles` until natural end; post-Flight `find_food` uses normal planner order; moving-prey consult remains latch-gated only (D8).
 - **Carnivore-only (2026-07-09):** omnivore pursuit, plant-vs-prey bind, and omnivore duel smoke **out of scope** this slice.
 - **Persistence bridge only (D8):** no ambient hunt-from-memory; post-latch revisit to last prey position deferred.
-- **Prey capture via `EAT` (D11):** meal + defeat on successful `EAT` at **`eat_action_max_distance`** (**5**); full §6.2 memory writes on prey meals; `MobHitbox` contact predation disabled (node left for later removal).
+- **Prey capture via `EAT` (D11):** meal + defeat on successful `EAT` within the size-scaled eat range (B28, [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7; originally **`eat_action_max_distance`** **5**); full §6.2 memory writes on prey meals; `MobHitbox` contact predation disabled (node left for later removal).
 - **Hunt debug (D12):** engagement latch + inventory step mode on carnivore F10 HUD during pursuit.
 - **No V2 latch revival by shape:** legacy `goal_visibility_latch.gd` stays retired; latch numerics re-homed under **`creature_motor_v3`** planner state (D2, D10).
 - **`change_stability` on pursuit only (D10):** modulates engagement latch duration at arm — not hub `trait_goal_mul` / general tactic modulator.
