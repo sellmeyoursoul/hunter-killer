@@ -477,6 +477,7 @@ func _run_all() -> void:
   _test_locale_prior_escalate_seek()
   _test_escape_reversal_suppression()
   _test_load_merged_config_repo_fallback()
+  _test_game_config_dev_logging_override_prefers_repo_logging_params()
   _test_hunter_killer_debug_project_settings()
   _test_perception_snippet()
   _test_perception_sampling()
@@ -1114,8 +1115,12 @@ func _test_creature_motor_v3_merge_defaults() -> void:
     "v3 approach_overshoot_guard_move_steps default",
   )
   _assert(
-    is_equal_approx(float(v3.get("eat_action_max_distance", 0.0)), 5.0),
-    "v3 eat_action_max_distance default",
+    not v3.has("eat_action_max_distance"),
+    "v3 defaults omit retired eat_action_max_distance",
+  )
+  _assert(
+    is_equal_approx(float(v3.get("arrival_tolerance", 0.0)), 5.0),
+    "v3 arrival_tolerance default stays 5.0",
   )
   _assert(
     not v3.has("eat_range_move_steps"),
@@ -1270,8 +1275,8 @@ func _test_creature_motor_v3_playfield_distance_scale() -> void:
   ## shrink with playfield size (CLEANUP fox-can't-close-on-prey: eat range scaled to ~0.5m on a
   ## small duel arena, well below what's survivable against live, evasive prey).
   _assert(
-    is_equal_approx(float(scaled.get("eat_action_max_distance", 0.0)), 5.0),
-    "v3 eat_action_max_distance does not scale with playfield factor",
+    not scaled.has("eat_action_max_distance"),
+    "v3 scaled params omit retired eat_action_max_distance",
   )
   _assert(
     is_equal_approx(float(scaled.get("arrival_tolerance", 0.0)), 5.0),
@@ -5490,7 +5495,7 @@ func _test_motor_planner_overshoot_retains_locale_no_progress() -> void:
   main.queue_free()
 
 
-## C3 — EAT gate measures ultimate in eat_action_max_distance meters, not distant nav step_goal.
+## C3 — EAT gate measures ultimate within arrival_tolerance-scale meters (5 m; inside the carnivore eat gate), not distant nav step_goal.
 func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
   var motor_v3 := _motor_v3_test_params()
   var main := Node3D.new()
@@ -5499,7 +5504,7 @@ func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
   var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var delta := 1.0 / 60.0
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   ## Ultimate within 5 m (not step×5) so meter gate arms despite distant substep.
   var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
   var distant_substep := Vector3(80.0, 1.0, 40.0)
@@ -5545,7 +5550,7 @@ func _test_motor_planner_eat_uses_ultimate_not_step_goal() -> void:
 
 
 ## C18 — a solid on the eater's own collision_mask between it and the target must block EAT even
-## when the target is within straight-line eat_action_max_distance and facing is aligned.
+## when the target is within straight-line eat range and facing is aligned.
 ## PHYSICS_SQUEEZE.md §3 decision 33 (2026-09-21): uses a real terrain-layer (1) blocker, not the
 ## old species-only layer 8 — that diet-role mask bit was retired (nothing has been on it since
 ## decision 25's ghost-layer migration; decision 28's ghost-layer raycast already covers the
@@ -5560,7 +5565,7 @@ func _test_motor_planner_eat_blocked_by_solid_between() -> void:
   var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var delta := 1.0 / 60.0
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
@@ -5632,7 +5637,7 @@ func _test_motor_planner_eat_blocked_by_ghost_layer_solid_between() -> void:
   var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.last_move_direction = Vector3(1.0, 0.0, 0.0)
   var delta := 1.0 / 60.0
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var ultimate := Vector3(eat_max * 0.5, 1.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
@@ -5724,7 +5729,7 @@ func _test_motor_planner_eat_orbit_break_after_revolutions() -> void:
   ## Face away from ultimate so EAT cone fails while still within 5 m.
   body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
   var delta := 1.0 / 60.0
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var ultimate := Vector3(eat_max * 0.4, 1.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
@@ -5793,7 +5798,7 @@ func _test_motor_planner_eat_orbit_break_scales_with_turn_rate() -> void:
   var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, 0.0))
   body.last_move_direction = Vector3(-1.0, 0.0, 0.0)
   var delta := 1.0 / 60.0
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var ultimate := Vector3(eat_max * 0.4, 1.0, 0.0)
   var state := _MotorPlanner.new_state()
   state["goal_kind"] = _GkReg.GK_FIND_FOOD
@@ -5848,7 +5853,7 @@ func _test_motor_locale_approach_no_oscillation_smoke() -> void:
     if str(snap_after.get("action", "")) == "MOVE_F":
       if float(snap_after.get("facing_dot_tgt", 1.0)) < 0.0:
         rear_hemisphere_moves += 1
-  var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_dist := float(motor_v3.get("arrival_tolerance", 5.0))
   _assert(
     min_dist < start_dist - 0.05 or min_dist <= eat_dist * 2.0,
     "locale smoke: distance to anchor decreases or reaches eat band (start=%.2f min=%.2f)"
@@ -6036,7 +6041,7 @@ func _test_motor_pursuit_pinch_detour_smoke() -> void:
     if act == _MotorAction.EAT:
       eat_reached = true
       break
-  var eat_dist := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_dist := float(motor_v3.get("arrival_tolerance", 5.0))
   _assert(
     min_dist < start_dist - 0.15 or min_dist <= eat_dist * 2.5,
     "pursuit pinch smoke: closes on moving prey (start=%.2f min=%.2f)" % [start_dist, min_dist],
@@ -6873,7 +6878,7 @@ func _test_motor_planner_locale_seek_walks_past_intermediate_hop_on_real_navmesh
   body.global_position = start
   var motor_v3 := _motor_v3_test_params()
   var tol := float(motor_v3.get("arrival_tolerance", 5.0))
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var hop := _MotorPathClear.resolve_step_objective(map_rid, start, anchor, 0.5)
   var hop_xz := _MotorPlane.horizontal_distance(start, hop)
   _assert(
@@ -7688,7 +7693,7 @@ func _test_motor_planner_locale_arrival_binds_live_or_clears() -> void:
   body.last_move_direction = Vector3(0.0, 0.0, 1.0)
   var stack := _motor_stack_test_configure(body)
   var motor_v3 := _motor_v3_test_params()
-  var eat_max := float(motor_v3.get("eat_action_max_distance", 5.0))
+  var eat_max := float(motor_v3.get("arrival_tolerance", 5.0))
   var anchor := Vector3(2.0, 1.0, 0.0)
   # Case A: locale arrival with live bush nearby → bind live.
   var state_live := _MotorPlanner.new_state()
@@ -12964,6 +12969,35 @@ func _test_load_merged_config_repo_fallback() -> void:
   _assert(str(res.get("diagnostic", "x")).is_empty(), "missing user file over repo template has no diagnostic")
   var merged: Dictionary = res["merged"]
   _assert(typeof(merged.get("perception", null)) == TYPE_DICTIONARY, "merged config repo-fallback still has perception section")
+
+## Dev (editor-feature) runs: repo template logging_params overlay a stale user copy; other sections untouched.
+func _test_game_config_dev_logging_override_prefers_repo_logging_params() -> void:
+  if not OS.has_feature("editor"):
+    return
+  var repo_json := JSON.new()
+  _assert(
+    repo_json.parse(FileAccess.get_file_as_string("res://game_config.json")) == OK,
+    "fixture: repo game_config.json parses",
+  )
+  var repo_lp: Dictionary = (repo_json.data as Dictionary).get("logging_params", {})
+  var gc: Node = (load("res://game_config.gd") as GDScript).new()
+  gc.set("_merged", {
+    "logging_params": {"LOG_LEVEL": "__stale_user_level__", "USER_ONLY_KEY": 7},
+    "perception": {"SNAPSHOT_PHYSICS_STRIDE": 99},
+  })
+  gc.call("_apply_dev_logging_override")
+  var lp: Dictionary = gc.call("get_logging_params")
+  _assert(
+    lp.get("LOG_LEVEL") == repo_lp.get("LOG_LEVEL"),
+    "dev override: repo LOG_LEVEL shadows stale user LOG_LEVEL",
+  )
+  _assert(int(lp.get("USER_ONLY_KEY", 0)) == 7, "dev override: user-only logging keys survive the overlay")
+  var per: Dictionary = gc.call("get_perception_params")
+  _assert(
+    int(per.get("SNAPSHOT_PHYSICS_STRIDE", 0)) == 99,
+    "dev override: non-logging sections keep user precedence",
+  )
+  gc.free()
 
 func _test_locale_prior_escalate_seek() -> void:
   var motor_p := _Merge.creature_motor_spine()

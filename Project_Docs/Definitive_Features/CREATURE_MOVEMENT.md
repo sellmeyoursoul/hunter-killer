@@ -160,7 +160,7 @@ For each candidate step direction `d`, predicted center = `creature_position + d
 | Source | Path | Role |
 |--------|------|------|
 | **Defaults** | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) → `default_creature_motor_params()` | Full key set when JSON missing |
-| **User overrides** | `user://game_config.json` → `creature_motor` | Merged by `GameConfig` autoload |
+| **User overrides** | `user://game_config.json` → `creature_motor` | Merged by `GameConfig` autoload. Precedence: defaults, then repo `res://game_config.json`, then user file (user wins). **Exception (dev runs):** when `OS.has_feature("editor")` (editor binary, incl. headless `--path`), `game_config.gd` `_apply_dev_logging_override()` makes the repo `logging_params` win over the user file; exported builds keep user precedence; non-logging sections (including `creature_motor`) are not overridden, so a stale user copy still shadows them (see [CREATURE_BODY_DIMENSIONS.md](../Draft_Features/CREATURE_BODY_DIMENSIONS.md) §8) |
 | **Repo sample** | [`game_config.json`](../../game_config.json) | Partial; many keys fall back to defaults |
 | **Runtime context** | `AiDriver._build_motor_context()` | Per-tick scaled weights (hunger, pursuit urgency, stuck, predator boost) |
 

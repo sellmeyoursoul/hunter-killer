@@ -18,6 +18,31 @@ func _reload_from_disk() -> void:
   var result: Dictionary = _Merge.load_merged_config(CONFIG_PATH)
   _merged = result["merged"]
   _diagnostic = str(result.get("diagnostic", ""))
+  _apply_dev_logging_override()
+
+
+## Dev runs (editor binary, incl. headless smokes via [code]--path[/code]): the repo [code]res://game_config.json[/code]
+## [code]logging_params[/code] wins over a stale [code]user://game_config.json[/code] copy, so editing the repo file
+## (e.g. [code]LOG_LEVEL[/code] = Debug) takes effect. Exported builds keep user:// precedence.
+## Root cause it fixes: a user:// copy with [code]"LOG_LEVEL": "Info"[/code] silently shadowed the repo's Debug.
+func _apply_dev_logging_override() -> void:
+  if not OS.has_feature("editor"):
+    return
+  const repo_template := "res://game_config.json"
+  if not FileAccess.file_exists(repo_template):
+    return
+  var rjson := JSON.new()
+  if rjson.parse(FileAccess.get_file_as_string(repo_template)) != OK:
+    return
+  if typeof(rjson.data) != TYPE_DICTIONARY:
+    return
+  var repo_lp: Variant = (rjson.data as Dictionary).get("logging_params", null)
+  if typeof(repo_lp) != TYPE_DICTIONARY:
+    return
+  var lp: Dictionary = _merged.get("logging_params", {}).duplicate(true)
+  for k in (repo_lp as Dictionary):
+    lp[k] = repo_lp[k]
+  _merged["logging_params"] = lp
 
 
 ## Non-empty when [code]user://game_config.json[/code] failed to load (parse error, wrong root type). A missing user file is normal on first run: [code]load_merged_config[/code] still merges [code]res://game_config.json[/code] plus defaults and leaves this diagnostic empty.

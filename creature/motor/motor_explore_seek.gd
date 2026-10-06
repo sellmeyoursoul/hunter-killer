@@ -25,7 +25,7 @@ static func mint_explore_step(
 ) -> Vector3:
   state["step_source"] = &"explore"
   var reach := float(motor_v3.get("awareness_radius", 1500.0)) * 0.5
-  var arrival_tol := float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  var arrival_tol := _MotorPlanner._arrival_tolerance(motor_v3)
   var latched: Vector3 = state.get("explore_waypoint", Vector3.ZERO)
   var latched_valid := bool(state.get("explore_waypoint_set", false))
   var body: CharacterBody3D = ctx.get("body")

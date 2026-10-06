@@ -16,6 +16,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | Deterministic `user://` root for automated tests (CI / headless) | Medium | — | Stable paths under Godot test harness |
 | Editor-only or `logging_params.enabled` gate for shipped builds | Medium | — | Optional once shipping matters |
 | Mirror selected levels to remote sink (HTTP, file rotation) | Medium | — | Out of scope for current file-only design |
+| Stale `user://game_config.json` shadows repo config in dev (non-logging sections) | Medium | [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) §8 | Logging is fixed for editor runs (`game_config.gd` `_apply_dev_logging_override()`, 2026-10-06); gameplay keys are still shadowed until the user deletes / refreshes the file (awaiting user decision) |
 
 ---
 

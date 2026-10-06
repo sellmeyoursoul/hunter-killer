@@ -542,8 +542,6 @@ static func default_creature_motor_v3_params() -> Dictionary:
     ## CLEANUP C11 flip-flop fix — separate tunable from `los_hysteresis_ticks` since threat
     ## awareness and path-clearance LoS have no evidence they need the same debounce timing).
     "threat_awareness_hysteresis_ticks": 3,
-    ## EAT contact range in world meters to ultimate (not nav [code]step_goal[/code]).
-    "eat_action_max_distance": 5.0,
     ## Body-dimensions (CREATURE_BODY_DIMENSIONS §4.2): fractional clearance padding added to body width (>= 0).
     "width_margin": 0.10,
     ## Body-dimensions (§4.2): fraction of reach added as extra margin (>= 0).
@@ -691,7 +689,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "approach_overshoot_guard_move_steps": 2,
     ## Arrival damping radius (world meters) — MOVE_FORWARD speed tapers from full to
     ## _ARRIVAL_DAMPING_MIN_SPEED_FRAC as `dist_to_goal` closes inside this band. Independent of
-    ## `eat_action_max_distance` / `arrival_tolerance` (goal-agnostic, not EAT-specific; CLEANUP R1).
+    ## `arrival_tolerance` (goal-agnostic, not EAT-specific; CLEANUP R1).
     "approach_arrival_damping_radius": 2.5,
     ## Widened MOVE_FORWARD heading gate (CLEANUP R1 mitigation #2 — blend turn+move in one tick).
     ## MOVE_FORWARD is legal whenever heading error is within this arc (vs. the tight

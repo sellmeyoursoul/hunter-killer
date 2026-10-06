@@ -4205,7 +4205,7 @@ static func _flee_objective(
   # CLEANUP RT1 follow-up (2026-08-12): was `awareness_radius * 0.5` — on a small (playfield-
   # scaled-down) arena that put the flee waypoint only halfway to the edge of the creature's own
   # (already-shrunk) awareness disc, well inside the fox's bite range (now the size-scaled
-  # `eat_range`, formerly a fixed `eat_action_max_distance`) — the rabbit took a token hop and was
+  # `eat_range`) — the rabbit took a token hop and was
   # immediately back in striking range. Flee to the
   # full edge of the awareness disc instead; `awareness_radius` itself already scales down with
   # playfield size (`scale_creature_motor_v3_for_playfield`), so this stays proportionate as arenas
@@ -4236,7 +4236,7 @@ static func _resolve_eat_target_pos(state: Dictionary, step_goal: Vector3) -> Ve
   return step_goal
 
 
-## Size-scaled eat range (2026-10-05 decision; supersedes the fixed `eat_action_max_distance` gate,
+## Size-scaled eat range (2026-10-05 decision; supersedes the old fixed-distance gate,
 ## which let a wolf bite from ~6 units beyond its nose). Pure and testable:
 ## [code]eat_range = reach + target_radius[/code], both clamped to >= 0.
 ## [param eater_reach] is the eater's [code]get_reach_extent()[/code] (centre to mouth; already
@@ -4760,9 +4760,13 @@ static func _at_arrival(body: CharacterBody3D, step_goal: Vector3, motor_v3: Dic
   return _MotorPlane.horizontal_distance(body.global_position, step_goal) <= _arrival_tolerance(motor_v3)
 
 
-## `arrival_tolerance` from [param motor_v3], falling back to `eat_action_max_distance`, then 5.0 m.
+## Fallback arrival gate (metres) when [param motor_v3] carries no `arrival_tolerance`.
+const _DEFAULT_ARRIVAL_TOLERANCE := 5.0
+
+
+## `arrival_tolerance` from [param motor_v3], falling back to [constant _DEFAULT_ARRIVAL_TOLERANCE] (5.0 m).
 static func _arrival_tolerance(motor_v3: Dictionary) -> float:
-  return float(motor_v3.get("arrival_tolerance", motor_v3.get("eat_action_max_distance", 5.0)))
+  return float(motor_v3.get("arrival_tolerance", _DEFAULT_ARRIVAL_TOLERANCE))
 
 
 ## True when a [method _route_scanned_endpoint] truncation left [param endpoint] within arrival
