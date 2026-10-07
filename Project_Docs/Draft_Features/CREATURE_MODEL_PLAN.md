@@ -30,7 +30,7 @@
 - Existing: `player.gd`, `mob.gd` may gain **optional** exports that mirror a subset of names below.
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
+- [`CLAUDE.md`](../../CLAUDE.md)  
 - Prefer **Resource** or **composition** for stats so `Player` and `Mob` do not duplicate large blocks of logic prematurely.
 
 **Stat point math:** Centralize in [SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md).

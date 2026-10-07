@@ -28,7 +28,7 @@
 **Key scripts (paths):** TBD per phase; see active feature plans below.
 
 **Existing patterns to follow:**  
-- Follow [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md) and [`.cursor/rules/focus/`](../../.cursor/rules/focus/).  
+- Follow [`CLAUDE.md`](../../CLAUDE.md) and the relevant nested `CLAUDE.md` files.  
 - **Feature-doc scope:** When implementing a ticket, the **explicitly referenced** feature plan is authoritative; this vision doc does not override a narrower phase doc.
 
 **Split from legacy notes:** The freeform capture in [Completed_Features/EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC) is superseded for **agent work** by the linked plans below.

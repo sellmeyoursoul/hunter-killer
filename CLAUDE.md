@@ -33,8 +33,9 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
   4. If none exists and the change is user-facing or contract-like → **stop and ask** whether to extend an existing doc or add a new `Draft_Features/` plan (register in index)
 - **Tier rules:**
   - **`Definitive_Features/`** — update contract sections: tables, config keys, layer maps, file-path inventories, "implementation snapshot" blocks, acceptance checklists. These must match code after the change.
-  - **`Draft_Features/`** — update the sections the task or code comments reference (technical design, acceptance criteria, open questions). Resolve or add `<<Question>>` / `<<Comment>>` when the code answers them.
+  - **`Draft_Features/`** — update the sections the task or code comments reference (technical design, acceptance criteria, open questions). Resolve or add `<<Question>>` / `<<Comment>>` when the code answers them. `<<Answer>>` is reserved for the user's response to an inline `<<Question>>`.
   - **`Completed_Features/`** — **do not** update to match new code (snapshots; drift expected). If behavior supersedes an archive, update **active** draft/definitive docs instead.
+  - **Cross-tier:** Semantic narrative stays in draft hubs (e.g. [CREATURE_GOAL_DRIVERS.md](Project_Docs/Draft_Features/CREATURE_GOAL_DRIVERS.md)); code-facing maps stay in definitive usage docs (e.g. [CREATURE_TRAIT_USAGE.md](Project_Docs/Definitive_Features/CREATURE_TRAIT_USAGE.md)) — update the **appropriate** file, don't duplicate.
 - **Exclusions (no doc edit required):** Pure refactors with zero behavior/API/config contract change; typo-only fixes; user explicitly requests code-only.
 - **Playbook:** Full how-to in [Project_Docs/CLAUDE.md](Project_Docs/CLAUDE.md) — read it when syncing.
 
@@ -49,7 +50,8 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
   3. **Match the open file** — every new/changed line uses spaces (no `\t`).
   4. **Do not blind `\t` → two-spaces replace** on the whole file; prefer `line.expandtabs(2)` on original tabbed text, or re-indent from git.
   5. **Before marking a `.gd` coding task done**, run from repo root: `python tools/check_gdscript_no_tabs.py` — exit code must be `0`.
-  6. **Recovery when tabs were introduced:** `git checkout HEAD -- path/to/file.gd` if the committed version is space-clean, then re-apply changes with spaces only (or `expandtabs(2)` on a tabbed backup) and re-run the check script.
+  6. **Editor alignment:** VS Code uses [`.vscode/settings.json`](.vscode/settings.json) (Insert Spaces, `detectIndentation: false`); in the Godot Editor set Text Editor → Indent → **Space**, size **2**.
+  7. **Recovery when tabs were introduced:** `git checkout HEAD -- path/to/file.gd` if the committed version is space-clean, then re-apply changes with spaces only (or `expandtabs(2)` on a tabbed backup) and re-run the check script.
 
 ## Documenting / comments
 

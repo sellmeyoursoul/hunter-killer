@@ -92,7 +92,7 @@ These sliders are **first-class genes** for evolution and parent→child copy, e
 
 ## Next implementation steps (when requested)
 
-1. NDJSON or SQLite logger for near-miss + motor context (respect [.cursor/rules/focus/logging_instr.md](../../.cursor/rules/focus/logging_instr.md) PII/volume policy).
+1. NDJSON or SQLite logger for near-miss + motor context (respect [oLog_lib/CLAUDE.md](../../oLog_lib/CLAUDE.md) PII/volume policy).
 2. Batch runner: `godot --headless` loads genome from CLI, runs K episodes, prints fitness.
 3. Optional: small Python driver for GA loop calling Godot subprocesses.
 4. When `CreatureStats` exists: extend CLI / JSON schema to load and persist **motivation traits** alongside `creature_motor`; log them with episode outcomes for later correlation.

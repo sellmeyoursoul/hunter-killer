@@ -1,6 +1,6 @@
 # Hunter Killer — Plants / food (design doc, agent-friendly)
 
-> **Authoritative implementation slice for hunger + bushes (shipped; archived spec):** [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md). This file tracks **plants/food** intent at a high level and stays aligned with [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) field names. **Asset layout:** all new plant-authored content lives under **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](../Completed_Features/ASSET_MANAGEMENT_PLAN.md).
+> **Authoritative implementation slice for hunger + bushes (shipped; archived spec):** [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md). This file tracks **plants/food** intent at a high level and stays aligned with [PLANT_ECOLOGY_PLAN.md](PLANT_ECOLOGY_PLAN.md) field names. **Asset layout:** all new plant-authored content lives under **`res://assets/plants/`** per [assets/CLAUDE.md](../../assets/CLAUDE.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](../Completed_Features/ASSET_MANAGEMENT_PLAN.md).
 
 ---
 
@@ -28,7 +28,7 @@
 - `res://main.gd`, `res://player.gd`, `res://mob.gd`, `res://hud.gd`  
 - Plant logic / scenes: **`res://assets/plants/`** — archetype folders **`solid_shrub/`** (Food A), **`open_shrub/`** (Food B); shared script **`res://assets/plants/bush_food.gd`** (see [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md) §5.2).
 
-**Existing patterns to follow:** [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md), [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md).
+**Existing patterns to follow:** [`CLAUDE.md`](../../CLAUDE.md), [assets/CLAUDE.md](../../assets/CLAUDE.md).
 
 ---
 
