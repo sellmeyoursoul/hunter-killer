@@ -2,7 +2,6 @@ extends Node3D
 ## M1 production 3D main: grasslands playfield, ENGINE duel harness, HUD overlay ([CONVERT_TO_3D.md §6 M1](../../Project_Docs/Completed_Features/CONVERT_TO_3D.md)).
 
 const _Brand := preload("res://product_brand.gd")
-const _AgentNdjson := preload("res://AI_int_lib/agent_ndjson_sink.gd")
 const _ControlMode := preload("res://creature/capabilities/creature_control_mode.gd")
 const _ConfigMerge := preload("res://AI_int_lib/game_config_merge.gd")
 const _BodyDimensions := preload("res://creature/capabilities/creature_body_dimensions.gd")
