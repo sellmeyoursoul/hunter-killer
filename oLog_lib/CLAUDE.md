@@ -1,6 +1,6 @@
 # OLog hygiene
 
-Migrated from `.cursor/rules/logging.mdc`. Keep the two in sync if you edit either. Also applies to `AI_int_lib/**` (see [AI_int_lib/CLAUDE.md](../AI_int_lib/CLAUDE.md)), `game_config.gd`, and any `**/olog_safe.gd`.
+Also applies to `AI_int_lib/**` (see [AI_int_lib/CLAUDE.md](../AI_int_lib/CLAUDE.md)), `game_config.gd`, and any `**/olog_safe.gd`.
 
 - **PII/secrets/tokens:** never; paths: redact home username when feasible.
 - **Volume:** no full prompts/grids/binary; use counts/summaries/short excerpts; large debug only behind dev flags + truncation.

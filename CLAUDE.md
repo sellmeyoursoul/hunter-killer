@@ -1,6 +1,6 @@
 # Agent instructions
 
-Migrated from the Cursor rule set (`.cursor/rules/core.mdc` + `AGENTS.md` + `subagent-governance.mdc` + `subagent-provisioning.mdc`) so Claude Code has the same always-on context Cursor was injecting. If you edit the source `.cursor/rules/*.mdc` files, mirror the change here — they are two copies of one policy, not two policies.
+Always-on policy for this repository. Scoped rules live in nested `CLAUDE.md` files (see **Directory-scoped context**); domain specialists are defined in `.claude/agents/`.
 
 ## Agent role
 
@@ -8,7 +8,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 
 ## Behavioral instructions
 
-- **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. **Project Documents** = files in `./.cursor/rules/*` plus this file plus active markdown under `./Project_Docs/` as defined below (not `Completed_Features/` unless the user explicitly cites them).
+- **Ambiguity protocol:** If a requirement is unclear or not explicitly stated in the Project Documents, **STOP and ask for clarification**. Do not guess. **Project Documents** = this file plus the nested `CLAUDE.md` files plus active markdown under `./Project_Docs/` as defined below (not `Completed_Features/` unless the user explicitly cites them).
 - **Observation vs code:** When the user describes runtime behavior, symptoms, or intent that **conflicts with what the code actually does**, verify in the codebase first. If the mismatch holds, **push back clearly** — cite the relevant paths and explain what the code does instead of agreeing or changing code to match a mistaken observation. Ask what they saw (steps, scene, config) only when that helps reconcile the gap; do not defer to the observation when the source contradicts it.
 - **Project_Docs layout** (inventory: [PROJECT_DOC_INDEX.md](Project_Docs/PROJECT_DOC_INDEX.md)):
   - **Start here:** `./Project_Docs/PROJECT_DOC_INDEX.md` — **canonical path registry** for every project doc; update **only this file** when moving or adding `*.md` under `Project_Docs/`.
@@ -18,8 +18,8 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
   - **Archived:** `./Project_Docs/Completed_Features/**` — see **Completed_Features scope** below.
   - Full authoring conventions (draft markers, status vocabulary, code↔doc sync playbook) live in [Project_Docs/CLAUDE.md](Project_Docs/CLAUDE.md) — read it before touching anything under `Project_Docs/`.
 - **Completed_Features scope:** Files under `./Project_Docs/Completed_Features/**` are **snapshots in time**; drift vs current code is **expected**. Do **not** treat them as authoritative requirements when implementing, reviewing, or reconciling behavior unless the user **explicitly cites** that file for the task. Code comments that link to `Completed_Features/` do **not** elevate those files to definitive authority — they are reference pointers only. Use archived docs for initial design intention when no authoritative active doc exists on the topic; otherwise prefer `Draft_Features/`, `Definitive_Features/`, or the plan the task cites.
-- **Feature-doc scope guard:** When implementing a specific feature, treat only the **explicitly referenced** feature plan (plus this file and `./.cursor/rules/*`) as authoritative. Any other file in `Draft_Features/` or `Definitive_Features/` that is not referenced by the active request is a draft and must not override the cited spec.
-- **Refactoring:** Do not rename or move Project Docs or rule files casually — it breaks Cursor rule attachment and the nested `CLAUDE.md` files below. Coordinated migrations (folder changes, link updates, index update in one change) are allowed when a maintainer directs them.
+- **Feature-doc scope guard:** When implementing a specific feature, treat only the **explicitly referenced** feature plan (plus this file and the nested `CLAUDE.md` files) as authoritative. Any other file in `Draft_Features/` or `Definitive_Features/` that is not referenced by the active request is a draft and must not override the cited spec.
+- **Refactoring:** Do not rename or move Project Docs or `CLAUDE.md` files casually — it breaks the links in the nested `CLAUDE.md` files below. Coordinated migrations (folder changes, link updates, index update in one change) are allowed when a maintainer directs them.
 
 ## Doc sync (code ↔ Project_Docs)
 
@@ -69,7 +69,7 @@ You are an expert game developer focused on C++, the Godot game engine, and inte
 
 ## Directory-scoped context
 
-Claude Code loads a directory's `CLAUDE.md` automatically once you're working in that tree — these replace Cursor's glob-triggered `.mdc` rules:
+Claude Code loads a directory's `CLAUDE.md` automatically once you're working in that tree:
 
 | Directory | Covers |
 |---|---|
@@ -78,11 +78,11 @@ Claude Code loads a directory's `CLAUDE.md` automatically once you're working in
 | [AI_int_lib/CLAUDE.md](AI_int_lib/CLAUDE.md) | In-game embedded LLM runtime design priorities + OLog hygiene |
 | [oLog_lib/CLAUDE.md](oLog_lib/CLAUDE.md) | OLog hygiene (PII, volume, line cap, levels) |
 
-`logging.mdc`'s hygiene rules also apply to `game_config.gd` and any `**/olog_safe.gd` file even outside those two directories — see [oLog_lib/CLAUDE.md](oLog_lib/CLAUDE.md) if you touch those.
+The OLog hygiene rules also apply to `game_config.gd` and any `**/olog_safe.gd` file even outside those two directories — see [oLog_lib/CLAUDE.md](oLog_lib/CLAUDE.md) if you touch those.
 
 ## Subagent routing (domain specialists)
 
-Route by **primary write-target directory** using the **Agent** tool with the matching `subagent_type`, defined in `.claude/agents/`. Do not implement cross-domain edits directly yourself when a single specialist's scope covers the target — delegate instead. When a task spans multiple known domains with an explicit path list, use `code-executor`. When a path is wholly unmapped by any row below, say so and ask whether to proceed inline or define a new specialist (mirroring `.cursor/rules/subagent-provisioning.mdc` and `.cursor/agents/_TEMPLATE.md`) before continuing.
+Route by **primary write-target directory** using the **Agent** tool with the matching `subagent_type`, defined in `.claude/agents/`. Do not implement cross-domain edits directly yourself when a single specialist's scope covers the target — delegate instead. When a task spans multiple known domains with an explicit path list, use `code-executor`. When a path is wholly unmapped by any row below, say so and ask whether to proceed inline or define a new specialist (copy an existing file in `.claude/agents/`; `creature-motor.md` is the reference) before continuing.
 
 | Primary write path | Agent |
 |---|---|
@@ -93,7 +93,7 @@ Route by **primary write-target directory** using the **Agent** tool with the ma
 | `main_3d.gd`, `main_3d.tscn`, `hud.gd`, `hud.tscn`, `game_config.gd`, `game_config.json`, `oLog_lib/`, `pack_resource_resolver.gd`, `product_brand.gd`, `project.godot`, `art/` | `app-shell` |
 | `assets/creatures/`, `assets/_shared/` | `assets-pack` |
 | `tests/`, `tools/` | `test-harness` |
-| `Project_Docs/`, `.cursor/rules/` (contract sync) | `project-docs` |
+| `Project_Docs/`, `CLAUDE.md` files (contract sync) | `project-docs` |
 | `Project_Docs/Draft_Features/` (design only, pre-implementation) | `feature-designer` |
 | Explicit multi-domain path list you already have | `code-executor` |
 

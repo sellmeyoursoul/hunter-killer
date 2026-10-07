@@ -1,7 +1,5 @@
 # Project_Docs authoring
 
-Migrated from `.cursor/rules/project-docs.mdc`. Keep the two in sync if you edit either.
-
 **Applies when:** Writing or revising design docs agents implement from.
 
 ## Embedded markers

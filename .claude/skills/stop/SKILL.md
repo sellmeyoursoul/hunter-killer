@@ -1,7 +1,28 @@
 ---
 name: stop
-description: End session and overwrite chat_sum.md using the stop handoff protocol in .cursor/rules/stop.mdc
+description: End session and overwrite chat_sum.md using the stop handoff protocol
 disable-model-invocation: true
 ---
 
-Follow `.cursor/rules/stop.mdc` exactly. Overwrite `chat_sum.md` in the workspace root using the required handoff format. Use Agent/write tools; do not summarize only in chat.
+# Slash Command: /stop
+
+When I type `/stop`, immediately execute this sequence. Use Agent/write tools; do not summarize only in chat.
+
+1. Analyze the current chat and create or overwrite `chat_sum.md` in the workspace root.
+2. Use this exact high-signal handoff structure:
+
+```markdown
+# Handoff Context
+
+**System State:** [Current architecture, active files, working code state]
+
+**Progress Made:**
+- [Dense, high-signal completed item]
+- [Dense, high-signal completed item]
+
+**Last Known Trajectory:** [What we were working on right before this handoff]
+```
+
+3. Stage all changes (including the updated `chat_sum.md`), commit with a descriptive message summarizing the session (ending with the standard Co-Authored-By trailer), and push the current branch to its remote tracking branch (create the upstream if none exists yet). Do not force-push. If there is nothing to commit, skip the commit/push step.
+
+Keep it concise, current, and useful for a fresh `/go` chat.

@@ -1,8 +1,6 @@
 # Runtime / in-game AI (embedded LLM)
 
-Migrated from `.cursor/rules/agentic-runtime-ai.mdc`. Keep the two in sync if you edit either.
-
-**Scope:** Implementing in-engine LLM behavior in Godot — **not** Claude Code, Cursor, or other IDE assistants.
+**Scope:** Implementing in-engine LLM behavior in Godot — **not** Claude Code or other IDE/coding assistants.
 
 Prioritize in this order:
 
@@ -14,7 +12,7 @@ Prioritize in this order:
 
 ## OLog hygiene
 
-Migrated from `.cursor/rules/logging.mdc`, which also covers `oLog_lib/**`, `game_config.gd`, and any `**/olog_safe.gd` — see [oLog_lib/CLAUDE.md](../oLog_lib/CLAUDE.md) for the same text scoped to that directory.
+These rules also cover `oLog_lib/**`, `game_config.gd`, and any `**/olog_safe.gd` — see [oLog_lib/CLAUDE.md](../oLog_lib/CLAUDE.md) for the same text scoped to that directory.
 
 - **PII/secrets/tokens:** never; paths: redact home username when feasible.
 - **Volume:** no full prompts/grids/binary; use counts/summaries/short excerpts; large debug only behind dev flags + truncation.
