@@ -1,0 +1,11 @@
+---
+description: Fallback pointer. This project's rules live in Claude Code files.
+alwaysApply: true
+---
+
+This repository is maintained primarily with Claude Code. Read and follow:
+- /CLAUDE.md (always-on policy: doc sync, formatting, subagent routing)
+- nested CLAUDE.md files in Project_Docs/, assets/, AI_int_lib/, oLog_lib/ (scoped rules)
+- /.claude/agents/ (domain specialist definitions)
+
+Do not add rules here; add them to the CLAUDE.md files.
