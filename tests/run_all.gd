@@ -798,7 +798,6 @@ func _test_eat_range_scales_with_predator_body_size() -> void:
   var rabbit := _spawn_herbivore_body(main, Vector3(0.0, 0.0, 300.0))
   await physics_frame
   var wolf_reach: float = wolf.get_reach_extent()
-  var motor_v3 := _motor_v3_test_params()
   var planner := _MotorPlanner as GDScript
   var scaled_gate: float = planner.call("_eat_range_for", wolf, rabbit.get_instance_id())
   var rabbit_gate: float = planner.call("_eat_range_for", rabbit, 0)
@@ -810,12 +809,12 @@ func _test_eat_range_scales_with_predator_body_size() -> void:
   _assert(scaled_gate > rabbit_gate, "a wolf's gate (%.2f) exceeds a rabbit's (%.2f)" % [scaled_gate, rabbit_gate])
   rabbit.global_position = Vector3(scaled_gate - 0.1, 0.0, 0.0)
   var within_range: bool = planner.call(
-    "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
+    "_is_within_eat_range", wolf, rabbit.global_position, 0.0, rabbit.get_instance_id()
   )
   _assert(within_range, "a rabbit just inside the wolf's reach + prey radius is in eat range")
   rabbit.global_position = Vector3(scaled_gate + 0.5, 0.0, 0.0)
   var beyond: bool = planner.call(
-    "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 0.0, rabbit.get_instance_id()
+    "_is_within_eat_range", wolf, rabbit.global_position, 0.0, rabbit.get_instance_id()
   )
   _assert(not beyond, "a rabbit just past reach + rabbit radius is out of eat range")
   main.queue_free()
@@ -14383,10 +14382,9 @@ func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
   wolf.call("_clamp_playfield_position")
   # Phase 2: both bodies are authored-dimension (origin at the feet), so each stand height is 0 and the two
   # are already level; the Phase 1 workaround that levelled the rabbit's Y to a 15.3 m legacy wolf is gone.
-  var motor_v3 := _motor_v3_test_params()
   var in_reach := bool(
     (_MotorPlanner as GDScript).call(
-      "_is_within_eat_range", wolf, rabbit.global_position, motor_v3, 1.0 / 60.0, rabbit.get_instance_id()
+      "_is_within_eat_range", wolf, rabbit.global_position, 1.0 / 60.0, rabbit.get_instance_id()
     )
   )
   _assert(
@@ -15229,7 +15227,6 @@ func _test_body_dims_visual_fit_production_uniform_vs_placeholder_per_axis() -> 
 func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var motor_v3 := _motor_v3_test_params()
   var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
   var fox := _bd_spawn_shipped(main, 1, Vector3(0, 1, 200))
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
@@ -15257,11 +15254,11 @@ func _test_body_dims_eat_gate_matches_b20_numbers() -> void:
     var inside := eater.global_position + Vector3(gate - 0.02, 0.0, 0.0)
     var outside := eater.global_position + Vector3(gate + 0.02, 0.0, 0.0)
     _assert(
-      bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, inside, motor_v3, 1.0 / 60.0, tid)),
+      bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, inside, 1.0 / 60.0, tid)),
       "%s target just inside the gate is in eat range" % label,
     )
     _assert(
-      not bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, outside, motor_v3, 1.0 / 60.0, tid)),
+      not bool((_MotorPlanner as GDScript).call("_is_within_eat_range", eater, outside, 1.0 / 60.0, tid)),
       "%s target just outside the gate is out of eat range" % label,
     )
   # Rounded figures at reach_margin_fraction 0.25 with the B20 dimensions.
@@ -15283,7 +15280,6 @@ func _test_eat_range_ignores_vertical_offset_when_xz_overlaps() -> void:
   # Arrange
   var main := Node3D.new()
   root.add_child(main)
-  var motor_v3 := _motor_v3_test_params()
   var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
   var fox := _bd_spawn_shipped(main, 1, Vector3(0, 1, 200))
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
@@ -15301,7 +15297,7 @@ func _test_eat_range_ignores_vertical_offset_when_xz_overlaps() -> void:
     for dy in [7.0, 12.0, gate + 25.0, -(gate + 25.0)]:
       # Act
       var target := eater.global_position + Vector3(0.0, dy, 0.0)
-      var in_range := bool(planner.call("_is_within_eat_range", eater, target, motor_v3, 0.0, tid))
+      var in_range := bool(planner.call("_is_within_eat_range", eater, target, 0.0, tid))
       # Assert
       _assert(in_range, "%s identical XZ at dy=%.2f (gate %.2f) is in eat range" % [label, dy, gate])
   main.queue_free()
@@ -15313,7 +15309,6 @@ func _test_eat_range_xz_boundary_is_independent_of_y() -> void:
   # Arrange
   var main := Node3D.new()
   root.add_child(main)
-  var motor_v3 := _motor_v3_test_params()
   var wolf := _bd_spawn_shipped(main, 2, Vector3(0, 1, 0))
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
   await process_frame
@@ -15326,15 +15321,15 @@ func _test_eat_range_xz_boundary_is_independent_of_y() -> void:
     var diag_inside := wolf.global_position + Vector3((gate - 0.02) * 0.6, dy, (gate - 0.02) * 0.8)
     # Act / Assert
     _assert(
-      bool(planner.call("_is_within_eat_range", wolf, inside, motor_v3, 0.0, tid)),
+      bool(planner.call("_is_within_eat_range", wolf, inside, 0.0, tid)),
       "XZ gate-0.02 with dy=%.1f is in range" % dy,
     )
     _assert(
-      bool(planner.call("_is_within_eat_range", wolf, diag_inside, motor_v3, 0.0, tid)),
+      bool(planner.call("_is_within_eat_range", wolf, diag_inside, 0.0, tid)),
       "diagonal XZ gate-0.02 with dy=%.1f is in range" % dy,
     )
     _assert(
-      not bool(planner.call("_is_within_eat_range", wolf, outside, motor_v3, 0.0, tid)),
+      not bool(planner.call("_is_within_eat_range", wolf, outside, 0.0, tid)),
       "XZ gate+0.02 with dy=%.1f is out of range" % dy,
     )
   main.queue_free()
@@ -15458,7 +15453,6 @@ func _test_eat_range_reach_override_changes_gate() -> void:
   var rabbit := _bd_spawn_shipped(main, 0, Vector3(0, 1, 400))
   await process_frame
   var planner := _MotorPlanner as GDScript
-  var motor_v3 := _motor_v3_test_params()
   var tid := rabbit.get_instance_id()
   var base: float = planner.call("_eat_range_for", base_body, tid)
   var wide: float = planner.call("_eat_range_for", long_body, tid)
@@ -15466,12 +15460,12 @@ func _test_eat_range_reach_override_changes_gate() -> void:
   _assert(is_equal_approx(wide, 7.0 + 0.385), "reach_override 7 sets the gate to 7.385 (got %.3f)" % wide)
   var probe := long_body.global_position + Vector3(base + 0.5, 0.0, 0.0)
   _assert(
-    bool(planner.call("_is_within_eat_range", long_body, probe, motor_v3, 0.0, tid)),
+    bool(planner.call("_is_within_eat_range", long_body, probe, 0.0, tid)),
     "a point past the computed-reach gate is in range once reach_override widens it",
   )
   var probe_b := base_body.global_position + Vector3(base + 0.5, 0.0, 0.0)
   _assert(
-    not bool(planner.call("_is_within_eat_range", base_body, probe_b, motor_v3, 0.0, tid)),
+    not bool(planner.call("_is_within_eat_range", base_body, probe_b, 0.0, tid)),
     "the same offset is out of range without the override",
   )
   main.queue_free()
@@ -15524,19 +15518,18 @@ func _test_eat_gate_log_throttles_once_per_step_instance() -> void:
   var other := _bd_spawn_shipped(main, 0, Vector3(6, 1, 0))
   await process_frame
   var planner := _MotorPlanner as GDScript
-  var motor_v3 := _motor_v3_test_params()
   var state: Dictionary = _MotorPlanner.new_state()
   _assert(int(state.get("eat_gate_logged_iid", -1)) == 0, "fresh state starts with eat_gate_logged_iid 0")
   state["step_instance_id"] = rabbit.get_instance_id()
-  planner.call("_log_eat_commit", wolf, state, rabbit.global_position, motor_v3)
+  planner.call("_log_eat_commit", wolf, state, rabbit.global_position)
   _assert(
     int(state["eat_gate_logged_iid"]) == rabbit.get_instance_id(),
     "first EAT commit records the step_instance_id it logged",
   )
-  planner.call("_log_eat_commit", wolf, state, rabbit.global_position, motor_v3)
+  planner.call("_log_eat_commit", wolf, state, rabbit.global_position)
   _assert(int(state["eat_gate_logged_iid"]) == rabbit.get_instance_id(), "same step_instance_id stays throttled")
   state["step_instance_id"] = other.get_instance_id()
-  planner.call("_log_eat_commit", wolf, state, other.global_position, motor_v3)
+  planner.call("_log_eat_commit", wolf, state, other.global_position)
   _assert(
     int(state["eat_gate_logged_iid"]) == other.get_instance_id(),
     "a new step_instance_id re-arms the EatGate log",
@@ -16044,7 +16037,7 @@ func _test_nav0_nav_router_for_map_matches_direct_server_queries() -> void:
   var direct: PackedVector3Array = NavigationServer3D.map_get_path(map_rid, from, to, true, 1)
   # Act
   var result: Dictionary = router.path(null, from, to, false)
-  var snapped: Dictionary = router.path(null, Vector3(5.0, 1.0, 20.0), to)
+  var snapped_path: Dictionary = router.path(null, Vector3(5.0, 1.0, 20.0), to)
   # Assert
   _assert(direct.size() >= 3, "precondition: the centre wall forces a bent direct path (%d points)" % direct.size())
   var pts: PackedVector3Array = result["points"]
@@ -16055,7 +16048,7 @@ func _test_nav0_nav_router_for_map_matches_direct_server_queries() -> void:
   _assert(same, "router path points equal the direct NavigationServer3D.map_get_path result")
   _assert(bool(result["reachable"]), "path ending at the requested goal reports reachable")
   _assert((result["link_segments"] as PackedInt32Array).is_empty(), "link_segments is empty until climb links exist")
-  _assert((snapped["points"] as PackedVector3Array).size() >= 2, "snap_origin path from a point above the floor still resolves")
+  _assert((snapped_path["points"] as PackedVector3Array).size() >= 2, "snap_origin path from a point above the floor still resolves")
   _assert(router.path_queries == 2, "path_queries counts each path call that reached a map (got %d)" % router.path_queries)
   var far := Vector3(3.0, 0.0, 45.0)
   var expected_closest: Vector3 = NavigationServer3D.map_get_closest_point(map_rid, far)
@@ -16285,8 +16278,9 @@ func _test_nav0_choke_ray_lift_lifts_ray_origin_only() -> void:
 ## Seeded runs per gap-trap measurement (plan section 7 target: 0 wedges in >= 30 runs).
 const _GAP_TRAP_RUNS := 30
 ## Hard cap per run (physics ticks at 60 Hz).
-## Runs for the legacy-size variant (the original observation was 9 of 17).
-const _GAP_TRAP_LEGACY_RUNS := 17
+## Runs for the legacy-size variant (original observation was 9 of 17 wedged, ~53%; 5 seeded runs still
+## leave ~97% odds of at least one wedge if that regression returns, at under a third of the cost).
+const _GAP_TRAP_LEGACY_RUNS := 5
 const _GAP_TRAP_MAX_TICKS := 900
 ## True while the legacy-size (r 7.04) scenario is red: the test then prints GAP_TRAP stats without asserting the
 ## wedge count (expected failure until Phase 1, plan section 8). Flip to false once it passes.

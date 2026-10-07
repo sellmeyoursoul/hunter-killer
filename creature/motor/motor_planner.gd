@@ -255,7 +255,7 @@ static func select_action(ctx: Dictionary, state: Dictionary) -> int:
   if goal_kind == _GkReg.GK_FIND_FOOD:
     if _can_eat_now(body, step_goal, state, motor_v3, delta, ctx):
       state["eat_orbit_turn_deg_accumulated"] = 0.0
-      _log_eat_commit(body, state, _resolve_eat_target_pos(state, step_goal), motor_v3)
+      _log_eat_commit(body, state, _resolve_eat_target_pos(state, step_goal))
       if int(state.get("step_instance_id", 0)) == int(state.get("lost_prey_hint_instance_id", 0)):
         _clear_lost_prey_hint(state)
       return _MotorAction.EAT
@@ -4284,12 +4284,11 @@ static func _eat_arrival_tolerance(
 ## [param target] measured on the ground plane (XZ via [method MotorPlane.horizontal_distance]; Y
 ## ignored, 2026-10-05 decision: footprints overlapping under/over each other are always in range,
 ## even where a rounded capsule's 3D centre distance would be too far). [param delta] kept for
-## call-site stability; unused ([param _motor_v3] likewise). [param target_instance_id] (live prey) adds that body's radius;
+## call-site stability; unused. [param target_instance_id] (live prey) adds that body's radius;
 ## omitted / unresolvable (a plant, a stale id) adds 0.
 static func _is_within_eat_range(
   body: CharacterBody3D,
   target: Vector3,
-  _motor_v3: Dictionary,
   _delta: float,
   target_instance_id: int = 0,
 ) -> bool:
@@ -4301,12 +4300,12 @@ static func _is_within_eat_range(
 
 ## Debug-only (once per EAT commit, see [method select_action]): eater species, ground-plane (XZ)
 ## distance to the eat target, and the eat gate it passed. Logged through [code]_OLogSafe[/code];
-## one short line, no PII.
+## one short line, no PII. [param state] carries [code]step_instance_id[/code] and the
+## [code]eat_gate_logged_iid[/code] throttle; [param eat_tgt] is the resolved eat target position.
 static func _log_eat_commit(
   body: CharacterBody3D,
   state: Dictionary,
   eat_tgt: Vector3,
-  _motor_v3: Dictionary,
 ) -> void:
   var iid := int(state.get("step_instance_id", 0))
   if iid == int(state.get("eat_gate_logged_iid", 0)):
@@ -4344,7 +4343,7 @@ static func _can_eat_now(
   var eat_tgt := _resolve_eat_target_pos(state, step_goal)
   if eat_tgt.length_squared() < 1e-8:
     return false
-  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta, int(state.get("step_instance_id", 0))):
+  if not _is_within_eat_range(body, eat_tgt, delta, int(state.get("step_instance_id", 0))):
     return false
   if not _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
     return false
@@ -4375,7 +4374,7 @@ static func debug_eat_gate_snapshot(
   ## Ground-plane (XZ) distance, the same metric `_is_within_eat_range` gates on.
   out["eat_dist_to_ultimate"] = _MotorPlane.horizontal_distance(body.global_position, eat_tgt)
   out["eat_within_range"] = _is_within_eat_range(
-    body, eat_tgt, motor_v3, 0.0, int(state.get("step_instance_id", 0))
+    body, eat_tgt, 0.0, int(state.get("step_instance_id", 0))
   )
   out["eat_facing_aligned"] = _is_facing_aligned_for_eat(body, eat_tgt, motor_v3)
   out["eat_clear_path"] = _has_clear_contact_path_for_action(body, eat_tgt, ctx)
@@ -4420,7 +4419,7 @@ static func _select_eat_orbit_or_align(
   if eat_tgt.length_squared() < 1e-8:
     state["eat_orbit_turn_deg_accumulated"] = 0.0
     return -1
-  if not _is_within_eat_range(body, eat_tgt, motor_v3, delta, int(state.get("step_instance_id", 0))):
+  if not _is_within_eat_range(body, eat_tgt, delta, int(state.get("step_instance_id", 0))):
     state["eat_orbit_turn_deg_accumulated"] = 0.0
     return -1
   if _is_facing_aligned_for_eat(body, eat_tgt, motor_v3):
