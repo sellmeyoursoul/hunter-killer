@@ -28,7 +28,7 @@
 - `AI_int_lib/ai_driver.gd` (ENGINE round orchestration only — the movement-era inference client config and `system_prompt.txt` were **deleted** 2026-09-23 and no longer exist).
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
+- [`CLAUDE.md`](../../CLAUDE.md)  
 - The "do not delete working inference code" guidance is **moot** — the movement-LLM inference code has already been removed. New gameplay AI lives in **heuristic / utility / V3 motor** modules per [VISION_WORLD_BUILDER_PLAN.md](VISION_WORLD_BUILDER_PLAN.md); a future dialogue LLM would be a fresh build, not a revival of the deleted code.
 
 ---

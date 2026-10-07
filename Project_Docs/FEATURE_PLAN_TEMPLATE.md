@@ -25,7 +25,7 @@
 -  
 
 **Existing patterns to follow:** (naming, signals, groups, layers, file layout)  
-- Follow [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md) and relevant files under [`.cursor/rules/focus/`](../.cursor/rules/focus/).  
+- Follow [`CLAUDE.md`](../CLAUDE.md) and the relevant nested `CLAUDE.md` files (e.g. [`assets/CLAUDE.md`](../assets/CLAUDE.md), [`oLog_lib/CLAUDE.md`](../oLog_lib/CLAUDE.md)).  
 
 ---
 

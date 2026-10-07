@@ -1,6 +1,6 @@
 # Project documentation index
 
-> **Canonical path registry — update only this file when any `Project_Docs/**/*.md` is added, moved, or removed.** Other docs, code comments, and [AGENTS.md](../.cursor/rules/AGENTS.md) describe *policy*; **paths live here.**
+> **Canonical path registry — update only this file when any `Project_Docs/**/*.md` is added, moved, or removed.** Other docs, code comments, and [CLAUDE.md](../CLAUDE.md) describe *policy*; **paths live here.**
 >
 > **Tiers:** **II** = draft (work in progress), **III** = definitive contract (`Definitive_Features/` only — no tier III at root), **A** = archived (`Completed_Features/`), **root** = navigation / backlog / templates. **Tier I** (implementation notes) stays **outside** `Project_Docs/` and is not listed here unless policy changes.
 >
@@ -31,7 +31,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | **`Definitive_Features/`** (tier III) | **Ongoing contract** — must stay aligned with code, `project.godot`, or shared schemas (e.g. physics layer table). Drift is a bug. | Move file; register below; remove any `Draft_Features/` copy; fix cross-links. |
 | **`Completed_Features/`** (tier A) | Feature **shipped**, plan **superseded**, or content **extracted** elsewhere. **Snapshot** — drift vs code is **expected**. | Move file; register below; **delete** `Draft_Features/` copy; **no** redirect stubs. |
 
-**Do not** promote to tier III merely because code exists. **Code comments** linking to `Completed_Features/` do **not** make those files authoritative — see [AGENTS.md](../.cursor/rules/AGENTS.md) **Completed_Features scope**.
+**Do not** promote to tier III merely because code exists. **Code comments** linking to `Completed_Features/` do **not** make those files authoritative — see [CLAUDE.md](../CLAUDE.md) **Completed_Features scope**.
 
 **Tier III default:** `Definitive_Features/` only. Rare root exception → **exception** note in the Definitive table below with rationale.
 
@@ -89,13 +89,13 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 ## `Project_Docs/Completed_Features/` (archived — tier A)
 
-**Per [AGENTS.md](../.cursor/rules/AGENTS.md):** snapshots in time; not default authority unless explicitly cited. Code comment links are reference only.
+**Per [CLAUDE.md](../CLAUDE.md):** snapshots in time; not default authority unless explicitly cited. Code comment links are reference only.
 
 | File | Notes |
 |------|-------|
 | [Completed_Features/AI_INSTRUCTIONS_PLAN.md](Completed_Features/AI_INSTRUCTIONS_PLAN.md) | Archived rules refactor. |
 | [Completed_Features/CONVERT_TO_3D.md](Completed_Features/CONVERT_TO_3D.md) | **Archived:** 2D→3D migration umbrella (M0–M4 migration scope complete); creature stack → [CREATURE_3D_ARCHITECTURE.md](Definitive_Features/CREATURE_3D_ARCHITECTURE.md). Snapshot — drift expected. |
-| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see `.cursor/rules/assets.mdc` (stub: `focus/asset_management.md`). |
+| [Completed_Features/ASSET_MANAGEMENT_PLAN.md](Completed_Features/ASSET_MANAGEMENT_PLAN.md) | Asset pipeline; see [assets/CLAUDE.md](../assets/CLAUDE.md). |
 | [Completed_Features/CREATURE_GOALS.md](Completed_Features/CREATURE_GOALS.md) | **Archived:** v1 Herbivore vs Carnivore duel (opposite spawns, dual HUD, N-creature AiDriver, manual playtest log). Snapshot — drift expected. |
 | [Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md](Completed_Features/CREATURE_GOALS_PLAYTEST_LOG.md) | Manual win/cause rows for CREATURE_GOALS balance tuning (companion to archived spec). |
 | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) | **Archived:** V2 unified motor (`creature_motor`, **`SeekCandidate`**, **`MotorContext`**, cardinal). Superseded by [CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md). Snapshot — V2 code until Step 3 teardown. |
@@ -105,7 +105,7 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | [Completed_Features/FORK_HUNTER_KILLER.md](Completed_Features/FORK_HUNTER_KILLER.md) | Fork / mirror workflow (historical policy). |
 | [Completed_Features/HUNGER_AND_EATING.md](Completed_Features/HUNGER_AND_EATING.md) | Hunger + bushes POC — **implemented**. |
 | [Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md](Completed_Features/HUNTER_KILLER_FIELD_AND_PERCEPTION_PLAN.md) | Field / perception archive. |
-| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | Supplanted by `.cursor/rules/logging.mdc` (stub: `focus/logging_instr.md`). |
+| [Completed_Features/LOGGING_PLAN.md](Completed_Features/LOGGING_PLAN.md) | Supplanted by [oLog_lib/CLAUDE.md](../oLog_lib/CLAUDE.md). |
 | [Completed_Features/MOB_AVOIDANCE_PLAN.md](Completed_Features/MOB_AVOIDANCE_PLAN.md) | Shipped motor avoidance (code may link here — **reference only** unless task cites this file). |
 | [Completed_Features/OBJECT_AVOIDANCE_PLAN.md](Completed_Features/OBJECT_AVOIDANCE_PLAN.md) | Object / grid avoidance archive. |
 | [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md) | **Completed** Project_Docs reorg (option B) — historical; active policy is **this index** + `AGENTS.md`. |
@@ -117,8 +117,8 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 
 | Location | Role |
 |----------|------|
-| [.cursor/rules/core.mdc](../.cursor/rules/core.mdc) | Agent hub (`alwaysApply`); stub: [AGENTS.md](../.cursor/rules/AGENTS.md). |
-| [.cursor/rules/*.mdc](../.cursor/rules/) | Scoped rules: `gdscript`, `logging`, `agentic-runtime-ai`, `assets`, `project-docs`. Stubs: [focus/](../.cursor/rules/focus/). |
+| [CLAUDE.md](../CLAUDE.md) | Always-on agent policy: doc sync, formatting, subagent routing. |
+| Nested `CLAUDE.md` files | Scoped rules: [Project_Docs/CLAUDE.md](CLAUDE.md), [assets/CLAUDE.md](../assets/CLAUDE.md), [AI_int_lib/CLAUDE.md](../AI_int_lib/CLAUDE.md), [oLog_lib/CLAUDE.md](../oLog_lib/CLAUDE.md). |
 | [../../HK-models/3d_modeling_v1.md](../../HK-models/3d_modeling_v1.md) | **External art pipeline (HK-models):** 2D concept → 3D model stages (Rodin/Hunyuan generation, cleanup, texturing, rigging, glTF export). Must stay aligned with [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) (game units, rest-pose AABB dims, +Z forward (B22), ground-centre origin, proportion tolerances). Changes on either side → review the other. |
 | [../../HK-models/shared_parts.md](../../HK-models/shared_parts.md) | External shared parts library (eyes, teeth, claws) for the art pipeline. |
 
@@ -132,6 +132,6 @@ The external `HK-models` paths are outside this repo; keep them in sync manually
 2. **New draft:** Add a row under `Draft_Features/` when work starts; remove the row and delete the file when shipped (move to `Completed_Features/` or `Definitive_Features/` per **Promotion** above).
 3. **No draft stubs** for completed features — register `Completed_Features/` (or `Definitive_Features/`) here instead.
 4. **Enhancement backlog:** Link `Draft_Features/…` paths in [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) when tracking active work.
-5. **Coordinated migrations:** Folder or glob changes → update [core.mdc](../.cursor/rules/core.mdc), affected `.mdc` rules, and [AGENTS.md](../.cursor/rules/AGENTS.md) stub in the **same** change set.
+5. **Coordinated migrations:** Folder or glob changes → update [CLAUDE.md](../CLAUDE.md) and the affected nested `CLAUDE.md` files in the **same** change set.
 6. **Link hygiene:** Use **relative** links from each file’s directory (`../` when crossing folders).
 7. **Duplication:** One canonical path per topic — e.g. mob avoidance: `Completed_Features/MOB_AVOIDANCE_PLAN.md` only, not a duplicate in `Draft_Features/`.

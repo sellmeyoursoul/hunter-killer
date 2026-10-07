@@ -1,6 +1,6 @@
 # Hunter Killer — Plant ecology (world model, agent-friendly)
 
-> **Authoritative asset layout for plant packs:** **`res://assets/plants/`** per [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](../Completed_Features/ASSET_MANAGEMENT_PLAN.md). **Shipped hunger + shrub POC** (field usage / rates): archived [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md); this doc defines **long-term** semantics and names—implementations should **reuse the same property names** where they overlap.
+> **Authoritative asset layout for plant packs:** **`res://assets/plants/`** per [assets/CLAUDE.md](../../assets/CLAUDE.md) and [Completed_Features/ASSET_MANAGEMENT_PLAN.md](../Completed_Features/ASSET_MANAGEMENT_PLAN.md). **Shipped hunger + shrub POC** (field usage / rates): archived [HUNGER_AND_EATING.md](../Completed_Features/HUNGER_AND_EATING.md); this doc defines **long-term** semantics and names—implementations should **reuse the same property names** where they overlap.
 
 ---
 
@@ -29,8 +29,8 @@
 - Long term: optional `PlantSpecies` Resource holding the fields below.
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)  
-- [.cursor/rules/focus/asset_management.md](../../.cursor/rules/focus/asset_management.md)  
+- [`CLAUDE.md`](../../CLAUDE.md)  
+- [assets/CLAUDE.md](../../assets/CLAUDE.md)  
 - Forward-compat: **declare unused exports or Resource defaults** on plant scenes when cheap, so future saves/replicas carry data.
 
 ---

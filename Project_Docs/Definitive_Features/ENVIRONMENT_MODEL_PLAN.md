@@ -51,8 +51,8 @@
 - Future: tileset custom data or parallel grid for `passible` (+ `movement_impact`, `fit_size`).
 
 **Existing patterns to follow:**  
-- [`.cursor/rules/AGENTS.md`](../.cursor/rules/AGENTS.md)  
-- [.cursor/rules/focus/asset_management.md](../.cursor/rules/focus/asset_management.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (3D scenes **`solid_shrub_3d.tscn`** / **`open_shrub_3d.tscn`**); **3D** physics **layer/mask** mapping for hunger + actors is **§6**.
+- [`CLAUDE.md`](../../CLAUDE.md)  
+- [assets/CLAUDE.md](../../assets/CLAUDE.md) — **authored food shrubs** use **`res://assets/plants/solid_shrub/`** and **`open_shrub/`** (3D scenes **`solid_shrub_3d.tscn`** / **`open_shrub_3d.tscn`**); **3D** physics **layer/mask** mapping for hunger + actors is **§6**.
 - Align numeric semantics with [PLANT_ECOLOGY_PLAN.md](../Draft_Features/PLANT_ECOLOGY_PLAN.md) for `movement_impact`, `fit_size`, `crush_weight` where possible (shared helper).
 
 ---

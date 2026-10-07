@@ -36,7 +36,7 @@
 - `res://creature/motor/creature_motor_stack.gd` (`_creature_log_label`, `get_debug_snapshot`) — tick-log labeling and the new `nearest_threat_dist`/`nearest_threat_id` fields (2026-09-15).
 
 **Existing patterns to follow:**
-- [`.cursor/rules/AGENTS.md`](../../.cursor/rules/AGENTS.md)
+- [`CLAUDE.md`](../../CLAUDE.md)
 - Tick-log per-instance labeling already solved this exact ambiguity problem once (`species_id + "#" + get_instance_id()`, CLEANUP C2) — reuse that pattern anywhere else multiple same-species instances need to stay distinguishable, don't invent a second convention.
 
 ---

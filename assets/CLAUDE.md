@@ -1,6 +1,6 @@
 # Assets & `res://assets/` layout
 
-Migrated from `.cursor/rules/assets.mdc`. Keep the two in sync if you edit either. Also applies to `pack_resource_resolver.gd` and any `**/pack_resources.json`, even though those files live outside this directory.
+Also applies to `pack_resource_resolver.gd` and any `**/pack_resources.json`, even though those files live outside this directory.
 
 **Authoritative spec:** [ASSET_MANAGEMENT_PLAN.md](../Project_Docs/Completed_Features/ASSET_MANAGEMENT_PLAN.md). Unresolved `<<Question: …>>` on a topic → **stop and ask**.
 
