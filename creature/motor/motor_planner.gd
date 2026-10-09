@@ -23,6 +23,7 @@ const _LatchHold := preload("res://creature/motor/latch_hold.gd")
 const _WaypointChain := preload("res://creature/motor/motor_waypoint_chain.gd")
 const _GoalBelief := preload("res://creature/motor/goal_belief_memory.gd")
 const _RouteScan := preload("res://creature/motor/route_plausibility_scan.gd")
+const _NavTiming := preload("res://creature/motor/nav_timing.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
@@ -3319,11 +3320,15 @@ static func _apply_route_plausibility_scan(
   if space_state == null:
     probe["detour_forcing"] = false
     return probe
+  var timing_nav: Variant = _NavRouter.from_ctx(ctx) if _NavTiming.enabled else null
+  var t0: int = timing_nav.timing_begin() if timing_nav != null else 0
   var scan := _RouteScan.scan_path(
     space_state, path, _agent_radius(body), _agent_height(body), [body.get_rid()],
     threat_radius, threat_height, _agent_centre_offset(body),
     _threat_centre_offset(threat_radius, threat_height),
   )
+  if timing_nav != null:
+    timing_nav.timing_end(_NavTiming.COMP_GHOST_SCAN, t0)
   if not bool(scan.get("blocked", false)):
     probe["detour_forcing"] = bool(scan.get("detour_forcing", false))
     return probe

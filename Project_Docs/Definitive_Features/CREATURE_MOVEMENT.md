@@ -373,7 +373,7 @@ Keys from `default_creature_motor_params()` (values = code defaults; user JSON m
 | Read intent | `_read_move_intent()` — ENGINE/AI use `creature_move_intent` |
 | Wall slide | `_engine_heading_with_wall_slide` — heading redirected along playfield edges (same helpers as §8.3) |
 | Move | `apply_horizontal_move_intent` → `move_and_slide()` on XZ; gravity on Y |
-| Clamp | **`_clamp_playfield_position`** — `PlayfieldClamp.clamp_position` on footprint **after** move (row 55 safety net) |
+| Clamp | **`_clamp_playfield_position`** — `PlayfieldClamp.clamp_position` on footprint **after** move (row 55 safety net), then (2026-10-08) a baked walkable-terrain clamp when `walkable_sampler` is set — see [CREATURE_MOVEMENT_V3.md §7.4](../Draft_Features/CREATURE_MOVEMENT_V3.md) and [ENVIRONMENT_MODEL_PLAN.md §6.4](ENVIRONMENT_MODEL_PLAN.md) |
 | Rim intent sanitize | **`_predator_playfield_outward_intent_ok`** + **`_predator_sanitize_rim_playfield_intent`** in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — rejects outward rim headings when `edge_m < edge_band × 1.05`; tangential slide allowed (row 56); recovery via **`_predator_rim_sanitize_recovery_intent`** when sanitize would zero non-zero raw |
 | Scope | ENGINE and AI control modes only (human control unchanged) |
 

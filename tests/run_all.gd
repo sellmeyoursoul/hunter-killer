@@ -551,6 +551,10 @@ func _run_all() -> void:
   await _test_bake_playfield_navmesh_includes_solid_food_plants()
   _test_motor_plane_footprint_is_radius_on_both_axes()
   await _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach()
+  await _test_walkable_query_false_off_terrain_true_on_terrain()
+  await _test_walkable_clamp_slides_and_blocks_at_terrain_edge()
+  await _test_kinematic_clamp_stops_at_terrain_edge_inside_aabb()
+  await _test_creature_spawn_always_walkable_ground_across_seeds()
   await _test_interior_boulder_blocks_wolf_capsule()
   await _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit()
   await _test_shelter_enclosure_probe_detects_real_refuge_ring()
@@ -14396,6 +14400,132 @@ func _test_playfield_clamp_north_edge_keeps_rabbit_in_wolf_eat_reach() -> void:
   await process_frame
 
 
+## Builds a half-filled playfield: playfield AABB x,z in [-100, 100], but terrain (a layer-1 box)
+## only covers z in [-100, 0] — mirrors the real bug where the mesh does not fill the AABB.
+## Returns {"holder", "bounds", "sampler"} after baking the ground sampler.
+func _half_filled_terrain_sampler() -> Dictionary:
+  var holder := Node3D.new()
+  root.add_child(holder)
+  var sb := StaticBody3D.new()
+  sb.collision_layer = 1
+  sb.collision_mask = 1
+  var cs := CollisionShape3D.new()
+  var box := BoxShape3D.new()
+  box.size = Vector3(200.0, 2.0, 100.0)
+  cs.shape = box
+  sb.add_child(cs)
+  holder.add_child(sb)
+  sb.global_position = Vector3(0.0, -1.0, -50.0)
+  var bounds := {
+    "valid": true,
+    "min": Vector2(-100.0, -100.0),
+    "max": Vector2(100.0, 100.0),
+    "size": Vector2(200.0, 200.0),
+    "center": Vector3(0.0, -2.0, 0.0),
+    "floor_y": -2.0,
+    "surface_y": 0.0,
+  }
+  await self.physics_frame
+  await self.physics_frame
+  var space: PhysicsDirectSpaceState3D = root.get_world_3d().direct_space_state
+  var sampler: _GroundSampler = _GroundSampler.bake_from_playfield(bounds, space)
+  return {"holder": holder, "bounds": bounds, "sampler": sampler}
+
+func _test_walkable_query_false_off_terrain_true_on_terrain() -> void:
+  var fx := await _half_filled_terrain_sampler()
+  var sampler: _GroundSampler = fx["sampler"]
+  _assert(sampler.is_valid() and sampler.has_walkable_mask(), "walkable mask baked with the ground sampler")
+  _assert(sampler.is_walkable(Vector2(0.0, -50.0), 7.0), "walkable: terrain interior is walkable (wolf margin)")
+  _assert(sampler.is_walkable(Vector2(-90.0, -90.0), 0.5), "walkable: terrain corner inside inset is walkable")
+  _assert(not sampler.is_walkable(Vector2(0.0, 50.0), 0.0), "walkable: AABB interior with no terrain is not walkable")
+  _assert(not sampler.is_walkable(Vector2(99.0, 99.0), 0.0), "walkable: AABB corner with no terrain is not walkable")
+  _assert(not sampler.is_walkable(Vector2(0.0, 150.0), 0.0), "walkable: outside the baked bounds is not walkable")
+  _assert(not sampler.is_walkable(Vector2(0.0, -3.0), 7.0), "walkable: margin keeps a wide body off the terrain edge")
+  (fx["holder"] as Node).queue_free()
+  await process_frame
+
+func _test_walkable_clamp_slides_and_blocks_at_terrain_edge() -> void:
+  var fx := await _half_filled_terrain_sampler()
+  var sampler: _GroundSampler = fx["sampler"]
+  var m := 2.0
+  var straight := sampler.clamp_to_walkable(Vector2(0.0, -20.0), Vector2(0.0, 30.0), m)
+  _assert(straight.y <= -m + 0.01 and straight.y > -20.0, "clamp blocks a straight push into the void at the edge (z=%.2f)" % straight.y)
+  _assert(is_equal_approx(straight.x, 0.0), "straight block keeps x")
+  var slide := sampler.clamp_to_walkable(Vector2(0.0, -10.0), Vector2(20.0, 30.0), m)
+  _assert(is_equal_approx(slide.x, 20.0), "clamp slides along the edge (x advances to %.2f)" % slide.x)
+  _assert(sampler.is_walkable(slide, m), "slid position is walkable")
+  var free := sampler.clamp_to_walkable(Vector2(0.0, -50.0), Vector2(10.0, -40.0), m)
+  _assert(free.is_equal_approx(Vector2(10.0, -40.0)), "clamp leaves an on-terrain move untouched")
+  var rescued := sampler.clamp_to_walkable(Vector2(0.0, 50.0), Vector2(0.0, 60.0), m)
+  _assert(sampler.is_walkable(rescued, m), "a start off terrain is pulled back onto walkable ground")
+  (fx["holder"] as Node).queue_free()
+  await process_frame
+
+## Real kinematic body: a target inside the AABB but over the void is stopped at the terrain edge,
+## and the velocity component driving off the edge is removed.
+func _test_kinematic_clamp_stops_at_terrain_edge_inside_aabb() -> void:
+  var fx := await _half_filled_terrain_sampler()
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_carnivore_body(main, Vector3(0.0, 1.0, -30.0))
+  await process_frame
+  body.set("playfield_bounds_min", Vector2(-100.0, -100.0))
+  body.set("playfield_bounds_max", Vector2(100.0, 100.0))
+  body.set("screen_size", Vector2(200.0, 200.0))
+  body.set("walkable_sampler", fx["sampler"])
+  body.set_control_mode(_ControlMode.engine_as_int())
+  var he := _MotorPlane.footprint_half_extents(body, _Merge.default_creature_motor_params())
+  body.global_position = Vector3(0.0, 1.0, -30.0)
+  body.call("_clamp_playfield_position")
+  body.global_position = Vector3(0.0, 1.0, 40.0)
+  body.velocity = Vector3(0.0, 0.0, 10.0)
+  var changed: bool = body.call("_clamp_playfield_position")
+  _assert(changed, "terrain-edge clamp reports a position change")
+  _assert(
+    body.global_position.z <= -he.x + 0.01,
+    "body stopped before the void (z=%.2f footprint=%.2f)" % [body.global_position.z, he.x],
+  )
+  _assert(body.velocity.z <= 0.001, "velocity into the void removed (vz=%.2f)" % body.velocity.z)
+  main.queue_free()
+  (fx["holder"] as Node).queue_free()
+  await process_frame
+
+## Every spawn fraction, across several seeds, resolves to a position with a walkable ground hit.
+func _test_creature_spawn_always_walkable_ground_across_seeds() -> void:
+  var fx := await _half_filled_terrain_sampler()
+  var sampler: _GroundSampler = fx["sampler"]
+  var bounds: Dictionary = fx["bounds"]
+  var main_script := load("res://main_3d.gd") as Script
+  var main: Node3D = main_script.new()
+  main.set("_playfield_bounds", bounds)
+  main.set("_ground_sampler", sampler)
+  var margin := 7.03
+  var space: PhysicsDirectSpaceState3D = root.get_world_3d().direct_space_state
+  var checked := 0
+  for seed_v in [1, 7, 42, 1234, 99991]:
+    var rng := RandomNumberGenerator.new()
+    rng.seed = seed_v
+    main.set("_spawn_rng", rng)
+    main.set("_spawn_existing_points", [] as Array[Vector2])
+    var fracs: Array[Vector2] = [Vector2(0.5, 0.95), Vector2(0.99, 0.99), Vector2(0.0, 1.0), Vector2(0.5, 0.2)]
+    for _i in range(40):
+      fracs.append(Vector2(rng.randf(), rng.randf()))
+    for frac in fracs:
+      var pos: Vector3 = main.call("_spawn_position", "", frac)
+      var out: Vector3 = main.call("_validated_spawn_position", pos, "wolf", checked, margin)
+      var xz := Vector2(out.x, out.z)
+      var ground: Dictionary = _PlayfieldBounds3D.raycast_ground_surface(space, xz, -2.0)
+      _assert(
+        sampler.is_walkable(xz, margin) and bool(ground.get("hit", false)),
+        "seed %d frac (%.2f,%.2f) spawns on walkable ground (xz=%.1f,%.1f)" % [seed_v, frac.x, frac.y, xz.x, xz.y],
+      )
+      checked += 1
+  _assert(checked >= 200, "spawn walkable test covered every seed/fraction (%d)" % checked)
+  main.free()
+  (fx["holder"] as Node).queue_free()
+  await process_frame
+
+
 ## 2026-09-25 (user-approved 2x interior boulders): a headless live run had the wolf (capsule
 ## r 7.03, h 15.33) cross an interior boulder row. Re-probing showed a grounded wolf is already
 ## stopped by a 3x row; the crossing came from the wolf reaching the boulder while still dropping
@@ -15724,6 +15854,7 @@ func _run_nav_phase0_tests() -> void:
   await _test_nav0_nav_router_construction_seams()
   await _test_nav0_nav_router_without_map_degrades()
   _test_nav0_nav_router_navigation_layers_follow_capabilities()
+  _test_nav0_nav_timing_gate_percentiles_and_reset()
   await _test_nav0_route_scan_start_overlap_none_escaping_blocked()
   await _test_nav0_scan_truncated_static_counts_planner_truncations()
   await _test_nav0_choke_ray_lift_lifts_ray_origin_only()
@@ -16022,6 +16153,41 @@ func _test_nav0_passability_profile_defaults_and_capabilities() -> void:
   _assert(p.has_capability(_PassabilityProfileScr.CAP_SWIM), "SWIM bit reads back when set")
   p.capabilities = _PassabilityProfileScr.CAP_SWIM
   _assert(not p.has_capability(_PassabilityProfileScr.CAP_CLIMB), "CLIMB bit stays clear when only SWIM is set")
+
+
+func _test_nav0_nav_timing_gate_percentiles_and_reset() -> void:
+  # Arrange: disabled by default, so begin() must not stamp and nothing registers.
+  var timing_scr = load("res://creature/motor/nav_timing.gd")
+  timing_scr.clear_registry()
+  var router = _NavRouterScr.for_map(RID())
+  _assert(not timing_scr.enabled, "nav timing is OFF by default")
+  _assert(router.timing_begin() == 0, "timing_begin returns 0 while disabled")
+  router.timing_end(&"path_query", 0)
+  _assert(timing_scr.snapshot_all().is_empty(), "disabled timing registers no stores")
+  _assert(not router.telemetry_snapshot().has("timing"), "telemetry has no timing key while disabled")
+  # Act: feed known samples straight into a store (one physics frame -> one sample).
+  var store = timing_scr.new(7)
+  store.add(&"path_query", 2000)
+  store.add(&"ghost_scan", 1000)
+  store.add(&"path_query", 1000)
+  var snap: Dictionary = store.snapshot()
+  # Assert
+  _assert(is_equal_approx(float(snap["path_query"]["max_ms"]), 3.0), "path_query frame sums to 3 ms")
+  _assert(is_equal_approx(float(snap["ghost_scan"]["p95_ms"]), 1.0), "ghost_scan p95 is 1 ms")
+  _assert(is_equal_approx(float(snap["total"]["p50_ms"]), 4.0), "frame total sums components")
+  _assert(float(snap["step_probe"]["max_ms"]) == 0.0 and float(snap["replan"]["max_ms"]) == 0.0, "reserved slots stay zero")
+  _assert(int(snap["frames"]) == 1, "one physics frame sampled")
+  store.reset()
+  _assert(int(store.snapshot()["frames"]) == 0, "reset clears samples")
+  # Enabled path through the router registers a store and exposes it in telemetry.
+  timing_scr.enabled = true
+  var t0: int = router.timing_begin()
+  _assert(t0 != 0, "timing_begin stamps while enabled")
+  router.timing_end(&"ghost_scan", t0)
+  _assert(router.telemetry_snapshot().has("timing"), "telemetry exposes timing when enabled")
+  _assert(timing_scr.snapshot_all().size() == 1, "enabled timing registers one store")
+  timing_scr.enabled = false
+  timing_scr.clear_registry()
 
 
 func _test_nav0_nav_router_for_map_matches_direct_server_queries() -> void:

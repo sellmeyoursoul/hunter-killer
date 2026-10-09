@@ -1302,7 +1302,8 @@ func set_nav_router(router: _NavRouter) -> void:
   _nav_router = router
 
 
-## Navigation telemetry for this body: `{path_queries, scan_truncated_static, ratio}` (plan section 7).
+## Navigation telemetry for this body: `{path_queries, scan_truncated_static, ratio}` (plan section 7), plus
+## `timing` (per-component p50/p95/max, D29) when [member NavTiming.enabled] and samples exist.
 func get_nav_telemetry() -> Dictionary:
   if _nav_router == null:
     return {"path_queries": 0, "scan_truncated_static": 0, "ratio": 0.0}

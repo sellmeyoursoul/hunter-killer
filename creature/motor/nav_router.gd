@@ -23,6 +23,7 @@ class_name NavRouter
 const _Self := preload("res://creature/motor/nav_router.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _PassabilityProfile := preload("res://creature/capabilities/passability_profile.gd")
+const _NavTiming := preload("res://creature/motor/nav_timing.gd")
 
 ## Navigation-layer bit reserved for the walkable baseline (Godot's default `navigation_layers` = 1).
 const NAV_LAYER_WALK := 1
@@ -56,6 +57,8 @@ var _default_profile: RefCounted = null
 var path_queries: int = 0
 ## Route-scan truncations caused by static (ghost-layer) obstacles; see [method note_scan_truncated_static].
 var scan_truncated_static: int = 0
+## Per-creature timing store (D29); created lazily on the first recorded sample, only while timing is enabled.
+var _timing: RefCounted = null
 
 
 ## Router over an explicit [param map_rid] (headless fixtures). [param body] optionally binds a profile source.
@@ -174,10 +177,12 @@ func path(profile_in: RefCounted, from: Vector3, to: Vector3, snap_origin: bool 
   if not map.is_valid():
     return result
   path_queries += 1
+  var t0 := timing_begin()
   var start := query_origin(p, from) if snap_origin else from
   var pts: PackedVector3Array = NavigationServer3D.map_get_path(
     map, start, to, true, navigation_layers_for(p)
   )
+  timing_end(_NavTiming.COMP_PATH_QUERY, t0)
   result["points"] = pts
   if pts.size() >= 1:
     result["reachable"] = (
@@ -194,7 +199,9 @@ func closest_point(profile_in: RefCounted, point: Vector3) -> Vector3:
   var map := map_for(profile_in if profile_in != null else profile())
   if not map.is_valid():
     return point
+  var t0 := timing_begin()
   var on_mesh := NavigationServer3D.map_get_closest_point(map, point)
+  timing_end(_NavTiming.COMP_PATH_QUERY, t0)
   if on_mesh == Vector3.ZERO and point.length_squared() > 1e-6:
     return point
   return on_mesh
@@ -235,10 +242,42 @@ func scan_truncated_static_ratio() -> float:
   return float(scan_truncated_static) / float(path_queries)
 
 
-## Telemetry snapshot: `{path_queries, scan_truncated_static, ratio}`.
+## Telemetry snapshot: `{path_queries, scan_truncated_static, ratio}` plus, only while
+## [member NavTiming.enabled] and at least one sample exists, `timing` (see [method NavTiming.snapshot]).
 func telemetry_snapshot() -> Dictionary:
-  return {
+  var out := {
     "path_queries": path_queries,
     "scan_truncated_static": scan_truncated_static,
     "ratio": scan_truncated_static_ratio(),
   }
+  if _timing != null:
+    out["timing"] = _timing.call(&"snapshot")
+  return out
+
+
+## Start stamp for a timed section: [code]Time.get_ticks_usec()[/code] when [member NavTiming.enabled], else 0
+## (no clock read). Pair with [method timing_end]. Example: `var t0 := nav.timing_begin()`.
+func timing_begin() -> int:
+  if not _NavTiming.enabled:
+    return 0
+  return Time.get_ticks_usec()
+
+
+## Adds the time since [param t0] (from [method timing_begin]) to [param component] (a `NavTiming.COMP_*`
+## name) for this router's creature. No-op when [param t0] is 0 (timing was off at begin).
+## Example: `nav.timing_end(NavTiming.COMP_GHOST_SCAN, t0)`.
+func timing_end(component: StringName, t0: int) -> void:
+  if t0 == 0:
+    return
+  timing_store().call(&"add", component, Time.get_ticks_usec() - t0)
+
+
+## This creature's timing store (registered in the static [NavTiming] registry), created on first use.
+## Key = bound body instance id, else this router's instance id.
+func timing_store() -> RefCounted:
+  if _timing == null:
+    var id := get_instance_id()
+    if _body != null and is_instance_valid(_body):
+      id = _body.get_instance_id()
+    _timing = _NavTiming.for_creature(id)
+  return _timing

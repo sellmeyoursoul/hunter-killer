@@ -38,6 +38,14 @@ var speed: float = 5.0
 var screen_size: Vector2 = Vector2.ZERO
 var playfield_bounds_min: Vector2 = Vector2.ZERO
 var playfield_bounds_max: Vector2 = Vector2.ZERO
+## Baked ground sampler whose walkable mask limits movement to real terrain (set by Main3D); null
+## disables the terrain constraint (AABB clamp only).
+var walkable_sampler: PlayfieldGroundSampler = null
+## Last XZ accepted by the walkable clamp (slide origin) and whether it is set.
+var _last_walkable_xz: Vector2 = Vector2.ZERO
+var _has_last_walkable_xz: bool = false
+## A stale slide origin farther than this from the target (teleport/respawn) is ignored.
+const WALKABLE_SLIDE_MAX_STEP_M := 25.0
 var creature_size: float = 1.0
 var _base_creature_size: float = 1.0
 ## True until the definition authors body_length / width / height (deprecated radius / height fallback).
@@ -829,7 +837,11 @@ func _clamp_velocity_to_ghost_fit(delta: float) -> bool:
   return true
 
 
-## Snaps world XZ inside playfield AABB after movement (row 55 safety net).
+## Snaps world XZ inside playfield AABB after movement (row 55 safety net), then (when
+## [member walkable_sampler] is set) constrains it to real terrain: the terrain mesh does not fill
+## the AABB, so the rectangle alone lets a body walk off the ground into the void. The walkable
+## step slides along the terrain edge when possible and removes the velocity component that drove
+## the body off. Uses the baked mask only — no per-tick physics queries.
 ## Returns true when [member global_position] XZ was adjusted.
 func _clamp_playfield_position() -> bool:
   var half := _footprint_half_for_clamp()
@@ -843,10 +855,46 @@ func _clamp_playfield_position() -> bool:
   var bmax_local := bmax - bmin
   var clamped_local := _PlayfieldClamp.clamp_position(pos2_local, half, bmax_local, Vector2.ZERO)
   var clamped_world := clamped_local + bmin
-  if not pos2.is_equal_approx(clamped_world):
-    global_position = Vector3(clamped_world.x, global_position.y, clamped_world.y)
+  var target := _clamp_to_walkable_terrain(clamped_world, half)
+  if not pos2.is_equal_approx(target):
+    global_position = Vector3(target.x, global_position.y, target.y)
+    if not target.is_equal_approx(clamped_world):
+      var removed := (clamped_world - target)
+      if removed.length_squared() > 1e-10:
+        var n := Vector3(removed.x, 0.0, removed.y).normalized()
+        var into := velocity.dot(n)
+        if into > 0.0:
+          velocity -= n * into
     return true
   return false
+
+
+## Applies [member walkable_sampler] to a rectangle-clamped target XZ.
+## Params:
+## - target: Desired XZ (already inside the playfield AABB).
+## - half: Footprint half extents; the larger axis is the required ground margin.
+## Returns:
+## - Allowed XZ; [param target] unchanged when no sampler/mask is set. Also records the accepted
+##   point as the slide origin for the next tick.
+func _clamp_to_walkable_terrain(target: Vector2, half: Vector2) -> Vector2:
+  var sampler := walkable_sampler
+  if sampler == null or not sampler.has_walkable_mask():
+    return target
+  var margin := maxf(half.x, half.y)
+  var from := _last_walkable_xz
+  if not _has_last_walkable_xz or from.distance_to(target) > WALKABLE_SLIDE_MAX_STEP_M:
+    from = Vector2(INF, INF)
+  var allowed: Vector2
+  if from.x == INF:
+    allowed = target if sampler.is_walkable(target, margin) else sampler.clamp_to_walkable(
+      target, target, margin
+    )
+  else:
+    allowed = sampler.clamp_to_walkable(from, target, margin)
+  if sampler.is_walkable(allowed, margin):
+    _last_walkable_xz = allowed
+    _has_last_walkable_xz = true
+  return allowed
 
 
 ## Public playfield clamp for [code]CreatureMotorStack[/code]; returns whether position changed.

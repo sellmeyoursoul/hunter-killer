@@ -7,6 +7,11 @@ const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
 
 const DEFAULT_GRID_CELLS := 32
 const DEPRESSION_RADIUS_CELLS := 2
+## Walkable-mask resolution per axis (finer than the elevation grid so the terrain edge is located
+## to ~3 m on a 200 m playfield).
+const WALKABLE_GRID_CELLS := 64
+## Ring sample count around a body centre in [method is_walkable].
+const WALKABLE_RING_SAMPLES := 8
 ## Cells at or above this elevation percentile qualify as rim spawn candidates.
 const SPAWN_ELEVATION_PERCENTILE := 0.70
 const SPAWN_DEPRESSION_THRESHOLD_M := 0.35
@@ -22,6 +27,11 @@ var _bounds_min := Vector2.ZERO
 var _bounds_max := Vector2.ZERO
 var _floor_y_hint := 0.0
 var _elevations := PackedFloat32Array()
+## Walkable mask: 1 where a ground ray hit at the cell centre ([method _bake_walkable_mask]).
+var _walk := PackedByteArray()
+var _walk_w := 0
+var _walk_h := 0
+var _walk_exclude: Array = []
 
 
 ## Builds a sampler from playfield bounds and downward ground raycasts.
@@ -29,14 +39,18 @@ var _elevations := PackedFloat32Array()
 ## - bounds: [PlayfieldBounds3D.xz_bounds_from_playfield_root] dictionary.
 ## - space: Active [PhysicsDirectSpaceState3D] (scene must be in tree).
 ## - grid_cells: Square grid resolution per axis.
+## - walkable_exclude_rids: Collider RIDs (props: boulders, plants) ignored by the walkable mask only,
+##   so a prop over the void never marks its cell as terrain. Elevation sampling is unchanged.
 ## Returns:
 ## - Configured sampler (may be invalid when bounds or space are missing).
 static func bake_from_playfield(
   bounds: Dictionary,
   space: PhysicsDirectSpaceState3D,
   grid_cells: int = DEFAULT_GRID_CELLS,
+  walkable_exclude_rids: Array = [],
 ) -> PlayfieldGroundSampler:
   var sampler := PlayfieldGroundSampler.new()
+  sampler._walk_exclude = walkable_exclude_rids
   sampler._bake(bounds, space, maxi(4, grid_cells))
   return sampler
 
@@ -225,7 +239,145 @@ func _bake(bounds: Dictionary, space: PhysicsDirectSpaceState3D, grid_cells: int
       var xz := _bounds_min + Vector2(fx * sz.x, fy * sz.y)
       var ground: Dictionary = _Bounds3D.raycast_ground_surface(space, xz, _floor_y_hint)
       _elevations[gy * _grid_w + gx] = float(ground.get("surface_y", _floor_y_hint))
+  _bake_walkable_mask(space)
   _valid = true
+
+
+## Bakes the coarse "has ground" mask ([constant WALKABLE_GRID_CELLS] square) with one ground ray
+## per cell centre. Runs once at bake time so per-tick walkability queries never touch physics.
+## Params:
+## - space: Active [PhysicsDirectSpaceState3D] (same one used for the elevation grid).
+func _bake_walkable_mask(space: PhysicsDirectSpaceState3D) -> void:
+  _walk_w = WALKABLE_GRID_CELLS
+  _walk_h = WALKABLE_GRID_CELLS
+  _walk = PackedByteArray()
+  _walk.resize(_walk_w * _walk_h)
+  var sz := _bounds_max - _bounds_min
+  for gy in range(_walk_h):
+    for gx in range(_walk_w):
+      var xz := _bounds_min + Vector2(
+        (float(gx) + 0.5) / float(_walk_w) * sz.x,
+        (float(gy) + 0.5) / float(_walk_h) * sz.y,
+      )
+      var ground: Dictionary = _Bounds3D.raycast_ground_surface(
+        space, xz, _floor_y_hint, _Bounds3D.WORLD_STATIC_COLLISION_MASK, _walk_exclude
+      )
+      _walk[gy * _walk_w + gx] = 1 if bool(ground.get("hit", false)) else 0
+
+
+## True when the baked walkable mask exists (sampler baked from a real physics space).
+func has_walkable_mask() -> bool:
+  return _walk_w > 0 and _walk.size() == _walk_w * _walk_h
+
+
+## Size of one walkable-mask cell in meters (x, z); [code]Vector2.ZERO[/code] when unbaked.
+func walkable_cell_size() -> Vector2:
+  if not has_walkable_mask():
+    return Vector2.ZERO
+  var sz := _bounds_max - _bounds_min
+  return Vector2(sz.x / float(_walk_w), sz.y / float(_walk_h))
+
+
+## True when the mask cell containing [param xz] had a ground hit at bake time; false outside the
+## baked bounds. Cheap array lookup (no physics).
+func _walk_cell_has_ground(xz: Vector2) -> bool:
+  var sz := _bounds_max - _bounds_min
+  if xz.x < _bounds_min.x or xz.y < _bounds_min.y or xz.x > _bounds_max.x or xz.y > _bounds_max.y:
+    return false
+  var gx := clampi(int(floor((xz.x - _bounds_min.x) / sz.x * float(_walk_w))), 0, _walk_w - 1)
+  var gy := clampi(int(floor((xz.y - _bounds_min.y) / sz.y * float(_walk_h))), 0, _walk_h - 1)
+  return _walk[gy * _walk_w + gx] != 0
+
+
+## Whether a body of footprint radius [param margin] centred at [param xz] stays over real terrain.
+## Samples the centre plus [constant WALKABLE_RING_SAMPLES] points on a ring at
+## [code]margin + half a mask cell[/code] (the half cell conservatively covers the mask's
+## quantization, since a cell only records ground at its centre). No per-tick physics.
+## Params:
+## - xz: World XZ of the body centre.
+## - margin: Footprint radius in meters (0 = point query).
+## Returns:
+## - True when every sample has ground; also true when no mask is baked (nothing to enforce).
+## Example: [code]sampler.is_walkable(Vector2(10, 20), 0.5)[/code]
+func is_walkable(xz: Vector2, margin: float = 0.0) -> bool:
+  if not has_walkable_mask():
+    return true
+  if not _walk_cell_has_ground(xz):
+    return false
+  var cs := walkable_cell_size()
+  var r := maxf(margin, 0.0) + maxf(cs.x, cs.y) * 0.5
+  for i in range(WALKABLE_RING_SAMPLES):
+    var a := TAU * float(i) / float(WALKABLE_RING_SAMPLES)
+    if not _walk_cell_has_ground(xz + Vector2(cos(a), sin(a)) * r):
+      return false
+  return true
+
+
+## Nearest walkable point to [param xz] (searched on a 1 m-ish expanding square ring up to
+## [param max_radius]). Returns [code]Vector2(INF, INF)[/code] when nothing walkable is in range.
+## Params:
+## - xz: Query point.
+## - margin: Footprint radius required at the result.
+## - max_radius: Search radius in meters.
+func nearest_walkable(xz: Vector2, margin: float = 0.0, max_radius: float = 150.0) -> Vector2:
+  if is_walkable(xz, margin):
+    return xz
+  var cs := walkable_cell_size()
+  var step := maxf(1.0, minf(cs.x, cs.y) * 0.5)
+  var best := Vector2(INF, INF)
+  var best_d := INF
+  var rings := int(ceil(max_radius / step))
+  for ring in range(1, rings + 1):
+    var rad := float(ring) * step
+    if best_d < rad:
+      break
+    for ix in range(-ring, ring + 1):
+      var iy_step := 1 if absi(ix) == ring else 2 * ring
+      for iy in range(-ring, ring + 1, iy_step):
+        var p := xz + Vector2(float(ix), float(iy)) * step
+        var d := p.distance_to(xz)
+        if d < best_d and is_walkable(p, margin):
+          best_d = d
+          best = p
+  return best
+
+
+## Constrains a one-tick move to real terrain: returns [param to] when walkable; otherwise the
+## farthest walkable point reachable from [param from] by sliding along one axis (edge slide) or by
+## shortening the move. When [param from] itself is not walkable (spawned/teleported off terrain),
+## returns [method nearest_walkable] of [param to] so the body is pulled back on.
+## Params:
+## - from: Previous accepted XZ (should be walkable).
+## - to: Desired XZ after the move.
+## - margin: Footprint radius in meters.
+## Returns:
+## - Allowed XZ (equals [param to] when nothing blocks it).
+func clamp_to_walkable(from: Vector2, to: Vector2, margin: float = 0.0) -> Vector2:
+  if is_walkable(to, margin):
+    return to
+  if not is_walkable(from, margin):
+    var back := nearest_walkable(to, margin)
+    return to if back.x == INF else back
+  var best := from
+  var best_d := 0.0
+  for cand in [Vector2(to.x, from.y), Vector2(from.x, to.y)]:
+    var c: Vector2 = cand
+    var d := c.distance_squared_to(from)
+    if d > best_d and is_walkable(c, margin):
+      best = c
+      best_d = d
+  var lo := 0.0
+  var hi := 1.0
+  for _i in range(8):
+    var mid := (lo + hi) * 0.5
+    if is_walkable(from.lerp(to, mid), margin):
+      lo = mid
+    else:
+      hi = mid
+  var shortened := from.lerp(to, lo)
+  if shortened.distance_squared_to(from) > best_d:
+    best = shortened
+  return best
 
 
 func _cell_elevation(gx: int, gy: int) -> float:

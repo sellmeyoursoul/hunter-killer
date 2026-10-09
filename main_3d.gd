@@ -114,6 +114,8 @@ var _obstacles_root: Node3D
 var _food_root: Node3D
 var _using_fallback_floor: bool = false
 var _ground_sampler: PlayfieldGroundSampler
+## Bounded resample budget when a creature spawn candidate is off walkable ground.
+const _SPAWN_WALKABLE_MAX_ATTEMPTS := 64
 var _spawn_rng: RandomNumberGenerator
 var _spawn_seed: int = 0
 var _spawn_existing_points: Array[Vector2] = []
@@ -776,6 +778,18 @@ func _recompute_playfield_bounds() -> void:
   _ground_sampler = null
 
 
+## Collider RIDs of placed props (boulders, plants) that the walkable mask must ignore: a prop
+## overhanging the void is not terrain. Terrain stays the only thing that marks a cell walkable.
+## Returns:
+## - RIDs under the obstacles and food roots (empty before they exist).
+func _walkable_mask_exclude_rids() -> Array:
+  var rids: Array = []
+  for r in [_obstacles_root, _food_root]:
+    if r != null and is_instance_valid(r):
+      rids.append_array(_Bounds3D.collect_collision_object_rids(r))
+  return rids
+
+
 func _ensure_ground_sampler_ready() -> void:
   if _ground_sampler != null and _ground_sampler.is_valid():
     return
@@ -785,7 +799,8 @@ func _ensure_ground_sampler_ready() -> void:
   if world_3d == null:
     return
   _ground_sampler = _GroundSampler.bake_from_playfield(
-    _playfield_bounds, world_3d.direct_space_state
+    _playfield_bounds, world_3d.direct_space_state, _GroundSampler.DEFAULT_GRID_CELLS,
+    _walkable_mask_exclude_rids(),
   )
 
 
@@ -799,7 +814,9 @@ func _bake_ground_sampler() -> void:
     _ground_sampler = null
     return
   var space := world_3d.direct_space_state
-  _ground_sampler = _GroundSampler.bake_from_playfield(_playfield_bounds, space)
+  _ground_sampler = _GroundSampler.bake_from_playfield(
+    _playfield_bounds, space, _GroundSampler.DEFAULT_GRID_CELLS, _walkable_mask_exclude_rids()
+  )
   if _ground_sampler != null and _ground_sampler.is_valid():
     var center_xz: Vector2 = (
       _playfield_bounds.get("min", Vector2.ZERO)
@@ -1202,7 +1219,16 @@ func _spawn_configured_creatures() -> void:
     for _n in range(count):
       var frac: Vector2 = fracs[idx] if idx < fracs.size() else Vector2(0.5, 0.5)
       var marker_name := "HerbivoreSpawn" if idx == 0 else ("CarnivoreSpawn" if idx == 1 else "")
-      var pos := _spawn_position(marker_name, frac)
+      var root := body_scene.instantiate() as Node3D
+      root.set("definition", def)
+      add_child(root)
+      var body := root.get_node("Body") as CharacterBody3D
+      _setup_motor_body(body, groups)
+      ## Position resolved after the body exists so the walkable-ground margin is its real radius.
+      var pos := _validated_spawn_position(
+        _spawn_position(marker_name, frac), str(def.species_id), idx,
+        float(body.call(&"get_collision_capsule_radius")),
+      )
       if _ground_sampler != null and _ground_sampler.is_valid():
         OLog.info(
           "Main3D duel spawn: creature[%d] species=%s frac=(%.2f,%.2f) elev=%.2f player=%s"
@@ -1217,11 +1243,6 @@ func _spawn_configured_creatures() -> void:
           false,
           "Main3D",
         )
-      var root := body_scene.instantiate() as Node3D
-      root.set("definition", def)
-      add_child(root)
-      var body := root.get_node("Body") as CharacterBody3D
-      _setup_motor_body(body, groups)
       ## Deferred: [CreatureRoot3D]'s own `_ready()` queues `_propagate_definition_to_children`
       ## (`call_deferred`), which calls `Vitals.apply_parent_definition()` and resets
       ## `Vitals.current_calories` to the species' full `caloric_needs`. That reset is queued
@@ -1276,7 +1297,68 @@ func _setup_motor_body(body: CharacterBody3D, groups: Array[StringName]) -> void
   body.screen_size = get_motor_playfield_size()
   body.playfield_bounds_min = get_motor_playfield_bounds_min()
   body.playfield_bounds_max = get_motor_playfield_bounds_max()
+  if _ground_sampler != null and _ground_sampler.is_valid() and _ground_sampler.has_walkable_mask():
+    body.set("walkable_sampler", _ground_sampler)
   body.set_control_mode(_ControlMode.engine_as_int())
+
+
+## Spawn-time walkable-ground resolution: returns [param pos] when a body of radius
+## [param margin] at its XZ stays over real terrain (baked ground mask); otherwise resamples
+## uniform playfield fractions from [member _spawn_rng] (bounded by
+## [constant _SPAWN_WALKABLE_MAX_ATTEMPTS], clear of [member _spawn_existing_points]) and finally
+## falls back to the nearest walkable point. Logs one OLog line only when the position moved.
+## Params:
+## - pos: Candidate world position (marker or fraction-derived).
+## - role: Species id for the log line.
+## - idx: Spawn index for the log line.
+## - margin: Body footprint radius in meters.
+## Returns:
+## - A world position (Y untouched / 0) with a walkable ground sample; [param pos] unchanged when
+##   there is no baked mask or nothing walkable exists.
+func _validated_spawn_position(pos: Vector3, role: String, idx: int, margin: float) -> Vector3:
+  var sampler := _ground_sampler
+  if sampler == null or not sampler.is_valid() or not sampler.has_walkable_mask():
+    return pos
+  var xz := Vector2(pos.x, pos.z)
+  if sampler.is_walkable(xz, margin):
+    return pos
+  var clearance := _creature_spawn_prop_clearance_m()
+  var chosen := Vector2(INF, INF)
+  var attempts := 0
+  for _a in range(_SPAWN_WALKABLE_MAX_ATTEMPTS):
+    attempts += 1
+    var f := _SpawnRandomizer.pick_uniform_fraction(_spawn_rng, _playfield_bounds, margin)
+    var cand_pos := _Bounds3D.world_position_from_fraction(_playfield_bounds, f, 0.0)
+    var cand := Vector2(cand_pos.x, cand_pos.z)
+    if not sampler.is_walkable(cand, margin):
+      continue
+    var clear := true
+    for p in _spawn_existing_points:
+      if cand.distance_to(p) < clearance:
+        clear = false
+        break
+    if clear:
+      chosen = cand
+      break
+  var how := "resampled"
+  if chosen.x == INF:
+    how = "nearest_walkable"
+    chosen = sampler.nearest_walkable(xz, margin, 120.0)
+  if chosen.x == INF:
+    OLog.error(
+      "Main3D: no walkable ground for %s[%d] near (%.1f, %.1f) margin=%.1f — spawn left unchanged"
+      % [role, idx, xz.x, xz.y, margin],
+      true,
+      "Main3D",
+    )
+    return pos
+  OLog.info(
+    "Main3D: spawn %s[%d] off walkable ground at (%.1f, %.1f) margin=%.1f — %s to (%.1f, %.1f) after %d tries"
+    % [role, idx, xz.x, xz.y, margin, how, chosen.x, chosen.y, attempts],
+    true,
+    "Main3D",
+  )
+  return Vector3(chosen.x, pos.y, chosen.y)
 
 
 func _spawn_position(marker_name: String, fallback_frac: Vector2) -> Vector3:
@@ -1302,7 +1384,9 @@ func _snap_creature_to_ground(
       _Bounds3D.root_global_y_for_surface(body, hint_y),
       xz.y,
     )
-    OLog.info(
+    ## Defensive only: [method _validated_spawn_position] guarantees a walkable ground sample, so
+    ## this is reachable solely when no ground mask is baked (or the terrain changed since).
+    OLog.error(
       "Main3D: no ground raycast hit for %s at (%.1f, %.1f) — using floor_y fallback"
       % [role, xz.x, xz.y],
       true,
