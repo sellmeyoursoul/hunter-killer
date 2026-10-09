@@ -257,14 +257,20 @@ static func raycast_ground_surface(
 
 ## Places [param creature_root] so [param body] capsule bottom sits on raycast ground at [param xz].
 ## Returns true when a static surface was hit.
+## Params:
+## - exclude_rids: Collider RIDs the ground ray ignores (obstacle/food props) so the creature never
+##   lands atop a prop; terrain stays hittable.
 static func snap_creature_root_to_ground(
   creature_root: Node3D,
   body: CharacterBody3D,
   xz: Vector2,
   hint_y: float,
   space: PhysicsDirectSpaceState3D,
+  exclude_rids: Array = [],
 ) -> bool:
-  var ground: Dictionary = raycast_ground_surface(space, xz, hint_y)
+  var ground: Dictionary = raycast_ground_surface(
+    space, xz, hint_y, WORLD_STATIC_COLLISION_MASK, exclude_rids
+  )
   var surface_y := float(ground.get("surface_y", hint_y))
   var root_y := root_global_y_for_surface(body, surface_y)
   creature_root.global_position = Vector3(xz.x, root_y, xz.y)
@@ -302,6 +308,8 @@ static func settle_character_body_on_floor(
 ## - body: Duel [code]Body[/code] already in the scene tree.
 ## - space: Active [PhysicsDirectSpaceState3D].
 ## - hint_y: Floor hint from playfield bounds.
+## - settle_steps: Physics iterations for the first settle pass.
+## - exclude_rids: Collider RIDs ignored by the nudge-loop ground ray (obstacle/food props).
 ## Returns:
 ## - True when [param body] reports on-floor after settlement.
 static func settle_creature_spawn_on_floor(
@@ -310,6 +318,7 @@ static func settle_creature_spawn_on_floor(
   space: PhysicsDirectSpaceState3D,
   hint_y: float,
   settle_steps: int = 12,
+  exclude_rids: Array = [],
 ) -> bool:
   if creature_root == null or body == null:
     return false
@@ -318,7 +327,9 @@ static func settle_creature_spawn_on_floor(
     return true
   for _nudge in 8:
     var xz := Vector2(creature_root.global_position.x, creature_root.global_position.z)
-    var ground: Dictionary = raycast_ground_surface(space, xz, hint_y)
+    var ground: Dictionary = raycast_ground_surface(
+      space, xz, hint_y, WORLD_STATIC_COLLISION_MASK, exclude_rids
+    )
     if bool(ground.get("hit", false)):
       creature_root.global_position.y = root_global_y_for_surface(
         body, float(ground.get("surface_y", hint_y))

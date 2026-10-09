@@ -123,6 +123,10 @@ var _invariant_pos_history: Array = []
 var _invariant_flee_wp_history: Array = []
 var _invariant_last_flee_wp: Vector3 = Vector3.ZERO
 var _invariant_airborne_ticks: int = 0
+## Defeated bodies (eaten / starved) are inert in [method tick]; tests disable via
+## [method set_defeat_inert_enabled_for_test] because many fixtures use near-zero calories and
+## starve mid-run while still expecting the stack to plan.
+var _defeat_inert_enabled: bool = true
 var _invariant_tripped: bool = false
 ## C10 repro aid (2026-09-14): the trip-time `geometry_probe` alone only shows where the body
 ## ended up ~45 ticks *after* losing the floor — by then it's drifted well past the actual liftoff
@@ -194,8 +198,30 @@ func configure(
   _ReplayCapture.reset_session_for(_creature_log_label())
 
 
+## True when the body is defeated (eaten / starved): hidden, collision disabled, and inert until
+## respawn via the body's [code]start_duel_spawn[/code]. Reads the body's [code]_defeat_hidden[/code]
+## defensively — plain CharacterBody3D fixtures lack the property, and a missing/null value is false.
+func _is_body_defeated() -> bool:
+  if not _defeat_inert_enabled or _body == null or not is_instance_valid(_body):
+    return false
+  var v: Variant = _body.get("_defeat_hidden")
+  return v != null and bool(v)
+
+
+## Clears C10 airborne tracking so a respawned body starts from a clean slate.
+func _reset_airborne_invariant_state() -> void:
+  _invariant_airborne_ticks = 0
+  _invariant_liftoff_snapshot = {}
+
+
 ## One physics tick: awareness scan, consideration cadence, planner action, execution.
+## A defeated body (see [method _is_body_defeated]) is inert: returns an empty outcome without
+## scanning, planning, moving, applying gravity, or asserting invariants (its collision is disabled,
+## so gravity would otherwise sink it through terrain and falsely trip the C10 invariant).
 func tick(delta: float) -> _ActionOutcome:
+  if _is_body_defeated():
+    _reset_airborne_invariant_state()
+    return _ActionOutcome.new()
   _physics_tick_count += 1
   _refresh_wait_calorie_multiplier()
   _refresh_prey_race_giveup_ticks()
@@ -398,6 +424,9 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
 func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
   if _invariant_tripped or _body == null or not is_instance_valid(_body):
     return
+  if _is_body_defeated():
+    _reset_airborne_invariant_state()
+    return
   var pos := _body.global_position
   var label := _creature_log_label()
   var on_floor := _body.is_on_floor()
@@ -465,6 +494,8 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
           "velocity": velocity,
           "airborne_ticks": _invariant_airborne_ticks,
           "tick": _physics_tick_count,
+          "defeat_hidden": bool(_body.get("_defeat_hidden")),
+          "body_visible": _body.visible,
           "geometry_probe": _airborne_geometry_probe(pos),
           "liftoff": _invariant_liftoff_snapshot,
           "recent_trace": _invariant_trace.duplicate(true),
@@ -902,6 +933,12 @@ func set_live_scan_for_test(scan: Dictionary) -> void:
 ## fixture already confirmed to hit that specific artifact, not as a general escape hatch.
 func set_debug_assert_motor_invariants_enabled_for_test(enabled: bool) -> void:
   _debug_assert_motor_invariants = enabled
+
+
+## Test-only: [code]false[/code] lets a starved/defeated fixture body keep ticking (legacy fixture
+## behavior); default [code]true[/code] makes [method tick] inert for defeated bodies.
+func set_defeat_inert_enabled_for_test(enabled: bool) -> void:
+  _defeat_inert_enabled = enabled
 
 
 func _run_live_scan() -> void:

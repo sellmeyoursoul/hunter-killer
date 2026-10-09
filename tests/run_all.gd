@@ -275,6 +275,7 @@ func _run_all() -> void:
   _test_motor_goal_hub_subacute_flight_weight()
   _test_motor_consideration_cadence_interval()
   _test_creature_motor_stack_tick_valid_action()
+  _test_creature_motor_stack_tick_defeated_body_is_inert()
   _test_creature_motor_stack_bare_safety_recovery_does_not_promote_shelter_or_write_locale()
   _test_creature_motor_stack_flight_exit_promotes_nearby_shelter_from_observed_and_confirmed()
   _test_creature_motor_stack_flight_exit_writes_one_avoid_hostiles_locale_row_per_episode()
@@ -555,6 +556,7 @@ func _run_all() -> void:
   await _test_walkable_clamp_slides_and_blocks_at_terrain_edge()
   await _test_kinematic_clamp_stops_at_terrain_edge_inside_aabb()
   await _test_creature_spawn_always_walkable_ground_across_seeds()
+  await _test_spawn_snap_ignores_excluded_prop_colliders()
   await _test_interior_boulder_blocks_wolf_capsule()
   await _test_open_shrub_refuge_cluster_gaps_passable_to_rabbit()
   await _test_shelter_enclosure_probe_detects_real_refuge_ring()
@@ -9668,10 +9670,31 @@ func _test_motor_consideration_cadence_interval() -> void:
 func _motor_stack_test_configure(body: CharacterBody3D) -> CreatureMotorStack:
   var stack := _CreatureMotorStack.new()
   stack.configure(body, null, _motor_v3_test_params(), "", {})
+  stack.set_defeat_inert_enabled_for_test(false)
   body.set_use_v3_action_calories(true)
   body.set_motor_stack_drives_physics(true)
   body.set_control_mode(_ControlMode.engine_as_int())
   return stack
+
+## Defeated (eaten/starved) bodies must not plan, move, or apply gravity: the stack returns an empty
+## outcome so a collision-less body is never dragged through terrain (false C10 airborne trip).
+func _test_creature_motor_stack_tick_defeated_body_is_inert() -> void:
+  var main := Node3D.new()
+  root.add_child(main)
+  var body := _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0))
+  var stack := _motor_stack_test_configure(body)
+  stack.set_defeat_inert_enabled_for_test(true)
+  body.set("_defeat_hidden", true)
+  var pos_before := body.global_position
+  var calories_before := float(body.current_calories)
+  var outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+  _assert(int(outcome.action) == -1, "defeated body: tick returns the empty outcome")
+  _assert(body.global_position.is_equal_approx(pos_before), "defeated body: no displacement or gravity")
+  _assert(is_equal_approx(float(body.current_calories), calories_before), "defeated body: no calorie debit")
+  body.set("_defeat_hidden", false)
+  var live_outcome: _ActionOutcome = stack.tick(1.0 / 60.0)
+  _assert(int(live_outcome.action) != -1, "respawned body: tick plans an action again")
+  main.queue_free()
 
 func _test_creature_motor_stack_tick_valid_action() -> void:
   var main := Node3D.new()
@@ -14523,6 +14546,60 @@ func _test_creature_spawn_always_walkable_ground_across_seeds() -> void:
   _assert(checked >= 200, "spawn walkable test covered every seed/fraction (%d)" % checked)
   main.free()
   (fx["holder"] as Node).queue_free()
+  await process_frame
+
+
+## Spawn snap must land on terrain, not on top of a tall prop collider at the same XZ, once the
+## prop RIDs are passed as exclude_rids (the unexcluded snap lands on the prop top: the bug).
+func _test_spawn_snap_ignores_excluded_prop_colliders() -> void:
+  # Arrange: floor top at y=0, 10 m tall prop box (top y=10) on layer 1 at the same XZ.
+  var holder := Node3D.new()
+  root.add_child(holder)
+  var floor_body := _motor_v3_test_floor(holder, 60.0)
+  var prop := StaticBody3D.new()
+  prop.collision_layer = 1
+  prop.collision_mask = 1
+  var prop_col := CollisionShape3D.new()
+  var prop_box := BoxShape3D.new()
+  prop_box.size = Vector3(4.0, 10.0, 4.0)
+  prop_col.shape = prop_box
+  prop.add_child(prop_col)
+  holder.add_child(prop)
+  prop.global_position = Vector3(0.0, 5.0, 0.0)
+  var creature_root := Node3D.new()
+  holder.add_child(creature_root)
+  var body := CharacterBody3D.new()
+  body.collision_layer = 0  # keep the fixture body out of the layer-1 ground ray
+  var cap_col := CollisionShape3D.new()
+  var cap := CapsuleShape3D.new()
+  cap.radius = 0.3
+  cap.height = 1.0
+  cap_col.shape = cap
+  body.add_child(cap_col)
+  creature_root.add_child(body)
+  await physics_frame
+  await physics_frame
+  var space: PhysicsDirectSpaceState3D = root.get_world_3d().direct_space_state
+  var xz := Vector2.ZERO
+  # Act
+  _PlayfieldBounds3D.snap_creature_root_to_ground(creature_root, body, xz, 0.0, space)
+  var y_unexcluded := creature_root.global_position.y
+  var hit_excluded: bool = _PlayfieldBounds3D.snap_creature_root_to_ground(
+    creature_root, body, xz, 0.0, space, [prop.get_rid()]
+  )
+  var y_excluded := creature_root.global_position.y
+  # Assert
+  _assert(hit_excluded, "snap with prop excluded still hits terrain")
+  _assert(
+    y_unexcluded > y_excluded + 9.0,
+    "without exclude the snap lands on the prop top (unexcluded=%.2f excluded=%.2f)" % [y_unexcluded, y_excluded],
+  )
+  _assert(
+    absf(y_excluded - _PlayfieldBounds3D.root_global_y_for_surface(body, 0.0)) < 0.01,
+    "with prop excluded the snap lands on the floor surface (y=%.2f)" % y_excluded,
+  )
+  _assert(floor_body != null, "floor fixture exists")
+  holder.queue_free()
   await process_frame
 
 

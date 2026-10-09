@@ -1377,7 +1377,10 @@ func _snap_creature_to_ground(
   var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
   var xz := Vector2(xz_pos.x, xz_pos.z)
   var space := get_world_3d().direct_space_state if get_world_3d() != null else null
-  var ground_hit: bool = _Bounds3D.snap_creature_root_to_ground(creature_root, body, xz, hint_y, space)
+  var exclude_rids: Array = _walkable_mask_exclude_rids()
+  var ground_hit: bool = _Bounds3D.snap_creature_root_to_ground(
+    creature_root, body, xz, hint_y, space, exclude_rids
+  )
   if not ground_hit:
     creature_root.global_position = Vector3(
       xz.x,
@@ -1393,7 +1396,7 @@ func _snap_creature_to_ground(
       "Main3D",
     )
   if space != null and creature_root is Node3D:
-    PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root, body, space, hint_y)
+    PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root, body, space, hint_y, 12, exclude_rids)
   else:
     _Bounds3D.settle_character_body_on_floor(body)
 
@@ -1402,12 +1405,15 @@ func _settle_spawned_creature_bodies() -> void:
   await get_tree().physics_frame
   var hint_y := float(_playfield_bounds.get("floor_y", 0.0))
   var space := get_world_3d().direct_space_state if get_world_3d() != null else null
+  var exclude_rids: Array = _walkable_mask_exclude_rids()
   for body in _creature_bodies:
     if body == null or not is_instance_valid(body):
       continue
     var creature_root: Node = body.get_parent()
     if space != null and creature_root is Node3D:
-      PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root as Node3D, body, space, hint_y)
+      PlayfieldBounds3D.settle_creature_spawn_on_floor(
+        creature_root as Node3D, body, space, hint_y, 12, exclude_rids
+      )
     else:
       _Bounds3D.settle_character_body_on_floor(body)
   await get_tree().physics_frame
@@ -1419,7 +1425,9 @@ func _settle_spawned_creature_bodies() -> void:
         continue
       var creature_root_retry: Node = body.get_parent()
       if creature_root_retry is Node3D:
-        PlayfieldBounds3D.settle_creature_spawn_on_floor(creature_root_retry as Node3D, body, space, hint_y)
+        PlayfieldBounds3D.settle_creature_spawn_on_floor(
+          creature_root_retry as Node3D, body, space, hint_y, 12, exclude_rids
+        )
   call_deferred("_log_spawn_floor_contact")
 
 
