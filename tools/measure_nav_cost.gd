@@ -90,11 +90,16 @@ func _run() -> void:
   _NavTiming.reset_all()
   var started_restarts := _restarts
   var t0 := Time.get_ticks_msec()
+  var frame_ms := PackedFloat32Array()
+  var prev_sum := _nav_sum_ms_all()
   for _i in _frames:
     await physics_frame
+    var now_sum := _nav_sum_ms_all()
+    frame_ms.append(maxf(0.0, now_sum - prev_sum))
+    prev_sum = now_sum
     _restart_if_round_ended()
   var wall_s := float(Time.get_ticks_msec() - t0) / 1000.0
-  _report(wall_s, _restarts - started_restarts)
+  _report(wall_s, _restarts - started_restarts, frame_ms)
   quit(0)
 
 
@@ -137,7 +142,43 @@ func _fail(msg: String) -> void:
   quit(1)
 
 
-func _report(wall_s: float, restarts_in_window: int) -> void:
+## Returns the sum of lifetime nav ms across all creatures in the NavTiming registry.
+func _nav_sum_ms_all() -> float:
+  var total: float = 0.0
+  var snaps: Dictionary = _NavTiming.snapshot_all()
+  for id in snaps.keys():
+    var s: Dictionary = snaps[id]
+    total += float((s["total"] as Dictionary)["sum_ms"])
+  return total
+
+
+## Computes summary statistics from a list of per-frame nav cost samples.
+## [param samples]: packed array of per-frame total nav ms values (not modified).
+## Returns dictionary with keys frames, mean_ms, p50_ms, p95_ms, max_ms.
+## Example: empty input returns frames=0 and all floats 0.0.
+static func roster_frame_stats(samples: PackedFloat32Array) -> Dictionary:
+  var n: int = samples.size()
+  if n == 0:
+    return {"frames": 0, "mean_ms": 0.0, "p50_ms": 0.0, "p95_ms": 0.0, "max_ms": 0.0}
+  var sorted := samples.duplicate()
+  sorted.sort()
+  var sum: float = 0.0
+  for v in sorted:
+    sum += v
+  var mean_ms: float = sum / float(n)
+  var p50_rank: int = clampi(int(ceil(0.5 * float(n))) - 1, 0, n - 1)
+  var p95_rank: int = clampi(int(ceil(0.95 * float(n))) - 1, 0, n - 1)
+  var max_rank: int = clampi(int(ceil(1.0 * float(n))) - 1, 0, n - 1)
+  return {
+    "frames": n,
+    "mean_ms": mean_ms,
+    "p50_ms": sorted[p50_rank],
+    "p95_ms": sorted[p95_rank],
+    "max_ms": sorted[max_rank],
+  }
+
+
+func _report(wall_s: float, restarts_in_window: int, frame_ms: PackedFloat32Array) -> void:
   var snaps: Dictionary = _NavTiming.snapshot_all()
   var species_by_id: Dictionary = {}
   for b in _main.call("get_all_creature_bodies"):
@@ -175,6 +216,12 @@ func _report(wall_s: float, restarts_in_window: int) -> void:
   print("  %s" % _NavTiming.summary_line())
   print("  POOLED c (p95 of per-creature per-active-frame total) = %.4f ms  ->  N_active_est = floor(%.1f / c) = %s" % [
     c_p95, _B_NAV_MS, str(n_est) if n_est >= 0 else "n/a (no samples)",
+  ])
+  var rs: Dictionary = roster_frame_stats(frame_ms)
+  var p95_label: String = "<=" if float(rs.get("p95_ms", 0.0)) <= _B_NAV_MS else ">"
+  print("  ROSTER per-frame total (all frames) n=%d mean=%.4f p50=%.4f p95=%.4f max=%.4f ms | B_nav=%.1f ms -> p95 %s B_nav" % [
+    int(rs.get("frames", 0)), float(rs.get("mean_ms", 0.0)), float(rs.get("p50_ms", 0.0)),
+    float(rs.get("p95_ms", 0.0)), float(rs.get("max_ms", 0.0)), _B_NAV_MS, p95_label,
   ])
   var total_sum_ms := 0.0
   for id in ids:
