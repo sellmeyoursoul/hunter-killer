@@ -11,9 +11,9 @@ Applies to any session whose task involves the pilot pipeline, however it was st
    - `E`: fix what the worker could not, and record why (bad packet, worker error, spec flaw).
    - `D`: implement directly from the same starting prompt a user would give. Never read the packet or the worker's diff. The branch is discarded afterwards.
 3. **Do not run `/stop`** in a P, R or E session (it overwrites `chat_sum.md`, stages everything, commits and pushes). Leave the handoff to the user.
-4. **At the end of the phase, log it.** Find this session's id with
-   `python -I -X utf8 C:\Users\mikea\Documents\Git_Proj\AI_dev_pipeline\pipeline\pilot\claude_cost.py --list 1 --project hunter-killer`
-   (the newest hunter-killer transcript is the active one; if another hunter-killer session is open at the same time, ask the user for the id). Run `claude_cost.py <id>` and append one row to `pipeline/PILOT_LOG.md`: date, task, phase, session id, replies, input, cache read, cache write (5m + 1h), output, weighted, one line of notes. The row is a snapshot; the user re-runs the script if more work happens in the session afterwards.
+4. **At the end of the phase, log it with the script** (one reply, no hand-written row). From this repo's root:
+   `python -I -X utf8 C:\Users\mikea\Documents\Git_Proj\AI_dev_pipeline\pipeline\pilot\pilot_log.py add T-NNN <phase> --note "one line" [--tag NAME] [--session ID]`
+   It sums the newest transcript of this repo's project folder (pass `--session` if two sessions of this repo are open). Rows are snapshots; `pilot_log.py refresh` re-sums them all later. Phases used so far: `P`, `P2`/`P3` (packet or test repairs), `R`, `E`, `D`.
 5. Never edit `tasks/` packets after the worker has started.
 
 ## Measuring Claude tokens
@@ -43,7 +43,7 @@ Done 2026-10-12 (commit 054b0e1): suite and tab check green at the base; `pipeli
 3. Authenticate with the AI_dev_pipeline copy, not the repo copy: `python C:\Users\mikea\Documents\Git_Proj\AI_dev_pipeline\pipeline\verify\verify.py --repo . --packet tasks/T-NNN.md` (full suite, no `--fast`).
 
 ## Per-task procedure
-1. Phase `P`: spec check, then the packet from the template (`AI_dev_pipeline.md` section 5): goal, non-goals, scope toml (functions where possible, `max_changed_lines`), a `[[premise]]` for every "already exists" claim, exact line ranges to read, and an acceptance test written by Claude. Validate the packet before the worker sees it: `verify` at base reports NO_CHANGE and the acceptance script fails for the right reason.
+1. Phase `P`: read `pipeline/PACKET_TEMPLATE.md` (toml reference, packet skeleton, P checklist) and `pipeline/TEST_FIXTURES.md` (copy-paste test helpers and pitfalls) first; do not read `verify.py` or study `tests/run_all.gd`. Lessons behind them: `AI_dev_pipeline/pipeline/pilot/PACKET_LESSONS.md`. Spec check, then the packet from the template (`AI_dev_pipeline.md` section 5): goal, non-goals, scope toml (functions where possible, `max_changed_lines`), a `[[premise]]` for every "already exists" claim, exact line ranges to read, and an acceptance test written by Claude. Validate the packet before the worker sees it: `verify` at base reports NO_CHANGE and the acceptance script fails for the right reason, **and the acceptance script passes against a reference solution (apply, run, revert)**. Keep planned reads under 20k tokens (Zoo's window is 49k) and tasks under about 100 changed lines; the acceptance test needs a discriminating case for every largest/smallest/first-of-many choice (`PACKET_LESSONS.md` rules 9-16).
 2. Worker: in Zoo, "Do the task in tasks/T-NNN.md." Note start and end time. Stop it at the retry cap; do not coach it.
 3. Authenticate (setup step 3). Only a script PASS counts.
 4. Phase `R`: give Claude only the packet, the diff and the receipt. Ask for a review against the packet, not a re-derivation. Doc sync happens here.
