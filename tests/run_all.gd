@@ -374,6 +374,7 @@ func _run_all() -> void:
   await _test_shelter_enclosure_probe_ring_detects_blockers()
   await _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap()
   await _test_motor_planner_flee_shelter_stage_b_disqualifies_breachable_shelter()
+  _test_c9_flee_remint_oscillation_gate()
   await _test_creature_motor_stack_rest_triggers_opportunistic_shelter_observation()
   await _test_motor_planner_shelter_candidate_nomination_binds_precise()
   await _test_motor_planner_shelter_candidate_nomination_skips_dead_end()
@@ -2126,6 +2127,28 @@ func _test_shelter_enclosure_probe_shape_cast_catches_narrow_gap() -> void:
   _assert(is_equal_approx(frac_wolf, 1.0), "wolf-scale capsule (radius > half the gap) is blocked at the doorway a ray missed")
   main.queue_free()
   await process_frame
+
+
+## CLEANUP C9: an identical flee_waypoint re-mint only counts as boundary ping-pong when the body
+## is back near where it stood at the earlier mint; a creature that travelled along the edge and
+## revisits the same lattice point is not oscillating.
+func _test_c9_flee_remint_oscillation_gate() -> void:
+  var stack_script := _CreatureMotorStack as GDScript
+  var start := Vector3(-73.0, 0.0, -90.0)
+  var travelled := Vector3(-56.0, 0.0, -90.0)
+  var barely_moved := Vector3(-72.0, 3.0, -91.0)
+  _assert(
+    not bool(stack_script.call("_flee_remint_is_oscillation", start, travelled)),
+    "C9 gate: 17 m of travel between identical re-mints is not oscillation",
+  )
+  _assert(
+    bool(stack_script.call("_flee_remint_is_oscillation", start, barely_moved)),
+    "C9 gate: identical re-mint with the body back near its earlier mint position is oscillation",
+  )
+  _assert(
+    bool(stack_script.call("_flee_remint_is_oscillation", start, start)),
+    "C9 gate: zero net travel is oscillation",
+  )
 
 
 ## Stage B fit-gate (decision 13's addendum, §9 slice 10): a shelter candidate with even one

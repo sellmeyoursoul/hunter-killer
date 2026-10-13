@@ -105,6 +105,11 @@ var _flight_exit_tdist: float = -1.0
 var _debug_assert_motor_invariants: bool = true
 const _INVARIANT_POS_HISTORY_LEN := 30
 const _INVARIANT_FLEE_WP_HISTORY_LEN := 20
+## C9 repeat-remint oscillation gate (m): a remint equal to a recent one only counts as boundary
+## ping-pong when the body is back within this distance of where it stood at that earlier mint
+## (A -> B -> A with no net travel). The baked nav lattice makes edge mints land on a small set of
+## identical points, so a creature genuinely travelling along an edge legitimately revisits one.
+const _INVARIANT_FLEE_WP_REPEAT_RETURN_M := 3.0
 const _INVARIANT_STALL_MIN_DISP := 0.02
 const _INVARIANT_SETTLE_TICKS := 45
 ## PHYSICS_SQUEEZE.md §3 decision 30 (2026-09-21): was a flat const — now reads
@@ -121,6 +126,8 @@ const _INVARIANT_TRACE_LEN := 90
 var _invariant_trace: Array = []
 var _invariant_pos_history: Array = []
 var _invariant_flee_wp_history: Array = []
+## Body position at the tick each [member _invariant_flee_wp_history] entry was minted (parallel array).
+var _invariant_flee_wp_pos_history: Array = []
 var _invariant_last_flee_wp: Vector3 = Vector3.ZERO
 var _invariant_airborne_ticks: int = 0
 ## Defeated bodies (eaten / starved) are inert in [method tick]; tests disable via
@@ -419,6 +426,17 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
     )
 
 
+## C9 helper: true when a flee_waypoint that equals a recent remint is a genuine boundary
+## ping-pong, i.e. the body is within [const _INVARIANT_FLEE_WP_REPEAT_RETURN_M] (horizontal) of
+## where it stood when that earlier waypoint was minted. Params: [param pos_at_prior_mint] body
+## position at the earlier mint, [param pos_now] body position at the repeat. Example:
+## travelled 17 m between the two mints -> false; stood within 1 m -> true.
+static func _flee_remint_is_oscillation(pos_at_prior_mint: Vector3, pos_now: Vector3) -> bool:
+  var dx := pos_now.x - pos_at_prior_mint.x
+  var dz := pos_now.z - pos_at_prior_mint.z
+  return sqrt(dx * dx + dz * dz) < _INVARIANT_FLEE_WP_REPEAT_RETURN_M
+
+
 ## TEMP-DEBUG (CLEANUP C9/C10): fail-fast the instant a known bug signature reproduces, with the
 ## exact tick's state dumped to stderr — see [const _DEBUG_ASSERT_MOTOR_INVARIANTS].
 func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
@@ -508,23 +526,38 @@ func _assert_motor_invariants(action: int, outcome: _ActionOutcome) -> void:
     # Flight episode ended — history from a prior episode shouldn't indict a new one that
     # happens to mint near the same spot (e.g. a recurring corner) on its very first remint.
     _invariant_flee_wp_history.clear()
+    _invariant_flee_wp_pos_history.clear()
     _invariant_last_flee_wp = Vector3.ZERO
   elif flee_wp.distance_to(_invariant_last_flee_wp) >= 0.05:
     # Only a genuine remint (the waypoint just changed) counts as a history event — while a
     # waypoint is latched it's expected to read back identical tick after tick, so comparing
     # every tick's value (rather than only value-change events) against history flagged normal
     # latch persistence as a false "repeat."
-    for prior in _invariant_flee_wp_history:
-      if (prior as Vector3).distance_to(flee_wp) < 0.05:
+    for hi in _invariant_flee_wp_history.size():
+      var prior: Vector3 = _invariant_flee_wp_history[hi]
+      if prior.distance_to(flee_wp) < 0.05:
+        # Same point re-minted. Oscillation only if the body is also back where it stood at that
+        # earlier mint; a creature that travelled on (e.g. along the edge) just revisited a
+        # lattice point and is not ping-ponging.
+        if not _flee_remint_is_oscillation(_invariant_flee_wp_pos_history[hi], pos):
+          continue
         _trip_invariant(
           label,
           "flee_waypoint remint repeated a recent remint (boundary ping-pong, C9)",
-          {"flee_waypoint": flee_wp, "tick": _physics_tick_count},
+          {
+            "flee_waypoint": flee_wp,
+            "tick": _physics_tick_count,
+            "pos": pos,
+            "history": _invariant_flee_wp_history.duplicate(),
+            "prior": prior,
+          },
         )
         return
     _invariant_flee_wp_history.append(flee_wp)
+    _invariant_flee_wp_pos_history.append(pos)
     if _invariant_flee_wp_history.size() > _INVARIANT_FLEE_WP_HISTORY_LEN:
       _invariant_flee_wp_history.pop_front()
+      _invariant_flee_wp_pos_history.pop_front()
     _invariant_last_flee_wp = flee_wp
 
   if int(_MotorAction.normalize(action)) == _MotorAction.MOVE_FORWARD and not outcome.blocked:

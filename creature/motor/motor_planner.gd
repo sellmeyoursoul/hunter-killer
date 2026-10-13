@@ -3342,6 +3342,111 @@ static func _apply_route_plausibility_scan(
   }
 
 
+## CLEANUP C9 (walkable flee candidates): the baked walkable-terrain sampler the body itself clamps
+## against (`creature_kinematic_body_3d.gd` `walkable_sampler`), or [code]null[/code] when the body
+## exposes none / no mask is baked (synthetic fixtures) — callers then keep pre-existing behavior.
+static func _flee_walkable_sampler(body: CharacterBody3D) -> Object:
+  if body == null:
+    return null
+  var sampler: Variant = body.get(&"walkable_sampler")
+  if sampler == null or not (sampler is Object):
+    return null
+  if not (sampler as Object).has_method(&"has_walkable_mask") or not sampler.has_walkable_mask():
+    return null
+  return sampler
+
+
+## CLEANUP C9 (walkable flee candidates): truncates a flee candidate [param probe] so its endpoint
+## lies on walkable terrain. The navmesh (and the straight-line no-nav fallback) can reach points in
+## the playfield AABB that sit past the baked walkable inset — the body's own clamp then refuses
+## them, so a waypoint minted there is a target the creature can never reach (0.7-1.2 m outside in
+## the repro, `tests/test_c9_flee_edge_pingpong.gd`). Unwalkable endpoints are cut back along the
+## candidate's path (or the straight line when it has none) to the last walkable point, so
+## `reach`/`endpoint`/`path` stay mutually consistent and the scorer sees the true walkable reach
+## (a fully unwalkable bearing scores reach 0, like a wall). Probes whose endpoint is already
+## walkable, or whose start is not walkable even for a point query (nothing to anchor a cut), are
+## returned unchanged. The footprint margin relaxes to a point query when only the start fails it.
+## Params:
+## - probe: Dictionary from [method _flee_candidate_probe] (`reach`, `endpoint`, `path`, ...).
+## - body: Fleeing body (supplies the sampler and footprint margin).
+## - creature_pos: Capsule-centre start of the probe.
+## Returns: [param probe] or a truncated copy.
+static func _apply_walkable_clamp(
+  probe: Dictionary,
+  body: CharacterBody3D,
+  creature_pos: Vector3,
+) -> Dictionary:
+  var sampler := _flee_walkable_sampler(body)
+  if sampler == null:
+    return probe
+  var margin := _agent_radius(body)
+  var endpoint: Vector3 = probe.get("endpoint", creature_pos)
+  if sampler.is_walkable(Vector2(endpoint.x, endpoint.z), margin):
+    return probe
+  # A creature sliding along the edge can sit within `margin` of the inset (the body clamp uses its
+  # footprint half, not the nav agent radius): anchor the cut with a point query instead of
+  # skipping the clamp, otherwise exactly the edge-hugging case would keep unwalkable waypoints.
+  if not sampler.is_walkable(Vector2(creature_pos.x, creature_pos.z), margin):
+    margin = 0.0
+    if not sampler.is_walkable(Vector2(creature_pos.x, creature_pos.z), margin):
+      return probe
+    if sampler.is_walkable(Vector2(endpoint.x, endpoint.z), margin):
+      return probe
+  var path: PackedVector3Array = probe.get("path", PackedVector3Array())
+  var pts := PackedVector3Array()
+  if path.size() >= 2:
+    pts = path
+  else:
+    pts = PackedVector3Array([creature_pos, endpoint])
+  # A navmesh path's first point is snapped onto the mesh and can sit just outside the walkable
+  # mask; anchor the cut on the (verified walkable) creature position in that case so a zero-length
+  # cut can never return an unwalkable point.
+  var first: Vector3 = pts[0]
+  if not sampler.is_walkable(Vector2(first.x, first.z), margin):
+    first = creature_pos
+  var kept := PackedVector3Array([first])
+  var cut := first
+  for i in range(1, pts.size()):
+    var a: Vector3 = first if i == 1 else pts[i - 1]
+    var b: Vector3 = pts[i]
+    if sampler.is_walkable(Vector2(b.x, b.z), margin):
+      kept.append(b)
+      cut = b
+      continue
+    var lo := 0.0
+    var hi := 1.0
+    for _k in range(8):
+      var mid := (lo + hi) * 0.5
+      var p := a.lerp(b, mid)
+      if sampler.is_walkable(Vector2(p.x, p.z), margin):
+        lo = mid
+      else:
+        hi = mid
+    cut = a.lerp(b, lo)
+    if lo > 0.0:
+      kept.append(cut)
+    break
+  var out := probe.duplicate()
+  out["endpoint"] = cut
+  out["path"] = kept if kept.size() >= 2 else PackedVector3Array()
+  out["reach"] = _MotorPlane.horizontal_distance(creature_pos, cut)
+  return out
+
+
+## Walkable-clamps a single fallback waypoint (the C9 "boxed" straight-line projection, which has no
+## probe): returns the last walkable point from [param creature_pos] toward [param target], or
+## [param target] unchanged when already walkable / no sampler / the start is not walkable.
+static func _clamp_flee_target_walkable(
+  body: CharacterBody3D,
+  creature_pos: Vector3,
+  target: Vector3,
+) -> Vector3:
+  var probe := _apply_walkable_clamp(
+    {"reach": 0.0, "endpoint": target, "path": PackedVector3Array()}, body, creature_pos,
+  )
+  return probe.get("endpoint", target)
+
+
 ## PHYSICS_SQUEEZE.md §3 decision 25 Tier 2 / §9 slice 6 (2026-09-18): the single-target sibling
 ## of [method _apply_route_plausibility_scan] — that one truncates a *probe dict* (flee's discrete
 ## bearing candidates); this one truncates a single navigable point, for the other mint sites that
@@ -3523,6 +3628,7 @@ static func _mint_flee_waypoint(
       ctx,
       body,
     )
+    fallback_probe = _apply_walkable_clamp(fallback_probe, body, creature_pos)
     var fallback_wp: Vector3 = fallback_probe.get("endpoint", creature_pos)
     state["flee_waypoint"] = fallback_wp
     state["flee_waypoint_set"] = true
@@ -3656,6 +3762,8 @@ static func _mint_flee_waypoint(
         _flee_candidate_probe(nav, creature_pos, candidate_dir, cand_dist), ctx, body,
         detour_threat_radius, detour_threat_height,
       )
+      # CLEANUP C9: cut unwalkable endpoints back to the walkable edge before scoring.
+      probe = _apply_walkable_clamp(probe, body, creature_pos)
       var reach := float(probe.get("reach", 0.0))
       var cand_kind: StringName = cand.get("kind", &"open")
       # Shelter/choke beliefs are "rescaled" candidates; locale cells are not (decision 44
@@ -3780,6 +3888,7 @@ static func _mint_flee_waypoint(
         var probe := _apply_route_plausibility_scan(
           _flee_candidate_probe(nav, creature_pos, candidate_dir, flee_dist), ctx, body,
         )
+        probe = _apply_walkable_clamp(probe, body, creature_pos)
         var reach := float(probe.get("reach", 0.0))
         var endpoint: Vector3 = probe.get("endpoint", creature_pos)
         if reach > scan_best_reach:
@@ -3869,7 +3978,9 @@ static func _mint_flee_waypoint(
         _WaypointChain.simplify(final_path) if final_path.size() > 2 else PackedVector3Array([wp])
       )
     else:
-      wp = creature_pos + final_dir * flee_dist
+      # CLEANUP C9: this straight-line projection has no probe; clamp it to walkable terrain (final
+      # fallback only — scored candidates were already cut back above).
+      wp = _clamp_flee_target_walkable(body, creature_pos, creature_pos + final_dir * flee_dist)
       state["flee_waypoint_chain"] = PackedVector3Array([wp])
     state["flee_waypoint_chain_index"] = 0
     ## `open` / `incumbent` / `shelter` / `choke` / `locale` from the scored pool, `giveup` when the
@@ -4536,11 +4647,16 @@ static func apply_immediate_blocked_path_reevaluation(
       var streak := int(state.get("flee_backtrack_streak", 0)) + 1
       state["flee_backtrack_streak"] = streak
       if streak >= int(motor_v3.get("dead_end_record_min_blocked_ticks", 3)):
-        state["flee_waypoint"] = deflected
-        state["flee_waypoint_set"] = true
-        state["flee_waypoint_chain"] = PackedVector3Array([deflected])
-        state["flee_waypoint_chain_index"] = 0
-        _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
+        # CLEANUP C9: the rotated point is a raw geometric offset (no probe), so near the walkable
+        # edge it can land outside the mask; cut it back to walkable terrain before promoting. If
+        # that leaves no usable distance (cornered against the edge), skip the promotion this time.
+        var promoted := _clamp_flee_target_walkable(body, creature_pos, deflected)
+        if _MotorPlane.horizontal_distance(creature_pos, promoted) >= 0.5:
+          state["flee_waypoint"] = promoted
+          state["flee_waypoint_set"] = true
+          state["flee_waypoint_chain"] = PackedVector3Array([promoted])
+          state["flee_waypoint_chain_index"] = 0
+          _LatchHold.start(state, "flee_waypoint", maxi(1, int(motor_v3.get("flee_waypoint_latch_ticks", 16))))
         state["flee_backtrack_streak"] = 0
   _run_path_clearance_los_nav(body, motor_v3, state, ctx)
   # Deliberately NOT stamped back into `flee_waypoint` (removed CLEANUP R1 follow-up,
