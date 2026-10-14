@@ -29,7 +29,7 @@ When an item is **done**, note the fix (commit / test) here and, if the underlyi
 | [RT1](#rt1-rabbit-flees-into-a-terrain-dead-end-instead-of-the-real-exit) | Rabbit flees into a terrain dead-end (valley) instead of the real exit | `done` | `spawn_layout_locked_rt1.json`, seed `900425302035824835` |
 | RT2 | Rabbit oscillates near spawn with no threat present — **moved to [CLEANUP.md C11](CREATURE_MOVEMENT_V3_CLEANUP.md#c11-goal-hub-incumbent-flip-flops-find_foodrestavoid_hostiles-on-single-tick-threat-sampling)**, confirmed unrelated to spawn randomization (reproduces under the fixed forced-close debug spawn) | `done` (see C11) | — |
 | [RT3](#rt3-boulders--shrubs-reported-spawning-outside-the-playfield) | Boulders/shrubs reported spawning outside the playfield | `done` | live session `18:03:38 UTC` 2026-08-12, south-wall boulder cluster `X≈25–66` at `Z=-99.5` |
-| [RT4](#rt4-rabbit-never-shelters-inside-the-forced-shrub-refuge-cluster) | Rabbit never shelters inside the forced shrub-refuge cluster, even fed and with a fox outside | `in_progress` — Slice 1 + Slice 2 shipped, REST/`safety_met` half of item 2 still open | live playtest, 2026-08-14, `_DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER` repro rig |
+| [RT4](#rt4-rabbit-never-shelters-inside-the-forced-shrub-refuge-cluster) | Rabbit never shelters inside the forced shrub-refuge cluster, even fed and with a fox outside | `in_progress` — Slice 1 + Slice 2 shipped, REST/`safety_met` half of item 2 still open. **Feature slice that gates closing this doc** (not a bug; not in OPEN_BUGS.md) | live playtest, 2026-08-14, `_DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER` repro rig |
 
 ---
 
@@ -109,6 +109,8 @@ run 2: t=700  pos=(-50.4,-1.7,-5.5) ... nav_closest=(0.0,0.0,0.0) nav_snap_dist=
 ---
 
 ### RT4 — Rabbit never shelters inside the forced shrub-refuge cluster
+
+> **FEATURE SLICE, not a bug (maintainer decision 2026-10-14): must be addressed before this RANDOMTESTS doc can be resolved / closed.** It is deliberately **not** in [OPEN_BUGS.md](../OPEN_BUGS.md); the remaining work (the REST / `safety_met` half of item 2) is unbuilt feature behavior. Carried in the Active development list in [PROJECT_DOC_INDEX.md](../PROJECT_DOC_INDEX.md) as this doc's close-out gate.
 
 **Status:** `in_progress` — Slice 1 (candidate detection → approach → STAY-evaluate → belief write → feasibility consult) shipped 2026-08-14, see "Fix shipped (Slice 1)" below. Slice 2 (Flight consulting confirmed shelter beliefs to bias flee waypoints) shipped 2026-08-26, see "Fix shipped (Slice 2)" below. The REST/`safety_met` half of item 2 below remains open. Logged here because it was surfaced through [`_DEBUG_FORCE_OPEN_SHRUB_REFUGE_CLUSTER`](../../main_3d.gd) (`main_3d.gd:44`, added 2026-08-12 specifically to manually repro this behavior), the same "spawn extra clutter on top of the normal layout" family as the rest of this doc — not a randomized-layout bug per se, but tracked here rather than `CLEANUP.md` since it's this rig's whole reason for existing.
 

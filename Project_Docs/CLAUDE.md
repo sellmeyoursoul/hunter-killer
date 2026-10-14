@@ -28,6 +28,16 @@ Use for any doc that tracks discrete items (bugs, risks, follow-on slices) with 
 
 `watch` vs `pending_recurrence`: `watch` is proactive (a known risk, waiting on a defined trigger); `pending_recurrence` is reactive (an already-observed problem that stopped reproducing before it was pinned down).
 
+## Bug register (OPEN_BUGS.md)
+
+**Applies when:** Logging, updating, or closing a bug that is `open`, `in_progress`, or `pending_recurrence`.
+
+- **Separation:** [OPEN_BUGS.md](OPEN_BUGS.md) holds the **dense summary** (summary table plus per-bug entries: ID, status, symptom, repro with command and observed rate, ruled out, leading hypothesis, owner agent, source-doc link, last-updated date). The **messy history** stays in the feature doc (e.g. [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md)), untouched, with a **one-line pointer** at the bug's entry (ID, status, link to the OPEN_BUGS.md anchor). Update **both** when a status or fact changes; at `done` / `wont_fix`, remove the entry from OPEN_BUGS.md and leave the final status in the source doc. `watch` items stay in their source docs.
+- **Scope (every entry and summary-table row):** `V3` = belongs to, or blocks closing, the current Creature Movement V3 project (Active development list in [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md)); `outside-V3` = not V3 scope, but **must be addressed eventually** (it does not gate V3 close-out and is not dropped). Anything not required for V3 is `outside-V3`.
+- **IDs:** `<DOC_ACRONYM>-<n>`, acronym derived from the source doc's filename, registered in the prefix registry at the top of OPEN_BUGS.md before use; the number is the source doc's own item number (`C9` -> `CMV3C-9`); numbers are never reused. A bug with no source-doc number takes the prefix of the doc its pointer lives in.
+- **Unbuilt features are not bugs:** they belong to their feature plan or [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md).
+- **Unclear items:** if it is unclear whether an item is a bug, which doc is in scope, or which status applies, do **not** guess. Leave it out and flag it to the caller for review.
+
 ## Code ↔ doc sync playbook
 
 **Applies when:** Syncing active Project_Docs after a code or config change (see root [CLAUDE.md](../CLAUDE.md) **Doc sync**).

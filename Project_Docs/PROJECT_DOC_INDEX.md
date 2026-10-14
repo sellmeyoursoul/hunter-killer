@@ -2,7 +2,7 @@
 
 > **Canonical path registry — update only this file when any `Project_Docs/**/*.md` is added, moved, or removed.** Other docs, code comments, and [CLAUDE.md](../CLAUDE.md) describe *policy*; **paths live here.**
 >
-> **Tiers:** **II** = draft (work in progress), **III** = definitive contract (`Definitive_Features/` only — no tier III at root), **A** = archived (`Completed_Features/`), **root** = navigation / backlog / templates. **Tier I** (implementation notes) stays **outside** `Project_Docs/` and is not listed here unless policy changes.
+> **Tiers:** **II** = draft (work in progress), **III** = definitive contract (`Definitive_Features/` only — no tier III at root), **A** = archived (`Completed_Features/`), **root** = navigation / backlog / templates / tracking (e.g. [OPEN_BUGS.md](OPEN_BUGS.md); not a feature plan). **Tier I** (implementation notes) stays **outside** `Project_Docs/` and is not listed here unless policy changes.
 >
 > **Layout (option B):** `Draft_Features/` (active drafts only), `Definitive_Features/`, `Completed_Features/`. Historical migration notes: [Completed_Features/PD_INDEXING_AND_ORGANIZATION.md](Completed_Features/PD_INDEXING_AND_ORGANIZATION.md).
 
@@ -15,12 +15,13 @@ Project_Docs/
   PROJECT_DOC_INDEX.md          ← this file (inventory + policy)
   FEATURE_PLAN_TEMPLATE.md
   ENHANCEMENT_BACKLOG_PLAN.md
+  OPEN_BUGS.md                  ← root/tracking: dense open-bug register
   Draft_Features/               ← tier II
   Definitive_Features/          ← tier III
   Completed_Features/           ← tier A (archived)
 ```
 
-Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
+Do **not** add new feature plans at `Project_Docs/` root (root holds navigation, process, backlog and tracking docs only). No `Meta/` subfolder.
 
 ---
 
@@ -44,6 +45,33 @@ Do **not** add new feature plans at `Project_Docs/` root. No `Meta/` subfolder.
 | [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md) | root | **This file** — sole inventory + active doc policy. |
 | [FEATURE_PLAN_TEMPLATE.md](FEATURE_PLAN_TEMPLATE.md) | root | Template for new feature plans. |
 | [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) | root | Cross-feature parking lot; links draft plans where applicable. |
+| [OPEN_BUGS.md](OPEN_BUGS.md) | root (tracking) | **Open-bug register** (`open` / `in_progress` / `pending_recurrence`): dense summary per bug, ID prefix registry; history stays in the source feature doc with a one-line pointer. **Not a feature plan** and not a contract. Rules: [CLAUDE.md](CLAUDE.md) "Bug register". |
+
+---
+
+## Active development (current project: Creature Movement V3)
+
+**Project:** Creature Movement V3 — hub [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md), first committed 2026-06-15. This is the ordered "call stack" of every `Draft_Features/` doc that is part of the current work: hub first, then companions, then docs the hub depends on, then docs spun out of it. The Draft table below remains the path registry; this section says **what must be reconciled before the project closes**.
+
+**Inclusion rule:** a draft is listed if it was created after V3 began, or was created earlier **and** has been updated for V3 work (V3 cross-references, V3-dated notes). Pre-V3 drafts with no V3 content are excluded. When unsure, leave a doc out and ask the maintainer.
+
+| # | Doc | Role | Verify before close-out |
+|---|-----|------|-------------------------|
+| 1 | [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) | **Hub / spec.** ENGINE motor contract, §12 phasing, §7 telemetry. | §12 and §15 inventory rows all `done` or `deferred` with a backlog entry; no unresolved `<<Question>>` / `<<Comment>>`; §7 telemetry and config tables match code; "known limitation" notes reconciled; decide the Definitive_Features/ promotion (link from [CREATURE_MOVEMENT.md](Definitive_Features/CREATURE_MOVEMENT.md)). |
+| 2 | [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | **Companion:** C# bug / gap log, R1 architecture risk. | No `open` / `in_progress` items; `pending_recurrence` items consciously accepted ([OPEN_BUGS.md](OPEN_BUGS.md) entries cleared or carried); C9 disposition reconciled with DESIGNREVIEW §1; C10 reopened as `in_progress` ([CMV3C-10](OPEN_BUGS.md#cmv3c-10); non-vocabulary `fixed` normalized); R1 `watch` decision made; debug scaffolding removed (`_DEBUG_FORCE_EDGE_CHASE_SPAWN`, temp traces). |
+| 3 | [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) | **Companion:** cross-cutting design review and approved slices. | Each approved slice (§1 R1 executor controller, §4 stuck abstraction, §5 sentinel bools, §7 per-tick LoS subsystem) shipped or explicitly deferred; every `<<Question>>` answered; the "not addressed" findings (explore walk-to-wall, off-floor spawn warning) dispositioned; §9 turn-rate / evasive-bias slice decided. |
+| 4 | [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md) | **Companion:** randomized-spawn stress-test log (RT#). | **RT4 feature slice must be addressed before this doc can be resolved / closed** (maintainer, 2026-10-14; it is a feature slice, not a bug, and is not in OPEN_BUGS.md): RT4 (`in_progress`) REST / `safety_met` half built; RT1 `<<Comment>>` (re-check the valley escape against the real navmesh with `spawn_layout_locked_rt1.json`) answered; locked layouts still referenced exist. |
+| 5 | [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) | **Dependency (semantics):** motivation tree, traits, `GoalKind` registry; V3 Step 3 sibling sync dated 2026-06-20. | Strategy-class `<<Question>>` Actions 1-3 resolved; semantics match the shipped hub; [CREATURE_TRAIT_USAGE.md](Definitive_Features/CREATURE_TRAIT_USAGE.md) still matches. |
+| 6 | [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | **Dependency (storage):** beliefs, locale priors, §14 tuning; consumed by V3. | §14 tuning and key tables match code; memory-lifetime assumptions (wall-clock vs game time) noted; "working -> definitive" promotion decided. |
+| 7 | [PHYSICS_SQUEEZE.md](Draft_Features/PHYSICS_SQUEEZE.md) | **Spun out:** size / passability, shelter and flee scoring (decisions 1-46). | Decision 44 live smoke re-run recorded (and `flee_memory_debug_log` switched off); staged `spawn_layout_c1_smoke.json` / `spawn_layout_c44_smoke.json` run; flee-scoring K case (ii) decided; slice 11 still parked or built; §4 open questions answered. |
+| 8 | [NAVIGATION_PASSABILITY_PLAN.md](Draft_Features/NAVIGATION_PASSABILITY_PLAN.md) | **Spun out:** per-creature navigation passability (size-class navmeshes, NavRouter). | Q2-Q9, Q11, Q13 answered; acceptance checklists ticked or deferred; gap-trap and budget (B_nav, N_active) boxes settled; decision on the per-size navmesh backbone shipped or explicitly deferred. |
+| 9 | [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) | **Spun out:** authored body dimensions, movement radius, facing invariant. | Phases 1 / 2 status current (Phase 3 shipped); headless grounding test landed; `open` fox-archetype item decided; HK-models art pipeline still aligned. |
+| 10 | [CREATURE_BODY_HULL.md](Draft_Features/CREATURE_BODY_HULL.md) | **Spun out:** body-hull abstraction (collision body, nav gate hull, mesh footprint); status `design, not started`. | Nothing is implemented yet and open questions HQ1-HQ8 are unanswered: before close-out, build it, or decide and record an explicit deferral (it is not complete, so it stays active); refinements to B14 / B24 in CREATURE_BODY_DIMENSIONS reconciled. |
+| 11 | [CM_V3_MULTI_MOBS.md](Draft_Features/CM_V3_MULTI_MOBS.md) | **Spun out:** multi-predator support. | Live F10 HUD verification (§8) done; link to the DESIGNREVIEW §9 evasive-bias slice still accurate; scope (still draft vs shipped) decided. |
+
+**Closing step (required):** before calling the project complete, do **one full read-through of every doc listed above** (not skimming): check statuses, markers, links, and cross-doc contradictions; confirm every [OPEN_BUGS.md](OPEN_BUGS.md) entry sourced from these docs is resolved or consciously carried; then promote or archive per the **Promotion** table, update this section and the Draft table, and clear the project's entries from this section.
+
+**Maintenance:** keep this list current — when V3 work adds or retires a doc, update this section in the same change as the Draft table row.
 
 ---
 
@@ -136,3 +164,5 @@ The external `HK-models` paths are outside this repo; keep them in sync manually
 5. **Coordinated migrations:** Folder or glob changes → update [CLAUDE.md](../CLAUDE.md) and the affected nested `CLAUDE.md` files in the **same** change set.
 6. **Link hygiene:** Use **relative** links from each file’s directory (`../` when crossing folders).
 7. **Duplication:** One canonical path per topic — e.g. mob avoidance: `Completed_Features/MOB_AVOIDANCE_PLAN.md` only, not a duplicate in `Draft_Features/`.
+8. **Active development list:** keep the **Active development** section current — when the current project's work adds, retires, or moves a doc, update that list (and its "verify before close-out" line) in the same change as the Draft table row.
+9. **Open-bug register:** [OPEN_BUGS.md](OPEN_BUGS.md) is root/tracking, not a feature plan; its ID prefixes are registered at its top. Update it (and the source doc's one-line pointer) when a bug's status or facts change. Rules: [CLAUDE.md](CLAUDE.md) "Bug register".
