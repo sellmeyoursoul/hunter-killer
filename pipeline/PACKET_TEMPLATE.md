@@ -68,6 +68,7 @@ Spec: <path#section> (do not open unless this packet is ambiguous). Language rul
 - Max 3 gate retries, then stop and report. Do not modify tests. 2-space indentation, never tabs.
 - Do not re-read a range already read; edit one function per apply_diff and run the gate after each file.
 - If a file or range is missing, stop and report; do not search for a packet or spec.
+- Finish: when the full verify (the command without `--fast`) prints `RESULT: PASS`, your very next action is the completion tool (`attempt_completion`) with a two-line summary. After a PASS do not re-read files or run anything else: the context window is nearly full by then.
 ```
 
 ## P checklist (tick before committing the packet)
@@ -79,3 +80,6 @@ Spec: <path#section> (do not open unless this packet is ambiguous). Language rul
 6. `verify --fast` at base reports `NO_CHANGE` and the acceptance script fails only on the new code.
 7. `max_changed_lines` is about 1.3x the reference diff; ask for no more than about 100 changed lines for a 49k window (split larger tasks).
 8. Log the phase with `pilot_log.py` (one reply).
+
+## Worker profile (Zoo)
+Todo tool OFF. With it on, eight todo updates cost about 5k tokens per run, and with the closing line above they were the difference between runs that ended with the window full and runs that finished with 1-9k to spare (T-002 bench, 2026-10-13: peaks 48.9-49.1k before, 40.3-47.8k after). The worker may still skip the full verify before completing, so Claude's authentication step (`verify.py` without `--fast`) is always run separately.
