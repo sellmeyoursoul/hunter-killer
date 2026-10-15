@@ -106,7 +106,6 @@ func _ready() -> void:
   _sync_calories_from_vitals()
   _refresh_calorie_burn_params()
   _apply_physics_layers()
-  _connect_mob_hitbox()
 
 
 func _resolve_definition() -> Variant:
@@ -320,9 +319,8 @@ func get_los_eye_height() -> float:
   return get_collision_capsule_height() * 0.9
 
 
-## Re-derives the body capsule and the legacy [code]MobHitbox[/code] capsule (1.15 x body radius, B21)
-## from the live dimensions. The body's own scale is never touched (M3). Logs once per species when the
-## capsule height had to clamp up to 2r (B14 / B24).
+## Re-derives the body collision capsule from the live dimensions. The body's own scale is never
+## touched (M3). Logs once per species when the capsule height had to clamp up to 2r (B14 / B24).
 func _refresh_shapes() -> void:
   _passability_profile = null
   if not _shapes_driven:
@@ -353,14 +351,6 @@ func _refresh_shapes() -> void:
     body_col.shape = body_cap
     if has_center:
       body_col.position = center
-  var hit_col := get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  if hit_col != null:
-    var hit_cap := CapsuleShape3D.new()
-    hit_cap.radius = r * 1.15
-    hit_cap.height = maxf(h, hit_cap.radius * 2.0)
-    hit_col.shape = hit_cap
-    if has_center:
-      hit_col.position = center
 
 
 func _species_label() -> String:
@@ -472,14 +462,6 @@ func _apply_physics_layers() -> void:
   else:
     collision_layer = 2
     collision_mask = 1
-
-
-func _connect_mob_hitbox() -> void:
-  var hb := get_node_or_null("MobHitbox") as Area3D
-  if hb == null:
-    return
-  if not hb.body_entered.is_connected(_on_mob_hitbox_body_entered):
-    hb.body_entered.connect(_on_mob_hitbox_body_entered)
 
 
 ## Returns [enum CreatureDefinition.FeedingMode] for motor / diet registration.
@@ -682,9 +664,6 @@ func _apply_defeat_local() -> void:
   var cs := get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs != null:
     cs.set_deferred("disabled", true)
-  var hb_cs := get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  if hb_cs != null:
-    hb_cs.set_deferred("disabled", true)
 
 
 func try_grant_as_prey_to(predator: CharacterBody3D) -> bool:
@@ -703,11 +682,6 @@ func try_grant_as_prey_to(predator: CharacterBody3D) -> bool:
   _apply_defeat_local()
   hit.emit(predator)
   return true
-
-
-func _on_mob_hitbox_body_entered(_body: Node3D) -> void:
-  ## D11 — contact predation retired; prey defeat via V3 [code]EAT[/code] only.
-  return
 
 
 func _motor_distance_scale() -> float:
@@ -1038,6 +1012,3 @@ func start_duel_spawn() -> void:
   var cs := get_node_or_null("CollisionShape3D") as CollisionShape3D
   if cs != null:
     cs.disabled = false
-  var hb_cs := get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  if hb_cs != null:
-    hb_cs.disabled = false

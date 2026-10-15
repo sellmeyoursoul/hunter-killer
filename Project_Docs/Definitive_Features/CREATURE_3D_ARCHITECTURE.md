@@ -11,7 +11,7 @@
 | Capability | Where logic lives | Attached as | Driven by |
 |------------|-------------------|-------------|-----------|
 | **Vitals / calorie burn & plant clamp** | [creature_vitals_math.gd](../../creature/capabilities/creature_vitals_math.gd) (pure) | [creature_vitals_component.gd](../../creature/capabilities/creature_vitals_component.gd) (`Node`) | [GameConfig](../../game_config.gd) globals × [CreatureDefinition](../../creature/definition/creature_definition.gd) multipliers |
-| **Predator meal clamp** | [creature_predation_math.gd](../../creature/capabilities/creature_predation_math.gd) (pure) | V3 **`EAT`** completion via motor stack (planned — [CREATURE_MOVEMENT_V3.md §12.2 D11](../Draft_Features/CREATURE_MOVEMENT_V3.md)); legacy `MobHitbox` contact **inert** until template cleanup | [predator_prey_meal_calories](../../AI_int_lib/game_config_merge.gd), species caps |
+| **Predator meal clamp** | [creature_predation_math.gd](../../creature/capabilities/creature_predation_math.gd) (pure) | V3 **`EAT`** completion via motor stack (planned — [CREATURE_MOVEMENT_V3.md §12.2 D11](../Draft_Features/CREATURE_MOVEMENT_V3.md)); legacy `MobHitbox` contact predation **retired** (node removed 2026-10-15) | [predator_prey_meal_calories](../../AI_int_lib/game_config_merge.gd), species caps |
 | **Perception scale (3D)** | [creature_perception_3d.gd](../../creature/capabilities/creature_perception_3d.gd) (pure) | Radius/cone scale at ingest | Definition `perception_radius_scale`, cone scale |
 | **Line of sight (3D)** | [line_of_sight.gd](../../creature/motor/line_of_sight.gd) | Combined awareness gate in [motor_target_builder.gd](../../creature/motor/motor_target_builder.gd) | Optional `los_eye_height` in pack; default `0.9 ×` capsule height (`max(live_height, 2r)`) |
 | **Diet → default groups** | [diet_registry.gd](../../creature/capabilities/diet_registry.gd) (static) | Runs at setup / AI context build | [CreatureDefinition.FeedingMode](../../creature/definition/creature_definition.gd) |
@@ -37,7 +37,7 @@ Single Resource type (plus [LocomotionProfile](../../creature/definition/locomot
 
 | Scene | Physics | Use |
 |-------|---------|-----|
-| [creature_herbivore_kinematic_3d.tscn](../../creature/templates/creature_herbivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule + MobHitbox [code]Area3D[/code] (**inert** for predation post–D11 — remove in later phase) | Herbivore / omnivore duel prey |
+| [creature_herbivore_kinematic_3d.tscn](../../creature/templates/creature_herbivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule (legacy MobHitbox [code]Area3D[/code] **removed** 2026-10-15; template test asserts its absence) | Herbivore / omnivore duel prey |
 | [creature_carnivore_kinematic_3d.tscn](../../creature/templates/creature_carnivore_kinematic_3d.tscn) | [code]CharacterBody3D[/code] + capsule | Carnivore duel predator ([code]is_hostile[/code] on body script) |
 
 Both: [code]CreatureRoot3D[/code] + child [code]Body[/code] + child [code]Vitals[/code] ([CreatureVitalsComponent](res://creature/capabilities/creature_vitals_component.gd)). **Shared** scripts and definition; **only** leaf data and body exports differ. Physics layers applied at runtime in [creature_kinematic_body_3d.gd](../../creature/capabilities/creature_kinematic_body_3d.gd) (`player` layer `2` / mask `1` for prey; `mob` layer `4` / mask `9` for predators).

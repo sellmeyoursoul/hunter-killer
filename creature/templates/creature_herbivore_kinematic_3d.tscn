@@ -1,4 +1,4 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://creature/creature_root_3d.gd" id="1"]
 [ext_resource type="Script" path="res://creature/capabilities/creature_kinematic_body_3d.gd" id="2"]
@@ -8,10 +8,6 @@
 [sub_resource type="CapsuleShape3D" id="caps"]
 radius = 0.35
 height = 1.2
-
-[sub_resource type="CapsuleShape3D" id="hit_caps"]
-radius = 0.4025
-height = 1.38
 
 [node name="CreatureHerbivoreKinematic3D" type="Node3D"]
 script = ExtResource("1")
@@ -27,14 +23,6 @@ visual_yaw_offset_rad = 4.71238898038469
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Body"]
 shape = SubResource("caps")
-
-[node name="MobHitbox" type="Area3D" parent="Body"]
-collision_layer = 2
-collision_mask = 4
-monitoring = true
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Body/MobHitbox"]
-shape = SubResource("hit_caps")
 
 [node name="AwarenessDebugOverlay" type="Node3D" parent="Body"]
 script = ExtResource("4")

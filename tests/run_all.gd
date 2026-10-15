@@ -762,14 +762,12 @@ func _test_creature_3d_predation_contact() -> void:
   carn_root.global_position = contact
   await physics_frame
   await physics_frame
-  _assert(prey_body.visible, "MobHitbox contact does not defeat prey (D11 inert)")
-  _assert(int(hit_state[0]) == 0, "MobHitbox contact does not emit hit")
+  _assert(prey_body.visible, "body contact/overlap does not defeat prey (D11 inert)")
+  _assert(int(hit_state[0]) == 0, "body contact/overlap does not emit hit")
   _assert(
     is_equal_approx(float(pred_body.get("current_calories")), pred_cal_before),
-    "MobHitbox overlap does not grant meal — V3 EAT only",
+    "body contact/overlap does not grant meal — V3 EAT only",
   )
-  var hb_cs := prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  _assert(hb_cs != null and not hb_cs.disabled, "prey MobHitbox stays enabled after contact overlap")
   pred_body.last_move_direction = Vector3(0.0, 0.0, -1.0)
   pred_body.global_position = contact + Vector3(3.5, 0.0, 0.0)
   prey_body.global_position = contact
@@ -787,8 +785,8 @@ func _test_creature_3d_predation_contact() -> void:
     "predator gains calories from V3 EAT prey grant",
   )
   await physics_frame
-  hb_cs = prey_body.get_node_or_null("MobHitbox/CollisionShape3D") as CollisionShape3D
-  _assert(hb_cs != null and hb_cs.disabled, "prey MobHitbox disabled after V3 EAT defeat")
+  var prey_cs := prey_body.get_node_or_null("CollisionShape3D") as CollisionShape3D
+  _assert(prey_cs != null and prey_cs.disabled, "prey body collision disabled after V3 EAT defeat")
   herb_root.queue_free()
   carn_root.queue_free()
   floor_body.queue_free()
@@ -838,10 +836,7 @@ func _test_creature_3d_template_scenes_load() -> void:
   _assert(root_c.get_script() == _CreatureRoot3D, "carnivore root uses CreatureRoot3D script")
   var prey_body := root_h.get_node_or_null("Body") as CharacterBody3D
   _assert(prey_body != null, "herbivore template has Body")
-  var mob_hitbox := prey_body.get_node_or_null("MobHitbox") as Area3D
-  _assert(mob_hitbox != null, "herbivore template has MobHitbox Area3D")
-  _assert(mob_hitbox.monitoring, "MobHitbox monitoring enabled")
-  _assert(mob_hitbox.collision_mask == 4, "MobHitbox collision_mask includes mob layer")
+  _assert(prey_body.get_node_or_null("MobHitbox") == null, "herbivore template has no legacy MobHitbox (retired)")
   var pred_body := root_c.get_node_or_null("Body") as CharacterBody3D
   _assert(pred_body != null, "carnivore template has Body CharacterBody3D")
   _assert(pred_body.is_hostile, "carnivore template Body is hostile")

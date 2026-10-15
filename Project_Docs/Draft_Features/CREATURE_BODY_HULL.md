@@ -21,7 +21,7 @@
 - Baked class maps stay **circular and permissive** (D24). No per-orientation bakes.
 - Authoring dimensions (`body_length / width / height`), the fit / mount flow and variety stretch ([CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.1–4.4). Unchanged.
 - Authoring or art for the first flat species (spider-like). This plan defines when it triggers the non-capsule hull, not the species.
-- Hit / kill semantics (contact hitboxes stay removed; B15 / B21).
+- Hit / kill semantics (contact hitboxes stay removed; B15 / B21; `MobHitbox` node retired 2026-10-15).
 - Changing any current species' collision behaviour in the first phases: rabbit, fox, wolf stay capsules with identical numbers.
 
 ---
@@ -46,7 +46,7 @@ Includes and extends the D25 / Q17 follow-up table (kinematic body, ghost-fit, L
 
 | Consumer | Path | Capsule assumption |
 |---|---|---|
-| Body shape construction | `creature/capabilities/creature_kinematic_body_3d.gd` (~342 body capsule, ~350 hit capsule, 243–312 accessors) | Builds `CapsuleShape3D` with `max(live_height, 2r)`; hit capsule 1.15 × radius (legacy, B21) |
+| Body shape construction | `creature/capabilities/creature_kinematic_body_3d.gd` (~342 body capsule, 243–312 accessors; line numbers approximate, not re-verified after the 2026-10-15 `MobHitbox` removal) | Builds `CapsuleShape3D` with `max(live_height, 2r)`; no hit capsule (legacy `MobHitbox` retired 2026-10-15, B21) |
 | Dimension helpers | `creature/capabilities/creature_body_dimensions.gd` | `capsule_height`, `capsule_height_clamped` |
 | Authored fields | `creature/definition/creature_definition.gd` (~33–48) | `collision_capsule_radius / height` retained as legacy fallbacks (CREATURE_BODY_DIMENSIONS §4.1 says removed from authored use) |
 | Mesh measuring | `creature/capabilities/creature_mesh_footprint.gd` | Radius / height style output for a capsule |

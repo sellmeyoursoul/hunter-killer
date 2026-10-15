@@ -346,7 +346,7 @@ No dedicated locale-spin repro was run. Marked `done` instead because rabbit foo
 
 ### V3 contract reminder (bug vs resolved)
 
-Contact / `MobHitbox` predation remains intentionally **inert** (D11). Kill is V3 **`EAT` only** via `_can_eat_now` → `_try_complete_eat` → `try_grant_as_prey_to`.
+Contact / `MobHitbox` predation remains intentionally **inert** (D11); the node itself was retired 2026-10-15. Kill is V3 **`EAT` only** via `_can_eat_now` → `_try_complete_eat` → `try_grant_as_prey_to`.
 
 > **Superseded (2026-10-05, pointer only; C3 history below is kept as written).** The distance bound is no longer the fixed `eat_action_max_distance` (5; the key was fully retired 2026-10-06 and the rows/log entries below that cite it are history): `_can_eat_now` uses the size-scaled eat range (`motor_planner.gd` `eat_range()` / `_eat_range_for` = eater `get_reach_extent()` + target `get_body_radius()` since B29; B28's `eat_range_bonus_fraction` × eater length term was removed), and food-bound approach steps use `min(arrival_tolerance, eat range)`. See [CREATURE_BODY_DIMENSIONS.md](CREATURE_BODY_DIMENSIONS.md) §4.7 "Current eat gate (B29)". The facing arc contract (`eat_facing_arc_deg` 90) is unchanged.
 
