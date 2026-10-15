@@ -27,6 +27,7 @@ const _NavTiming := preload("res://creature/motor/nav_timing.gd")
 const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.gd")
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -3187,7 +3188,7 @@ static func _sync_food_memory_objective(
     creature_pos, motor_v3, food_split, incumbent_iid, now_ms, food_exclusions
   )
   if bool(coarse.get("active", false)):
-    var reach := float(motor_v3.get("awareness_radius", 150.0)) * 0.5
+    var reach := float(motor_v3.get("awareness_radius", _Merge.v3_default("awareness_radius"))) * 0.5
     var bearing: Vector3 = coarse.get("bearing", Vector3.ZERO)
     state["step_goal"] = creature_pos + bearing.normalized() * reach
     state["step_goal_set"] = true
@@ -3622,7 +3623,7 @@ static func _mint_flee_waypoint(
     # measured reach same as the main path, so this bootstrapping-only fallback can't overshoot past
     # the map edge either; a reach of 0 just holds position for this one tick until the next
     # reconsideration has real threat data to steer by.
-    var fallback_dist := float(motor_v3.get("awareness_radius", 150.0))
+    var fallback_dist := float(motor_v3.get("awareness_radius", _Merge.v3_default("awareness_radius")))
     var fallback_probe := _apply_route_plausibility_scan(
       _flee_candidate_probe(_NavRouter.from_ctx(ctx), creature_pos, _MotorPlane.MODEL_FORWARD, fallback_dist),
       ctx,
@@ -4326,7 +4327,7 @@ static func _flee_objective(
   # full edge of the awareness disc instead; `awareness_radius` itself already scales down with
   # playfield size (`scale_creature_motor_v3_for_playfield`), so this stays proportionate as arenas
   # grow.
-  var flee_dist := float(motor_v3.get("awareness_radius", 150.0))
+  var flee_dist := float(motor_v3.get("awareness_radius", _Merge.v3_default("awareness_radius")))
   return creature_pos + away_dir * flee_dist
 
 

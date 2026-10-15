@@ -4,51 +4,23 @@
   "MAX_LINES_PER_PROCESS": 256,
   "MAX_QUEUE_ENTRIES": 2048
   },
-  "perception": {
-  "SNAPSHOT_PHYSICS_STRIDE": 1
-  },
+  "perception": {},
   "playfield_spawn": {
-  "seed": 0,
   "locked_layout_path": "res://spawn_layout_cornered_wall_repro.json",
   "debug_start_calories": {
     "creature_0": 55.0,
     "creature_1": 60.0
   }
   },
-  "creature_motor_v3": {
-  "width_margin": 0.10,
-  "reach_margin_fraction": 0.25
-  },
+  "creature_motor_v3": {},
   "creature_motor": {
-  "mode": "scripted",
-  "lookahead_sec": 0.15,
-  "weight_dist": 0.45,
-  "weight_dist_sq": 55.0,
-  "weight_closing": 1.05,
-  "penalty_oob": 10000000,
-  "distance_eps": 6.0,
-  "creature_half_extent_x": 13.5,
-  "creature_half_extent_y": 30.5,
   "scripted_intent_hold_physics_ticks": 8,
   "explore_intent_hold_extra_ticks": 5,
-  "explore_coverage_cell": 52.0,
-  "explore_trail_max_cells": 96,
   "weight_explore_trail_repulsion": 2.35,
   "weight_explore_turn_bias": 0.14,
   "weight_interior": 0.7,
-  "shuffle_tie_break": true,
-  "weight_edge": 0.48,
   "awareness_radius": 200.0,
   "awareness_cone_extra": 150.0,
-  "awareness_cone_half_angle_deg": 45.0,
-  "awareness_memory_ticks": 30,
-  "awareness_memory_weight": 0.35,
-  "awareness_memory_horizon_sec": 0.0,
-  "weight_obstacle": 1.25,
-  "food_seek_imminent_mob_radius": 100.0,
-  "jeopardy_forced_turn_ticks": 5,
-  "interior_env_near_mob": 70.0,
-  "weight_interior_env_solid": 8000.0,
-  "weight_interior_env_slow": 4.0
+  "awareness_memory_ticks": 30
   }
 }

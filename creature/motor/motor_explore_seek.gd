@@ -7,6 +7,7 @@ const _MotorPlanner := preload("res://creature/motor/motor_planner.gd")
 const _NavRouter := preload("res://creature/motor/nav_router.gd")
 const _AwarenessZone := preload("res://creature/motor/awareness_zone.gd")
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 const _FORWARD_SWATCH_HALF_ANGLE_DEG := 45.0
 ## Bearing rotations tried when a route-scanned explore waypoint collapses onto the creature
@@ -96,8 +97,8 @@ static func _pick_explore_dir(
   ctx: Dictionary,
 ) -> Vector3:
   var bearing_count := maxi(1, int(motor_v3.get("explore_bearing_count", 8)))
-  var w_spawn := float(motor_v3.get("explore_w_spawn", 0.35))
-  var w_open := float(motor_v3.get("explore_w_open", 0.30))
+  var w_spawn := float(motor_v3.get("explore_w_spawn", _Merge.v3_default("explore_w_spawn")))
+  var w_open := float(motor_v3.get("explore_w_open", _Merge.v3_default("explore_w_open")))
   var w_unexp := float(motor_v3.get("explore_w_unexp", 0.25))
   var w_forward := float(motor_v3.get("explore_w_forward", 0.10))
   var chaos := clampf(float(motor_v3.get("goal_consideration_chaos", 0.15)), 0.0, 1.0)

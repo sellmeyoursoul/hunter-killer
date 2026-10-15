@@ -489,6 +489,19 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
   }
 
 
+## Lazily built, cached copy of [method default_creature_motor_v3_params] for hot-path fallbacks.
+static var _v3_defaults_cache: Dictionary = {}
+
+
+## Single-source default lookup for a `creature_motor_v3` key (cached; the dictionary is built once).
+## [param key] V3 param name. Returns the code default, or [code]null[/code] if the key is unknown.
+## Example: [code]float(motor_v3.get("awareness_radius", _Merge.v3_default("awareness_radius")))[/code].
+static func v3_default(key: String) -> Variant:
+  if _v3_defaults_cache.is_empty():
+    _v3_defaults_cache = default_creature_motor_v3_params()
+  return _v3_defaults_cache.get(key)
+
+
 ## V3 motor defaults ([CREATURE_MOVEMENT_V3.md §7.5 / §12.2 6a](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 static func default_creature_motor_v3_params() -> Dictionary:
   var core := {
