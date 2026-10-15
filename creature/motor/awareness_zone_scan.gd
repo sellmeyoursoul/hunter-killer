@@ -45,12 +45,14 @@ static func scan_live(
   return out
 
 
+## LoS eye height: `los_eye_height` override in [param motor_v3] (no code default), else the body's
+## `get_los_eye_height()`, else [constant MotorPlane.DEFAULT_EYE_HEIGHT].
 static func _eye_height(body: CharacterBody3D, motor_v3: Dictionary) -> float:
   if motor_v3.has("los_eye_height"):
     return float(motor_v3.get("los_eye_height"))
   if body.has_method(&"get_los_eye_height"):
     return float(body.call(&"get_los_eye_height"))
-  return 1.0
+  return _MotorPlane.DEFAULT_EYE_HEIGHT
 
 
 static func _scan_food_plants(

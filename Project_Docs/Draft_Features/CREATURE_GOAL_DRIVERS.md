@@ -38,7 +38,7 @@ Tier 1 — Don’t die
 
 | Tier 2 leaf | Implemented today (approx.) | Extension / stub |
 |-------------|----------------------------|------------------|
-| **Avoid hostiles** | Mob costs, imminent gating food seek, jeopardy forced turn, `weight_obstacle_shield_prey` | Unified **threat samples**; acute threat **dominates** Tier-2 until **pack combat / nest defense** allows trait-driven **engage** (**§3** preamble); threat **live samples** use same **§E.1** awareness geometry unless **`herbivore_threat_awareness_omni`** |
+| **Avoid hostiles** | Mob costs, imminent gating food seek, jeopardy forced turn, `weight_obstacle_shield_prey` | Unified **threat samples**; acute threat **dominates** Tier-2 until **pack combat / nest defense** allows trait-driven **engage** (**§3** preamble); threat **live samples** use same **§E.1** awareness geometry (the V2-era `herbivore_threat_awareness_omni` override is retired on V3, see [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md) retired-keys note) |
 | **Find food** | Live `food_plants` + prey positions → seek; hunger scales explore | **Goal-target memory** (**CREATURE_MOVEMENT_V2 §C**; tier rules **[CREATURE_MEMORY.md §5](CREATURE_MEMORY.md)**); **Preserve cross-over** (**CREATURE_MOVEMENT_V2 §A.3.1**); habitual **`believed_goal_*`** bias (**§5** below); **`feeding_mode`** filters **`SeekCandidate`** ingress (**CREATURE_MOVEMENT_V2 §B.2**); live ingest gated by **zone of awareness** (**CREATURE_MOVEMENT_V2 §E.1** — radius disk + forward cone); **no goal** → patrol lock (**MOVEMENT §A.3.1**) |
 | **Find mate** | — | **`MotivationWeights.mate_urgency` / slot in context** defaulted to zero; species or story enables later (**[CREATURE_MEMORY.md §3 — Mates row](CREATURE_MEMORY.md)**) |
 | **Preserve calories** | Burn per distance (`game_config_merge`), hunger explore modifiers | Cross-threshold blend with **Find food** (**CREATURE_MOVEMENT_V2 §A.3.1**); thrift / posture / idle when **sated** |
@@ -364,7 +364,7 @@ When **`tactic_classifier_active`:** build **`modality_tags[]`** from active fla
 
 #### 5.1.2 Replay formula constants (`creature_motor` — phase-1 resolved)
 
-**Policy:** Every replay tuning key is a **`creature_motor`** overlay key. **Authoritative defaults** live only in **`default_creature_motor_params()`** ([`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)). Pack **`creature_motor` JSON** should **omit** these keys unless overriding — empty/missing pack fields **must not** silently invent values; merge falls back to the single default table so missing pack entries are obvious in authoring.
+**Policy (updated 2026-10-15):** On V3 the replay tuning keys are **`creature_motor_v3`** keys. **Authoritative defaults** live in **`default_creature_motor_v3_params()`** ([`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd); relocated there 2026-10-15, consumers read `_Merge.v3_default(key)`). The legacy `default_creature_motor_params()` copy and pack **`creature_motor`** blocks are not applied at V3 runtime ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1)). A pack **`creature_motor_v3`** block should **omit** these keys unless overriding — empty/missing pack fields **must not** silently invent values; merge falls back to the single default table so missing pack entries are obvious in authoring.
 
 | Key | Default | Used in |
 |-----|---------|---------|
@@ -405,7 +405,7 @@ urgency_boost = urgency_boost_linear_slope * external_urgency * gate(slot_b_base
 ```
 
 - **`gate(slot_b_base)`:** **1.0** when `slot_b_base >= replay_urgency_slot_b_min` (default **90**), else **0.0** (no cap lift on weak tactics).
-- **`urgency_boost_linear_slope`:** default **25** in **`default_creature_motor_params()`** — tune in play.
+- **`urgency_boost_linear_slope`:** default **25** in **`default_creature_motor_v3_params()`** (relocated 2026-10-15) — tune in play.
 
 **`creature_motor` keys:** `urgency_boost_linear_slope`, `replay_urgency_slot_b_min` (optional per-bit slopes deferred).
 

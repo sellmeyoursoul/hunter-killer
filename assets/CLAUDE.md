@@ -21,7 +21,8 @@ Also applies to `pack_resource_resolver.gd` and any `**/pack_resources.json`, ev
 **Config layering (pack authoring):** one definition per default; each layer holds only what differs from the layer above.
 - **Code default** (`AI_int_lib/game_config_merge.gd`) -> **`game_config.json`** = tuning override only -> **species pack overlay** (`pack_resources.json`) = deliberate species deviations only; never restate a code default -> sub-species later (not implemented).
 - Judge overlay redundancy against the **code default**, not the json-merged config: a `game_config.json` tuning pin is not a reason to drop a pack key.
-- Profile-dependent values (dev vs ship) are legitimate pins even when equal to one profile's default.
+- **Live vs inert blocks:** at V3 runtime only the pack's **`creature_motor_v3`** block is applied (merged over `default_creature_motor_v3_params()` via `get_creature_motor_v3_params_for_pack`). A pack's legacy **`creature_motor`** block is NOT applied at runtime (only tests call the overlay merge), so pins there (including dev-vs-ship profile values) do not affect gameplay. Do not add knobs to `creature_motor`; see CBD-1 step 6 (retirement decision pending).
+- **Where a default lives:** tunables -> `default_*_params()` in `AI_int_lib/game_config_merge.gd` (consume via `_Merge.v3_default(key)` or the merged dict); structural / cross-file constants -> ONE named const in the owning script (e.g. `MotorPlane.DEFAULT_EYE_HEIGHT`, `CreatureDefinition.DEFAULT_STAT`, `FallPhysics.DEFAULT_GRAVITY`). No inline literal fallback duplicating either.
 - Audit: `python tools/audit_default_duplicates.py` (CONFLICT should be 0). Background: CBD-1 in [OPEN_BUGS.md](../Project_Docs/OPEN_BUGS.md#cbd-1).
 
 **Pack README:** not required for routine work — use `pack_resources.json` (`notes` / `shared_resources`).

@@ -908,18 +908,6 @@ func _test_creature_pack_motor_overlays() -> void:
     is_equal_approx(float(rabbit_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
     "rabbit pack duel motor chaos",
   )
-  _assert(
-    not bool(rabbit_m.get("herbivore_threat_awareness_omni", true)),
-    "rabbit pack uses forward cone threat awareness",
-  )
-  _assert(
-    not bool(rabbit_m.get("awareness_forward_cone_only", true)),
-    "rabbit pack uses hybrid radius disk + forward cone awareness",
-  )
-  _assert(
-    not bool(rabbit_m.get("plant_awareness_requires_los", true)),
-    "rabbit pack allows occluded-in-zone plants for goal belief sync",
-  )
   var fox_m := _Merge.merge_creature_motor_pack_overlay(
     base.duplicate(true),
     "res://assets/creatures/fox",
@@ -955,18 +943,6 @@ func _test_creature_pack_motor_overlays() -> void:
   _assert(
     is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 4.4),
     "fox pack duel motor chaos",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("geometry_escape_lock_ticks", 0.0)), 14.0),
-    "fox pack geometry escape lock ticks",
-  )
-  _assert(
-    not bool(fox_m.get("predator_prey_awareness_omni", true)),
-    "fox pack uses forward cone prey awareness",
-  )
-  _assert(
-    not bool(fox_m.get("awareness_forward_cone_only", true)),
-    "fox pack uses hybrid radius disk + forward cone awareness",
   )
   _assert(
     is_equal_approx(float(fox_m.get("weight_explore_trail_repulsion", 0.0)), 2.35),

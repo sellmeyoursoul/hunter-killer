@@ -28,6 +28,7 @@ const _GhostObstacleQuery := preload("res://creature/motor/ghost_obstacle_query.
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
+const _CreatureDefinition := preload("res://creature/definition/creature_definition.gd")
 
 const _FOOD_INV_HUNGRY := 0
 const _FOOD_INV_STOCKED := 1
@@ -1553,7 +1554,7 @@ static func _derive_find_food_step_objective(
 ## pegged at stat 1/10/25, so stat 10 (both current archetypes' default) still carries the same
 ## moderate noise `goal_consideration_chaos` uses elsewhere, not a silent zero.
 static func _food_yield_estimate_noise_frac(traits: Dictionary, motor_v3: Dictionary) -> float:
-  var stat_observation := int(traits.get("stat_observation", 10))
+  var stat_observation := int(traits.get("stat_observation", _CreatureDefinition.DEFAULT_STAT))
   var v1 := float(motor_v3.get("food_yield_estimate_noise_frac_v1", 0.4))
   var v10 := float(motor_v3.get("food_yield_estimate_noise_frac_v10", 0.15))
   var v25 := float(motor_v3.get("food_yield_estimate_noise_frac_v25", 0.03))
@@ -2994,7 +2995,7 @@ static func _track_prey_race_and_maybe_give_up(
     return
   var stall := int(state.get("prey_race_stall_ticks", 0)) + 1
   state["prey_race_stall_ticks"] = stall
-  var giveup_ticks := int(motor_v3.get("prey_race_giveup_ticks", 90.0))
+  var giveup_ticks := int(motor_v3.get("prey_race_giveup_ticks", _Merge.v3_default("prey_race_giveup_ticks")))
   if stall < giveup_ticks:
     return
   ## Give up: exclude this instance from fresh live-food selection for a cooldown window (planner
@@ -3048,7 +3049,7 @@ static func _tick_prey_engagement_latch(ctx: Dictionary, state: Dictionary) -> v
   if state.get("step_source", &"") == &"memory_moving":
     var detour_count := int(state.get("memory_pursuit_detour_count", 0))
     if detour_count > 0:
-      var step := int(motor_v3.get("prey_engagement_detour_decay_step_ticks", 4))
+      var step := int(motor_v3.get("prey_engagement_detour_decay_step_ticks", _Merge.v3_default("prey_engagement_detour_decay_step_ticks")))
       decay += detour_count * step
   var rem := int(state.get("prey_engagement_ticks_remaining", 0)) - decay
   state["prey_engagement_ticks_remaining"] = rem
@@ -4511,7 +4512,7 @@ static func _has_clear_contact_path_for_action(
   var space_state: PhysicsDirectSpaceState3D = ctx.get("space_state")
   if space_state == null:
     return true
-  var eye_h := float(ctx.get("eye_height", 1.0))
+  var eye_h := float(ctx.get("eye_height", _MotorPlane.DEFAULT_EYE_HEIGHT))
   var creature_pos := body.global_position
   var from := Vector3(creature_pos.x, creature_pos.y + eye_h, creature_pos.z)
   var to := Vector3(target_pos.x, from.y, target_pos.z)
@@ -4673,6 +4674,8 @@ static func apply_immediate_blocked_path_reevaluation(
   _maybe_mint_memory_pursuit_detour_latch(state, motor_v3)
 
 
+## Runs the path-clearance LoS/nav check for the current step goal (eye height defaults to
+## [constant MotorPlane.DEFAULT_EYE_HEIGHT]); see signature for params.
 static func _run_path_clearance_los_nav(
   body: CharacterBody3D,
   motor_v3: Dictionary,
@@ -4685,7 +4688,7 @@ static func _run_path_clearance_los_nav(
   if not _is_facing_aligned_for_move(body, step_goal, motor_v3):
     return
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
-  var eye_h := float(ctx.get("eye_height", 1.0))
+  var eye_h := float(ctx.get("eye_height", _MotorPlane.DEFAULT_EYE_HEIGHT))
   var creature_pos := body.global_position
   var raw_blocked := not _PathClear.has_clear_los(space, creature_pos, eye_h, step_goal, motor_v3)
   var latched := _latch_los_blocked(state, motor_v3, raw_blocked)

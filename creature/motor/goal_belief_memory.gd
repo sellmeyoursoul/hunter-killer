@@ -27,6 +27,7 @@ const CHOKE_TIER_CONFIRMED := &"confirmed"
 const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
 const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 
 ## Unit step direction [param d] → sector index 0..7 (N, NE, E, SE, S, SW, W, NW; **−Z = N**).
@@ -129,12 +130,12 @@ static func live_target_instance_ids(
   return seen
 
 
+## Memory TTL (ms) for moving-target beliefs.
+## [param motor_p]: merged V3 motor params; reads `goal_memory_mover_ttl_sec` (code default via
+## `_Merge.v3_default` when absent). Returns the TTL in milliseconds.
 static func _moving_ttl_ms(motor_p: Dictionary) -> int:
   var sec := float(
-    motor_p.get(
-      "goal_memory_mover_ttl_sec",
-      motor_p.get("predator_prey_memory_sec", motor_p.get("goal_memory_ttl_sec", 45.0)),
-    )
+    motor_p.get("goal_memory_mover_ttl_sec", _Merge.v3_default("goal_memory_mover_ttl_sec"))
   )
   return int(sec * 1000.0)
 

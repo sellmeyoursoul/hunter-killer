@@ -48,7 +48,7 @@ var _live_threat_samples: Array = []
 var _food_split: Dictionary = {"ready": [], "unready": []}
 var _food_map_confidence: float = 0.0
 var _shelter_map_confidence: float = 0.0
-var _stat_observation: int = 10
+var _stat_observation: int = _CreatureDefinition.DEFAULT_STAT
 var _planner_state: Dictionary = {}
 var _threat_samples_test_override: bool = false
 var _safety_cycles: int = 0
@@ -412,7 +412,7 @@ func _update_choke_point_producers(outcome: _ActionOutcome) -> void:
     _memory_adapter.record_choke_point_confirmation(
       passed["mouth"], float(passed["width"]), _motor_v3, now_ms, merge_radius
     )
-  var stat_obs := 10
+  var stat_obs := _CreatureDefinition.DEFAULT_STAT
   var def_v: Variant = _body.get("definition")
   if def_v is _CreatureDefinition:
     stat_obs = int((def_v as _CreatureDefinition).stat_observation)
@@ -1048,10 +1048,12 @@ func _refresh_danger_samples(area_only: bool) -> void:
   _threat_samples = _memory_adapter.consult_danger_samples(zone_ctx, _live_threat_samples)
 
 
+## Builds the awareness-zone scan context (creature pose, eye height, physics space) for this tick.
+## [param area_only] restricts the scan to the zone area without LoS rays. Returns the context dictionary.
 func _build_zone_ctx(area_only: bool) -> Dictionary:
   var creature_pos := _body.global_position if _body != null else Vector3.ZERO
   var facing: Vector3 = _body.get("last_move_direction") if _body != null else _MotorPlane.MODEL_FORWARD
-  var eye_h := 1.0
+  var eye_h := _MotorPlane.DEFAULT_EYE_HEIGHT
   var space: PhysicsDirectSpaceState3D = null
   if _body != null and _body.is_inside_tree():
     space = _body.get_world_3d().direct_space_state
@@ -1323,10 +1325,12 @@ func _build_context() -> Dictionary:
   }
 
 
+## Builds the planner context (body, nav, eye height, physics space, hub fields) for one tick.
+## [param hub_ctx] goal-hub context; [param delta] frame seconds. Returns the context dictionary.
 func _build_planner_context(hub_ctx: Dictionary, delta: float) -> Dictionary:
   var nav := get_nav_router()
   var space: PhysicsDirectSpaceState3D = null
-  var eye_h := 1.0
+  var eye_h := _MotorPlane.DEFAULT_EYE_HEIGHT
   if _body != null and _body.is_inside_tree():
     space = _body.get_world_3d().direct_space_state
     if _body.has_method(&"get_los_eye_height"):
@@ -1409,15 +1413,17 @@ func _calorie_ratio() -> float:
   return clampf(current / cap, 0.0, 1.0)
 
 
+## Observation stat used for cadence gating: the body definition's value floored at 10, or
+## [constant CreatureDefinition.DEFAULT_STAT] when there is no body/definition.
 func _resolve_stat_observation() -> int:
   if _body == null:
-    return 10
+    return _CreatureDefinition.DEFAULT_STAT
   var def_v: Variant = _body.get("definition")
   if def_v is Resource:
     var stat_v: Variant = (def_v as Resource).get("stat_observation")
     if typeof(stat_v) == TYPE_INT or typeof(stat_v) == TYPE_FLOAT:
       return maxi(10, int(stat_v))
-  return 10
+  return _CreatureDefinition.DEFAULT_STAT
 
 
 func _update_flight_fast_path(ctx: Dictionary) -> void:
@@ -1778,13 +1784,15 @@ func _refresh_move_turn_rate() -> void:
   _motor_v3["move_turn_rate_deg_per_sec"] = lerpf(v1, curve_value, pool_ratio)
 
 
+## Builds the planner trait dictionary from the body definition; `stat_observation` defaults to
+## [constant CreatureDefinition.DEFAULT_STAT] when the body has no definition.
 func _traits_from_body() -> Dictionary:
   var traits := {
     "explorer_builder": 0.0,
     "change_stability": 0.0,
     "compassion_self_interest": 0.0,
     "community_individual": 0.0,
-    "stat_observation": 10,
+    "stat_observation": _CreatureDefinition.DEFAULT_STAT,
   }
   if _body == null:
     return traits

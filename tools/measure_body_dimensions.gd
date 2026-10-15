@@ -29,16 +29,32 @@ const _SHIPPED: Array = [
   ["wolf raw", "wolf", "res://assets/creatures/wolf/wolf.blend"],
 ]
 
+## Tolerance keys that must exist in the spec file. The spec is the single source for these values,
+## so a missing key is a hard error (exit 2) rather than a silently different tool-side default.
+const _REQUIRED_SPEC_KEYS := [
+  "origin_position_tolerance_fraction",
+  "proportion_warn_fraction",
+  "proportion_fail_fraction",
+]
+
 var _spec: Dictionary = {}
 var _production_fail := false
 
 
+## Entry point: loads and validates the spec (exit 2 on a missing file or required key), then
+## measures either the shipped models or the model/species given as user args, and quits with
+## 1 when a production model fails, else 0.
 func _init() -> void:
   _spec = _load_spec()
   if _spec.is_empty():
     printerr("body_dims: cannot read %s" % _SPEC_PATH)
     quit(2)
     return
+  for key in _REQUIRED_SPEC_KEYS:
+    if not _spec.has(key):
+      push_error("body_dims: %s is missing required key '%s'" % [_SPEC_PATH, key])
+      quit(2)
+      return
   var args := OS.get_cmdline_user_args()
   if args.size() > 0:
     var species := String(args[1]) if args.size() > 1 else ""
@@ -140,7 +156,7 @@ func measure_model(root: Node) -> Dictionary:
 ## Prints the pivot offset vs the B10 convention (origin at AABB bottom-centre) with pass/fail.
 func _report_pivot(mn: Vector3, mx: Vector3, length: float) -> void:
   var target := Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5)
-  var tol := float(_spec.get("origin_position_tolerance_fraction", 0.02)) * length
+  var tol := float(_spec["origin_position_tolerance_fraction"]) * length
   var ok := absf(target.x) <= tol and absf(target.y) <= tol and absf(target.z) <= tol
   print("  pivot: AABB bottom-centre relative to origin = %s (tol +/-%.3f)  -> %s" % [_fmt_v(target), tol, "PASS" if ok else "FAIL"])
 
@@ -172,8 +188,8 @@ func _report_design(d: Dictionary, length: float, width: float, height: float) -
   var s := dl / maxf(0.0001, length)
   print("  uniform fit on length: scale s=%.4f -> L=%.3f W=%.3f H=%.3f" % [s, length * s, width * s, height * s])
   var axes := [["L", length * s, dl], ["W", width * s, dw], ["H", height * s, dh]]
-  var warn_f := float(_spec.get("proportion_warn_fraction", 0.10))
-  var fail_f := float(_spec.get("proportion_fail_fraction", 0.20))
+  var warn_f := float(_spec["proportion_warn_fraction"])
+  var fail_f := float(_spec["proportion_fail_fraction"])
   for a in axes:
     var dev := (float(a[1]) - float(a[2])) / float(a[2])
     var verdict := "PASS"

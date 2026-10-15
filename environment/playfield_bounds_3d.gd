@@ -4,6 +4,7 @@ class_name PlayfieldBounds3D
 
 
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
 const _MeshWorldAabb3D := preload("res://environment/mesh_world_aabb_3d.gd")
 const _StaticObstacleCollision := preload("res://environment/static_obstacle_collision.gd")
 
@@ -289,7 +290,7 @@ static func settle_character_body_on_floor(
 ) -> void:
   if body == null:
     return
-  var grav := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+  var grav := float(ProjectSettings.get_setting("physics/3d/default_gravity", _FallPhysics.DEFAULT_GRAVITY))
   if not body.is_on_floor():
     body.velocity = Vector3(0.0, -2.0, 0.0)
     body.move_and_slide()

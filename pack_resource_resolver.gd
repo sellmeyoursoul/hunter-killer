@@ -92,8 +92,6 @@ static func merge_creature_motor_v3_from_legacy(pack_root: String) -> Dictionary
   for key in _V3_LEGACY_COPY_KEYS:
     if legacy.has(key):
       out[key] = legacy[key]
-  if legacy.has("herbivore_flee_panic_radius") and not out.has("flight_acute_panic_radius"):
-    out["flight_acute_panic_radius"] = legacy["herbivore_flee_panic_radius"]
   return out
 
 

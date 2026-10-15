@@ -10,6 +10,10 @@ const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
 
+## Fallback line-of-sight eye height (world units above the body origin) when a context has no
+## `eye_height` and the body exposes no `get_los_eye_height()`. Single source for every LoS reader.
+const DEFAULT_EYE_HEIGHT := 1.0
+
 ## Idle intent on the horizontal motor plane.
 const HORIZONTAL_ZERO := Vector3.ZERO
 ## World +X (motor "right" / east).
@@ -296,7 +300,7 @@ static func _apply_terrain_scaled_invariant_airborne_ticks(
   var max_drop := float(sampler.max_elevation_range())
   if max_drop <= 0.0:
     return motor_v3
-  var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+  var gravity := float(ProjectSettings.get_setting("physics/3d/default_gravity", _FallPhysics.DEFAULT_GRAVITY))
   var grav_mul := 1.0
   if body != null and body.has_method(&"get_gravity_multiplier"):
     grav_mul = maxf(0.01, float(body.call(&"get_gravity_multiplier")))
@@ -314,6 +318,10 @@ static func _apply_terrain_scaled_invariant_airborne_ticks(
 ## is the size-scaled [code]MotorPlanner.eat_range[/code], 2026-10-05, and is not playfield-scaled).
 const _UNSCALED_MOTOR_DISTANCE_KEYS := [
   "arrival_tolerance",
+  ## Single-sourced into the V3 defaults 2026-10-15; before that the dictionary lacked them, so the
+  ## readers always used the (unscaled) inline fallback. Keep them unscaled to preserve that.
+  "explore_coverage_cell",
+  "food_seek_imminent_mob_radius",
 ]
 
 

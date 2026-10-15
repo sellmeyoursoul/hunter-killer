@@ -5,6 +5,10 @@ class_name CreatureDefinition
 
 const _StatMath := preload("res://creature/stat_math.gd")
 
+## Neutral mid-range attribute value (stat scale is 1..25): the `@export` default for stats and the
+## fallback readers use when a body has no [CreatureDefinition] (e.g. `stat_observation`).
+const DEFAULT_STAT := 10
+
 enum FeedingMode {
   HERBIVORE,
   CARNIVORE,
@@ -73,7 +77,7 @@ enum FeedingMode {
 ## Live consumer: predator prey-race giveaway ([CREATURE_MOVEMENT_V3.md §6.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md), 2026-09-12) —
 ## higher observation shortens how long a predator chases a live-visible prey that isn't closing
 ## distance before recognizing the race is lost.
-@export_range(1, 25) var stat_observation: int = 10
+@export_range(1, 25) var stat_observation: int = DEFAULT_STAT
 ## Same stub caveat as [member stat_composure] — [CREATURE_ATTRIBUTES_USAGE.md §3.8](../../Project_Docs/Definitive_Features/CREATURE_ATTRIBUTES_USAGE.md).
 ## Live consumer (2026-09-15): per-creature turn rate — both the continuous goal-directed turn law
 ## and boundary-scan/EAT-orbit's turn stepping, unified onto one dexterity-derived rate

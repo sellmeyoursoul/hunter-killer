@@ -74,7 +74,7 @@ Slot A uses **eight global pole ids** on each `LocalePriorMap` row (`pole_facet_
 
 ### 3.1 `creature_motor` keys that touch replay (not trait exports)
 
-Authoritative defaults: [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_params()`. Traits do **not** add pack keys; replay reads **`motor_p`** + **`traits`** dict together.
+Authoritative defaults (V3): [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_v3_params()` (read via `_Merge.v3_default(key)`; the replay keys `replay_bell_k` 1.4, `replay_n_min` 3.0, `replay_n_sat` 10.0, `replay_urgency_slot_b_min` 90.0, `replay_w_fit` 0.4, `replay_w_store` 0.6, `urgency_boost_linear_slope` 25.0 were relocated there 2026-10-15). The legacy `default_creature_motor_params()` copy is inert for V3 ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1)). Traits do **not** add pack keys; replay reads **`motor_p`** + **`traits`** dict together.
 
 | Key | Default | Trait interaction |
 |-----|---------|-------------------|

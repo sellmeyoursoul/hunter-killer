@@ -341,6 +341,13 @@ static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
     "predator_prey_engagement_latch_scale_max": 1.5,
     "predator_prey_engagement_latch_ticks_min": 8,
     "predator_prey_engagement_latch_ticks_max": 120,
+    ## Extra latch-tick decay per memory-pursuit detour while the prey-engagement latch is held without a
+    ## live sighting (`motor_planner.gd` decay = 1 + detour_count * this).
+    "prey_engagement_detour_decay_step_ticks": 4,
+    ## Baseline until the stat-based refresh overwrites it: `CreatureMotorStack._refresh_prey_race_giveup_ticks`
+    ## rewrites this key per body from `prey_race_giveup_ticks_at_stat_1/10/25`; the planner falls back to
+    ## this value only when no refresh has run (raw dictionaries in tests / headless fixtures).
+    "prey_race_giveup_ticks": 90.0,
     "flee_waypoint_latch_ticks": 16,
     ## Multi-threat flee bearing blending ([CM_V3_MULTI_MOBS.md]
     ## (../Project_Docs/Draft_Features/CM_V3_MULTI_MOBS.md) step 4) — `_flee_objective` sums every
@@ -765,6 +772,23 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "unknown_kind_multiplier": 1.0,
     "believed_goal_hotspot_near_radius": 250.0,
     "believed_goal_seek_escalate_radius": 1000.0,
+    ## Locale-prior / replay-rank tunables read by `GoalSourceMemoryStore` through the V3 dictionary.
+    ## Values are the inline fallbacks those readers carried before 2026-10-15 (single-source move,
+    ## CBD-1); the same-named legacy `creature_motor_spine()` entries are never seen by V3 code.
+    "believed_goal_escalate_seek_mul": 1.35,
+    "explore_coverage_cell": 52.0,
+    "food_seek_imminent_mob_radius": 100.0,
+    "locale_prior_max_buckets": 100,
+    "locale_prior_pull_w_norm": 3.0,
+    "locale_prior_write_blend": 0.35,
+    "replay_bell_k": 1.4,
+    "replay_n_min": 3.0,
+    "replay_n_sat": 10.0,
+    "replay_urgency_slot_b_min": 90.0,
+    "replay_w_fit": 0.4,
+    "replay_w_store": 0.6,
+    "salient_write_max_per_sec": 100,
+    "urgency_boost_linear_slope": 25.0,
   }
   return _merge_dict_shallow(core, default_creature_motor_v3_explore_inventory_params())
 

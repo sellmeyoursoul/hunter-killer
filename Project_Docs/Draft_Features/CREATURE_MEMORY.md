@@ -203,7 +203,7 @@ Enter **Precise** when the creature holds a fresh belief **and** distance-from-b
 
 ### 5.4 Re-awareness: Coarse → Precise
 
-When a remembered entity **re-enters the creature’s active zone of sensory awareness** — **same definition** as scripted motor live ingest (**[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)** — hybrid **`awareness_radius`** disk plus forward **`awareness_cone_extra`** wedge; default **`awareness_forward_cone_only = false`**), **drop it from coarse-only treatment** — **snap to Precise**: refresh position/affordance from live scanner, freeze snapshots per refresh rules (**§5.1 stationaries** unchanged).
+When a remembered entity **re-enters the creature’s active zone of sensory awareness** — **same definition** as scripted motor live ingest (**[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)** — hybrid **`awareness_radius`** disk plus forward **`awareness_cone_extra`** wedge; the `awareness_forward_cone_only` posture key is retired on V3 as of 2026-10-15 — never read; see [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md) retired-keys note), **drop it from coarse-only treatment** — **snap to Precise**: refresh position/affordance from live scanner, freeze snapshots per refresh rules (**§5.1 stationaries** unchanged).
 
 **Resolved (LRU vs coarse TTL — phase 1):** When **`goal_memory_max_entries`** is exceeded, **LRU eviction wins** over waiting for coarse TTL. Evict the entry with **lowest merge use count**; tie-break **least recently merged** into motor context (**§5.5**). Coarse TTL and global **`goal_memory_ttl_sec`** still apply on non-LRU paths.
 
@@ -247,7 +247,7 @@ When a remembered entity **re-enters the creature’s active zone of sensory awa
 | **Motor merge shape (Q4)** | **A + D:** one **`SeekCandidate`** (`is_moving`, `source = memory_precise`) + **`pursuit_targets`** `{position, velocity, cost_scale}` per remembered mover. **Light C:** optional **`ghost_intercept_pos = last_world_pos + last_velocity × goal_memory_ghost_horizon_sec`** (default **~0.4 s**) as a second pursuit hint — **no** full disk sampling in Phase E. |
 | **Ghost velocity (Q5)** | **`last_velocity`** stored at sync; merged into pursuit + intercept. |
 
-**Implementation notes:** Centroid only at merge (disk radius **`goal_memory_moving_last_known_radius_px`** documents uncertainty; not sampled on cardinal grid in E). Mover TTL: **`goal_memory_mover_ttl_sec`** with fallback **`predator_prey_memory_sec`** then **`goal_memory_ttl_sec`**.
+**Implementation notes:** Centroid only at merge (disk radius **`goal_memory_moving_last_known_radius_px`** documents uncertainty; not sampled on cardinal grid in E). Mover TTL: **`goal_memory_mover_ttl_sec`** (sole source on V3 since 2026-10-15; the former fallbacks `predator_prey_memory_sec` / `goal_memory_ttl_sec` in `_moving_ttl_ms` were removed).
 
 **V3 additions (2026-09-28/29, [PHYSICS_SQUEEZE.md decision 46 G/H](PHYSICS_SQUEEZE.md)):**
 - **Lost-prey search (planner state, not a belief row).** When live and memory (`memory_moving`) pursuit of moving prey have both lapsed, the planner searches around the prey's last-known position, projected 1 s along its last velocity. It does not fall to random explore. The hint lives in planner state (`lost_prey_hint_*`), not in `_goal_belief`; the prey's belief row is unchanged, and a lost-prey give-up does not invalidate locale food beliefs. Details: [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md) D13.
@@ -481,7 +481,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 
 ## 10. Planned config keys (`goal_*` + `believed_goal_*`)
 
-Prefer **dual home**: authoritative defaults in **`default_creature_motor_params()`** / **`creature_motor` pack JSON** overlays when keys are tuning-adjacent; global merge MAY retain fallbacks mirrored in **`game_config_merge.gd`** comments.
+Authoritative defaults (V3, updated 2026-10-15): **`default_creature_motor_v3_params()`** in `game_config_merge.gd`, with per-species deviations in the pack's **`creature_motor_v3`** block. The legacy `default_creature_motor_params()` / pack `creature_motor` blocks are not applied at V3 runtime ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1)); the older "dual home" wording is superseded.
 
 **Policy:** **`food_memory_*` / `_food_belief` / `believed_food_*` identifiers are deprecated** throughout **code** and active **Draft/Definitive** docs. Implement only **`goal_*`** / **`_goal_belief`** (**no parser aliases**, **no transitional save-key bridges** unless a maintainer mandates a dedicated migration spike). *[Completed_Features/](../Completed_Features/)* snapshots may lag.
 
@@ -489,7 +489,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 |-------------|-------------------|---------------|
 | `goal_memory_precise_radius_px` | **1000** | Inside → precise tier can merge exact coords into seek |
 | `goal_memory_moving_last_known_radius_px` | **50** | Moving targets — credibility disk (documentary in E; merge uses centroid) |
-| `goal_memory_mover_ttl_sec` | **10** (fallback `predator_prey_memory_sec`) | Moving belief TTL |
+| `goal_memory_mover_ttl_sec` | **10** (sole source; the old `predator_prey_memory_sec` fallback was removed 2026-10-15, default via `_Merge.v3_default`) | Moving belief TTL |
 | `goal_memory_ghost_horizon_sec` | **0.4** | Light-C intercept: `pos + vel × horizon` |
 | `goal_memory_forget_radius_px` | **2400** | Beyond → evict (LRU candidate) |
 | `goal_memory_coarse_ttl_sec` | **15** | Forget after N seconds continuously coarse |
@@ -507,7 +507,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 | `weight_seek_remembered_goal` | **8.0** | Scales cardinal **seek pull** toward **precise** remembered bush positions (merged into `food_seek_targets`). **~0.5×** default **`weight_seek_ready_food`** (16): remembered targets nudge direction but **weaker than live in-cone food**. **Raise** → chases stale GPS harder (may ignore fresher live cues). **Lower** → memory barely affects pathing. |
 | `weight_coarse_sector_goal_bias` | **3.0** | Scales **`sector_weights[s]`** in motor cost (**§14.1**). Multiplies egocentric 8-way bias from **coarse** beliefs only. **0** = off. **Raise** → stronger weak turn toward “food was that way” without exact coords. Keep **well below** live seek weights so coarse bias stays a hint. |
 
-**Wire defaults:** Uncomment / set in **`default_creature_motor_params()`** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) (**GB-10**).
+**Wire defaults:** Set in **`default_creature_motor_v3_params()`** (V3; the legacy `default_creature_motor_params()` is inert for V3) in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) (**GB-10**).
 
 **Belief / habitual locale** (**CREATURE_MOVEMENT_V2 §A.3.1**, projection **§14.1**):
 
@@ -518,8 +518,8 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 | `weight_believed_goal_pull` | **6.4** | Scales habitual **vector** attraction (**§14.1**); **0.4×** **`weight_seek_ready_food`** (16). |
 | `locale_prior_pull_w_norm` | **3.0** | Denominator for **`pull_mag`** centroid scaling (**§14.1**). |
 | `locale_prior_ewma_alpha` | **0.15** | Per-tick soft decay on in-row **`success_delta`** / **`stored_strength`**. |
-| `locale_prior_write_blend` | **0.35** | Per-write lerp for **`stored_strength`** toward **`success_rate`** (**§14.2**). **V3: fallback-only** (not in `default_creature_motor_v3_params()`; the store's 0.35 literal applies; V2 ship profile sets 0.32). |
-| `salient_write_max_per_sec` | **100** | Per-creature safety valve on salient writes/sec (**§14**). **V3: fallback-only** (store literal 100). |
+| `locale_prior_write_blend` | **0.35** | Per-write lerp for **`stored_strength`** toward **`success_rate`** (**§14.2**). **In V3 defaults since 2026-10-15** (`default_creature_motor_v3_params()` 0.35, read via `_Merge.v3_default`); the V2 ship-profile 0.32 is in the inert legacy `creature_motor` surface and is NOT applied on V3. |
+| `salient_write_max_per_sec` | **100** | Per-creature safety valve on salient writes/sec (**§14**). **In V3 defaults since 2026-10-15** (100). |
 | `believed_goal_source_bias` | — | **`MotorContext`** façade: **`pull_dir`**, **`pull_mag`**, **`sector_weights[8]`** — not a config scalar. |
 
 **LocalePriorMap row fields (phase-1 — §14.1):** persist **`cell_x`**, **`cell_y`** at salient write (from §2.1.1 compositor); optional **`anchor_world`** mirror for debug. **Required** for centroid projection — **`context_hash` alone is not invertible**.
@@ -528,7 +528,7 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 
 | Planned key | Default (phase-1) | Role |
 |-------------|-------------------|------|
-| `locale_prior_max_buckets` | **100** | LRU cap on **`LocalePriorMap`** rows per creature. **V3: fallback-only** (store literal 100). |
+| `locale_prior_max_buckets` | **100** | LRU cap on **`LocalePriorMap`** rows per creature. **In V3 defaults since 2026-10-15** (100). |
 | `locale_prior_idle_evict_base_sec` | **10** | Base idle time before bucket eligible for eviction. **In V3 defaults since 2026-09-24** (decision 45 D; previously reached only via fallback literal; V2 spine copy kept). |
 | `locale_prior_idle_evict_per_attempt_sec` | **1** | Added idle sec per **`attempt_count`** beyond first: **`idle_evict_sec = base + (attempt_count - 1) * per_attempt`**. Single formula: `GoalSourceMemoryStore.idle_limit_for_row`, shared by `_evict_if_needed` and the `avoid_hostiles_cells` read filter (2026-09-24). **In V3 defaults since 2026-09-24.** |
 | `locale_prior_idle_evict_avoid_hostiles_sec` | **300** | **Shipped 2026-09-24; in V3 defaults since the decision 45 D fix pass (same day).** Replaces `base` for **`avoid_hostiles`** rows only (rare-escape cadence: a 10 s base would evict a flee row before it could ever be reused); per-attempt term shared. **Wall-clock** seconds (`Time.get_ticks_msec()/1000`, same clock as `last_used_time`), **not** game-time ticks. **Requirement:** if a pause / game-speed control is ever added, this and every other locale-prior clock (all goal kinds) must convert to game time — see [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) **Game pause / time-scale** row (Other). Eviction runs only inside `try_salient_write`. **Known trade-off:** the shared **`locale_prior_max_buckets`** cap still evicts by `idle_age / attempts` across **all** goal kinds, so long-lived, few-attempt flee rows are now the first cap-eviction casualties. |
@@ -542,11 +542,11 @@ Prefer **dual home**: authoritative defaults in **`default_creature_motor_params
 | `flight_threat_memory_sec` (`creature_motor_v3`) | **2.0** | **Shipped 2026-09-29 (decision 46 H, option 1).** Wall clock. While the Flight latch is held, an `avoid_hostiles` belief seen at most this long ago still counts as danger for the Safety counter if its believed position is within `flight_acute_panic_radius × (1 + flight_release_margin_frac)`. ≤ 0 disables. Read via `MemoryAdapter.nearest_remembered_hostile`. |
 | `flight_release_margin_frac` (`creature_motor_v3`) | **0.25** | **Shipped 2026-09-29 (decision 46 H).** Unitless release hysteresis on `flight_acute_panic_radius` for the threat memory above. |
 | `flight_exit_confirm_sec` (`creature_motor_v3`) | **2.0** | **Shipped 2026-09-29 (decision 46 H, option 5).** Wall clock. A Flight exit's `avoid_hostiles` SUCCESS write, shelter `battle_tested` promotion and clean-exit disposition nudge commit only after this long with no re-entry; a re-entry inside it cancels them (no FAILURE either). ≤ 0 = commit immediately. |
-| `explore_coverage_cell` (`creature_motor_v3`) | **52** (fallback) | Locale cell size for the §2.1.1 compositor on V3 (`coverage_cell_from_motor`, clamped ≥ 16). **V3: fallback-only and never playfield-scaled.** The key is absent from the V3 defaults, so `MotorPlane`'s distance scaler has nothing to scale. Live cells therefore stay 52u on a ~200u field while `dead_end_match_radius` scales to ~5.5. Tracked in the backlog. |
+| `explore_coverage_cell` (`creature_motor_v3`) | **52** (fallback) | Locale cell size for the §2.1.1 compositor on V3 (`coverage_cell_from_motor`, clamped ≥ 16). **In V3 defaults since 2026-10-15 (52.0) and explicitly unscaled** (listed in `MotorPlane._UNSCALED_MOTOR_DISTANCE_KEYS`, as is `food_seek_imminent_mob_radius`). Behaviour unchanged: live cells stay 52u on a ~200u field while `dead_end_match_radius` scales to ~5.5. Whether to scale it is still a backlog design question. |
 
-**Replay / Slot B formula keys** (authoritative defaults **`default_creature_motor_params()`** only — **[CREATURE_GOAL_DRIVERS.md §5.1.2](CREATURE_GOAL_DRIVERS.md)**): `replay_bell_k`, `replay_w_fit`, `replay_w_store`, `replay_n_sat`, `replay_n_min`, `urgency_boost_linear_slope`, `replay_urgency_slot_b_min`. Omit from pack JSON unless overriding.
+**Replay / Slot B formula keys** (authoritative V3 defaults in **`default_creature_motor_v3_params()`** since 2026-10-15 — **[CREATURE_GOAL_DRIVERS.md §5.1.2](CREATURE_GOAL_DRIVERS.md)**): `replay_bell_k`, `replay_w_fit`, `replay_w_store`, `replay_n_sat`, `replay_n_min`, `urgency_boost_linear_slope`, `replay_urgency_slot_b_min`. Omit from the pack `creature_motor_v3` block unless overriding.
 
-| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window; **key retained but no V3 consumer since 2026-09-24 — AH-7 suppression dropped, §14.2**). Defaults in **`default_creature_motor_params()`** only.
+| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window; **key retained but no V3 consumer since 2026-09-24 — AH-7 suppression dropped, §14.2**). Defaults in the legacy **`default_creature_motor_params()`** only (not verified as read by V3 in this pass; see CBD-1 step 6).
 
 ---
 

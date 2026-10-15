@@ -244,12 +244,14 @@ static func _coverage_for_goal(
   )
 
 
+## Builds an awareness-zone context from the planner [param ctx] (eye height defaults to
+## [constant MotorPlane.DEFAULT_EYE_HEIGHT]). Returns the zone context dictionary.
 static func _build_zone_ctx(ctx: Dictionary) -> Dictionary:
   var body: CharacterBody3D = ctx.get("body")
   var motor_v3: Dictionary = ctx.get("motor_v3", {})
   var creature_pos := body.global_position if body != null else Vector3.ZERO
   var facing: Vector3 = _spawn_facing(ctx)
-  var eye_h := float(ctx.get("eye_height", 1.0))
+  var eye_h := float(ctx.get("eye_height", _MotorPlane.DEFAULT_EYE_HEIGHT))
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
   if body != null and body.is_inside_tree() and space == null:
     space = body.get_world_3d().direct_space_state
@@ -270,6 +272,7 @@ static func _wedge_center_dir(wedge_index: int, wedge_count: int) -> Vector3:
   return Vector3(sin(angle), 0.0, -cos(angle))
 
 
+## Clearance query along [param dir] from [param creature_pos] using [param motor_v3] and the planner context; see signature.
 static func _nav_clearance(
   creature_pos: Vector3,
   dir: Vector3,
@@ -281,7 +284,7 @@ static func _nav_clearance(
   var probe_dist := float(motor_v3.get("awareness_radius", 1500.0)) * 0.5
   var target := creature_pos + dir.normalized() * probe_dist
   var space: PhysicsDirectSpaceState3D = ctx.get("space_state")
-  var eye_h := float(ctx.get("eye_height", 1.0))
+  var eye_h := float(ctx.get("eye_height", _MotorPlane.DEFAULT_EYE_HEIGHT))
   if space == null:
     return 1.0
   var los := _AwarenessZone.line_of_sight_clear(

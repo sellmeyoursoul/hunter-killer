@@ -161,6 +161,9 @@ func _add_world_marker(world_p: Vector3, col: Color, radius: float = 0.18) -> vo
   _marker_root.add_child(mi)
 
 
+## Rebuilds the awareness zone mesh: full disk of `awareness_radius` plus a forward cone extension
+## (`awareness_cone_extra`, `awareness_cone_half_angle_deg`) when extra > 0, then per-goal markers.
+## No params; side effects: replaces `_mesh_inst.mesh` and markers.
 func _rebuild_draw() -> void:
   if not _overlay_enabled():
     return
@@ -180,7 +183,6 @@ func _rebuild_draw() -> void:
     return
   var extra := float(motor.get("awareness_cone_extra", 0.0))
   var half_deg := float(motor.get("awareness_cone_half_angle_deg", 45.0))
-  var forward_cone_only := bool(motor.get("awareness_forward_cone_only", false))
   var facing := _MotorPlane.HORIZONTAL_RIGHT
   if par != null:
     var fd: Variant = par.get("last_move_direction")
@@ -193,12 +195,9 @@ func _rebuild_draw() -> void:
   const LIFT := 0.06
   var st := SurfaceTool.new()
   st.begin(Mesh.PRIMITIVE_TRIANGLES)
-  if forward_cone_only:
-    _append_sector_tris(st, reach, a0, a1, LIFT, 36)
-  else:
-    _append_sector_tris(st, r0, 0.0, TAU, LIFT, 72)
-    if extra > 0.0:
-      _append_sector_tris(st, reach, a0, a1, LIFT + 0.01, 24)
+  _append_sector_tris(st, r0, 0.0, TAU, LIFT, 72)
+  if extra > 0.0:
+    _append_sector_tris(st, reach, a0, a1, LIFT + 0.01, 24)
   var mesh := st.commit()
   var mat := StandardMaterial3D.new()
   ## Per-creature color ([CreatureDebugColor]) — same hue this creature's F10 HUD label uses, so a

@@ -31,7 +31,7 @@ static func project_ghosts(
     return out
   var creature_pos: Vector3 = zone_ctx.get("creature_pos", Vector3.ZERO)
   var facing: Vector3 = zone_ctx.get("facing", _MotorPlane.MODEL_FORWARD)
-  var eye_h := float(zone_ctx.get("eye_height", 1.0))
+  var eye_h := float(zone_ctx.get("eye_height", _MotorPlane.DEFAULT_EYE_HEIGHT))
   var motor_v3: Dictionary = zone_ctx.get("motor_v3", {})
   var area_only := bool(zone_ctx.get("area_only", false))
   var space: PhysicsDirectSpaceState3D = zone_ctx.get("space_state")

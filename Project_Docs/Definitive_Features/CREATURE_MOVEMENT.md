@@ -159,14 +159,17 @@ For each candidate step direction `d`, predicted center = `creature_position + d
 
 | Source | Path | Role |
 |--------|------|------|
-| **Defaults** | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) → `default_creature_motor_params()` | Full key set when JSON missing |
+| **Defaults (V3, live)** | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) → `default_creature_motor_v3_params()` (+ pack `creature_motor_v3` block; consumers use `_Merge.v3_default(key)`) | The only motor dict V3 reads (`motor_v3`); see [CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) |
+| **Defaults (legacy, mostly inert for V3)** | same file → `default_creature_motor_params()` | Legacy spine; as of 2026-10-15 no pack or `game_config.json` `creature_motor` block is applied at V3 runtime (verified); only a few keys are still read via `get_creature_motor_params` (`predator_prey_meal_calories`, footprint extents, v2 calorie fallbacks). Retirement decision pending: [OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1) step 6 |
 | **User overrides** | `user://game_config.json` → `creature_motor` | Merged by `GameConfig` autoload. Precedence: defaults, then repo `res://game_config.json`, then user file (user wins). **Exception (dev runs):** when `OS.has_feature("editor")` (editor binary, incl. headless `--path`), `game_config.gd` `_apply_dev_logging_override()` makes the repo `logging_params` win over the user file; exported builds keep user precedence; non-logging sections (including `creature_motor`) are not overridden, so a stale user copy still shadows them (see [CREATURE_BODY_DIMENSIONS.md](../Draft_Features/CREATURE_BODY_DIMENSIONS.md) §8) |
 | **Repo sample** | [`game_config.json`](../../game_config.json) | Partial; many keys fall back to defaults |
 | **Runtime context** | `AiDriver._build_motor_context()` | Per-tick scaled weights (hunger, pursuit urgency, stuck, predator boost) |
 
 ### 6.1 Full default key list (`creature_motor`)
 
-Keys from `default_creature_motor_params()` (values = code defaults; user JSON may override):
+> **Legacy table (2026-10-15): INERT for V3.** These are the legacy `default_creature_motor_params()` keys. V3 does not read this dict (it reads `motor_v3`, built from `default_creature_motor_v3_params()`), and pack / `game_config.json` `creature_motor` overrides are not applied at runtime, so the values below do not drive V3 behaviour except the few keys named in the Defaults (legacy) row above. The dead diet-prefixed pack knobs (`herbivore_*`, `predator_*`, `post_los_*`, `awareness_forward_cone_only`, etc.) were removed from the shipped packs 2026-10-15. Kept as history of the legacy key set; see [OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1).
+
+Keys from `default_creature_motor_params()` (values = code defaults; user JSON may override, but see the note above):
 
 | Key | Default | Used for |
 |-----|---------|----------|

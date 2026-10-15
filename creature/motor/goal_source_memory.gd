@@ -6,6 +6,7 @@ const _GkReg := preload("res://creature/memory/goal_kind_registry.gd")
 const _EnvGrid := preload("res://environment/environment_grid_baked.gd")
 const _PackRes := preload("res://pack_resource_resolver.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 const TIER_SUCCESS := &"SUCCESS"
 const TIER_PARTIAL := &"PARTIAL_SUCCESS"
@@ -123,8 +124,10 @@ static func effective_modality_allowlist_for_pack(pack_root: String) -> Array:
   return out
 
 
+## Locale-prior grid cell size in world units: `explore_coverage_cell` from [param motor_p] (V3 dictionary), floored at 16.
+## Returns the cell edge length as float.
 static func coverage_cell_from_motor(motor_p: Dictionary) -> float:
-  return maxf(16.0, float(motor_p.get("explore_coverage_cell", 52.0)))
+  return maxf(16.0, float(motor_p.get("explore_coverage_cell", _Merge.v3_default("explore_coverage_cell"))))
 
 
 static func grid_indices_for_anchor(anchor: Vector3, motor_p: Dictionary) -> Vector2i:
@@ -356,19 +359,23 @@ static func pole_blend_from_tags(traits: Dictionary, pole_tags: Array) -> float:
   return blend
 
 
+## Bell-curve ceiling for slot-B replay urgency (uses `replay_bell_k`).
+## [param slot_b_base] base slot-B score 0..100; [param motor_p] V3 params. Returns the cap (0..75).
 static func bell_cap(slot_b_base: float, motor_p: Dictionary) -> float:
-  var k := float(motor_p.get("replay_bell_k", 1.4))
+  var k := float(motor_p.get("replay_bell_k", _Merge.v3_default("replay_bell_k")))
   var b_norm := clampf(slot_b_base / 100.0, 0.0, 1.0)
   return (1.0 - exp(-k * b_norm)) * 75.0
 
 
+## Linear urgency boost added on top of [method bell_cap] once slot B reaches `replay_urgency_slot_b_min`.
+## [param external_urgency] 0..1; [param slot_b_base] slot-B score; [param motor_p] V3 params. Returns the boost.
 static func urgency_boost(
   external_urgency: float, slot_b_base: float, motor_p: Dictionary
 ) -> float:
-  var min_b := float(motor_p.get("replay_urgency_slot_b_min", 90.0))
+  var min_b := float(motor_p.get("replay_urgency_slot_b_min", _Merge.v3_default("replay_urgency_slot_b_min")))
   if slot_b_base < min_b:
     return 0.0
-  var slope := float(motor_p.get("urgency_boost_linear_slope", 25.0))
+  var slope := float(motor_p.get("urgency_boost_linear_slope", _Merge.v3_default("urgency_boost_linear_slope")))
   return slope * clampf(external_urgency, 0.0, 1.0)
 
 
@@ -390,6 +397,7 @@ static func effective_slot_a(
   return signf(slot_a_raw) * minf(absf(slot_a_raw), cap_f)
 
 
+## External-urgency jeopardy sub-score from [param motor_ctx] (threat state) and [param motor_p] (V3 params).
 static func _jeopardy_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> float:
   if bool(motor_ctx.get("tactic_jeopardy_egress", false)):
     return 1.0
@@ -402,7 +410,7 @@ static func _jeopardy_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> fl
   if typeof(pos_v) != TYPE_VECTOR3:
     return 1.0
   var pos := pos_v as Vector3
-  var r := float(motor_p.get("food_seek_imminent_mob_radius", 100.0))
+  var r := float(motor_p.get("food_seek_imminent_mob_radius", _Merge.v3_default("food_seek_imminent_mob_radius")))
   for mp in imminent:
     var threat_p := _read_pos_v3(mp)
     if threat_p != Vector3.ZERO and pos.distance_to(threat_p) <= r:
@@ -469,12 +477,13 @@ static func _reward_scalar_for_tier(tier: StringName) -> float:
       return 0.0
 
 
+## True when another salient write is allowed this wall-clock second (`salient_write_max_per_sec` in [param motor_p]).
 func _rate_limit_ok(motor_p: Dictionary) -> bool:
   var now_sec := int(Time.get_ticks_msec() / 1000.0)
   if now_sec != _write_sec_bucket:
     _write_sec_bucket = now_sec
     _writes_this_sec = 0
-  var cap := int(motor_p.get("salient_write_max_per_sec", 100))
+  var cap := int(motor_p.get("salient_write_max_per_sec", _Merge.v3_default("salient_write_max_per_sec")))
   if _writes_this_sec >= cap:
     return false
   _writes_this_sec += 1
@@ -487,6 +496,9 @@ func _same_goal_continuation_blocks(dominant_tier2: StringName, goal_kind: Strin
   return _last_salient_tier2 == dominant_tier2 and _last_salient_goal_kind == goal_kind
 
 
+## Attempts one salient locale-prior write for the given goal kind and anchor; honors the per-second rate limit,
+## `locale_prior_write_blend`, and bucket eviction. Params: see signature; motor params come from the V3 dictionary.
+## Returns true when a row was written or updated.
 func try_salient_write(
   goal_kind: StringName,
   dominant_tier2: StringName,
@@ -543,7 +555,7 @@ func try_salient_write(
   var reward := _reward_scalar_for_tier(tier)
   var now := Time.get_ticks_msec() / 1000.0
   var ewma_a := float(motor_p.get("locale_prior_ewma_alpha", 0.15))
-  var write_blend := float(motor_p.get("locale_prior_write_blend", 0.35))
+  var write_blend := float(motor_p.get("locale_prior_write_blend", _Merge.v3_default("locale_prior_write_blend")))
   var pole_rank1 := &"explorer"
   if not pole_tags.is_empty():
     pole_rank1 = pole_tags[0]
@@ -696,7 +708,7 @@ static func idle_limit_for_row(row: Dictionary, motor_p: Dictionary) -> float:
 ## (highest idle_age / attempts first). [param now] is wall-clock seconds
 ## (`Time.get_ticks_msec() / 1000.0`, the same clock `last_used_time` is stamped with).
 func _evict_if_needed(motor_p: Dictionary, now: float) -> void:
-  var max_buckets := int(motor_p.get("locale_prior_max_buckets", 100))
+  var max_buckets := int(motor_p.get("locale_prior_max_buckets", _Merge.v3_default("locale_prior_max_buckets")))
   var keys := _rows.keys()
   for key in keys:
     var row: Dictionary = _rows[key]
@@ -784,6 +796,8 @@ func _modality_allowed(mod: StringName, motor_ctx: Dictionary) -> bool:
   return false
 
 
+## Scores one locale row for replay (weights `replay_w_fit` / `replay_w_store`, saturation `replay_n_*`).
+## Returns a bundle dictionary including `replay_rank_score`.
 func _replay_rank_bundle(
   row: Dictionary,
   motor_p: Dictionary,
@@ -796,15 +810,15 @@ func _replay_rank_bundle(
   var fit := current_fit_for_modality(modality, motor_ctx, creature_pos, hotspot_r)
   var stored := float(row.get("stored_strength", 0.0))
   var fit_blend := fit * stored
-  var k := float(motor_p.get("replay_bell_k", 1.4))
-  var w_fit := float(motor_p.get("replay_w_fit", 0.4))
-  var w_store := float(motor_p.get("replay_w_store", 0.6))
+  var k := float(motor_p.get("replay_bell_k", _Merge.v3_default("replay_bell_k")))
+  var w_fit := float(motor_p.get("replay_w_fit", _Merge.v3_default("replay_w_fit")))
+  var w_store := float(motor_p.get("replay_w_store", _Merge.v3_default("replay_w_store")))
   var x_blend := w_fit * fit_blend + w_store * stored
   var slot_b := (1.0 - exp(-k * x_blend)) * 100.0
   var attempts := int(row.get("attempt_count", 0))
   var successes := int(row.get("success_count", 0))
-  var n_sat := float(motor_p.get("replay_n_sat", 10.0))
-  var n_min := float(motor_p.get("replay_n_min", 3.0))
+  var n_sat := float(motor_p.get("replay_n_sat", _Merge.v3_default("replay_n_sat")))
+  var n_min := float(motor_p.get("replay_n_min", _Merge.v3_default("replay_n_min")))
   var evidence := 1.0 - exp(-float(attempts) / maxf(1.0, n_sat))
   var success_rate := float(successes) / maxf(1.0, float(attempts))
   var thin_cap := minf(1.0, float(attempts) / maxf(1.0, n_min))
@@ -843,6 +857,8 @@ func _replay_rank_score(
   )
 
 
+## Projects the believed-goal pull bias for the dominant goal kind from the locale store.
+## Uses `locale_prior_pull_w_norm` and `believed_goal_escalate_seek_mul` from [param motor_p] (V3 params).
 static func project_believed_goal_bias(
   creature_pos: Vector3,
   dominant_goal_kind: StringName,
@@ -862,7 +878,7 @@ static func project_believed_goal_bias(
   if store == null or dominant_goal_kind != _GkReg.GK_FIND_FOOD:
     return {"pull_dir": pull_dir, "pull_mag": pull_mag, "sector_weights": sector_out}
   var hotspot_r := float(motor_p.get("believed_goal_hotspot_near_radius", 250.0))
-  var w_norm := float(motor_p.get("locale_prior_pull_w_norm", 3.0))
+  var w_norm := float(motor_p.get("locale_prior_pull_w_norm", _Merge.v3_default("locale_prior_pull_w_norm")))
   var coverage_cell := coverage_cell_from_motor(motor_p)
   var candidates: Array = []
   for key in store._rows.keys():
@@ -958,7 +974,7 @@ static func escalate_seek_multiplier(
   var escalate_r := float(motor_p.get("believed_goal_seek_escalate_radius", 1000.0))
   var nearest := _nearest_find_food_prior_dist(store, creature_pos, motor_p)
   if nearest > hotspot_r and nearest <= escalate_r:
-    return float(motor_p.get("believed_goal_escalate_seek_mul", 1.35))
+    return float(motor_p.get("believed_goal_escalate_seek_mul", _Merge.v3_default("believed_goal_escalate_seek_mul")))
   return 1.0
 
 

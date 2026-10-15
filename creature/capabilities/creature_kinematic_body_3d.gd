@@ -13,6 +13,7 @@ const _CreatureDefinition := preload("res://creature/definition/creature_definit
 const _DefScript := _CreatureDefinition
 const _DietRegistry := preload("res://creature/capabilities/diet_registry.gd")
 const _MotorPlane := preload("res://creature/motor/motor_plane.gd")
+const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _CreatureMeshFootprint := preload("res://creature/capabilities/creature_mesh_footprint.gd")
 const _BodyDims := preload("res://creature/capabilities/creature_body_dimensions.gd")
@@ -313,8 +314,9 @@ func get_passability_profile() -> Variant:
   return _passability_profile
 
 
-## Default LoS ray origin height unless overridden in [code]creature_motor.los_eye_height[/code]:
-## 0.9 x capsule height.
+## Default LoS ray origin height: 0.9 x capsule height. The optional override is the
+## [code]creature_motor_v3.los_eye_height[/code] key (read by `AwarenessZoneScan._eye_height`); it has no
+## code default on purpose (absent means use this method).
 func get_los_eye_height() -> float:
   return get_collision_capsule_height() * 0.9
 
@@ -751,7 +753,7 @@ func apply_horizontal_move_intent(intent: Vector3, delta: float) -> void:
     velocity.x = move_toward(velocity.x, 0.0, fric * delta)
     velocity.z = move_toward(velocity.z, 0.0, fric * delta)
   if not is_on_floor():
-    var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8))
+    var g := float(ProjectSettings.get_setting("physics/3d/default_gravity", _FallPhysics.DEFAULT_GRAVITY))
     velocity.y -= g * grav_mul * delta
   _last_ghost_layer_blocked = _clamp_velocity_to_ghost_fit(delta)
   move_and_slide()

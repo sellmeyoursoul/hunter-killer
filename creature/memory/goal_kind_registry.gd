@@ -15,6 +15,9 @@ const PARENT_PRESERVE := &"preserve_calories"
 
 const _PackRes := preload("res://pack_resource_resolver.gd")
 
+## Default for a goal-kind catalog entry's `salient_writes` flag when the entry omits it.
+const SALIENT_WRITES_DEFAULT := true
+
 const _VALID_PARENT_TIER2: Array[StringName] = [
   PARENT_FIND_FOOD,
   PARENT_AVOID_HOSTILES,
@@ -95,9 +98,9 @@ static func goal_kind_catalog_for_pack(pack_root: String) -> Dictionary:
       )
       continue
     seen[id_sn] = true
-    var salient := true
+    var salient: bool = SALIENT_WRITES_DEFAULT
     if d.has("salient_writes"):
-      salient = bool(d.get("salient_writes", true))
+      salient = bool(d.get("salient_writes", SALIENT_WRITES_DEFAULT))
     var overlay := StringName(str(d.get("context_overlay", "")).strip_edges())
     catalog[id_sn] = {
       "parent_tier2": parent,
@@ -141,10 +144,11 @@ static func parent_tier2_for_goal_kind(goal_kind: StringName, catalog: Dictionar
   return catalog[goal_kind].get("parent_tier2", &"") as StringName
 
 
+## True when [param goal_kind] allows salient writes in [param catalog] (missing flag means [constant SALIENT_WRITES_DEFAULT]; unknown kind is false).
 static func salient_writes_enabled(goal_kind: StringName, catalog: Dictionary) -> bool:
   if typeof(catalog) != TYPE_DICTIONARY or not catalog.has(goal_kind):
     return false
-  return bool(catalog[goal_kind].get("salient_writes", true))
+  return bool(catalog[goal_kind].get("salient_writes", SALIENT_WRITES_DEFAULT))
 
 
 ## Dominant Tier-2 leaf wire id → default salient [code]GoalKind[/code] at outcome.
@@ -170,7 +174,7 @@ static func resolve_goal_kind_at_outcome(
   var hint: StringName = outcome_ctx.get("goal_kind_hint", &"") as StringName
   if hint != &"" and typeof(catalog) == TYPE_DICTIONARY and catalog.has(hint):
     var entry: Dictionary = catalog[hint] as Dictionary
-    if entry.get("parent_tier2", &"") == dominant_tier2 and bool(entry.get("salient_writes", true)):
+    if entry.get("parent_tier2", &"") == dominant_tier2 and bool(entry.get("salient_writes", SALIENT_WRITES_DEFAULT)):
       return hint
   if bool(outcome_ctx.get("use_shelter", false)):
     return tier2_to_default_goal_kind(dominant_tier2)
