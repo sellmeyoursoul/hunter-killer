@@ -25,9 +25,9 @@
 | `CMV3D` | [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) | none: findings are unnumbered prose, so IDs are sequential | 3 |
 | `CMV3` | [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) (hub; reserved) | — | 1 |
 | `CMV3MM` | [CM_V3_MULTI_MOBS.md](Draft_Features/CM_V3_MULTI_MOBS.md) (reserved) | — | 1 |
-| `PSQ` | [PHYSICS_SQUEEZE.md](Draft_Features/PHYSICS_SQUEEZE.md) | decision numbers (none for PSQ-1: sequential; source decisions 46 E / 33) | 2 |
+| `PSQ` | [PHYSICS_SQUEEZE.md](Draft_Features/PHYSICS_SQUEEZE.md) | decision numbers (PSQ-1 had none: sequential; source decisions 46 E / 33; PSQ-1 is `done` 2026-10-15, number not reused) | 2 |
 | `NAV` | [NAVIGATION_PASSABILITY_PLAN.md](Draft_Features/NAVIGATION_PASSABILITY_PLAN.md) (reserved) | — | 1 |
-| `CBD` | [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) (reserved) | — | 1 |
+| `CBD` | [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) (reserved) | — | 2 |
 | `CGD` | [CREATURE_GOAL_DRIVERS.md](Draft_Features/CREATURE_GOAL_DRIVERS.md) (reserved) | — | 1 |
 | `CMEM` | [CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) (reserved) | — | 1 |
 | `EBP` | [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) (pointer lives in the backlog row) | none: backlog rows are unnumbered, IDs are sequential | 4 |
@@ -49,11 +49,10 @@
 | [CMV3C-29](#cmv3c-29) | `open` | V3 | creature-motor | Silent-stall `MOTOR_INVARIANT` for a rabbit near (90.5, 81.9), seen once in a nav-cost run; uninvestigated |
 | [CMV3D-1](#cmv3d-1) | `open` | V3 | creature-motor (tentative) | `is_on_floor=false` at spawn warning for both creatures on the C9 rig; recurrence not confirmed |
 | [CMV3D-2](#cmv3d-2) | `open` | V3 | creature-motor (tentative) | Explore walks the whole way to a wall: explore waypoints minted well past the playfield boundary; recurrence not confirmed |
-| [PSQ-1](#psq-1) | `open` | outside-V3 | creature-motor | Route plausibility scan start-overlap guard: code landed 2026-10-05, headless regression test still pending; stays open until it lands |
 | [EBP-1](#ebp-1) | `open` | outside-V3 | assets-pack | `open_shrub_3d` depleted visual appears to jump position after being eaten |
 | [EBP-2](#ebp-2) | `open` | outside-V3 | environment-world | `mesh_local_bottom_y` / `snap_prop_root_to_ground` measure in root-local units; a scaled prop sinks |
 
-Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--doc-hygiene) below: EBP-3, PDI-1, CMV3C-30, CMV3C-31, CMV3C-32.
+Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--doc-hygiene) below: EBP-3, PDI-1, CMV3C-30, CMV3C-31, CMV3C-32, CBD-1.
 
 ---
 
@@ -152,15 +151,6 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 - **Ruled out:** nothing tested. Per the source text only (not re-verified against current code): `_nav_clearance` evaluates an open-space probe once at explore-mint time against a fixed point `awareness_radius * 0.5` (750 u by default) away, never re-checked while closing, and independent of actual playfield size.
 - **Leading hypothesis:** the probe reach exceeds the playfield half-width, so most explore waypoints are minted past the boundary in any direction and "walk to a wall" is the structurally expected outcome. Fix directions (not applied): retune reach / probe distance to playfield scale, or re-check clearance on approach; needs its own sizing pass because it touches explore pacing.
 
-### PSQ-1
-
-- **Status:** `open` | **Scope:** outside-V3 (not V3 scope, must be addressed eventually) | **Owner:** creature-motor (`creature/motor/route_plausibility_scan.gd`, verified by grep; `ghost_obstacle_query.gd` is the sweep helper) | **Updated:** 2026-10-14 | **Source:** pointer in [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) "Navigation / pathfinding"; origin [PHYSICS_SQUEEZE.md decisions 46 E and 33](Draft_Features/PHYSICS_SQUEEZE.md)
-- **Symptom:** the route plausibility scan missed a ghost object the creature's capsule already overlaps at the path start (a start-overlap read as "clear"), so the route was accepted through a non-fitting object.
-- **Current code state (verified 2026-10-14):** `RoutePlausibilityScan._start_overlap` exists and `scan_path` returns a `start_overlap` key of `none` / `escaping` / `blocked` (`route_plausibility_scan.gd` lines ~32-150), landed with NAV Phase 0 (2026-10-05). The code half looks fixed; the headless regression test (sibling of the decision 33 shelter probe test) is still pending (NAVIGATION_PASSABILITY_PLAN §7 "Route scan start-overlap" box, test-harness, task T9).
-- **Repro:** none recorded; no rate. The maintainer chose to log it as a bug (2026-10-14) rather than delete the backlog row.
-- **Ruled out:** nothing needed; the guard exists.
-- **Leading hypothesis / next step:** none open beyond verification. Land the regression test (T9); if it passes, close as `done` and remove from this file. Flagged to the maintainer: the code contradicts a "still broken" reading.
-
 ### EBP-1
 
 - **Status:** `open` | **Scope:** outside-V3 (not V3 scope, must be addressed eventually) | **Owner:** assets-pack (maintainer decision 2026-10-14; the fix is a Blender origin / pivot alignment pass; note the scene file itself lives under `assets/plants/`, which routes to environment-world, so a scene-side tweak would hand over) | **Updated:** 2026-10-14 | **Source:** pointer in [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) "Plants & ecology"
@@ -207,3 +197,23 @@ Not bugs. Same ID convention, Scope `outside-V3` unless stated, status `open`. *
 
 - **Source / owner:** [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) open question (line ~804) | creature-motor
 - **Item:** the C9 open question about the 2026-10-13 trip's body y = 12.56 on a `minus_x_edge` run is only half answered: the xz position matches a `plus_z_edge` start ~(0,95) (the printed label was the previous scenario), but the y value remains unexplained (prop? terrain height there? a falling body, cf. [CMV3C-10](#cmv3c-10)). Check the terrain height at (1.74, 95.43) first.
+
+### CBD-1
+
+- **Status / scope / owner:** `open` | outside-V3 | cross-domain (suggest test-harness for the scripted audit; fixes route to the domain owners: creature-motor, creature-entity, app-shell). Logged 2026-10-15. **Not fixed yet** (except the two margin getters, below).
+- **Source:** [CREATURE_BODY_DIMENSIONS.md](Draft_Features/CREATURE_BODY_DIMENSIONS.md) §7 (reach config-driven box) and §4.8 Phase 1 landed state.
+- **Item (maintainer-requested review of ALL defaults for duplicated definitions).** Design rule (maintainer, 2026-10-15): global defaults live in code (e.g. `AI_int_lib/game_config_merge.gd`); `game_config.json` only overrides them (tuning / testing; proven values should eventually be folded back into the code default); then species packs (e.g. wolf), then possibly sub-species (e.g. timber wolf). A default that is a calculation should expose a place for per-creature customization. A default must be defined in **ONE** place.
+- **Already fixed (2026-10-15):** `game_config.gd` `get_width_margin()` / `get_reach_margin_fraction()` no longer hold literal 0.10 / 0.25 fallbacks (they use `_merge_default_v3_float` -> `default_creature_motor_v3_params()`); tests `_test_body_dims_reach_margin_config_drives_reach_extent` and `_test_body_dims_margin_getters_fall_back_to_merge_default`.
+- **Known suspects, verified 2026-10-15** (inline literal `motor_v3.get("key", 0.25)` where `default_creature_motor_v3_params()` in `game_config_merge.gd` already defines the same key with the same value 0.25, so each literal is a duplicate definition):
+  - `flight_release_margin_frac`: `creature/motor/creature_motor_stack.gd` ~1139 (merge line 473).
+  - `flee_incumbent_bearing_bonus`: `creature/motor/motor_planner.gd` ~3821 (merge line 410).
+  - `flee_separation_gain`: `creature/motor/flee_candidate_scoring.gd` ~262 (merge line 428).
+  - `explore_w_unexp`: `creature/motor/motor_explore_seek.gd` ~101 (merge line 314).
+  - `goal_shelter_explore_floor`: `creature/motor/motor_goal_hub.gd` ~282 (merge line 633).
+  - Also in `tests/run_all.gd` (~9649 `goal_shelter_explore_floor`, ~11614 `flight_release_margin_frac`; ~1170 restates `explore_w_unexp` 0.25 in a fixture), not yet judged: tests may justify an exception.
+- **Known suspects, NOT verified against a default (needs a look):**
+  - `game_config.json` `creature_motor_v3` keys that merely restate the code default: `width_margin` 0.10 (line 19), `reach_margin_fraction` 0.25 (line 20). Verified to match the merge defaults today; whether to delete them or keep as the documented override example is undecided.
+  - Hard-coded body fallbacks 0.35 (radius) and 1.2 (height) in `creature/motor/creature_motor_stack.gd` ~1656-1657 (used when `_body` lacks `get_body_radius` / `get_collision_capsule_height`); no matching default checked.
+  - `.get(...)` fallback chains for GameConfig-less bodies in `creature/capabilities/creature_kinematic_body_3d.gd` (lines ~214-234; the margin fallback reads the merge default but its `.get(key, 0.0)` literals are a second fallback layer); further chains not enumerated.
+  - Related, tracked in the source doc: body margins ignore the species pack overlay (open `<<Question>>` in CREATURE_BODY_DIMENSIONS.md; grep 2026-10-15: no shipped `pack_resources.json` sets either key).
+- **Next step:** scripted audit (grep for `.get("...", <number literal>)` across `creature/`, `AI_int_lib/`, `main_3d.gd`, `game_config.gd`, compared against the `default_*_params()` dictionaries and `game_config.json`), then fix each hit by removing the inline literal or documenting a justified exception. Ideally make the audit a repeatable check under `tools/` or `tests/` so reintroduced literals are caught (the grep half of the CREATURE_BODY_DIMENSIONS §7 reach box is currently manual).

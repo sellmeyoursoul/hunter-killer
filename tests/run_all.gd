@@ -2082,10 +2082,10 @@ func _test_shelter_enclosure_probe_ring_detects_blockers() -> void:
   await physics_frame
   var space := main.get_world_3d().direct_space_state
   var mask := _GhostObstacleQuery.GHOST_LAYER_MASK
-  var frac_inside := _ShelterProbe.enclosure_fraction(space, center, 1.8, mask)
+  var frac_inside := _ShelterProbe.enclosure_fraction(space, center, 1.8, mask, 1.0)
   _assert(frac_inside >= 0.75, "ring of ghost-layer blockers reads as highly enclosed (got %.2f)" % frac_inside)
   var open_point := Vector3(-50.0, 1.0, -50.0)
-  var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, mask)
+  var frac_open := _ShelterProbe.enclosure_fraction(space, open_point, 1.8, mask, 1.0)
   _assert(is_equal_approx(frac_open, 0.0), "open point with no nearby geometry reads as unenclosed")
   main.queue_free()
   await process_frame
@@ -14792,7 +14792,7 @@ func _test_shelter_enclosure_probe_detects_real_refuge_ring() -> void:
   var cluster_radius := 7.5
   var space := root.get_world_3d().direct_space_state
   var default_mask := int(_Merge.default_creature_motor_v3_params().get("shelter_enclosure_blocker_mask", 0))
-  var frac := _ShelterProbe.enclosure_fraction(space, expected_center, cluster_radius, default_mask)
+  var frac := _ShelterProbe.enclosure_fraction(space, expected_center, cluster_radius, default_mask, 1.0)
   _assert(
     frac > 0.1,
     (
@@ -15128,6 +15128,8 @@ const _BodyDims := preload("res://creature/capabilities/creature_body_dimensions
 
 func _run_body_dimensions_phase1_tests() -> void:
   _test_body_dims_config_defaults()
+  await _test_body_dims_reach_margin_config_drives_reach_extent()
+  _test_body_dims_margin_getters_fall_back_to_merge_default()
   _test_body_dims_helper_math()
   _test_body_dims_proportion_report_thresholds()
   _test_body_dims_facing_invariant()
@@ -15212,6 +15214,98 @@ func _test_body_dims_config_defaults() -> void:
       is_equal_approx(float(gc.call(&"get_reach_margin_fraction")), 0.25),
       "GameConfig.get_reach_margin_fraction default 0.25",
     )
+
+
+## Replaces the GameConfig autoload's merged [code]creature_motor_v3[/code] dictionary (no public setter exists;
+## tests mutate the [code]_merged[/code] member in place). Returns the original value of that key (a Variant, or
+## null when the key was absent) so the caller can pass it to [method _bd_restore_gc_v3].
+## [param gc]: the GameConfig node. [param v3]: replacement value (Dictionary or any Variant).
+func _bd_swap_gc_v3(gc: Node, v3: Variant) -> Variant:
+  var merged: Dictionary = gc.get("_merged")
+  var original: Variant = merged.get("creature_motor_v3", null)
+  merged["creature_motor_v3"] = v3
+  return original
+
+
+## Restores the value returned by [method _bd_swap_gc_v3]; a null original means the key was absent.
+func _bd_restore_gc_v3(gc: Node, original: Variant) -> void:
+  var merged: Dictionary = gc.get("_merged")
+  if original == null:
+    merged.erase("creature_motor_v3")
+  else:
+    merged["creature_motor_v3"] = original
+
+
+## Guards that the config key [code]reach_margin_fraction[/code] drives [code]get_reach_extent()[/code] for creatures
+## without [code]reach_override[/code], and never affects creatures that have one.
+func _test_body_dims_reach_margin_config_drives_reach_extent() -> void:
+  var gc := root.get_node_or_null("GameConfig")
+  if gc == null:
+    _assert(false, "GameConfig autoload present for reach margin config test")
+    return
+  # Arrange: no-override creature (L 2.0) and an override creature (reach 3.3).
+  var main := Node3D.new()
+  root.add_child(main)
+  var plain := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_cfg_plain", 2.0, 0.7, 1.4), false, Vector3(0, 1, 0))
+  var fixed := _bd_spawn(main, _bd_def(_RabbitArchetypeRes, &"bd_cfg_fixed", 2.0, 0.7, 1.4, 3.3), false, Vector3(20, 1, 0))
+  await process_frame
+  var default_reach: float = plain.get_reach_extent()
+  var default_fixed: float = fixed.get_reach_extent()
+  # Act: swap in a non-default reach_margin_fraction; always restore afterwards.
+  var original: Variant = _bd_swap_gc_v3(gc, {"reach_margin_fraction": 0.5})
+  var cfg_reach: float = plain.get_reach_extent()
+  var cfg_fixed: float = fixed.get_reach_extent()
+  _bd_restore_gc_v3(gc, original)
+  var restored_reach: float = plain.get_reach_extent()
+  var restored_fixed: float = fixed.get_reach_extent()
+  # Assert
+  _assert(is_equal_approx(default_reach, 2.0 * 0.75), "default config reach = L*(0.5+0.25) (got %.4f)" % default_reach)
+  _assert(is_equal_approx(cfg_reach, 2.0 * 1.0), "reach_margin_fraction 0.5 gives reach = L*(0.5+0.5) (got %.4f)" % cfg_reach)
+  _assert(not is_equal_approx(cfg_reach, default_reach), "non-default config changes the reach extent")
+  _assert(is_equal_approx(restored_reach, 2.0 * 0.75), "restoring config returns reach to L*0.75 (got %.4f)" % restored_reach)
+  _assert(is_equal_approx(default_fixed, 3.3), "reach_override creature reach is the override")
+  _assert(is_equal_approx(cfg_fixed, 3.3), "reach_override creature is unchanged by reach_margin_fraction config")
+  _assert(is_equal_approx(restored_fixed, 3.3), "reach_override creature unchanged after config restore")
+  main.queue_free()
+  await process_frame
+
+
+## Guards that the margin getters return the merge default when the key is absent, non-numeric, or NaN/inf,
+## and clamp negatives to 0 (default literals live only in game_config_merge.gd).
+func _test_body_dims_margin_getters_fall_back_to_merge_default() -> void:
+  var gc := root.get_node_or_null("GameConfig")
+  if gc == null:
+    _assert(false, "GameConfig autoload present for margin fallback test")
+    return
+  # Arrange
+  var d: Dictionary = _Merge.default_creature_motor_v3_params()
+  var want_w := float(d["width_margin"])
+  var want_r := float(d["reach_margin_fraction"])
+  var original: Variant = _bd_swap_gc_v3(gc, {})
+  # Act / Assert: absent keys
+  var absent_w := float(gc.call(&"get_width_margin"))
+  var absent_r := float(gc.call(&"get_reach_margin_fraction"))
+  # non-numeric
+  _bd_swap_gc_v3(gc, {"width_margin": "wide", "reach_margin_fraction": null})
+  var str_w := float(gc.call(&"get_width_margin"))
+  var null_r := float(gc.call(&"get_reach_margin_fraction"))
+  # NaN / inf
+  _bd_swap_gc_v3(gc, {"width_margin": NAN, "reach_margin_fraction": INF})
+  var nan_w := float(gc.call(&"get_width_margin"))
+  var inf_r := float(gc.call(&"get_reach_margin_fraction"))
+  # negative clamps to 0
+  _bd_swap_gc_v3(gc, {"width_margin": -1.0, "reach_margin_fraction": -2})
+  var neg_w := float(gc.call(&"get_width_margin"))
+  var neg_r := float(gc.call(&"get_reach_margin_fraction"))
+  _bd_restore_gc_v3(gc, original)
+  _assert(is_equal_approx(absent_w, want_w), "absent width_margin returns merge default (got %.4f)" % absent_w)
+  _assert(is_equal_approx(absent_r, want_r), "absent reach_margin_fraction returns merge default (got %.4f)" % absent_r)
+  _assert(is_equal_approx(str_w, want_w), "non-numeric width_margin returns merge default")
+  _assert(is_equal_approx(null_r, want_r), "null reach_margin_fraction returns merge default")
+  _assert(is_equal_approx(nan_w, want_w), "NaN width_margin returns merge default")
+  _assert(is_equal_approx(inf_r, want_r), "inf reach_margin_fraction returns merge default")
+  _assert(is_equal_approx(neg_w, 0.0), "negative width_margin clamps to 0")
+  _assert(is_equal_approx(neg_r, 0.0), "negative reach_margin_fraction clamps to 0")
 
 
 func _test_body_dims_helper_math() -> void:

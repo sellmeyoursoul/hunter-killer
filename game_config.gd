@@ -82,16 +82,27 @@ func get_creature_motor_v3_params() -> Dictionary:
   return cm.duplicate(true)
 
 
-## Body-dimensions width clearance margin ([code]creature_motor_v3.width_margin[/code], default 0.10).
-## Returns the default if missing/non-numeric; clamped to >= 0.
+## Body-dimensions width clearance margin ([code]creature_motor_v3.width_margin[/code]).
+## Default lives only in [code]_Merge.default_creature_motor_v3_params()[/code].
+## Returns that default if missing/non-numeric; clamped to >= 0.
 func get_width_margin() -> float:
-  return _get_v3_nonneg_float("width_margin", 0.10)
+  return _get_v3_nonneg_float("width_margin", _merge_default_v3_float("width_margin"))
 
 
-## Body-dimensions reach margin fraction ([code]creature_motor_v3.reach_margin_fraction[/code], default 0.25).
-## Returns the default if missing/non-numeric; clamped to >= 0.
+## Body-dimensions reach margin fraction ([code]creature_motor_v3.reach_margin_fraction[/code]).
+## Default lives only in [code]_Merge.default_creature_motor_v3_params()[/code].
+## Returns that default if missing/non-numeric; clamped to >= 0.
 func get_reach_margin_fraction() -> float:
-  return _get_v3_nonneg_float("reach_margin_fraction", 0.25)
+  return _get_v3_nonneg_float("reach_margin_fraction", _merge_default_v3_float("reach_margin_fraction"))
+
+
+## Reads one numeric default from [code]_Merge.default_creature_motor_v3_params()[/code].
+## [param key]: creature_motor_v3 key. Returns the default as float, or 0.0 if the merge table lacks it.
+func _merge_default_v3_float(key: String) -> float:
+  var v: Variant = _Merge.default_creature_motor_v3_params().get(key, 0.0)
+  if typeof(v) != TYPE_FLOAT and typeof(v) != TYPE_INT:
+    return 0.0
+  return float(v)
 
 
 ## Reads a numeric [code]creature_motor_v3[/code] key; falls back to [param fallback] when missing,

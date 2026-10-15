@@ -25,8 +25,9 @@ const RING_SAMPLES := 8
 ## [param center] is a BODY-ORIGIN point (feet for authored bodies); [param probe_height] is the
 ## origin-to-capsule-centre offset the ring is lifted by (Stage A capsule-centre fix: pass the
 ## sweeping body's `get_capsule_center_offset_y()` — `agent_h / 2` for authored bodies — not a
-## fixed 1.0; the 1.0 default only serves the zero-width ray path and legacy/test callers). The
-## overlap check and every sweep use that same lifted origin, so the capsule's centre is exactly
+## fixed 1.0). There is no default: every caller must pass it. For the zero-width ray path
+## ([param agent_radius] `<= 0`) it is simply the cast height the caller chooses (tests pass 1.0
+## explicitly). The overlap check and every sweep use that same lifted origin, so the capsule's centre is exactly
 ## at the ring origin.
 ## [param agent_radius] `<= 0.0` (the default) keeps the original zero-width raycast behavior,
 ## unchanged, for any caller not yet opted into the shape-cast sweep.
@@ -35,7 +36,7 @@ static func enclosure_fraction(
   center: Vector3,
   probe_radius: float,
   blocker_mask: int,
-  probe_height: float = 1.0,
+  probe_height: float,
   sample_count: int = RING_SAMPLES,
   exclude_rids: Array = [],
   agent_radius: float = 0.0,
