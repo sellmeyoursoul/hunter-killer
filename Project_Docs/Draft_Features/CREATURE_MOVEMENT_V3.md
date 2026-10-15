@@ -223,7 +223,7 @@ Clamp **`threat_disposition_mod`** to **`[flight_disposition_mod_min, flight_dis
 3. **Ship in 6b** — do not build a hub + `tier2_dominance` wrapper and delete later.
 4. **Port parity tests** — starvation-over-acute and preserve-band cases from `tests/run_all.gd` tier2 assertions to hub eligibility + `urgency_eat` tests at 6b.
 
-**V3 role (narrower than V2):** Goal **winner** = **max `weight`** among **eligible** hub rows on the **consideration cadence** (§10) — **not** per-tick `derive_dominant_tier2_leaf` ([POST_LOS_MOVEMENT.md §4.5b](POST_LOS_MOVEMENT.md)). Sub-acute threat uses continuous **`urgency_flight`** (§1), not tier2’s boolean `acute_threat`. Acute response uses **Flight fast-path** (§10), which bypasses the goal table entirely.
+**V3 role (narrower than V2):** Goal **winner** = **max `weight`** among **eligible** hub rows on the **consideration cadence** (§10) — **not** per-tick `derive_dominant_tier2_leaf` ([POST_LOS_MOVEMENT.md §4.5b](../Completed_Features/POST_LOS_MOVEMENT.md)). Sub-acute threat uses continuous **`urgency_flight`** (§1), not tier2’s boolean `acute_threat`. Acute response uses **Flight fast-path** (§10), which bypasses the goal table entirely.
 
 **Consideration pipeline (6b):**
 
@@ -274,7 +274,7 @@ For the active goal, break it down into **steps** with **objectives**. These sho
 
 **Resolved — step / objective / action:** See Definitions §3–5 and §10 default step chains.
 
-**Resolved — `ActiveGoal` schema:** Adopt [POST_LOS_MOVEMENT.md §3.1](POST_LOS_MOVEMENT.md) fields: `goal_kind`, `weight`, `ultimate_pos`, `step_chain`, `step_index`, `source` (`live` | `belief` | `locale_prior` | `explore` | `backtrack`). **Legacy incompatibility:** shipped motor scatters goal state across `MotorContext` keys (`motor_has_active_goal`, `motor_seek_goal_pos`, per-goal weights) rather than a typed goal table — V3 greenfield replaces this with an explicit active goal table (§10).
+**Resolved — `ActiveGoal` schema:** Adopt [POST_LOS_MOVEMENT.md §3.1](../Completed_Features/POST_LOS_MOVEMENT.md) fields: `goal_kind`, `weight`, `ultimate_pos`, `step_chain`, `step_index`, `source` (`live` | `belief` | `locale_prior` | `explore` | `backtrack`). **Legacy incompatibility:** shipped motor scatters goal state across `MotorContext` keys (`motor_has_active_goal`, `motor_seek_goal_pos`, per-goal weights) rather than a typed goal table — V3 greenfield replaces this with an explicit active goal table (§10).
 
 **Resolved — “Set finding location as goal”:** Not a separate goal type. If the target is already known — live in zone of awareness (§8.1), precise tier (§8.2), or coarse tier (§8.3) — decompose into steps and objectives. If not known at any tier, enter **Seek** (§3).
 
@@ -1620,7 +1620,7 @@ Re-evaluate zone of awareness and run **goal consideration** on new observations
 
 **Goal-table contract (Flight / combat fast-path):** the goal table does not compete during acute response. **As shipped for Flight (wording corrected 2026-09-24):** `MotorGoalHub.build_eligible_goals` returns an **empty list** while `flight_fast_path_active`, and `_run_consideration` **clears the incumbent** on each consideration — it is *not* a literal freeze with `weight`/`step_chain`/`step_index` preserved. (The original "freeze and preserve" intent remains the design text for the future combat fast-path; revisit when combat lands.) On release, run a **full goal-consideration round** before resuming step execution.
 
-**Resolved — Observation → n ticks:** Adopt [POST_LOS_MOVEMENT.md §3.3](POST_LOS_MOVEMENT.md) piecewise curve — **10 = neutral** (scale 1.0). `stat_observation ≤ 10`: scale `lerp(2.0, 1.0, stat/10)`; `> 10`: scale `lerp(1.0, 0.5, (stat−10)/90)`; `n = max(1, round(base_ticks × scale))`. Pilot clamp: minimum **10** for curve input until observation pools land.
+**Resolved — Observation → n ticks:** Adopt [POST_LOS_MOVEMENT.md §3.3](../Completed_Features/POST_LOS_MOVEMENT.md) piecewise curve — **10 = neutral** (scale 1.0). `stat_observation ≤ 10`: scale `lerp(2.0, 1.0, stat/10)`; `> 10`: scale `lerp(1.0, 0.5, (stat−10)/90)`; `n = max(1, round(base_ticks × scale))`. Pilot clamp: minimum **10** for curve input until observation pools land.
 
 **Resolved — `goal_replan_base_ticks` ship default:** Adopt POST_LOS **`post_los_replan_base_ticks` = 8** under **`creature_motor_v3.goal_replan_base_ticks`**. At `stat_observation = 10`, `n = 8`. Retune in playtest if consideration feels too sluggish or twitchy.
 

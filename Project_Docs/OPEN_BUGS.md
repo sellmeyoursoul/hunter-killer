@@ -8,7 +8,7 @@
 >
 > **Tier:** root / tracking (see [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md)); not a feature plan and not a contract. Rules for maintainers: [Project_Docs/CLAUDE.md](CLAUDE.md) "Bug register (OPEN_BUGS.md)".
 >
-> **Last full sweep:** 2026-10-14.
+> **Last full sweep:** 2026-10-15 (CBD-1 scripted audit results added; other entries last swept 2026-10-14).
 
 ---
 
@@ -52,7 +52,7 @@
 | [EBP-1](#ebp-1) | `open` | outside-V3 | assets-pack | `open_shrub_3d` depleted visual appears to jump position after being eaten |
 | [EBP-2](#ebp-2) | `open` | outside-V3 | environment-world | `mesh_local_bottom_y` / `snap_prop_root_to_ground` measure in root-local units; a scaled prop sinks |
 
-Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--doc-hygiene) below: EBP-3, PDI-1, CMV3C-30, CMV3C-31, CMV3C-32, CBD-1.
+Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--doc-hygiene) below: CMV3C-30, CMV3C-31, CMV3C-32, CBD-1.
 
 ---
 
@@ -173,16 +173,6 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 
 Not bugs. Same ID convention, Scope `outside-V3` unless stated, status `open`. **None of these is fixed yet** (logged 2026-10-14 for a later pass).
 
-### EBP-3
-
-- **Source / owner:** [ENHANCEMENT_BACKLOG_PLAN.md](ENHANCEMENT_BACKLOG_PLAN.md) | project-docs
-- **Item:** rows at lines ~77, 114, 115, 116 and 127 link `Draft_Features/CREATURE_MOVEMENT_V2.md`, which now lives at `Completed_Features/CREATURE_MOVEMENT_V2.md` (archived; V2 is superseded by V3). Per the Completed_Features scope, decide per row whether the target is now V3 / another active plan or the archive; do not just retarget blindly (the rows describe V2-era sections such as §A.1, §A.2.2, §G.1, §D-E).
-
-### PDI-1
-
-- **Source / owner:** [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md) Completed table | project-docs
-- **Item:** the `CREATURE_MOVEMENT_V2.md` and `POST_LOS_MOVEMENT.md` rows (lines ~129-130) link `../Draft_Features/CREATURE_MOVEMENT_V3.md`. The index sits in `Project_Docs/`, so the correct relative path is `Draft_Features/CREATURE_MOVEMENT_V3.md` (the `../` escapes the folder). Broken link.
-
 ### CMV3C-30
 
 - **Source / owner:** `spawn_layout_c44_smoke.json` (repo root, **outside Project_Docs, not edited**) | test-harness / app-shell (owner TBD)
@@ -216,4 +206,19 @@ Not bugs. Same ID convention, Scope `outside-V3` unless stated, status `open`. *
   - Hard-coded body fallbacks 0.35 (radius) and 1.2 (height) in `creature/motor/creature_motor_stack.gd` ~1656-1657 (used when `_body` lacks `get_body_radius` / `get_collision_capsule_height`); no matching default checked.
   - `.get(...)` fallback chains for GameConfig-less bodies in `creature/capabilities/creature_kinematic_body_3d.gd` (lines ~214-234; the margin fallback reads the merge default but its `.get(key, 0.0)` literals are a second fallback layer); further chains not enumerated.
   - Related, tracked in the source doc: body margins ignore the species pack overlay (open `<<Question>>` in CREATURE_BODY_DIMENSIONS.md; grep 2026-10-15: no shipped `pack_resources.json` sets either key).
-- **Next step:** scripted audit (grep for `.get("...", <number literal>)` across `creature/`, `AI_int_lib/`, `main_3d.gd`, `game_config.gd`, compared against the `default_*_params()` dictionaries and `game_config.json`), then fix each hit by removing the inline literal or documenting a justified exception. Ideally make the audit a repeatable check under `tools/` or `tests/` so reintroduced literals are caught (the grep half of the CREATURE_BODY_DIMENSIONS §7 reach box is currently manual).
+- **Tooling (2026-10-15):** `python tools/audit_default_duplicates.py [--json out.json]` (stdlib only, read-only, always exit 0) compares inline `get("key", literal)` fallbacks, `game_config.json` and the `creature_motor` / `creature_motor_v3` pack overlays in `pack_resources.json` against the `default_*_params()` dictionaries in `AI_int_lib/game_config_merge.gd`. Limits: regex / line based; scalar defaults only; single-line `get("key", literal)` fallbacks only; key-name matching, so generic keys (`count`, `dist`) are noise; 0 / empty / false fallbacks are counted, not classified; only the two pack overlay sections are checked; no sub-species structure exists yet. Guard test: `_test_margin_defaults_have_no_duplicate_literals` in `tests/run_all.gd` (`width_margin` / `reach_margin_fraction` may have no non-zero numeric fallback under `creature/` or in `game_config.gd`; a literal 0 is allowed).
+- **Audit results (2026-10-15; 8 default functions, 354 default keys).** Nothing below has been applied; maintainer decides.
+  - **CONFLICT = 5 (priority; all verified by hand):** inline literal differs from the code default.
+    - `motor_explore_seek.gd:99` `explore_w_spawn` 0.35 vs default 0.20; `:100` `explore_w_open` 0.30 vs 0.45 (literals stale since the CLEANUP C8 rebalance changed the defaults).
+    - `motor_planner.gd:3190`, `:3625`, `:4329` `awareness_radius` 150.0 vs default 1500.0 (the other 8 `awareness_radius` fallbacks use 1500). Dormant today: the merged dict always has the key and `scale_creature_motor_v3_for_playfield` overwrites it; if the key were ever missing the fallback would behave ~10x differently.
+  - **DUPLICATE_SAME = 285** inline fallbacks equal to the code default (approx: `motor_planner` ~100, `memory_adapter` ~45, `creature_motor_stack` ~35, `goal_source_memory` ~30, `motor_goal_hub` ~20, `goal_belief_memory` ~15, others, `oLog_lib/olog.gd` 3). Includes the five 0.25 suspects verified above. Some keys match only one of several differing defaults (`locale_prior_write_blend` 0.35 spine vs 0.32 ship; `believed_goal_escalate_seek_mul` 1.35 vs 1.4), so a literal can be "same" as one default and still differ from the other.
+  - **NO_DEFAULT = 69 sites / 41 keys** (literal is the only definition). Mostly runtime snapshot / log fields (`count`, `dist`, `calorie_ratio`, `hostile`, ...). Possible missing defaults to review: `prey_race_giveup_ticks` 90.0 (`motor_planner.gd:2996`), `prey_engagement_detour_decay_step_ticks` 4 (`:3050`), `stat_observation` 10 (`:1555`), `choke_confirm_count` 1, `eye_height` 1.0 (5 sites), and `origin_position_tolerance_fraction` / `proportion_warn_fraction` / `proportion_fail_fraction` in `tools/measure_body_dimensions.gd`.
+  - **`game_config.json`:** 30 keys restate the code default (`width_margin`, `reach_margin_fraction`, `perception.SNAPSHOT_PHYSICS_STRIDE`, `playfield_spawn.seed`, and 26 `creature_motor.*` keys); 1 UNKNOWN_KEY (`playfield_spawn.debug_start_calories`, a test-only override). Under the layering rule the json should hold only deliberate overrides.
+  - **Pack overlays:** 90 keys restate the global default (wolf 26 and fox 26 `creature_motor` keys, rabbit 38; each pack restates `creature_motor_v3.awareness_cone_extra` 400.0; rabbit also restates 4 v3 keys); 1 unknown key `creature_motor.awareness_forward_cone_only` in all three packs.
+  - **Repeated key with differing literals: 9** (`awareness_radius` x12 sites with 0.0 / 150.0 / 1500.0; the rest are mostly runtime fields).
+- **Next step (ordered plan; maintainer decides):**
+  1. Fix the 5 CONFLICTs first: remove the inline literal or make it the single code default. Decide per site which value is intended; for `explore_w_*` the default was deliberately rebalanced in C8, so likely remove the literal.
+  2. Decide policy for the 285 DUPLICATE_SAME: remove inline fallbacks vs a documented "safe default helper" (cf. `_merge_default_v3_float`). Large mechanical change; owner per domain (creature-motor / creature-entity / app-shell).
+  3. Review the NO_DEFAULT candidates above for missing defaults.
+  4. Decide whether `game_config.json` and `pack_resources.json` should drop keys that merely restate defaults (30 + 90) and whether the unknown keys are dead.
+  5. Extend the audit tool (multi-line calls, expressions, sub-species) and re-run after each batch; consider a guard test like the margin one once a batch is clean.

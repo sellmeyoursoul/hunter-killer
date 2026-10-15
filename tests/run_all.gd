@@ -15125,6 +15125,7 @@ func _run_body_dimensions_phase1_tests() -> void:
   _test_body_dims_config_defaults()
   await _test_body_dims_reach_margin_config_drives_reach_extent()
   _test_body_dims_margin_getters_fall_back_to_merge_default()
+  _test_margin_defaults_have_no_duplicate_literals()
   _test_body_dims_helper_math()
   _test_body_dims_proportion_report_thresholds()
   _test_body_dims_facing_invariant()
@@ -15301,6 +15302,101 @@ func _test_body_dims_margin_getters_fall_back_to_merge_default() -> void:
   _assert(is_equal_approx(inf_r, want_r), "inf reach_margin_fraction returns merge default")
   _assert(is_equal_approx(neg_w, 0.0), "negative width_margin clamps to 0")
   _assert(is_equal_approx(neg_r, 0.0), "negative reach_margin_fraction clamps to 0")
+
+
+## Guards the single-source rule for the body-dimension margins: the numbers behind
+## [code]reach_margin_fraction[/code] / [code]width_margin[/code] live only in
+## [code]AI_int_lib/game_config_merge.gd[/code]. Scans every .gd under [code]res://creature/[/code] plus
+## [code]res://game_config.gd[/code] (comments stripped) and fails on any line where one of the two keys is
+## directly followed by a non-zero numeric literal fallback, e.g. [code].get("width_margin", 0.10)[/code],
+## [code]_get_v3_nonneg_float("reach_margin_fraction", 0.25)[/code], [code]var width_margin := 0.1[/code] or a
+## [code]"width_margin": 0.1[/code] dict entry. A literal of exactly 0 is allowed: it is the legitimate
+## "key missing" fallback (e.g. creature_kinematic_body_3d.gd's [code]_fallback_margins[/code]). Arithmetic that
+## merely mentions the identifier ([code]maxf(0.0, width_margin)[/code]) is not a fallback and is not flagged.
+## The detector is first exercised on synthetic lines so a silently broken rule cannot pass vacuously.
+func _test_margin_defaults_have_no_duplicate_literals() -> void:
+  # Arrange: detector positive / negative controls (proves the rule can fail).
+  var bad_lines: Array[String] = [
+    'return float(d.get("reach_margin_fraction", 0.25))',
+    'return _get_v3_nonneg_float("width_margin", 0.10)',
+    'var width_margin := 0.1',
+    'func f(reach_margin_fraction: float = 0.25) -> void:',
+    '"width_margin": 0.10,',
+  ]
+  for line in bad_lines:
+    _assert(not _margin_literal_fallbacks_in_line(line).is_empty(), "margin detector flags: %s" % line)
+  var ok_lines: Array[String] = [
+    '_fallback_margins["width_margin"] = float(d.get("width_margin", 0.0))',
+    'return live_width * 0.5 * (1.0 + maxf(0.0, width_margin))',
+    'return _get_v3_nonneg_float("width_margin", _merge_default_v3_float("width_margin"))',
+    '  var m := 0.25  # reach_margin_fraction default is 0.25, documented only',
+    '## Body-dimensions width clearance margin (creature_motor_v3.width_margin = 0.10).',
+  ]
+  for line in ok_lines:
+    _assert(_margin_literal_fallbacks_in_line(line).is_empty(), "margin detector ignores: %s" % line)
+  # Act: scan production sources.
+  var files: Array[String] = ["res://game_config.gd"]
+  _collect_gd_files("res://creature", files)
+  var offenders: Array[String] = []
+  for path in files:
+    var lines := FileAccess.get_file_as_string(path).split("\n")
+    for i in lines.size():
+      if not _margin_literal_fallbacks_in_line(lines[i]).is_empty():
+        offenders.append("%s:%d" % [path, i + 1])
+  # Assert
+  _assert(files.size() > 10, "margin duplicate-literal scan covered the creature sources (%d files)" % files.size())
+  _assert(
+    offenders.is_empty(),
+    "margin defaults are single-sourced in game_config_merge.gd; literal fallbacks found at %s" % str(offenders),
+  )
+
+
+## Returns the non-zero numeric literals that directly follow a [code]reach_margin_fraction[/code] /
+## [code]width_margin[/code] identifier on [param line] (after comment stripping) via a call argument,
+## assignment, default parameter or dict entry. Empty means the line is clean.
+func _margin_literal_fallbacks_in_line(line: String) -> Array[String]:
+  var found: Array[String] = []
+  var code := _strip_gd_comment(line)
+  if not (code.contains("reach_margin_fraction") or code.contains("width_margin")):
+    return found
+  var re := RegEx.create_from_string(
+    "(?:reach_margin_fraction|width_margin)\"?\\s*(?:,|:\\s*float\\s*=|:=|:|=(?!=))\\s*(-?\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)"
+  )
+  for m in re.search_all(code):
+    var lit := m.get_string(1)
+    if not is_zero_approx(lit.replace("_", "").to_float()):
+      found.append(lit)
+  return found
+
+
+## Returns [param line] without a trailing [code]#[/code] comment, ignoring [code]#[/code] inside
+## double-quoted strings.
+func _strip_gd_comment(line: String) -> String:
+  var in_str := false
+  var i := 0
+  while i < line.length():
+    var c := line[i]
+    if c == "\\" and in_str:
+      i += 2
+      continue
+    if c == "\"":
+      in_str = not in_str
+    elif c == "#" and not in_str:
+      return line.substr(0, i)
+    i += 1
+  return line
+
+
+## Recursively appends every .gd path under [param dir_path] to [param out].
+func _collect_gd_files(dir_path: String, out: Array[String]) -> void:
+  var dir := DirAccess.open(dir_path)
+  if dir == null:
+    return
+  for sub in dir.get_directories():
+    _collect_gd_files("%s/%s" % [dir_path, sub], out)
+  for f in dir.get_files():
+    if f.get_extension() == "gd":
+      out.append("%s/%s" % [dir_path, f])
 
 
 func _test_body_dims_helper_math() -> void:

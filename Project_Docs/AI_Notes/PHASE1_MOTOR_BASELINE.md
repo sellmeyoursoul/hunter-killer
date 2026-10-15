@@ -9,7 +9,7 @@
 
 ## Phase 3 duel gates (tier 1 — before Phase 4)
 
-Authoritative spec: [CREATURE_MOVEMENT_V2.md §Phase 3 — exit tiers and gates](../Draft_Features/CREATURE_MOVEMENT_V2.md).
+Authoritative spec: [CREATURE_MOVEMENT_V2.md §Phase 3 — exit tiers and gates (archived V2 snapshot)](../Completed_Features/CREATURE_MOVEMENT_V2.md).
 
 | Gate | Pass |
 |------|------|

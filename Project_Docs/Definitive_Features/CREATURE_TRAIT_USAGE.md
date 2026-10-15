@@ -2,7 +2,7 @@
 
 > **Purpose:** **Code-facing map** for the four **`CreatureDefinition`** motivation traits (−100…+100): where scalars are read, which systems consume them today, and what remains deferred. **Semantics and survival-plan narrative** stay in draft **[CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) §3–§5** — do not duplicate pole/modality tables here except for quick lookup.
 >
-> **Read order:** [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) (why traits exist) → **this file** (where code reads them) → [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) §2.2 / §14 (replay projection) → [CREATURE_MOVEMENT_V2.md](../Draft_Features/CREATURE_MOVEMENT_V2.md) §A.3.1 / §A.4 (motor bands; traits pointer).
+> **Read order:** [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) (why traits exist) → **this file** (where code reads them) → [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) §2.2 / §14 (replay projection) → [CREATURE_MOVEMENT_V2.md (archived V2 snapshot)](../Completed_Features/CREATURE_MOVEMENT_V2.md) §A.3.1 / §A.4 (motor bands; traits pointer).
 >
 > **Implementation snapshot (repo):** Four `@export_range(-100, 100)` ints on [`creature_definition.gd`](../../creature/definition/creature_definition.gd). **Spawn-fixed** (copied once per body into `_goal_memory_meta_for_body` — no per-tick mutation). **Live:** Slot A replay + Slot B **`change_stability`** rank bias + salient-write trait dict passthrough + **post-6d-explore-prey (shipped)** prey engagement latch duration (D10 — [CREATURE_MOVEMENT_V3.md §12.2](../Draft_Features/CREATURE_MOVEMENT_V3.md)) + **`change_stability`** flee "race won" tolerance (2026-09-25 — [PHYSICS_SQUEEZE.md decision 45 M](../Draft_Features/PHYSICS_SQUEEZE.md)) + **`change_stability`** live-vs-locale food handoff starvation margin (exception B only; 2026-09-16 — [CREATURE_MOVEMENT_V3_CLEANUP.md C20](../Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md)). **Stub:** Tier-2 **`tier2_urgency_channels`** ([`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) zero deltas). **Not traits:** Preserve/Find bands, flee/jeopardy ticks, compassion/community motor fields.
 
@@ -125,7 +125,7 @@ replay_weight  = stored_strength * (1 + replay_delta / 100)
 |-----------|-------------|
 | **Stat pools** (`stat_fit`, `curr_point_fit`, …) | Physical RPG pools — [CREATURE_ATTRIBUTES_USAGE.md](./CREATURE_ATTRIBUTES_USAGE.md); **not** `explorer_builder` |
 | **`current_fit(modality)`** | Slot B tactic applicability 0…1 — [CREATURE_GOAL_DRIVERS.md §5.1.4](../Draft_Features/CREATURE_GOAL_DRIVERS.md) |
-| **`calorie_ratio`** | Vitals band for Tier-2 dominance / hunger `external_urgency` — [CREATURE_MOVEMENT_V2.md §A.3.1](../Draft_Features/CREATURE_MOVEMENT_V2.md) |
+| **`calorie_ratio`** | Vitals band for Tier-2 dominance / hunger `external_urgency` — [CREATURE_MOVEMENT_V2.md §A.3.1 (archived V2 snapshot)](../Completed_Features/CREATURE_MOVEMENT_V2.md) |
 
 ---
 
