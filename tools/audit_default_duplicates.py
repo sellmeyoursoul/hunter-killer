@@ -4,7 +4,7 @@
 Global defaults live in code (AI_int_lib/game_config_merge.gd). This script reports:
   * inline fallback literals in .gd files that duplicate or contradict a merge default,
   * game_config.json keys that merely restate a default (or are unknown),
-  * pack_resources.json creature_motor / creature_motor_v3 overlay keys that restate a default.
+  * pack_resources.json creature_motor_v3 overlay keys that restate a default.
 
 Usage:
   python tools/audit_default_duplicates.py [--json out.json]
@@ -13,11 +13,11 @@ Always exits 0 (report only). Stdlib only.
 
 Known limits (line/regex based, not a GDScript parser):
   * Merge defaults are read from lines shaped like `"key": <scalar literal>,` inside the
-    default/profile functions; keys of multi-line nested dicts are also collected (flat),
+    default functions; keys of multi-line nested dicts are also collected (flat),
     and list/dict values are recorded as non-scalar (never compared).
   * Fallback sites are found by `<name containing "get">("key", <literal>)` on one line.
     Expressions (`0.25 * x`), constants and multi-line calls are not seen.
-  * A key may exist in several default dicts (e.g. spine vs v3) with different values; a
+  * A key may exist in several default dicts (e.g. v3 core vs explore-inventory) with different values; a
     literal is DUPLICATE_SAME if it equals ANY of them, CONFLICT only if it equals none.
   * Keys are matched by name only, so unrelated dictionaries sharing a key name (`count`,
     `seed`) show up as NO_DEFAULT/CONFLICT noise.
@@ -39,9 +39,6 @@ FUNC_SECTION = {
   "default_logging_params": "logging_params",
   "default_perception_params": "perception",
   "default_playfield_spawn_params": "playfield_spawn",
-  "creature_motor_spine": "creature_motor",
-  "creature_motor_profile_dev": "creature_motor",
-  "creature_motor_profile_ship": "creature_motor",
   "default_creature_motor_v3_params": "creature_motor_v3",
   "default_creature_motor_v3_explore_inventory_params": "creature_motor_v3",
 }
@@ -239,7 +236,7 @@ def main() -> int:
     except (OSError, ValueError) as exc:
       print(f"WARN: cannot parse {rel}: {exc}")
       continue
-    for section in ("creature_motor", "creature_motor_v3"):
+    for section in ("creature_motor_v3",):
       if isinstance(data.get(section), dict):
         audit_overlay(rel, section, data[section], per_func, by_key, pack_hits)
 

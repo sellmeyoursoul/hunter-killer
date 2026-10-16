@@ -1,6 +1,6 @@
 extends Node
 ## Autoload **GameConfig**: loads and merges [code]user://game_config.json[/code] before **OLog** initializes.
-## Provides merged [code]logging_params[/code], [code]perception[/code], [code]creature_motor[/code], [code]creature_motor_v3[/code], and [code]playfield_spawn[/code] with safe defaults.
+## Provides merged [code]logging_params[/code], [code]perception[/code], [code]creature_motor_v3[/code], and [code]playfield_spawn[/code] with safe defaults.
 
 const CONFIG_PATH := "user://game_config.json"
 const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
@@ -66,14 +66,6 @@ func get_perception_params() -> Dictionary:
   return p.duplicate(true)
 
 
-## Merged [code]creature_motor[/code] ([code]mode[/code]: [code]scripted[/code] or [code]llm[/code], plus avoidance tunables).
-func get_creature_motor_params() -> Dictionary:
-  var cm: Variant = _merged.get("creature_motor", {})
-  if typeof(cm) != TYPE_DICTIONARY:
-    return _Merge.default_creature_motor_params()
-  return cm.duplicate(true)
-
-
 ## Merged [code]creature_motor_v3[/code] (V3 locomotion / hub / planner keys only).
 func get_creature_motor_v3_params() -> Dictionary:
   var cm: Variant = _merged.get("creature_motor_v3", {})
@@ -123,12 +115,6 @@ func get_playfield_spawn_params() -> Dictionary:
   if typeof(ps) != TYPE_DICTIONARY:
     return _Merge.default_playfield_spawn_params()
   return ps.duplicate(true)
-
-
-## Spine + profile + optional pack [code]creature_motor[/code] overlay for one creature instance.
-func get_creature_motor_params_for_pack(pack_root: String) -> Dictionary:
-  var base := get_creature_motor_params()
-  return _Merge.merge_creature_motor_pack_overlay(base, pack_root)
 
 
 ## Defaults + optional pack [code]creature_motor_v3[/code] overlay for one creature instance.

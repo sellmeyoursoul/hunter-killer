@@ -420,7 +420,7 @@ static func _jeopardy_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> fl
 
 static func _hunger_subscore(motor_ctx: Dictionary, motor_p: Dictionary) -> float:
   var cr := float(motor_ctx.get("calorie_ratio", 1.0))
-  var ceil_seek := float(motor_p.get("seek_priority_food_ceiling", 0.80))
+  var ceil_seek := float(motor_p.get("seek_priority_food_ceiling", _Merge.v3_default("seek_priority_food_ceiling")))
   if cr >= ceil_seek:
     return 0.0
   if ceil_seek <= 1e-6:

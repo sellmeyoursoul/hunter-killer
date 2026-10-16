@@ -1,26 +1,6 @@
 {
   "notes": "Herbivore duel pack — flee from threat + forage; hybrid awareness (rear disk + forward cone extension). Phase 3 playtest: 2× awareness vs ship baseline (revert Phase 7). Phase 3 refinement: occluded-in-zone plants write goal belief without live seek. Placeholder model (B13/B19): per-axis fit + re-centre at mount until a production model replaces it.",
   "placeholder_model": true,
-  "creature_motor": {
-    "motor_intent_cost_chaos": 2.8,
-    "awareness_radius": 150.0,
-    "awareness_cone_extra": 400.0,
-    "herbivore_flee_obstacle_shield_scale": 18.0,
-    "weight_obstacle_shield_prey": 32.0,
-    "interior_env_near_mob": 280.0,
-    "motor_playfield_corner_band": 84.0,
-    "motor_exploration_always_enabled": false,
-    "scripted_intent_hold_physics_ticks": 4,
-    "motor_stuck_escape_ticks": 1,
-    "weight_seek_ready_food": 18.0,
-    "weight_explore_idle_penalty": 10.5,
-    "weight_explore_turn_bias": 0.14,
-    "explore_intent_hold_extra_ticks": 5,
-    "weight_explore_trail_repulsion": 2.35,
-    "weight_believed_goal_pull": 5.2,
-    "believed_goal_escalate_seek_mul": 1.4,
-    "locale_prior_write_blend": 0.32
-  },
   "creature_motor_v3": {
     "awareness_radius": 150.0,
     "seek_priority_food_ceiling": 0.60

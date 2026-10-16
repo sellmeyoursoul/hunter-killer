@@ -156,7 +156,7 @@ apply_trait_urgency_channels(base: Tier2UrgencyChannels, traits: CreatureTraits,
 | `urgency_find_mate` | **Find mate** | `base.urgency_find_mate` (unchanged) |
 | `urgency_preserve_calories` | **Preserve calories** | `base.urgency_preserve_calories` (unchanged) |
 
-**Future (post-stub):** per-trait coefficients in **`creature_motor`** map **`explorer_builder`**, **`change_stability`**, etc. into channel deltas per **§3.2** shorthand — implemented only in **`trait_tier2_mapper.gd`** so formulas stay auditable.
+**Future (post-stub):** per-trait coefficients in **`creature_motor_v3`** map **`explorer_builder`**, **`change_stability`**, etc. into channel deltas per **§3.2** shorthand — implemented only in **`trait_tier2_mapper.gd`** so formulas stay auditable.
 
 **Jeopardy hard-win unchanged:** acute threat still forces **Avoid hostiles** dominance — **except** **`calorie_ratio < starvation_override_food_ceiling`** (priority **0**, [CREATURE_MOVEMENT_V2 §A.2.3](CREATURE_MOVEMENT_V2.md)). Trait channels **cannot** override jeopardy without explicit pack-combat / nest-defense verbs.
 
@@ -208,7 +208,7 @@ Loaded from engine code + **`core_goal_kinds`** resource (path locks at implemen
 
 ```json
 {
-  "creature_motor": { },
+  "creature_motor_v3": { },
   "strategy_class_tags": { "extra_modalities": [] },
   "goal_kinds": {
     "extra_goal_kinds": [
@@ -232,7 +232,7 @@ Loaded from engine code + **`core_goal_kinds`** resource (path locks at implemen
 
 **Not in `goal_kinds` schema:** **`pole_facet_tags`** (fixed engine eight) and per-episode **`modality_tags`** are **not** defined per goal in pack JSON. **`GoalKind`** + **`context_overlay`** only. Poles are **global**; episode tags are built at salient write by **[§5.1.1](CREATURE_GOAL_DRIVERS.md)** (modalities from motor classifier flags or per-`GoalKind` default inference → poles via §5.1 inference table). Pack **`strategy_class_tags.extra_modalities`** extends **tactics** only.
 
-**At spawn** (with **`creature_motor`** merge):
+**At spawn** (with **`creature_motor_v3`** merge):
 
 ```text
 effective_goal_kinds = core_goal_kinds ∪ pack.goal_kinds.extra_goal_kinds
@@ -310,7 +310,7 @@ Do **not** re-infer poles from later rules at **drift apply** time — the store
 
 > **V3 note (2026-09-24):** the `avoid_hostiles` salient write is now wired from the V3 stack (`CreatureMotorStack._on_flight_exited` → `MemoryAdapter.notify_flight_escape_outcome`), passing an empty `{}` motor ctx (classifier stub inactive → default `flee_retreat`), not the V2 `ai_driver` / `MotorContext` path described below; see §5.1.5.
 
-**Owner:** [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — **canonical** path for salient writes, **`LocalePriorMap`** updates, tag inference, and validation. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** invokes it **only after** [MEMORY §14 write gates](CREATURE_MEMORY.md) pass; passes **`MotorContext`**, outcome, **`GoalKind`**, food-anchor **`Vector2`**, merged **`creature_motor`**, and per-instance allowlists. **Cardinal / motor code** may set **`MotorContext`** tactic flags — **must not** write locale priors directly.
+**Owner:** [`goal_source_memory.gd`](../../creature/motor/goal_source_memory.gd) — **canonical** path for salient writes, **`LocalePriorMap`** updates, tag inference, and validation. **[`ai_driver.gd`](../../AI_int_lib/ai_driver.gd)** invokes it **only after** [MEMORY §14 write gates](CREATURE_MEMORY.md) pass; passes **`MotorContext`**, outcome, **`GoalKind`**, food-anchor **`Vector2`**, merged **`creature_motor_v3`**, and per-instance allowlists. **Cardinal / motor code** may set **`MotorContext`** tactic flags — **must not** write locale priors directly.
 
 **Pipeline:**
 
@@ -362,7 +362,7 @@ When **`tactic_classifier_active`:** build **`modality_tags[]`** from active fla
 
 **Implementation hook (code PR):** `goal_source_memory.try_salient_write(...)` — see [CREATURE_MEMORY.md §14 — Salient emitter](CREATURE_MEMORY.md).
 
-#### 5.1.2 Replay formula constants (`creature_motor` — phase-1 resolved)
+#### 5.1.2 Replay formula constants (`creature_motor_v3` — phase-1 resolved)
 
 **Policy (updated 2026-10-15):** On V3 the replay tuning keys are **`creature_motor_v3`** keys. **Authoritative defaults** live in **`default_creature_motor_v3_params()`** ([`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd); relocated there 2026-10-15, consumers read `_Merge.v3_default(key)`). The legacy `default_creature_motor_params()` copy and pack **`creature_motor`** blocks are not applied at V3 runtime ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1)). A pack **`creature_motor_v3`** block should **omit** these keys unless overriding — empty/missing pack fields **must not** silently invent values; merge falls back to the single default table so missing pack entries are obvious in authoring.
 
@@ -407,7 +407,7 @@ urgency_boost = urgency_boost_linear_slope * external_urgency * gate(slot_b_base
 - **`gate(slot_b_base)`:** **1.0** when `slot_b_base >= replay_urgency_slot_b_min` (default **90**), else **0.0** (no cap lift on weak tactics).
 - **`urgency_boost_linear_slope`:** default **25** in **`default_creature_motor_v3_params()`** (relocated 2026-10-15) — tune in play.
 
-**`creature_motor` keys:** `urgency_boost_linear_slope`, `replay_urgency_slot_b_min` (optional per-bit slopes deferred).
+**`creature_motor_v3` keys:** `urgency_boost_linear_slope`, `replay_urgency_slot_b_min` (optional per-bit slopes deferred).
 
 #### 5.1.4 `current_fit` per modality (phase-1 resolved)
 
@@ -472,9 +472,9 @@ When **`try_salient_write`** would fire on **jeopardy clear** ([CREATURE_MEMORY.
 |-------|--------|-------------------|
 | **Pole facet tags (8)** | Engine **GDScript** allowlist (`CORE_POLE_TAGS`) — §3 trait-axis table below | **No** — fixed engine contract |
 | **Core modality tags (6)** | Engine **resource** (e.g. `res://creature/memory/core_modality_tags.json` — path locks at implementation) | **No** — shared shipped set |
-| **Extra modalities** | **`pack_resources.json`** → **`strategy_class_tags.extra_modalities[]`** (sibling of **`creature_motor`**, not nested) | **Yes** — unioned at spawn |
+| **Extra modalities** | **`pack_resources.json`** → **`strategy_class_tags.extra_modalities[]`** (sibling of **`creature_motor_v3`**, not nested) | **Yes** — unioned at spawn |
 
-**At spawn** (same resolution pass as **`creature_motor`** via **`CreatureDefinition.asset_pack_root`**):
+**At spawn** (same resolution pass as **`creature_motor_v3`** via **`CreatureDefinition.asset_pack_root`**):
 
 ```text
 effective_modality_allowlist = core_modalities_from_resource ∪ pack.strategy_class_tags.extra_modalities
@@ -484,7 +484,7 @@ effective_modality_allowlist = core_modalities_from_resource ∪ pack.strategy_c
 
 ```json
 {
-  "creature_motor": { },
+  "creature_motor_v3": { },
   "strategy_class_tags": {
     "extra_modalities": ["ambush_stalk"]
   }
@@ -537,7 +537,7 @@ Packs **cannot** add or override pole facets. Legacy tactic names (`retreat`, `c
 
 **Action 2 — Per-tag mapping to §3 axes:** **Resolved** — numeric contracts below. Must compose with **per-family top-3 strength ranking** (**Action 3**) and **§3 trait application order** when spawn traits and tag-derived modulation touch the same mapper pass.
 
-**Resolved (Action 2 — per-tag mapping):** **Slot A** is **bipolar** (personality-colored replay); **Slot B** is **unipolar 0…100** (tactic familiarity + fit). **Slot B does not add a second signed term** — it **caps** how strongly **Slot A** can move habitual replay away from the baseline **`context_hash`** prior. Breakpoints and `k` are **first-pass** tunables in **`creature_motor`** / pack keys; the **0-neutral / B-gated / urgency-for-extremes** contract is normative.
+**Resolved (Action 2 — per-tag mapping):** **Slot A** is **bipolar** (personality-colored replay); **Slot B** is **unipolar 0…100** (tactic familiarity + fit). **Slot B does not add a second signed term** — it **caps** how strongly **Slot A** can move habitual replay away from the baseline **`context_hash`** prior. Breakpoints and `k` are **first-pass** tunables in **`creature_motor_v3`** / pack keys; the **0-neutral / B-gated / urgency-for-extremes** contract is normative.
 
 #### Slot A — `trait_affinity(creature_traits, pole_facet_tags)` (−100…+100)
 
@@ -605,7 +605,7 @@ store_blend = sum rank_weight[r] * stored_strength(tag_r)
 x_blend     = replay_w_fit * fit_blend + replay_w_store * store_blend    // §5.1.2 defaults 0.4 / 0.6
 slot_b_base = round(100 * bell(x_blend))
 slot_b      = slot_b_base    // alias: familiarity band; ranking uses replay_rank_score below
-bell(x)     = 1 - exp(-k * x)    // k from creature_motor replay_bell_k — §5.1.2 defaults
+bell(x)     = 1 - exp(-k * x)    // k from creature_motor_v3 replay_bell_k — §5.1.2 defaults
 bell_cap(b) = bell(b / 100.0) * 75    // Slot A cap_from_b(slot_b_base): ~75 max from B alone (phase-1 shape)
 ```
 
@@ -771,6 +771,7 @@ replay_weight = prior_base * (1 + replay_delta / 100.0)             // phase-1: 
 
 | Date | Change |
 |------|--------|
+| 2026-10-16 | **Legacy `creature_motor` retired (CBD-1 step 6):** every live `creature_motor` mention in §3.3 / §4.1 / §5.1.2-§5.1.4 / pack JSON snippets now reads `creature_motor_v3` (the pack `creature_motor` block, `default_creature_motor_params()` and `get_creature_motor_params` were deleted). Older changelog rows and the §6 V2-pointer row are historical and unchanged. |
 | 2026-09-24 | **§5.1.1 / §5.1.5:** `avoid_hostiles` writer live under V3 (`flight_just_exited` → `notify_flight_escape_outcome`); AH-7 reversal suppression dropped (goal table empty during Flight). Broader V2 `MotorContext` rewrite still deferred. |
 | 2026-06-20 | **V3 Step 3 sibling sync (§12.3.3):** Motor authority → [CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md); read order updated; §2 tree = semantic model for hub eligibility (not cardinal scorer). **§12.3.4** at **6d**. |
 | 2026-05-25 | **Phase 2:** salient emitter + locale priors integrated at runtime (`ai_driver` → `goal_source_memory`); Phase 1 contracts unchanged (trait Tier-2 stub, tactic classifiers optional). |

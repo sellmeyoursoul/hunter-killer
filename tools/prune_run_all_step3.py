@@ -213,10 +213,6 @@ def patch_test(name: str, body: str) -> str:
         return '''func _test_seek_wall_filter_and_backtrack() -> void:
   push_warning("skip _test_seek_wall_filter_and_backtrack — cardinal seek removed Step 3; port at §12.2 6c")
 '''
-    if name == "_test_ai_driver_helpers":
-        marker = "  var motor_p := _Merge.creature_motor_spine()"
-        if marker in body:
-            body = body.split(marker)[0].rstrip() + "\n"
     return body
 
 

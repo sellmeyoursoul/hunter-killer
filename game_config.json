@@ -12,15 +12,5 @@
     "creature_1": 60.0
   }
   },
-  "creature_motor_v3": {},
-  "creature_motor": {
-  "scripted_intent_hold_physics_ticks": 8,
-  "explore_intent_hold_extra_ticks": 5,
-  "weight_explore_trail_repulsion": 2.35,
-  "weight_explore_turn_bias": 0.14,
-  "weight_interior": 0.7,
-  "awareness_radius": 200.0,
-  "awareness_cone_extra": 150.0,
-  "awareness_memory_ticks": 30
-  }
+  "creature_motor_v3": {}
 }

@@ -102,7 +102,7 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
 | **Predator / prey calorie intake** (predators gain calories from prey, not bushes-only) | High | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §3 | **Prerequisite** before treating predator memory/foraging as correct; ties to diet archetype table (§2). |
-| **Movement-based calorie costs** (locomotion burns `current_calories` beyond time drain) | High | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §3, [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | **Prerequisite** per CREATURE_MEMORY — tune via `creature_motor` / vitals; pairs with foraging tradeoffs. |
+| **Movement-based calorie costs** (locomotion burns `current_calories` beyond time drain) | High | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) §3, [Draft_Features/PLANTS_PLAN.md](Draft_Features/PLANTS_PLAN.md) | **Prerequisite** per CREATURE_MEMORY — tune via `creature_motor_v3` (`calorie_cost_per_unit_moved`, `move_calorie_per_sec`) / vitals; pairs with foraging tradeoffs (legacy `creature_motor` retired 2026-10-16). |
 | **Food-source memory** (precise coords + egocentric 8-way) | Medium | [Draft_Features/CREATURE_MEMORY.md](Draft_Features/CREATURE_MEMORY.md) | After §3 prerequisites unless phase note defers; `ai_driver.gd` / `game_config_merge.gd`. |
 
 ---
@@ -111,9 +111,9 @@ Informal parking lot for improvements **not** committed in phase design docs. Pr
 
 | Item | Priority | Draft plan | Notes |
 |------|----------|------------|--------|
-| **`creature_motor_profile_ship` numerics** | Medium | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1 (archived V2 snapshot) | **Stub only** until gameplay baseline exists; finalize before release exports. |
-| **Ship executable automated regression** (`creature_motor_ship` feature tag) | Medium | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1, §G.1 (archived V2 snapshot) | **Deferred (B-10):** CI strategy for ship profile — export preset vs harness vs both — subsumes headless/executable tests, not merge-unit tests alone. Blocked on real ship profile values. |
-| **Dev profile aberrant tuning table** | Low | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1 (archived V2 snapshot) | Per-key extreme overrides for wiring regression (small circles / obviously wrong locomotion). Lands with first §G.1 dev regression test. |
+| **`creature_motor_profile_ship` numerics** | Medium | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1 (archived V2 snapshot) | **Retired 2026-10-16 (CBD-1 step 6):** `creature_motor_profile_ship()` and the whole legacy `creature_motor` spine / profile mechanism were deleted (it was inert at V3 runtime). If a per-build tuning profile is wanted again, design it as a `creature_motor_v3` overlay; no numerics are pending. |
+| **Ship executable automated regression** (`creature_motor_ship` feature tag) | Medium | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1, §G.1 (archived V2 snapshot) | **Deferred (B-10):** CI strategy for ship profile — export preset vs harness vs both — subsumes headless/executable tests, not merge-unit tests alone. Blocked on real ship profile values. **Retired 2026-10-16:** the `creature_motor_ship` feature-tag check (`use_ship_motor_profile()`) was deleted with the legacy profiles; re-scope against a V3 profile if ever revived. |
+| **Dev profile aberrant tuning table** | Low | [Completed_Features/CREATURE_MOVEMENT_V2.md](Completed_Features/CREATURE_MOVEMENT_V2.md) §A.1 (archived V2 snapshot) | Per-key extreme overrides for wiring regression (small circles / obviously wrong locomotion). Lands with first §G.1 dev regression test. **Retired 2026-10-16:** `creature_motor_profile_dev()` was deleted with the legacy `creature_motor` surface. |
 
 ---
 

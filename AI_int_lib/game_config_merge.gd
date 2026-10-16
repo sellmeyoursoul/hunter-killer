@@ -43,264 +43,6 @@ static func default_playfield_spawn_params() -> Dictionary:
 
 const _PackRes := preload("res://pack_resource_resolver.gd")
 
-## Species-agnostic motor spine ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-static func creature_motor_spine() -> Dictionary:
-  return {
-    "mode": "scripted",
-    "lookahead_sec": 0.15,
-    "weight_dist": 0.45,
-    "weight_dist_sq": 55.0,
-    "weight_closing": 1.05,
-    "penalty_oob": 1e7,
-    "distance_eps": 6.0,
-    "creature_half_extent_x": 13.5,
-    "creature_half_extent_y": 30.5,
-    "scripted_intent_hold_physics_ticks": 8,
-    "weight_interior": 0.65,
-    "shuffle_tie_break": true,
-    ## Uniform cost jitter per cardinal+idle in [member CardinalAvoidance.pick_best_move_intent]; pairs with instance-mixed tie shuffle seed.
-    "motor_intent_cost_chaos": 3.05,
-    "weight_edge": 0.48,
-    "awareness_radius": 1500.0,
-    "awareness_cone_extra": 3000.0,
-    "awareness_cone_half_angle_deg": 45.0,
-    "awareness_memory_ticks": 3,
-    "awareness_memory_weight": 0.35,
-    "awareness_memory_horizon_sec": 0.0,
-    "weight_obstacle": 1.25,
-    ## Off-path observed static AABB repulsion scale (full weight on step corridor / squeeze).
-    "weight_obstacle_peripheral_mul": 0.2,
-    ## Extra attenuation when obstacle is only in forward wedge beyond [code]awareness_radius[/code].
-    "weight_obstacle_cone_edge_mul": 0.5,
-    ## Prey ENGINE: strip merged shrub static AABBs this close to current [code]food_seek_targets[/code] so grazing can beat repulsion.
-    "vegetation_blocking_forage_clearance": 92.0,
-    ## Multiply base [code]weight_obstacle[/code] for carnivores (shrub footprints + pursuit balance).
-    "weight_obstacle_predator_boost": 1.55,
-    "interior_env_near_mob": 70.0,
-    "weight_interior_env_solid": 8000.0,
-    "weight_interior_env_slow": 4.0,
-    "hunger_explore_interior_scale_min": 0.16,
-    "hunger_explore_edge_scale_min": 0.16,
-    "hunger_explore_hold_scale_min": 0.2,
-    "hunger_explore_urgency_power": 1.25,
-    ## Vitals / calories (CREATURE_MEMORY §3): baseline time drain matches [HUNGER_AND_EATING.md](../Project_Docs/Completed_Features/HUNGER_AND_EATING.md) §3; movement adds cost per world unit traveled this tick.
-    "calorie_baseline_drain_per_sec": 1.0,
-    "calorie_cost_per_unit_moved": 0.002,
-    ## Predator meal gain on successful prey contact; clamped at [code]caloric_needs[/code] on the carnivore body.
-    "predator_prey_meal_calories": 5,
-    "weight_seek_ready_food": 16.0,
-    ## Unified goal seek ([CREATURE_MOVEMENT_V2.md §A.2.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)); pack may override; falls back to [code]weight_seek_ready_food[/code] when absent.
-    "weight_seek_goal": 16.0,
-    "weight_seek_backtrack": 14.0,
-    ## Remembered pinch approach: block 180° retry while other 8-way steps clear ([code]blocked_approach_memory.gd[/code]).
-    "blocked_approach_memory_ticks": 45,
-    "blocked_approach_backtrack_dot": 0.55,
-    "weight_blocked_approach_backtrack": 48.0,
-    "weight_blocked_approach_sector": 18.0,
-    ## Forage pinch: physics ticks stalled (or zero-intent turn) before forced escape intent.
-    "herbivore_pinch_escape_stuck_ticks": 1,
-    "food_seek_imminent_mob_radius": 100.0,
-    "jeopardy_forced_turn_ticks": 5,
-    "weight_avoid_unready_food": 5.5,
-    "food_avoid_unready_scale_when_ready_target": 0.35,
-    "weight_explore_idle_penalty": 10.5,
-    "weight_explore_turn_bias": 0.14,
-    "explore_intent_hold_extra_ticks": 5,
-    "explore_coverage_cell": 52.0,
-    "explore_trail_max_cells": 96,
-    "weight_explore_trail_repulsion": 2.35,
-    ## Active seek + patrol stay-still: physics ticks per 8-way heading while sweeping awareness ([code]seek_stationary_look.gd[/code]).
-    "seek_stationary_look_segment_physics_ticks": 9,
-    ## Active seek heading change: physics ticks per intermediate heading on shortest arc turn ([code]seek_direction_turn.gd[/code]); [code]0[/code] reuses [code]seek_stationary_look_segment_physics_ticks[/code].
-    "seek_direction_turn_segment_physics_ticks": 0,
-    ## Active goal seek (food/prey): eight headings (N..NW) and wall-clock lock per pick ([code]seek_direction_commit.gd[/code]).
-    "motor_seek_direction_lock_sec": 1.0,
-    ## Carnivore pursuit: minimum seek weight toward visible prey ([code]food_seek_targets[/code]), independent of calorie ratio.
-    "weight_seek_prey": 22.0,
-    ## Consecutive physics ticks with nonzero intent but displacement below [code]motor_stuck_move_epsilon[/code] before escape shaping runs.
-    "motor_stuck_escape_ticks": 8,
-    "motor_stuck_move_epsilon": 1.25,
-    ## Multiply [code]weight_seek_ready_food[/code] while stuck (breaks wall-slide deadlock toward prey).
-    "motor_stuck_prey_pull_scale": 1.5,
-    ## Boost expanding cardinal hint when stuck with no food/prey targets.
-    "weight_stuck_escape_explore": 2.2,
-    ## Softer expanding hint while prey is visible but movement has stalled ([code]motor_stuck_allow_expand_hint[/code]).
-    "weight_stuck_escape_explore_when_chasing": 0.95,
-    ## 3D terrain: uphill bonus when local depression exceeds [code]terrain_depression_threshold_m[/code].
-    "terrain_elevation_motor_active": true,
-    "weight_terrain_uphill": 4.0,
-    "terrain_depression_threshold_m": 0.5,
-    "terrain_stuck_min_uphill_m": 0.15,
-    "terrain_drop_block_m": 0.35,
-    "weight_terrain_drop": 40.0,
-    "motor_stuck_turn_bias_scale": 0.25,
-    "motor_stuck_idle_penalty_scale": 2.5,
-    "motor_stuck_prey_expand_floor": 0.95,
-    "motor_stuck_prey_idle_scale": 1.35,
-    "motor_stuck_prey_turn_scale": 1.2,
-    ## Unified ENGINE exploration: keep coverage terms while chasing ([code]exploration_blend_min_when_engaged[/code] at full pursuit urgency).
-    "motor_exploration_always_enabled": true,
-    "exploration_blend_min_when_engaged": 0.28,
-    ## Inverse-distance pull toward prey samples ([code]pursuit_targets[/code]); complements [code]food_seek_targets[/code].
-    "weight_pursuit_dist": 0.42,
-    "weight_pursuit_closing": 0.95,
-    "weight_pursuit_dist_sq": 38.0,
-    ## Rival predator jeopardy ([code]mobs[/code] samples); scaled by [code]jeopardy_weight_rival_predator[/code].
-    "jeopardy_forced_turn_ticks_predator": 5,
-    "jeopardy_weight_rival_predator": 1.0,
-    "intent_hold_ticks_predator": 6,
-    ## Strategic solids: prey shields vs threat; predator pins prey toward nearby obstacle samples.
-    "weight_obstacle_shield_prey": 28.0,
-    "weight_obstacle_pin_predator": 22.0,
-    ## Pinch detection / escape: full influence within this gate distance; linear falloff to zero at awareness max reach.
-    "pinch_obstacle_full_weight_dist_m": 12.0,
-    "pinch_obstacle_min_influence": 0.12,
-    "predator_chase_edge_band": 110.0,
-    "predator_chase_edge_weight_mul": 0.12,
-    "predator_chase_pin_scale": 0.15,
-    "predator_chase_closing_intent_dot": 0.35,
-    "predator_obstructed_hunt_lock_ticks": 10,
-    "predator_obstructed_max_toward_dot": 0.22,
-    "predator_prey_visible_latch_ticks": 6,
-    "predator_prey_engagement_latch_ticks": 36,
-    "predator_engagement_latch_seek_scale": 0.72,
-    "motor_seek_occlusion_penalty_weight": 12.0,
-    "predator_edge_kill_close_mul": 1.35,
-    "predator_edge_kill_close_pad": 12.0,
-    "predator_stalemate_full_ticks": 6,
-    "herbivore_flee_toward_threat_penalty": 8.0,
-    "herbivore_flee_obstacle_shield_scale": 14.0,
-    "herbivore_flee_shield_max_toward_dot": 0.15,
-    "herbivore_flee_shield_min_away_dot": -0.05,
-    "herbivore_flee_shield_require_chase_block": true,
-    "herbivore_flee_corner_edge": 48.0,
-    "herbivore_flee_corner_threat_move": 120.0,
-    "motor_playfield_corner_band": 56.0,
-    ## Preserve vs Find ([CREATURE_MOVEMENT_V2.md §A.3.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-    "preserve_bias_food_floor": 0.90,
-    "seek_priority_food_ceiling": 0.80,
-    "preserve_seek_blend_smoothness": 0.5,
-    "starvation_override_food_ceiling": 0.10,
-    ## Habitual locale / memory ([CREATURE_MEMORY.md §10](../Project_Docs/Draft_Features/CREATURE_MEMORY.md)) — wired in memory phase.
-    "weight_believed_goal_pull": 6.4,
-    "believed_goal_hotspot_near_radius": 250.0,
-    "believed_goal_seek_escalate_radius": 1000.0,
-    "believed_goal_escalate_seek_mul": 1.35,
-    "believed_goal_escalate_preserve_blend": 0.55,
-    "locale_prior_pull_w_norm": 3.0,
-    "locale_prior_ewma_alpha": 0.15,
-    "locale_prior_write_blend": 0.35,
-    "locale_prior_max_buckets": 100,
-    "locale_prior_idle_evict_base_sec": 10.0,
-    "locale_prior_idle_evict_per_attempt_sec": 1.0,
-    # avoid_hostiles rows record rare Flight escapes (minutes apart), not per-meal foraging, so they
-    # get their own much longer idle base (wall-clock seconds, like the sibling keys; 5 min).
-    # Per-attempt bonus is shared with find_food (locale_prior_idle_evict_per_attempt_sec).
-    "locale_prior_idle_evict_avoid_hostiles_sec": 300.0,
-    "salient_write_max_per_sec": 100.0,
-    "escape_reversal_window_sec": 1.0,
-    "tactic_squeeze_clearance": 28.0,
-    "tactic_conspecific_aid_radius": 120.0,
-    "replay_bell_k": 1.4,
-    "replay_w_fit": 0.4,
-    "replay_w_store": 0.6,
-    "replay_n_sat": 10.0,
-    "replay_n_min": 3.0,
-    "urgency_boost_linear_slope": 25.0,
-    "replay_urgency_slot_b_min": 90.0,
-    "goal_memory_precise_radius": 1000.0,
-    "goal_memory_moving_last_known_radius": 50.0,
-    "goal_memory_mover_ttl_sec": 10.0,
-    "goal_memory_ghost_horizon_sec": 0.4,
-    "goal_memory_forget_radius": 2400.0,
-    "goal_memory_ttl_sec": 45.0,
-    "goal_memory_coarse_ttl_sec": 15.0,
-    "goal_memory_max_entries": 25,
-    "weight_seek_remembered_goal": 8.0,
-    "weight_coarse_sector_goal_bias": 3.0,
-  }
-
-
-## Aberrant wiring-detector profile — extreme ends of knobs ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-static func creature_motor_profile_dev() -> Dictionary:
-  return {
-    "weight_seek_ready_food": 0.0,
-    "weight_seek_prey": 0.0,
-    "weight_explore_turn_bias": 2.5,
-    "weight_explore_idle_penalty": 0.5,
-    "weight_explore_trail_repulsion": 0.15,
-    "motor_intent_cost_chaos": 8.0,
-    "scripted_intent_hold_physics_ticks": 1,
-    "explore_intent_hold_extra_ticks": 0,
-  }
-
-
-## Ship / release stub — finalize before export ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-static func creature_motor_profile_ship() -> Dictionary:
-  return {
-    ## Phase 3 retune — spine-like seek for playtest/ship ([PHASE1_MOTOR_BASELINE.md](../Project_Docs/AI_Notes/PHASE1_MOTOR_BASELINE.md)).
-    "weight_seek_ready_food": 16.0,
-    "weight_seek_prey": 22.0,
-    "weight_seek_backtrack": 14.0,
-    ## Remembered pinch approach: block 180° retry while other 8-way steps clear ([code]blocked_approach_memory.gd[/code]).
-    "blocked_approach_memory_ticks": 45,
-    "blocked_approach_backtrack_dot": 0.55,
-    "weight_blocked_approach_backtrack": 48.0,
-    "weight_blocked_approach_sector": 18.0,
-    ## Forage pinch: physics ticks stalled (or zero-intent turn) before forced escape intent.
-    "herbivore_pinch_escape_stuck_ticks": 1,
-    "motor_intent_cost_chaos": 0.0,
-    "weight_explore_turn_bias": 0.14,
-    "weight_explore_idle_penalty": 10.5,
-    "weight_explore_trail_repulsion": 2.35,
-    "weight_believed_goal_pull": 5.2,
-    "locale_prior_pull_w_norm": 3.0,
-    "locale_prior_write_blend": 0.32,
-    "believed_goal_escalate_seek_mul": 1.4,
-  }
-
-
-## True when ship motor profile should merge (export tag or editor QA setting).
-static func use_ship_motor_profile() -> bool:
-  if OS.has_feature(&"creature_motor_ship"):
-    return true
-  if OS.has_feature("editor"):
-    return bool(ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile", false))
-  return false
-
-
-## Merges spine + selected build profile ([code]creature_motor_ship[/code] export feature when set).
-static func default_creature_motor_params() -> Dictionary:
-  var spine := creature_motor_spine()
-  var profile := (
-    creature_motor_profile_ship()
-    if use_ship_motor_profile()
-    else creature_motor_profile_dev()
-  )
-  return _merge_dict_shallow(spine, profile)
-
-
-## Test / harness helper — apply ship profile overlay on [param base].
-static func apply_creature_motor_profile_ship(base: Dictionary) -> Dictionary:
-  return _merge_dict_shallow(base, creature_motor_profile_ship())
-
-
-## Test / harness helper — apply dev profile overlay on [param base].
-static func apply_creature_motor_profile_dev(base: Dictionary) -> Dictionary:
-  return _merge_dict_shallow(base, creature_motor_profile_dev())
-
-
-## Per-spawn pack overlay: [param motor_p] ∪ [code]pack_resources.json[/code] [code]creature_motor[/code] ([CREATURE_MOVEMENT_V2.md §A.1](../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V2.md)).
-static func merge_creature_motor_pack_overlay(motor_p: Dictionary, pack_root: String) -> Dictionary:
-  var root := str(pack_root).strip_edges()
-  if root.is_empty():
-    return motor_p.duplicate(true)
-  var over := _PackRes.load_creature_motor_overlay(root)
-  if over.is_empty():
-    return motor_p.duplicate(true)
-  return _merge_dict_shallow(motor_p, over)
-
-
 ## §7.3.2 explore seek + §1 inventory ship defaults ([CREATURE_MOVEMENT_V3.md §7.3.2](../../Project_Docs/Draft_Features/CREATURE_MOVEMENT_V3.md)).
 static func default_creature_motor_v3_explore_inventory_params() -> Dictionary:
   return {
@@ -540,6 +282,16 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "move_turn_rate_deg_per_sec_at_stat_10": 691.6,
     "move_turn_rate_deg_per_sec_at_stat_25": 1350.0,
     "calorie_baseline_drain_per_sec": 1.0,
+    ## Distance-linear calorie cost per world unit moved: read only by the body's non-V3 fallback drain
+    ## (`CreatureKinematicBody3D._apply_calorie_drain_and_starvation`, a body with no V3 action-calorie owner).
+    "calorie_cost_per_unit_moved": 0.002,
+    ## Predator meal gain on successful prey contact (`try_grant_as_prey_to`, `CreatureMotorStack`); clamped at
+    ## `caloric_needs` on the carnivore body.
+    "predator_prey_meal_calories": 5,
+    ## Body footprint half-extents (world units) read by `MotorPlane.footprint_half_extents` when no
+    ## per-body collision shape / definition size applies.
+    "creature_half_extent_x": 13.5,
+    "creature_half_extent_y": 30.5,
     "move_calorie_per_sec": 1.0,
     "rest_baseline_multiplier": 0.5,
     "preserve_bias_food_floor": 0.90,
@@ -762,8 +514,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "food_yield_estimate_noise_frac_v25": 0.03,
     "locale_prior_ewma_alpha": 0.15,
     ## Locale-prior idle eviction (GoalSourceMemoryStore.idle_limit_for_row) — the V3 stack passes
-    ## THIS dict to `try_salient_write`, so these must live here, not only in the V2
-    ## `creature_motor_spine()` (decision 44 follow-up D, 2026-09-24; same values as V2). Wall-clock
+    ## THIS dict to `try_salient_write`, so these must live here (decision 44 follow-up D, 2026-09-24). Wall-clock
     ## seconds. avoid_hostiles rows record rare Flight escapes (minutes apart), so they get their
     ## own much longer base; the per-attempt bonus is shared.
     "locale_prior_idle_evict_base_sec": 10.0,
@@ -774,7 +525,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
     "believed_goal_seek_escalate_radius": 1000.0,
     ## Locale-prior / replay-rank tunables read by `GoalSourceMemoryStore` through the V3 dictionary.
     ## Values are the inline fallbacks those readers carried before 2026-10-15 (single-source move,
-    ## CBD-1); the same-named legacy `creature_motor_spine()` entries are never seen by V3 code.
+    ## CBD-1); the legacy `creature_motor` section that once held same-named entries was retired.
     "believed_goal_escalate_seek_mul": 1.35,
     "explore_coverage_cell": 52.0,
     "food_seek_imminent_mob_radius": 100.0,
@@ -793,7 +544,7 @@ static func default_creature_motor_v3_params() -> Dictionary:
   return _merge_dict_shallow(core, default_creature_motor_v3_explore_inventory_params())
 
 
-## Per-spawn pack overlay: [param motor_v3] ∪ [code]pack_resources.json[/code] [code]creature_motor_v3[/code] (one-shot legacy copy when absent).
+## Per-spawn pack overlay: [param motor_v3] ∪ [code]pack_resources.json[/code] [code]creature_motor_v3[/code].
 static func merge_creature_motor_v3_pack_overlay(motor_v3: Dictionary, pack_root: String) -> Dictionary:
   var root := str(pack_root).strip_edges()
   if root.is_empty():
@@ -809,7 +560,6 @@ static func default_root() -> Dictionary:
   return {
     "logging_params": default_logging_params(),
     "perception": default_perception_params(),
-    "creature_motor": default_creature_motor_params(),
     "creature_motor_v3": default_creature_motor_v3_params(),
     "playfield_spawn": default_playfield_spawn_params(),
   }
@@ -833,8 +583,6 @@ static func merge_root(defaults_root: Dictionary, file_root: Dictionary) -> Dict
     r["logging_params"] = _merge_dict_shallow(r["logging_params"], file_root["logging_params"])
   if file_root.has("perception"):
     r["perception"] = _merge_dict_shallow(r["perception"], file_root["perception"])
-  if file_root.has("creature_motor"):
-    r["creature_motor"] = _merge_dict_shallow(r["creature_motor"], file_root["creature_motor"])
   if file_root.has("creature_motor_v3"):
     r["creature_motor_v3"] = _merge_dict_shallow(r["creature_motor_v3"], file_root["creature_motor_v3"])
   if file_root.has("playfield_spawn"):

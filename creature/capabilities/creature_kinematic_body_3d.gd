@@ -90,8 +90,8 @@ var _last_ghost_layer_blocked: bool = false
 
 var _food_intake_policy: Resource
 var _starvation_fired: bool = false
-var _calorie_baseline_drain_per_sec: float = 1.0
-var _calorie_cost_per_unit_moved: float = 0.002
+var _calorie_baseline_drain_per_sec: float = float(_ConfigMerge.v3_default("calorie_baseline_drain_per_sec"))
+var _calorie_cost_per_unit_moved: float = float(_ConfigMerge.v3_default("calorie_cost_per_unit_moved"))
 var _defeat_hidden: bool = false
 var _wall_slide_away_hint: Vector3 = Vector3.ZERO
 ## When true, ENGINE/AI calorie burn is owned by V3 [method apply_action] / [LocomotionExecutor] (§7.5).
@@ -547,12 +547,10 @@ func add_calories_from_food(
 
 
 func _seek_priority_food_ceiling() -> float:
-  var seek_ceil := 0.80
+  var seek_ceil := float(_ConfigMerge.v3_default("seek_priority_food_ceiling"))
   var gc := get_node_or_null("/root/GameConfig")
   if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
     seek_ceil = float(gc.get_creature_motor_v3_params().get("seek_priority_food_ceiling", seek_ceil))
-  elif gc != null and gc.has_method(&"get_creature_motor_params"):
-    seek_ceil = float(gc.get_creature_motor_params().get("seek_priority_food_ceiling", seek_ceil))
   return seek_ceil
 
 
@@ -570,25 +568,21 @@ func _push_calories_to_vitals() -> void:
 
 
 func _refresh_calorie_burn_params() -> void:
-  _calorie_baseline_drain_per_sec = 1.0
-  _calorie_cost_per_unit_moved = 0.002
+  _calorie_baseline_drain_per_sec = float(_ConfigMerge.v3_default("calorie_baseline_drain_per_sec"))
+  _calorie_cost_per_unit_moved = float(_ConfigMerge.v3_default("calorie_cost_per_unit_moved"))
   var gc := get_node_or_null("/root/GameConfig")
-  if gc == null:
+  if gc == null or not gc.has_method(&"get_creature_motor_v3_params"):
     return
-  if _use_v3_action_calories and gc.has_method(&"get_creature_motor_v3_params"):
-    var v3: Dictionary = gc.get_creature_motor_v3_params()
-    _calorie_baseline_drain_per_sec = float(
-      v3.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec)
-    )
+  var v3: Dictionary = gc.get_creature_motor_v3_params()
+  _calorie_baseline_drain_per_sec = float(
+    v3.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec)
+  )
+  if _use_v3_action_calories:
     return
-  if gc.has_method(&"get_creature_motor_params"):
-    var cm: Dictionary = gc.get_creature_motor_params()
-    _calorie_baseline_drain_per_sec = float(
-      cm.get("calorie_baseline_drain_per_sec", _calorie_baseline_drain_per_sec)
-    )
-    _calorie_cost_per_unit_moved = float(
-      cm.get("calorie_cost_per_unit_moved", _calorie_cost_per_unit_moved)
-    )
+  ## Non-V3 fallback drain only: distance-linear cost (V3 action calories use per-action costs instead).
+  _calorie_cost_per_unit_moved = float(
+    v3.get("calorie_cost_per_unit_moved", _calorie_cost_per_unit_moved)
+  )
 
 
 func _apply_calorie_drain_and_starvation(delta: float) -> void:
@@ -676,10 +670,10 @@ func try_grant_as_prey_to(predator: CharacterBody3D) -> bool:
   var policy: Resource = _DietRegistry.food_intake_policy_for_body(predator)
   if policy == null or not _DietRegistry.node_is_valid_food_for_policy(self, policy):
     return false
-  var meal := 5
+  var meal := int(_ConfigMerge.v3_default("predator_prey_meal_calories"))
   var gc := get_node_or_null("/root/GameConfig")
-  if gc != null and gc.has_method(&"get_creature_motor_params"):
-    meal = int(gc.get_creature_motor_params().get("predator_prey_meal_calories", meal))
+  if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
+    meal = int(gc.get_creature_motor_v3_params().get("predator_prey_meal_calories", meal))
   predator.call(&"add_calories_from_prey", meal)
   _apply_defeat_local()
   hit.emit(predator)
@@ -694,8 +688,8 @@ func _motor_distance_scale() -> float:
 func _footprint_half_for_clamp() -> Vector2:
   var gc := get_node_or_null("/root/GameConfig")
   var motor_p: Dictionary = {}
-  if gc != null and gc.has_method(&"get_creature_motor_params"):
-    motor_p = gc.get_creature_motor_params()
+  if gc != null and gc.has_method(&"get_creature_motor_v3_params"):
+    motor_p = gc.get_creature_motor_v3_params()
   return _MotorPlane.footprint_half_extents(self, motor_p)
 
 

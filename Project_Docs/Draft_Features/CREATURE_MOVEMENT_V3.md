@@ -1753,8 +1753,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 |------|--------|
 | Motor scripts | `creature/motor/**/*.gd` |
 | Orchestrator | `AI_int_lib/ai_driver.gd` (motor pipeline sections) |
-| Config merge | `AI_int_lib/game_config_merge.gd` (`creature_motor`, future `creature_motor_v3`) |
-| Pack authoring | `assets/creatures/**/pack_resources.json` (`creature_motor` blocks) |
+| Config merge | `AI_int_lib/game_config_merge.gd` (`default_creature_motor_v3_params()`; legacy `creature_motor` retired 2026-10-16, CBD-1 step 6) |
+| Pack authoring | `assets/creatures/**/pack_resources.json` (`creature_motor_v3` blocks; the legacy `creature_motor` blocks were removed 2026-10-16) |
 | Body integration | `creature/creature_root_3d.gd`, `creature/capabilities/*.gd` (motor hooks) |
 | Tests | `tests/run_all.gd`, `tests/debug_motor_pick.gd`, `tests/motor_path_fixture.gd`, `tests/terrain_test_main_stub.gd` |
 | Debug / HUD | `creature/awareness_debug_overlay_3d.gd`, `hud.gd` (motor readouts only) |
@@ -1958,8 +1958,8 @@ Repeat 6–10 after **each** §12.2 sub-phase closes its acceptance checklist (n
 |---|-------|----------|
 | C1 | Stack, hub, and executor read **`GameConfig.get_creature_motor_v3_params_for_pack(pack_root)`** (or equivalent per-spawn merge) — **not** `get_creature_motor_params()` | **Yes** |
 | C2 | Body `_refresh_calorie_burn_params()` / food-outcome thresholds migrated to **`creature_motor_v3`** keys where V3 path is active (or stack passes merged dict into body at spawn) | **Yes** |
-| C3 | **`OLog` warn-once** if any V3 stack/hub/executor code path reads legacy **`creature_motor`** (§12.2 6a <<Comment>>, §15 #9) | No |
-| C4 | `merge_creature_motor_v3_from_legacy` covered by headless test (pack **without** explicit v3 block still merges calorie/awareness keys) | No |
+| C3 | **`OLog` warn-once** if any V3 stack/hub/executor code path reads legacy **`creature_motor`** (§12.2 6a <<Comment>>, §15 #9) | No — **moot 2026-10-16:** the legacy getter / section no longer exist, so there is nothing left to warn about (a headless test asserts the absence) |
+| C4 | `merge_creature_motor_v3_from_legacy` covered by headless test (pack **without** explicit v3 block still merges calorie/awareness keys) | No — **obsolete 2026-10-16:** the legacy-copy shim was deleted (`merge_creature_motor_v3_pack_overlay` loads the pack's `creature_motor_v3` block only; a pack without one gets the code defaults) |
 
 ##### D — 6a test debt (close during 6b or before 6c)
 
@@ -2974,7 +2974,7 @@ V3 owns the **planner interface**; **[CREATURE_MEMORY.md](CREATURE_MEMORY.md)** 
 
 - [ ] Every **§15.1** row **`done`** or **`deferred`** with [ENHANCEMENT_BACKLOG_PLAN](../ENHANCEMENT_BACKLOG_PLAN.md) entry
 - [ ] `grep` / inventory: no V3 code preloads **`cardinal_avoidance`**, **`tier2_dominance`**, **`trait_tier2_mapper`**, **`motor_tactic_classifier`**, **`motor_target_builder`**
-- [ ] No V3 runtime read of **`creature_motor`** keys; legacy pack blocks **removed** (V2 tests migrated or removed)
+- [x] No V3 runtime read of **`creature_motor`** keys; legacy pack blocks **removed** (V2 tests migrated or removed) *(2026-10-16, CBD-1 step 6: `GameConfig.get_creature_motor_params*`, the spine/profile defaults, the pack overlay loaders and every `creature_motor` JSON block deleted; `_test_legacy_creature_motor_surface_retired` guards it)*
 - [ ] **`goal_*_memory`** V2 projection/merge methods **deleted** — grep confirms zero callers (V3 adapter + V2 tests migrated/removed); no `@deprecated` stubs
 - [x] **§12.1** inventory complete — every `creature/motor/**/*.gd` row filled (**Step 2 — 2026-06-20**)
 

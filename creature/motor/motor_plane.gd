@@ -6,6 +6,7 @@ class_name MotorPlane
 const _DefScript := preload("res://creature/definition/creature_definition.gd")
 const _PlayfieldClamp := preload("res://creature/capabilities/playfield_clamp.gd")
 const _FallPhysics := preload("res://creature/motor/fall_physics.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 ## Reference playfield long-edge (world units) used to scale motor distance params on smaller 3D mains.
 const REFERENCE_MOTOR_PLAYFIELD_EDGE := 1890.0
@@ -154,8 +155,8 @@ static func body_motor_velocity(body: Node) -> Vector3:
 ## Example: wolf capsule r 7.03, h 15.33 → [code]Vector2(7.03, 7.03)[/code].
 static func footprint_half_extents(body: Node, motor_p: Dictionary) -> Vector2:
   var he_xy := Vector2(
-    maxf(0.0, float(motor_p.get("creature_half_extent_x", 13.5))),
-    maxf(0.0, float(motor_p.get("creature_half_extent_y", 30.5))),
+    maxf(0.0, float(motor_p.get("creature_half_extent_x", _Merge.v3_default("creature_half_extent_x")))),
+    maxf(0.0, float(motor_p.get("creature_half_extent_y", _Merge.v3_default("creature_half_extent_y")))),
   )
   if body == null:
     return he_xy

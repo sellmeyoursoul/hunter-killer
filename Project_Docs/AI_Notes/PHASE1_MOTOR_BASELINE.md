@@ -1,5 +1,7 @@
 # Motor play baseline (Phase 1 → Phase 3)
 
+> **Snapshot (2026-06-14); superseded 2026-10-16:** the dev/ship motor profiles, `use_ship_motor_profile()` and the legacy `creature_motor` config described below were deleted (CBD-1 step 6, [OPEN_BUGS.md](../OPEN_BUGS.md#cbd-1)); V3 reads only `creature_motor_v3`. Kept as history.
+
 **Last updated:** 2026-06-14  
 **Regression anchor:** `godot --path . --headless -s res://tests/run_all.gd` (Godot 4.6.2 steam tools).
 

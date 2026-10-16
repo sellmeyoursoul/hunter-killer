@@ -53,7 +53,7 @@ flowchart TD
 **Entry conditions (all required for scripted motor on a body):**
 
 1. `AiDriver` state `PLAYING` (or CPU round equivalent).
-2. Merged `creature_motor.mode == "scripted"` (`_creature_motor_mode()`).
+2. Merged `creature_motor.mode == "scripted"` (`_creature_motor_mode()`; historical - the legacy `creature_motor` section was retired 2026-10-16).
 3. Body `control_mode == ENGINE` (`player.engine_control_as_int()` / `mob.engine_control_as_int()`).
 4. Body in `_registered_creatures` (duel) or fallback `_creature`.
 
@@ -160,87 +160,24 @@ For each candidate step direction `d`, predicted center = `creature_position + d
 | Source | Path | Role |
 |--------|------|------|
 | **Defaults (V3, live)** | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) → `default_creature_motor_v3_params()` (+ pack `creature_motor_v3` block; consumers use `_Merge.v3_default(key)`) | The only motor dict V3 reads (`motor_v3`); see [CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) |
-| **Defaults (legacy, mostly inert for V3)** | same file → `default_creature_motor_params()` | Legacy spine; as of 2026-10-15 no pack or `game_config.json` `creature_motor` block is applied at V3 runtime (verified); only a few keys are still read via `get_creature_motor_params` (`predator_prey_meal_calories`, footprint extents, v2 calorie fallbacks). Retirement decision pending: [OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1) step 6 |
-| **User overrides** | `user://game_config.json` → `creature_motor` | Merged by `GameConfig` autoload. Precedence: defaults, then repo `res://game_config.json`, then user file (user wins). **Exception (dev runs):** when `OS.has_feature("editor")` (editor binary, incl. headless `--path`), `game_config.gd` `_apply_dev_logging_override()` makes the repo `logging_params` win over the user file; exported builds keep user precedence; non-logging sections (including `creature_motor`) are not overridden, so a stale user copy still shadows them (see [CREATURE_BODY_DIMENSIONS.md](../Draft_Features/CREATURE_BODY_DIMENSIONS.md) §8) |
+| **Legacy `creature_motor` section (retired 2026-10-16)** | removed: `default_creature_motor_params()`, `creature_motor_spine()` / `_profile_dev/_ship`, `use_ship_motor_profile()`, `merge_creature_motor_pack_overlay`, `PackResourceResolver.load_creature_motor_overlay` / `merge_creature_motor_v3_from_legacy`, `GameConfig.get_creature_motor_params[_for_pack]`, the `game_config.json` and pack `creature_motor` blocks | The four keys still read at runtime (`predator_prey_meal_calories`, `creature_half_extent_x/y`, `calorie_cost_per_unit_moved`) moved into `default_creature_motor_v3_params()`; everything else in the old spine was inert. A `creature_motor` key in `game_config.json` / a user file / a pack is now ignored (`merge_root` no longer knows the section). [OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1) step 6 |
+| **User overrides** | `user://game_config.json` → `creature_motor_v3` | Merged by `GameConfig` autoload. Precedence: defaults, then repo `res://game_config.json`, then user file (user wins). **Exception (dev runs):** when `OS.has_feature("editor")` (editor binary, incl. headless `--path`), `game_config.gd` `_apply_dev_logging_override()` makes the repo `logging_params` win over the user file; exported builds keep user precedence; non-logging sections (including `creature_motor_v3`) are not overridden, so a stale user copy still shadows them (see [CREATURE_BODY_DIMENSIONS.md](../Draft_Features/CREATURE_BODY_DIMENSIONS.md) §8) |
 | **Repo sample** | [`game_config.json`](../../game_config.json) | Partial; many keys fall back to defaults |
 | **Runtime context** | `AiDriver._build_motor_context()` | Per-tick scaled weights (hunger, pursuit urgency, stuck, predator boost) |
 
-### 6.1 Full default key list (`creature_motor`)
+### 6.1 Legacy `creature_motor` key list (retired 2026-10-16)
 
-> **Legacy table (2026-10-15): INERT for V3.** These are the legacy `default_creature_motor_params()` keys. V3 does not read this dict (it reads `motor_v3`, built from `default_creature_motor_v3_params()`), and pack / `game_config.json` `creature_motor` overrides are not applied at runtime, so the values below do not drive V3 behaviour except the few keys named in the Defaults (legacy) row above. The dead diet-prefixed pack knobs (`herbivore_*`, `predator_*`, `post_los_*`, `awareness_forward_cone_only`, etc.) were removed from the shipped packs 2026-10-15. Kept as history of the legacy key set; see [OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1).
+> **Retired (CBD-1 step 6, 2026-10-16).** The legacy `creature_motor` default spine, its dev/ship profiles, the pack / `game_config.json` `creature_motor` overlays and the `GameConfig.get_creature_motor_params*` getters are deleted; the old ~80-key table (`weight_dist`, `weight_interior`, `awareness_memory_*`, `weight_seek_ready_food`, ... all V2/cardinal-era motor weights) is no longer reproduced here - it described inert data and the V2 code that read it is gone. Use git history before 2026-10-16 (`default_creature_motor_params()`) or the archived [CREATURE_MOVEMENT_V2.md](../Completed_Features/CREATURE_MOVEMENT_V2.md) if the historical key set is needed.
 
-Keys from `default_creature_motor_params()` (values = code defaults; user JSON may override, but see the note above):
+The four keys that still had a live runtime reader now live in `default_creature_motor_v3_params()` (single source; read through `GameConfig.get_creature_motor_v3_params()` with `_Merge.v3_default(key)` as the fallback):
 
 | Key | Default | Used for |
 |-----|---------|----------|
-| `mode` | `"scripted"` | Motor mode selector; `_creature_motor_mode()` always returns `"scripted"` today — LLM movement mode is retired |
-| `lookahead_sec` | `0.15` | Prediction horizon |
-| `weight_dist` | `0.45` | Mob inverse distance |
-| `weight_dist_sq` | `55.0` | Mob crowding |
-| `weight_closing` | `1.05` | Closing velocity toward creature |
-| `penalty_oob` | `1e7` | Bounds violation |
-| `distance_eps` | `6.0` | Distance floor |
-| `creature_half_extent_x/y` | `13.5` / `30.5` | Motor footprint (overridden by capsule on body) |
-| `scripted_intent_hold_physics_ticks` | `8` | Intent stickiness (prey default) |
-| `shuffle_tie_break` | `true` | Cardinal shuffle |
-| `motor_intent_cost_chaos` | `3.05` | Tie-break jitter |
-| `weight_interior` | `0.65` | Center-seeking |
-| `weight_edge` | `0.48` | Wall margin |
-| `awareness_radius` | `1500.0` | Sense disk (JSON often lowers to ~200) |
-| `awareness_cone_extra` | `3000.0` | Forward cone reach add-on |
-| `awareness_cone_half_angle_deg` | `45.0` | Cone half-angle |
-| `awareness_memory_ticks` | `3` | Ghost mob memory depth |
-| `awareness_memory_weight` | `0.35` | Ghost/gated mob cost scale |
-| `awareness_memory_horizon_sec` | `0.0` | Predict ahead for ghosts (derived from ticks if 0) |
-| `weight_obstacle` | `1.25` | Static AABB repulsion scale |
-| `vegetation_blocking_forage_clearance_px` | `92.0` | **Prey:** strip shrub geom near food targets |
-| `weight_obstacle_predator_boost` | `1.55` | **Predator:** multiply `weight_obstacle` |
-| `interior_env_near_mob_px` | `70.0` | Suppress explore when mob this close |
-| `weight_interior_env_solid` | `8000.0` | Grid solid cell |
-| `weight_interior_env_slow` | `4.0` | Grid slow cell |
-| `hunger_explore_interior_scale_min` | `0.16` | Low hunger → weaker center pull |
-| `hunger_explore_edge_scale_min` | `0.16` | Low hunger → weaker edge repulsion |
-| `hunger_explore_hold_scale_min` | `0.2` | Low hunger → shorter intent hold |
-| `hunger_explore_urgency_power` | `1.25` | Hunger curve shape |
-| `calorie_baseline_drain_per_sec` | `1.0` | Vitals |
-| `calorie_cost_per_px_moved` | `0.002` | Vitals |
-| `predator_prey_meal_calories` | `5` | Contact meal (not motor) |
-| `weight_seek_ready_food` | `16.0` | Pull to ready bushes |
-| `weight_seek_backtrack` | `14.0` | Penalize reversing `last_move_direction` during seek |
-| `food_seek_imminent_mob_radius_px` | `100.0` | Disable seek when mob close |
-| `jeopardy_forced_turn_ticks` | `5` | Prey jeopardy streak |
-| `weight_avoid_unready_food` | `5.5` | Repel locked/depleted bushes |
-| `food_avoid_unready_scale_when_ready_target` | `0.35` | Scale down unready avoid when also seeking ready |
-| `weight_explore_idle_penalty` | `10.5` | Anti-idle explore |
-| `weight_explore_turn_bias` | `0.14` | Momentum bias |
-| `explore_intent_hold_extra_ticks` | `5` | **Prey:** extra hold when no food targets |
-| `explore_coverage_cell_px` | `52.0` | Trail grid cell size |
-| `explore_trail_max_cells` | `96` | Trail buffer cap |
-| `weight_explore_trail_repulsion` | `2.35` | Retread cost |
-| `expanding_explore_base_physics_ticks` | `36` | Expanding sweep segment length |
-| `weight_expanding_explore_hint` | `0.12` | Baseline sweep bias |
-| `weight_seek_prey` | `22.0` | **Predator:** floor seek toward prey positions |
-| `motor_stuck_escape_ticks` | `8` | Stuck detection threshold |
-| `motor_stuck_move_epsilon_px` | `1.25` | Displacement epsilon |
-| `motor_stuck_prey_pull_scale` | `1.5` | **Predator stuck:** boost food_seek |
-| `weight_stuck_escape_explore` | `2.2` | **Predator stuck, no prey:** explore hint |
-| `weight_stuck_escape_explore_when_chasing` | `0.95` | **Predator stuck, prey visible** |
-| `motor_stuck_turn_bias_scale` | `0.25` | **Predator stuck, no prey** |
-| `motor_stuck_idle_penalty_scale` | `2.5` | **Predator stuck, no prey** |
-| `motor_stuck_prey_expand_floor` | `0.95` | **Prey stuck:** explore hint floor |
-| `motor_stuck_prey_idle_scale` | `1.35` | **Prey stuck** |
-| `motor_stuck_prey_turn_scale` | `1.2` | **Prey stuck** |
-| `motor_exploration_always_enabled` | `true` | Blend explore while chasing |
-| `exploration_blend_min_when_engaged` | `0.28` | Min explore multiplier at full pursuit urgency |
-| `weight_pursuit_dist` | `0.42` | Pursuit inverse dist |
-| `weight_pursuit_closing` | `0.95` | Pursuit closing |
-| `weight_pursuit_dist_sq` | `38.0` | Pursuit crowding |
-| `jeopardy_forced_turn_ticks_predator` | `5` | Carnivore rival jeopardy |
-| `jeopardy_weight_rival_predator` | `1.0` | Scales predator jeopardy ticks |
-| `intent_hold_ticks_predator` | `6` | Carnivore intent hold |
-| `weight_obstacle_shield_prey` | `28.0` | Prey: reward cover between self and threat |
-| `weight_obstacle_pin_predator` | `22.0` | Predator: reward obstacles along prey vector |
-| `carnivore_explore_rotate_physics_ticks` | `36` | Legacy alias of `expanding_explore_base_physics_ticks` |
+| `predator_prey_meal_calories` | `5` | Contact meal on `try_grant_as_prey_to` / `CreatureMotorStack._resolve_predator_prey_meal_calories` (not motor) |
+| `creature_half_extent_x/y` | `13.5` / `30.5` | `MotorPlane.footprint_half_extents` fallback when the body has no capsule child (the capsule radius wins otherwise) |
+| `calorie_cost_per_unit_moved` | `0.002` | Distance-linear calorie cost, read only by the body's non-V3 fallback drain (`_apply_calorie_drain_and_starvation` when `_use_v3_action_calories` is false); V3 action calories use per-action costs |
+
+`calorie_baseline_drain_per_sec` and `seek_priority_food_ceiling` already existed in the V3 defaults and the body readers were switched to them. `calorie_cost_per_unit_moved` is also in `MotorPlane._is_distance_motor_param_key`, so the playfield-scaled V3 copy carries a scaled value that no reader consumes (the body reads the unscaled `GameConfig` dict).
 
 ---
 
@@ -530,6 +467,7 @@ Run: `godot --path . --headless -s res://tests/run_all.gd`
 
 | Date | Change |
 |------|--------|
+| 2026-10-16 | **Legacy `creature_motor` config surface retired (CBD-1 step 6).** §6 rewritten: the legacy spine / dev+ship profiles / pack and `game_config.json` `creature_motor` overlays / `GameConfig.get_creature_motor_params[_for_pack]` are deleted; the four still-live keys (`predator_prey_meal_calories`, `creature_half_extent_x/y`, `calorie_cost_per_unit_moved`) moved into `default_creature_motor_v3_params()`; the old §6.1 key table was dropped (inert data). |
 | 2026-09-24 | **V3 closeout session — archival NOT executed.** Both duel manual sign-offs closed (post-6d Flight fast-path; post-6d-explore-prey); [`CREATURE_MOVEMENT_V3_CLEANUP.md`](../Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) C1 (pursuit-detour pinch stall near corner geometry) and C24 (`avoid_host` explore-fallback sawtooth) fixed, tested, re-closed `done`; V3 §15 V2 cleanup backlog row #10 (`ai_driver.gd` thin-loop, no `_by_body` motor state) closed via dead-code deletion; every `Deferred` row in V3 §13/§15.3 mapped into [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md). **[CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) was checked against its own §12 step 11 promotion checklist and found still blocked:** §13 lists two rows still `Tracking` — **MEMORY sibling sync (6d)** (§12.3.2) and **GOAL_DRIVERS sibling sync (6d)** (§12.3.4). Verified by grep: [CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) and [CREATURE_GOAL_DRIVERS.md](../Draft_Features/CREATURE_GOAL_DRIVERS.md) still carry live V2-era `MotorContext` / `cardinal_avoidance.gd` / `sector_weights[8]` formulas and cross-links (e.g. MEMORY §14.1 projection formula, GOAL_DRIVERS §5.1.1 tactic-flag producer) that the §12.3.2 / §12.3.4 checklists specify rewriting to adapter-consult wording — that rewrite has not landed despite `post-6d` phase status showing `Done`. V3 therefore **remains Draft_Features** (still the active motor spec per the banner above) until that sibling-doc rewrite closes and §13 shows zero `Tracking` rows. |
 | 2026-09-23 | LLM-driven movement control **retired** (code removal: `ai_action_tokens.gd`, `bundled_inference_launcher.gd`, `system_prompt.txt`, `inference_client` config, `_apply_action_token`/`arm_ai_session` and related `AiDriver` signals/methods deleted). §1 intent-producers row and §3 control-mode table no longer list an LLM/`AI`-token producer; §6.1 `mode` key row and §12 known-gaps row updated to match. ENGINE/"CPU Player" round feature (`begin_engine_player_round()`, ARMED/PLAYING/WAITING) is unaffected — it runs the same scripted/V3 motor as any other creature, not an LLM. |
 | 2026-07-05 | Banner → V3 authority; removed duplicated V3 debug/planner prose from §10; §11/§14 point to V3 §7 / §12.2. |

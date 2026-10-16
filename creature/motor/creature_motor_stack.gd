@@ -26,6 +26,7 @@ const _GoalSource := preload("res://creature/motor/goal_source_memory.gd")
 const _OLogSafe := preload("res://AI_int_lib/olog_safe.gd")
 const _InstanceIdLookup := preload("res://creature/motor/instance_id_lookup.gd")
 const _NavRouter := preload("res://creature/motor/nav_router.gd")
+const _Merge := preload("res://AI_int_lib/game_config_merge.gd")
 
 
 var _body: CharacterBody3D
@@ -1683,12 +1684,12 @@ func _clear_prey_engagement_planner_state() -> void:
 
 
 func _resolve_predator_prey_meal_calories() -> int:
-  var meal := 5
+  var meal := int(_Merge.v3_default("predator_prey_meal_calories"))
   var gc := Engine.get_main_loop()
   if gc != null and gc.has_method(&"get_root"):
     var game_config := (gc as SceneTree).root.get_node_or_null("GameConfig")
-    if game_config != null and game_config.has_method(&"get_creature_motor_params"):
-      meal = int(game_config.call(&"get_creature_motor_params").get("predator_prey_meal_calories", meal))
+    if game_config != null and game_config.has_method(&"get_creature_motor_v3_params"):
+      meal = int(game_config.call(&"get_creature_motor_v3_params").get("predator_prey_meal_calories", meal))
   return meal
 
 

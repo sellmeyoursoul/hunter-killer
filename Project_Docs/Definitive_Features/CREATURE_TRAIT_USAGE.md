@@ -67,14 +67,14 @@ Slot A uses **eight global pole ids** on each `LocalePriorMap` row (`pole_facet_
 | **Believed goal pull** | Same as consult replay when `context_hash` matches | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_apply_believed_goal_bias_to_ctx` |
 | **Tier-2 urgency channels** | **Stub — zero delta** | [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) — `apply_trait_urgency_channels` returns base only |
 | **Preserve / Find food bands** | **Not** trait-driven | [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) — `preserve_find_food_seek_scale(calorie_ratio, motor_p)` |
-| **Cardinal flee / jeopardy** | **Not** trait-driven (fixed `creature_motor` ticks) | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5 |
+| **Cardinal flee / jeopardy** | **Not** trait-driven (fixed ticks; legacy `creature_motor` retired 2026-10-16) | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5 |
 | **Compassion / community motor** | **Not wired** | Deferred — see §4 |
 
 **`external_urgency`** (jeopardy + hunger subscores) caps how strong Slot A can be at replay — independent of trait sign; see [CREATURE_GOAL_DRIVERS.md §5.1.3](../Draft_Features/CREATURE_GOAL_DRIVERS.md).
 
-### 3.1 `creature_motor` keys that touch replay (not trait exports)
+### 3.1 `creature_motor_v3` keys that touch replay (not trait exports)
 
-Authoritative defaults (V3): [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_v3_params()` (read via `_Merge.v3_default(key)`; the replay keys `replay_bell_k` 1.4, `replay_n_min` 3.0, `replay_n_sat` 10.0, `replay_urgency_slot_b_min` 90.0, `replay_w_fit` 0.4, `replay_w_store` 0.6, `urgency_boost_linear_slope` 25.0 were relocated there 2026-10-15). The legacy `default_creature_motor_params()` copy is inert for V3 ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1)). Traits do **not** add pack keys; replay reads **`motor_p`** + **`traits`** dict together.
+Authoritative defaults (V3): [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) `default_creature_motor_v3_params()` (read via `_Merge.v3_default(key)`; the replay keys `replay_bell_k` 1.4, `replay_n_min` 3.0, `replay_n_sat` 10.0, `replay_urgency_slot_b_min` 90.0, `replay_w_fit` 0.4, `replay_w_store` 0.6, `urgency_boost_linear_slope` 25.0 were relocated there 2026-10-15). The legacy `default_creature_motor_params()` copy was deleted 2026-10-16 ([OPEN_BUGS.md CBD-1](../OPEN_BUGS.md#cbd-1) step 6). Traits do **not** add pack keys; replay reads **`motor_p`** + **`traits`** dict together.
 
 | Key | Default | Trait interaction |
 |-----|---------|-------------------|
@@ -84,7 +84,7 @@ Authoritative defaults (V3): [`game_config_merge.gd`](../../AI_int_lib/game_conf
 | `urgency_boost_linear_slope` | 25 | Slot A cap lift with `external_urgency` |
 | `replay_urgency_slot_b_min` | 90 | Gate for urgency boost |
 | `preserve_bias_food_floor` / `seek_priority_food_ceiling` | 0.90 / 0.80 | **Calorie bands only** — not trait-driven |
-| `weight_believed_goal_pull` | 6.4 | Scaled by `replay_weight` at consult |
+| `weight_believed_goal_pull` | *(none)* | Legacy-only key (6.4 in the deleted spine); not in `default_creature_motor_v3_params()` and no V3 reader exists - row kept as a marker, do not rely on it |
 
 ---
 

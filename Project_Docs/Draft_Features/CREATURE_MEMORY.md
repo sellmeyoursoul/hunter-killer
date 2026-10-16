@@ -94,7 +94,7 @@ flowchart LR
 
 | Parameter | Phase-1 choice |
 |-----------|----------------|
-| **Cell size** | Reuse merged **`creature_motor.explore_coverage_cell_px`** (default **52** in [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd)); same floor division as explore trail in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd). **`cell_px = max(16, explore_coverage_cell_px)`**. |
+| **Cell size** | Reuse merged **`creature_motor_v3.explore_coverage_cell`** (default **52** in `default_creature_motor_v3_params()`, [`game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd); the legacy `creature_motor` section was retired 2026-10-16); same floor division as explore trail in [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd). **`cell_px = max(16, explore_coverage_cell)`**. |
 | **Origin** | **Locale identity** (`cell_x`, `cell_y`, `context_hash`): floor division from **world `Vector2.ZERO`**, **not** [`EnvironmentGridBaked.origin_world`](../../environment/environment_grid_baked.gd). Indices **may be negative** on the origin-centred playfield; that is valid (they are only hash inputs and row fields). The **bounds gate** (next row) is separate and does use the env grid's own origin. |
 | **Anchor** | **Dominant food `SeekCandidate` world position at outcome** (the resource patch), **not** creature body position — patch-centric locale memory. |
 | **Out of bounds** | **Reject entire salient write** (no clamp-to-edge). When **`EnvironmentGridBaked`** is valid, map the anchor with the **env grid's own** `grid.world_to_cell(MotorPlane.to_grid_world(anchor))` (respects `origin_world` and the env grid's `cell_size`) and require the resulting env-cell index ∈ **`[0, cell_width) × [0, cell_height)`**. This is an env-grid footprint test in env cells, **not** a test on the 52u locale indices above. A grid with `cell_size <= 0` rejects. If env grid is missing/invalid at outcome, **reject** salient write. Code: `GoalSourceMemoryStore.anchor_cell_in_bounds` (`goal_source_memory.gd`). **Live grid:** `main_3d.gd` `_create_default_open_grid()` sets `origin_world = get_motor_playfield_bounds_min()` (since 2026-09-24), so the 4u grid covers about x ∈ [−100, 100), z ∈ [−100, 104) — the whole playfield. The upper edge is half-open: an anchor at exactly x = 100.0 is refused. |
@@ -437,7 +437,7 @@ Until predicted pathing for occupants inside squeeze cavities exists, **moving g
 | Area | Paths / notes |
 |------|----------------|
 | Awareness split / motor food | [`AI_int_lib/ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_motor_food_plants_in_awareness_by_readiness`, `_build_motor_context`; **`_goal_belief_*`** (**§5.5**); **`goal_source_memory.gd`** salient hooks (**§14.4**). Live zone geometry — **[CREATURE_MOVEMENT_V2.md §E.1](CREATURE_MOVEMENT_V2.md)**. |
-| Config merge spine | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — commented **`goal_*`** placeholders (**§10**); pack overlay via **`creature_motor`** (**CREATURE_MOVEMENT_V2 §A.1**). |
+| Config merge spine | [`AI_int_lib/game_config_merge.gd`](../../AI_int_lib/game_config_merge.gd) — commented **`goal_*`** placeholders (**§10**); pack overlay via **`creature_motor_v3`** (legacy `creature_motor` pack overlay retired 2026-10-16, CBD-1 step 6). |
 | Cardinal costs | [`creature/motor/cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd). |
 | Stationary flora anchor | [`assets/plants/bush_food_3d.gd`](../../assets/plants/bush_food_3d.gd) — **`global_position`**, **`stimulus_kind_id`** (V3; `@export` until authored), runtime **`instance_id`** for target binding |
 
@@ -546,7 +546,7 @@ Authoritative defaults (V3, updated 2026-10-15): **`default_creature_motor_v3_pa
 
 **Replay / Slot B formula keys** (authoritative V3 defaults in **`default_creature_motor_v3_params()`** since 2026-10-15 — **[CREATURE_GOAL_DRIVERS.md §5.1.2](CREATURE_GOAL_DRIVERS.md)**): `replay_bell_k`, `replay_w_fit`, `replay_w_store`, `replay_n_sat`, `replay_n_min`, `urgency_boost_linear_slope`, `replay_urgency_slot_b_min`. Omit from the pack `creature_motor_v3` block unless overriding.
 
-| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window; **key retained but no V3 consumer since 2026-09-24 — AH-7 suppression dropped, §14.2**). Defaults in the legacy **`default_creature_motor_params()`** only (not verified as read by V3 in this pass; see CBD-1 step 6).
+| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window; **key retained but no V3 consumer since 2026-09-24 — AH-7 suppression dropped, §14.2**). The four Preserve/Find keys are in `default_creature_motor_v3_params()` (read by `motor_goal_hub.gd` / `motor_planner.gd` / the body's `_seek_priority_food_ceiling`); `escape_reversal_window_sec` has no default or reader left after the legacy `default_creature_motor_params()` was deleted 2026-10-16 (CBD-1 step 6).
 
 ---
 
@@ -632,7 +632,7 @@ stored_strength blend uses success_rate / visit pattern (Action 2 bell path)
 | **Neutral** tier | **No** | — |
 | **Preserve calories** dominant | **No** salient write | — |
 
-**One write per goal outcome:** **At most one** salient success-pattern write per **completed goal-outcome episode** per creature per tick. Optional per-creature safety valve **`salient_write_max_per_sec`** (**default 100** in **`creature_motor`**) — high ceiling; primary spam control remains one-per-outcome + same-goal continuation.
+**One write per goal outcome:** **At most one** salient success-pattern write per **completed goal-outcome episode** per creature per tick. Optional per-creature safety valve **`salient_write_max_per_sec`** (**default 100** in **`creature_motor_v3`**) — high ceiling; primary spam control remains one-per-outcome + same-goal continuation.
 
 **Same-goal continuation (replaces per-bucket cooldown as primary policy):** While the **same Tier-2 leaf** stays active, pursuing **the next target of that goal** (e.g. second bush while still **`Find food`**, more food in sight after first success) is **one goal activity** — **no second write**.
 

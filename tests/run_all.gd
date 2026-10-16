@@ -178,9 +178,10 @@ func _run_all_async() -> void:
 
 func _run_all() -> void:
   _test_merge_defaults_and_override()
+  _test_legacy_creature_motor_surface_retired()
   _test_creature_motor_v3_merge_defaults()
   _test_creature_motor_v3_explore_inventory_defaults()
-  _test_creature_pack_motor_overlays()
+  _test_creature_pack_goal_kinds_and_archetypes()
   _test_wolf_archetype_scaled_3x_relative_to_fox()
   await _test_wolf_body_collision_shape_not_offset_from_origin()
   _test_creature_motor_v3_pack_overlays()
@@ -871,7 +872,7 @@ func _test_creature_kinematic_playfield_clamp_after_move() -> void:
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
   body.set_control_mode(_ControlMode.engine_as_int())
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.1, 1.0, 50.0)
   body.velocity = Vector3(30.0, 0.0, 0.0)
@@ -892,62 +893,9 @@ func _test_creature_kinematic_playfield_clamp_after_move() -> void:
   )
   main.queue_free()
 
-func _test_creature_pack_motor_overlays() -> void:
-  # Build the dev-profile base explicitly so this test is deterministic regardless of the
-  # ambient hunter_killer_debug/use_ship_motor_profile editor toggle (project.godot).
-  var base := _Merge.apply_creature_motor_profile_dev(_Merge.creature_motor_spine())
-  var rabbit_m := _Merge.merge_creature_motor_pack_overlay(
-    base.duplicate(true),
-    "res://assets/creatures/rabbit",
-  )
-  _assert(
-    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 18.0),
-    "rabbit pack restores food seek under dev profile",
-  )
-  _assert(
-    is_equal_approx(float(rabbit_m.get("motor_intent_cost_chaos", -1.0)), 2.8),
-    "rabbit pack duel motor chaos",
-  )
-  var fox_m := _Merge.merge_creature_motor_pack_overlay(
-    base.duplicate(true),
-    "res://assets/creatures/fox",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("weight_seek_prey", 0.0)), 22.0),
-    "fox pack restores prey seek under dev profile",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("weight_seek_ready_food", -1.0)), 0.0),
-    "fox pack does not enable bush food seek",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("weight_pursuit_closing", 0.0)), 1.35),
-    "fox pack pursuit closing tuned",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("weight_pursuit_dist", 0.0)), 0.55),
-    "fox pack pursuit dist tuned",
-  )
-  _assert(
-    is_equal_approx(float(rabbit_m.get("weight_stuck_escape_explore", 0.0)), 2.2),
-    "rabbit pack stuck escape explore weight",
-  )
-  _assert(
-    is_equal_approx(float(rabbit_m.get("scripted_intent_hold_physics_ticks", 0.0)), 4.0),
-    "rabbit pack restores intent hold ticks",
-  )
-  _assert(
-    is_equal_approx(float(rabbit_m.get("weight_seek_ready_food", 0.0)), 18.0),
-    "rabbit pack seek ready food weight",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("motor_intent_cost_chaos", -1.0)), 4.4),
-    "fox pack duel motor chaos",
-  )
-  _assert(
-    is_equal_approx(float(fox_m.get("weight_explore_trail_repulsion", 0.0)), 2.35),
-    "fox pack explore trail repulsion for patrol coverage",
-  )
+## Pack goal-kind catalog / modality allowlist / archetype pack-root wiring (the legacy `creature_motor`
+## pack overlay assertions that used to lead this test were retired with that config surface).
+func _test_creature_pack_goal_kinds_and_archetypes() -> void:
   var rabbit_kinds := _GkReg.effective_goal_kinds_for_pack("res://assets/creatures/rabbit")
   _assert(rabbit_kinds.size() >= 4, "rabbit pack goal kinds include core set")
   _assert(
@@ -8405,7 +8353,7 @@ func _test_motor_planner_latched_stuck_replan() -> void:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
   var edge_pos := body.global_position
@@ -8502,7 +8450,7 @@ func _test_motor_planner_explore_boundary_scan_inward_escape() -> void:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
 
@@ -8575,7 +8523,7 @@ func _test_motor_planner_explore_post_scan_egress_no_rescan() -> void:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
 
@@ -8639,7 +8587,7 @@ func _test_motor_planner_explore_post_scan_rim_move_keeps_egress() -> void:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
 
@@ -8718,7 +8666,7 @@ func _test_motor_planner_explore_post_scan_inward_align_no_flip_flop() -> void:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
 
@@ -8780,7 +8728,7 @@ func _motor_planner_east_rim_fixture(main: Node3D) -> CharacterBody3D:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(bounds_max.x - he.x - 0.5, 1.0, 50.0)
   return body
@@ -8795,7 +8743,7 @@ func _motor_planner_ne_corner_fixture(main: Node3D) -> CharacterBody3D:
   body.set("playfield_bounds_min", bounds_min)
   body.set("playfield_bounds_max", bounds_max)
   body.set("screen_size", bounds_max)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var he := _MotorPlane.footprint_half_extents(body, motor_p)
   body.global_position = Vector3(
     bounds_max.x - he.x - 0.5, 1.0, bounds_min.y + he.y + 0.5
@@ -8811,7 +8759,7 @@ func _test_motor_plane_playfield_corner_inbound_diagonal() -> void:
   _motor_v3_test_floor(main)
   var body := _motor_planner_ne_corner_fixture(main)
   var hug := _MotorPlane.playfield_boundary_hug(
-    body, _Merge.default_creature_motor_params(), float(motor_v3.get("playfield_hug_band", 14.0))
+    body, _Merge.default_creature_motor_v3_params(), float(motor_v3.get("playfield_hug_band", 14.0))
   )
   _assert(bool(hug.get("near", false)), "NE corner fixture is inside hug band")
   var inbound: Vector3 = hug.get("inbound_normal", Vector3.ZERO)
@@ -12182,8 +12130,8 @@ func _test_creature_trait_usage_wiring() -> void:
     is_equal_approx(_GoalMem.slot_a_raw_for_pole(traits_neutral, &"explorer"), 0.0),
     "neutral archetype traits yield zero explorer pole pull",
   )
-  var spine := _Merge.creature_motor_spine()
-  _assert(spine.has("urgency_boost_linear_slope"), "trait replay motor keys present")
+  var v3_defaults := _Merge.default_creature_motor_v3_params()
+  _assert(v3_defaults.has("urgency_boost_linear_slope"), "trait replay motor keys present")
 
 func _test_creature_vitals_math_burn_and_clamp() -> void:
   var burn: float = _CreatureVitalsMath.burn_amount(1.0, 0.002, 100.0, 1.0, 1.0, 1.0)
@@ -12377,7 +12325,7 @@ func _test_footprint_geometry() -> void:
   _assert(is_equal_approx(obs.distance_to(closest_obs), 20.0), "footprint point clearance uses AABB edge distance")
 
 func _test_goal_kind_phase_c_replay() -> void:
-  var motor_p := _Merge.creature_motor_spine()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var catalog := _GkReg.goal_kind_catalog_for_pack("")
   _assert(
     _GkReg.resolve_goal_kind_at_outcome(&"avoid_hostiles", {}, catalog) == _GkReg.GK_AVOID_HOSTILES,
@@ -12481,12 +12429,11 @@ func _test_goal_kind_phase_c_replay() -> void:
   )
   _assert(
     motor_p.has("urgency_boost_linear_slope") and motor_p.has("replay_urgency_slot_b_min"),
-    "creature_motor spine has external_urgency keys",
+    "v3 defaults have external_urgency keys",
   )
 
 func _test_goal_source_memory() -> void:
-  var spine := _Merge.creature_motor_spine()
-  var motor_p := spine.duplicate(true)
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var grid := _EnvGrid.new()
   grid.cell_width = 32
   grid.cell_height = 32
@@ -12948,18 +12895,8 @@ func _test_hunter_killer_debug_project_settings() -> void:
     "project defines hunter_killer_debug/draw_awareness",
   )
   _assert(
-    ProjectSettings.has_setting("hunter_killer_debug/use_ship_motor_profile"),
-    "project defines hunter_killer_debug/use_ship_motor_profile",
-  )
-  _assert(
     ProjectSettings.has_setting("hunter_killer_debug/draw_motor_planner_hud"),
     "project defines hunter_killer_debug/draw_motor_planner_hud",
-  )
-  # This is an editor-only QA toggle whose value is a per-developer choice, so assert it is
-  # a defined boolean rather than pinning a specific state (see game_config_merge.use_ship_motor_profile).
-  _assert(
-    typeof(ProjectSettings.get_setting("hunter_killer_debug/use_ship_motor_profile")) == TYPE_BOOL,
-    "use_ship_motor_profile is a boolean editor toggle",
   )
 
 func _test_line_of_sight_wall_occlusion() -> void:
@@ -13020,7 +12957,7 @@ func _test_game_config_dev_logging_override_prefers_repo_logging_params() -> voi
   gc.free()
 
 func _test_locale_prior_escalate_seek() -> void:
-  var motor_p := _Merge.creature_motor_spine()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var store := _GoalMem.new()
   var grid := _EnvGrid.new()
   grid.cell_width = 8
@@ -13056,7 +12993,6 @@ func _test_merge_defaults_and_override() -> void:
   var file_root := {
     "logging_params": {"LOG_LEVEL": "Debug"},
     "perception": {"SNAPSHOT_PHYSICS_STRIDE": 3},
-    "creature_motor": {"mode": "llm"},
     "playfield_spawn": {"seed": 777},
   }
   var merged: Dictionary = _Merge.merge_root(base, file_root)
@@ -13068,126 +13004,78 @@ func _test_merge_defaults_and_override() -> void:
     str(merged["playfield_spawn"].get("locked_layout_path", "x")) == "",
     "merge playfield_spawn keeps default locked_layout_path when not overridden",
   )
-  _assert(str(merged["creature_motor"].get("mode", "")) == "llm", "merge creature_motor.mode override")
-  _assert(
-    is_equal_approx(float(merged["creature_motor"].get("weight_interior", 0.0)), 0.65),
-    "merge creature_motor keeps default weight_interior when not overridden",
-  )
-  _assert(
-    is_equal_approx(float(merged["creature_motor"].get("weight_dist_sq", 0.0)), 55.0),
-    "merge creature_motor keeps default weight_dist_sq when not overridden",
-  )
-  _assert(
-    is_equal_approx(float(merged["creature_motor"].get("weight_edge", 0.0)), 0.48),
-    "merge creature_motor keeps default weight_edge when not overridden",
-  )
-  _assert(
-    float(merged["creature_motor"].get("lookahead_sec", 0.0)) > 0.0,
-    "merge creature_motor keeps default lookahead when not overridden"
-  )
   var res: Dictionary = _Merge.load_merge_from_path("user://__does_not_exist_for_test__.json")
   _assert(str(res.get("diagnostic", "")) != "", "missing file should set diagnostic")
   var m2: Dictionary = res["merged"]
   _assert(m2["perception"]["SNAPSHOT_PHYSICS_STRIDE"] == 1, "missing file perception default")
-  _assert(str(base["creature_motor"].get("mode", "")) == "scripted", "default creature_motor.mode scripted")
-  var spine: Dictionary = _Merge.creature_motor_spine()
+  # Legacy `creature_motor` section is retired (CBD-1 step 6): absent from defaults and ignored from file.
+  _assert(not base.has("creature_motor"), "default_root has no legacy creature_motor section")
+  var with_legacy: Dictionary = _Merge.merge_root(base, {"creature_motor": {"mode": "llm"}})
+  _assert(not with_legacy.has("creature_motor"), "merge_root ignores a legacy creature_motor file section")
+  # Still-live defaults that used to be asserted through the legacy section now live in the V3 defaults.
+  var v3: Dictionary = base["creature_motor_v3"]
+  _assert(is_equal_approx(float(v3.get("awareness_radius", 0.0)), 1500.0), "v3 default awareness_radius")
+  _assert(is_equal_approx(float(v3.get("explore_coverage_cell", 0.0)), 52.0), "v3 default explore_coverage_cell")
   _assert(
-    int(spine.get("scripted_intent_hold_physics_ticks", -1)) == 8,
-    "spine scripted intent hold",
+    is_equal_approx(float(v3.get("food_seek_imminent_mob_radius", 0.0)), 100.0),
+    "v3 default food_seek_imminent_mob_radius",
   )
-  # weight_seek_ready_food is the one default that flips with the build profile:
-  # dev profile zeroes it, ship profile restores seek. Assert the value for whichever
-  # profile default_root() actually selected (driven by use_ship_motor_profile()).
-  var expected_seek := 16.0 if _Merge.use_ship_motor_profile() else 0.0
+
+## True when [param script] declares a (static or instance) method named [param method_name].
+func _script_defines_method(script: GDScript, method_name: StringName) -> bool:
+  for m in script.get_script_method_list():
+    if StringName(str(m.get("name", ""))) == method_name:
+      return true
+  return false
+
+## CBD-1 step 6: the four keys that were still read through the legacy getter now live in the V3 defaults,
+## and the legacy config surface (getters, merge helpers, pack `creature_motor` blocks) is gone.
+func _test_legacy_creature_motor_surface_retired() -> void:
+  var v3 := _Merge.default_creature_motor_v3_params()
+  _assert(int(v3.get("predator_prey_meal_calories", -1)) == 5, "v3 default predator_prey_meal_calories")
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_seek_ready_food", -1.0)), expected_seek),
-    "default root seek matches active motor profile",
-  )
-  _assert(is_equal_approx(float(base["creature_motor"].get("weight_interior", 0.0)), 0.65), "default weight_interior")
-  _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist", 0.0)), 0.45), "default weight_dist")
-  _assert(is_equal_approx(float(base["creature_motor"].get("weight_closing", 0.0)), 1.05), "default weight_closing")
-  _assert(is_equal_approx(float(base["creature_motor"].get("distance_eps", 0.0)), 6.0), "default distance_eps")
-  _assert(is_equal_approx(float(base["creature_motor"].get("weight_dist_sq", 0.0)), 55.0), "default weight_dist_sq")
-  _assert(is_equal_approx(float(base["creature_motor"].get("weight_edge", 0.0)), 0.48), "default weight_edge")
-  _assert(bool(base["creature_motor"].get("shuffle_tie_break", false)), "default shuffle_tie_break")
-  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_radius", 0.0)), 1500.0), "default awareness_radius")
-  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_cone_extra", 0.0)), 3000.0), "default awareness_cone_extra")
-  _assert(int(base["creature_motor"].get("awareness_memory_ticks", -1)) == 3, "default awareness_memory_ticks")
-  _assert(is_equal_approx(float(base["creature_motor"].get("awareness_memory_weight", 0.0)), 0.35), "default awareness_memory_weight")
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("hunger_explore_interior_scale_min", 0.0)), 0.16),
-    "default hunger_explore_interior_scale_min",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("hunger_explore_urgency_power", 0.0)), 1.25),
-    "default hunger_explore_urgency_power",
+    is_equal_approx(float(v3.get("creature_half_extent_x", 0.0)), 13.5),
+    "v3 default creature_half_extent_x",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("calorie_baseline_drain_per_sec", 0.0)), 1.0),
-    "default calorie_baseline_drain_per_sec",
+    is_equal_approx(float(v3.get("creature_half_extent_y", 0.0)), 30.5),
+    "v3 default creature_half_extent_y",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("calorie_cost_per_unit_moved", 0.0)), 0.002),
-    "default calorie_cost_per_unit_moved",
+    is_equal_approx(float(v3.get("calorie_cost_per_unit_moved", 0.0)), 0.002),
+    "v3 default calorie_cost_per_unit_moved",
   )
-  _assert(int(base["creature_motor"].get("predator_prey_meal_calories", -1)) == 5, "default predator_prey_meal_calories")
+  var gc: Node = (load("res://game_config.gd") as GDScript).new()
+  _assert(not gc.has_method(&"get_creature_motor_params"), "GameConfig no longer has get_creature_motor_params")
   _assert(
-    is_equal_approx(float(spine.get("weight_seek_ready_food", 0.0)), 16.0),
-    "spine weight_seek_ready_food",
+    not gc.has_method(&"get_creature_motor_params_for_pack"),
+    "GameConfig no longer has get_creature_motor_params_for_pack",
   )
+  gc.free()
+  for sym in [
+    &"creature_motor_spine", &"creature_motor_profile_dev", &"creature_motor_profile_ship",
+    &"use_ship_motor_profile", &"default_creature_motor_params", &"merge_creature_motor_pack_overlay",
+    &"apply_creature_motor_profile_ship", &"apply_creature_motor_profile_dev",
+  ]:
+    _assert(not _script_defines_method(_Merge, sym), "game_config_merge no longer defines %s" % str(sym))
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("food_seek_imminent_mob_radius", 0.0)), 100.0),
-    "default food_seek_imminent_mob_radius",
-  )
-  _assert(
-    int(base["creature_motor"].get("jeopardy_forced_turn_ticks", -1)) == 5,
-    "default jeopardy_forced_turn_ticks",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_avoid_unready_food", 0.0)), 5.5),
-    "default weight_avoid_unready_food",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("food_avoid_unready_scale_when_ready_target", 0.0)), 0.35),
-    "default food_avoid_unready_scale_when_ready_target",
+    not _script_defines_method(_PackRes, &"load_creature_motor_overlay"),
+    "PackResourceResolver no longer defines load_creature_motor_overlay",
   )
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_explore_idle_penalty", 0.0)), 10.5),
-    "default weight_explore_idle_penalty",
+    not _script_defines_method(_PackRes, &"merge_creature_motor_v3_from_legacy"),
+    "PackResourceResolver no longer defines merge_creature_motor_v3_from_legacy",
   )
+  var repo_json := JSON.new()
+  _assert(repo_json.parse(FileAccess.get_file_as_string("res://game_config.json")) == OK, "game_config.json parses")
   _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_explore_turn_bias", 0.0)), 0.14),
-    "default weight_explore_turn_bias",
+    not (repo_json.data as Dictionary).has("creature_motor"),
+    "game_config.json has no legacy creature_motor block",
   )
-  _assert(
-    int(base["creature_motor"].get("explore_intent_hold_extra_ticks", -1)) == 5,
-    "default explore_intent_hold_extra_ticks",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("explore_coverage_cell", 0.0)), 52.0),
-    "default explore_coverage_cell",
-  )
-  _assert(
-    int(base["creature_motor"].get("explore_trail_max_cells", -1)) == 96,
-    "default explore_trail_max_cells",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_explore_trail_repulsion", 0.0)), 2.35),
-    "default weight_explore_trail_repulsion",
-  )
-  _assert(bool(base["creature_motor"].get("motor_exploration_always_enabled", false)), "default motor_exploration_always_enabled")
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_pursuit_dist", 0.0)), 0.42),
-    "default weight_pursuit_dist",
-  )
-  _assert(
-    int(base["creature_motor"].get("intent_hold_ticks_predator", -1)) == 6,
-    "default intent_hold_ticks_predator",
-  )
-  _assert(
-    is_equal_approx(float(base["creature_motor"].get("weight_obstacle_shield_prey", 0.0)), 28.0),
-    "default weight_obstacle_shield_prey",
-  )
+  for pack in ["rabbit", "fox", "wolf", "resolver_smoke"]:
+    var pack_root := _PackRes.load_pack_root("res://assets/creatures/%s" % pack)
+    _assert(not pack_root.is_empty(), "%s pack_resources.json loads" % pack)
+    _assert(not pack_root.has("creature_motor"), "%s pack_resources.json has no legacy creature_motor block" % pack)
 
 func _test_motor_plane_yaw_from_facing() -> void:
   const dirs: Array[Vector3] = [
@@ -13510,8 +13398,7 @@ func _test_playfield_prop_grounding_on_thick_floor() -> void:
   playfield_root.queue_free()
 
 func _test_predator_prey_meal_clamp() -> void:
-  var base := _Merge.default_root()
-  var meal := int(base["creature_motor"].get("predator_prey_meal_calories", 5))
+  var meal := int(_Merge.v3_default("predator_prey_meal_calories"))
   var carn_root := _instantiate_carnivore_root()
   var body := carn_root.get_node("Body") as CharacterBody3D
   _assert(body != null, "carnivore Body loads for meal clamp")
@@ -14344,7 +14231,7 @@ func _test_bake_playfield_navmesh_includes_solid_food_plants() -> void:
 func _test_motor_plane_footprint_is_radius_on_both_axes() -> void:
   var main := Node3D.new()
   root.add_child(main)
-  var motor_p := _Merge.default_creature_motor_params()
+  var motor_p := _Merge.default_creature_motor_v3_params()
   var bodies: Array[CharacterBody3D] = [
     _spawn_herbivore_body(main, Vector3(0.0, 1.0, 0.0)),
     _spawn_carnivore_body(main, Vector3(30.0, 1.0, 0.0)),
@@ -14491,7 +14378,7 @@ func _test_kinematic_clamp_stops_at_terrain_edge_inside_aabb() -> void:
   body.set("screen_size", Vector2(200.0, 200.0))
   body.set("walkable_sampler", fx["sampler"])
   body.set_control_mode(_ControlMode.engine_as_int())
-  var he := _MotorPlane.footprint_half_extents(body, _Merge.default_creature_motor_params())
+  var he := _MotorPlane.footprint_half_extents(body, _Merge.default_creature_motor_v3_params())
   body.global_position = Vector3(0.0, 1.0, -30.0)
   body.call("_clamp_playfield_position")
   body.global_position = Vector3(0.0, 1.0, 40.0)
