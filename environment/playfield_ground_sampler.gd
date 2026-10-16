@@ -1,6 +1,7 @@
 extends RefCounted
 class_name PlayfieldGroundSampler
 ## Baked ground-elevation grid over playfield XZ for rim spawn placement and terrain-aware motor.
+## Elevation is terrain-only: prop colliders passed as exclude RIDs are ignored by the elevation rays.
 
 
 const _Bounds3D := preload("res://environment/playfield_bounds_3d.gd")
@@ -39,8 +40,9 @@ var _walk_exclude: Array = []
 ## - bounds: [PlayfieldBounds3D.xz_bounds_from_playfield_root] dictionary.
 ## - space: Active [PhysicsDirectSpaceState3D] (scene must be in tree).
 ## - grid_cells: Square grid resolution per axis.
-## - walkable_exclude_rids: Collider RIDs (props: boulders, plants) ignored by the walkable mask only,
-##   so a prop over the void never marks its cell as terrain. Elevation sampling is unchanged.
+## - walkable_exclude_rids: Collider RIDs (props: boulders, plants) ignored by BOTH the walkable mask
+##   and the elevation rays, so a prop never marks a void cell as terrain and never raises
+##   [method sample_elevation] / [method max_elevation_range] (elevation is terrain-only; CMV3C-33).
 ## Returns:
 ## - Configured sampler (may be invalid when bounds or space are missing).
 static func bake_from_playfield(
@@ -237,7 +239,9 @@ func _bake(bounds: Dictionary, space: PhysicsDirectSpaceState3D, grid_cells: int
       var fx := (float(gx) + 0.5) / float(_grid_w)
       var fy := (float(gy) + 0.5) / float(_grid_h)
       var xz := _bounds_min + Vector2(fx * sz.x, fy * sz.y)
-      var ground: Dictionary = _Bounds3D.raycast_ground_surface(space, xz, _floor_y_hint)
+      var ground: Dictionary = _Bounds3D.raycast_ground_surface(
+        space, xz, _floor_y_hint, _Bounds3D.WORLD_STATIC_COLLISION_MASK, _walk_exclude
+      )
       _elevations[gy * _grid_w + gx] = float(ground.get("surface_y", _floor_y_hint))
   _bake_walkable_mask(space)
   _valid = true

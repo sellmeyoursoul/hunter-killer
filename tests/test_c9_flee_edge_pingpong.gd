@@ -273,8 +273,9 @@ func _run_attempt(label: String, outward: Vector2, lateral: float, standoff_m: f
 
 ## Teleports [param body] to [param xz] just above the REAL ground and clears its velocity.
 ## Ground comes from a terrain-only raycast (props and perimeter boulders excluded via main's
-## walkable-mask exclude RIDs), not [method PlayfieldGroundSampler.sample_elevation], whose elevation
-## rays include props and can report a boulder top (~16 m) over y=0 terrain at the corner.
+## walkable-mask exclude RIDs). [method PlayfieldGroundSampler.sample_elevation] is terrain-only too
+## since CMV3C-33; this test used to avoid it because its rays included props and could report a
+## boulder top (~16 m) over y=0 terrain at the corner.
 func _place(body: CharacterBody3D, xz: Vector2) -> void:
   var space: PhysicsDirectSpaceState3D = _main.get_world_3d().direct_space_state
   var exclude: Array = _main.call("_walkable_mask_exclude_rids")

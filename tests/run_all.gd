@@ -515,6 +515,7 @@ func _run_all() -> void:
   await _test_ground_sampler_center_lower_than_rim()
   _test_fall_physics_ticks_to_fall_matches_kinematics()
   await _test_ground_sampler_max_elevation_range_matches_real_terrain()
+  await _test_ground_sampler_elevation_ignores_excluded_prop_colliders()
   await _test_motor_plane_scales_invariant_airborne_ticks_from_terrain()
   _test_motor_plane_leaves_invariant_ticks_unscaled_without_ground_sampler()
   await _test_duel_spawn_picker_avoids_depression()
@@ -12685,6 +12686,66 @@ func _test_ground_sampler_max_elevation_range_matches_real_terrain() -> void:
   )
   _assert(got > 3.0, "grasslands has a genuine multi-meter elevation spread (got %.3f)" % got)
   (pack.get("root") as Node3D).queue_free()
+
+
+## CMV3C-33 regression: elevation is terrain-only. A tall prop collider over flat terrain, passed as
+## an exclude RID, must not change [PlayfieldGroundSampler.sample_elevation] or
+## [PlayfieldGroundSampler.max_elevation_range]; without the exclude it is (still) picked up.
+func _test_ground_sampler_elevation_ignores_excluded_prop_colliders() -> void:
+  var holder := Node3D.new()
+  root.add_child(holder)
+  var terrain := StaticBody3D.new()
+  terrain.collision_layer = 1
+  terrain.collision_mask = 1
+  var tcs := CollisionShape3D.new()
+  var tbox := BoxShape3D.new()
+  tbox.size = Vector3(200.0, 2.0, 200.0)
+  tcs.shape = tbox
+  terrain.add_child(tcs)
+  holder.add_child(terrain)
+  terrain.global_position = Vector3(0.0, -1.0, 0.0)
+  var prop := StaticBody3D.new()
+  prop.collision_layer = 1
+  prop.collision_mask = 1
+  var pcs := CollisionShape3D.new()
+  var pbox := BoxShape3D.new()
+  pbox.size = Vector3(10.0, 20.0, 10.0)
+  pcs.shape = pbox
+  prop.add_child(pcs)
+  holder.add_child(prop)
+  prop.global_position = Vector3(50.0, 10.0, 50.0)
+  var bounds := {
+    "valid": true,
+    "min": Vector2(-100.0, -100.0),
+    "max": Vector2(100.0, 100.0),
+    "size": Vector2(200.0, 200.0),
+    "center": Vector3(0.0, -2.0, 0.0),
+    "floor_y": -2.0,
+    "surface_y": 0.0,
+  }
+  await self.physics_frame
+  await self.physics_frame
+  var space: PhysicsDirectSpaceState3D = root.get_world_3d().direct_space_state
+  var with_exclude: _GroundSampler = _GroundSampler.bake_from_playfield(
+    bounds, space, _GroundSampler.DEFAULT_GRID_CELLS, [prop.get_rid()]
+  )
+  var prop_xz := Vector2(50.0, 50.0)
+  _assert(with_exclude.is_valid(), "prop-excluded sampler bakes")
+  _assert(
+    absf(with_exclude.sample_elevation(prop_xz, -99.0)) < 0.01,
+    "sample_elevation at the prop cell is terrain Y 0 (got %.3f)" % with_exclude.sample_elevation(prop_xz, -99.0),
+  )
+  _assert(
+    with_exclude.max_elevation_range() < 0.01,
+    "max_elevation_range ignores the excluded prop (got %.3f)" % with_exclude.max_elevation_range(),
+  )
+  var without_exclude: _GroundSampler = _GroundSampler.bake_from_playfield(bounds, space)
+  _assert(
+    without_exclude.sample_elevation(prop_xz, -99.0) > 15.0,
+    "sanity: without the exclude the prop top is sampled (got %.3f)" % without_exclude.sample_elevation(prop_xz, -99.0),
+  )
+  holder.queue_free()
+  await process_frame
 
 
 ## End-to-end wiring check for the fix itself: with a real baked ground sampler behind a

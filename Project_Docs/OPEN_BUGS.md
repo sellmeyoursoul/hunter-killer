@@ -8,7 +8,7 @@
 >
 > **Tier:** root / tracking (see [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md)); not a feature plan and not a contract. Rules for maintainers: [Project_Docs/CLAUDE.md](CLAUDE.md) "Bug register (OPEN_BUGS.md)".
 >
-> **Last full sweep:** 2026-10-16 (CBD-1 step 6 legacy `creature_motor` retirement recorded; other entries last swept 2026-10-14 / 2026-10-15).
+> **Last full sweep:** 2026-10-16 (CBD-1 step 6 legacy `creature_motor` retirement recorded; CMV3C-33 closed and CMV3C-34 added; other entries last swept 2026-10-14 / 2026-10-15).
 
 ---
 
@@ -20,7 +20,7 @@
 
 | Prefix | Source doc | Source-doc numbering | Next unused |
 |--------|------------|----------------------|-------------|
-| `CMV3C` | [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | `C#` (C1-C24 exist; 25-29, 30-32 and 33 were assigned here without a C section) | 34 |
+| `CMV3C` | [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | `C#` (C1-C24 exist; 25-29, 30-32, 33 and 34 were assigned here without a C section; 33 is `done` 2026-10-16, number not reused) | 35 |
 | `CMV3R` | [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md) | `RT#` (RT4 is a feature slice, not a bug; see its section) | 5 |
 | `CMV3D` | [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) | none: findings are unnumbered prose, so IDs are sequential | 3 |
 | `CMV3` | [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) (hub; reserved) | — | 1 |
@@ -47,9 +47,9 @@
 | [CMV3C-27](#cmv3c-27) | `pending_recurrence` | V3 | environment-world | Corner scenario of `test_c9_flee_edge_pingpong.gd` fell at tick 35 near (-95,-93); does not reproduce at HEAD, original coordinates look mislabelled |
 | [CMV3C-28](#cmv3c-28) | `open` | V3 | creature-entity | Instances of CMV3C-10: airborne-invariant trips for rabbit/fox/wolf in the C9 edge test; falling bodies, not flee |
 | [CMV3C-29](#cmv3c-29) | `open` | V3 | creature-motor | Silent-stall `MOTOR_INVARIANT` for a rabbit near (90.5, 81.9), seen once in a nav-cost run; uninvestigated |
+| [CMV3C-34](#cmv3c-34) | `pending_recurrence` | V3 | test-harness (tentative) | C9 test `_test_placement_lands_on_floor` failed once: rabbit not on floor within 10 ticks after `_place` at (-95.25, 40.0), y -1.73; not reproduced in 4 reruns or on baseline |
 | [CMV3D-1](#cmv3d-1) | `open` | V3 | creature-motor (tentative) | `is_on_floor=false` at spawn warning for both creatures on the C9 rig; recurrence not confirmed |
 | [CMV3D-2](#cmv3d-2) | `open` | V3 | creature-motor (tentative) | Explore walks the whole way to a wall: explore waypoints minted well past the playfield boundary; recurrence not confirmed |
-| [CMV3C-33](#cmv3c-33) | `open` | outside-V3 | environment-world | `PlayfieldGroundSampler._bake` elevation includes props (~16-17 m at the (-96,-96) corner vs terrain 0); low priority, fix decision pending consumer audit |
 | [EBP-1](#ebp-1) | `open` | outside-V3 | assets-pack | `open_shrub_3d` depleted visual appears to jump position after being eaten |
 | [EBP-2](#ebp-2) | `open` | outside-V3 | environment-world | `mesh_local_bottom_y` / `snap_prop_root_to_ground` measure in root-local units; a scaled prop sinks |
 
@@ -118,7 +118,7 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 - **Symptom (as originally logged 2026-10-13/14):** in the corner scenario the body fell (C10-like) at tick 35, "deterministically", near (-94..-96.6, y -3.64, z -93.2..-93.8), at all standoffs.
 - **Repro:** `godot --path . --headless -s res://tests/test_c9_flee_edge_pingpong.gd`. 2026-10-16 investigation: **does not reproduce** at HEAD (4 full runs + 3 corner-only runs) or at 7c1751e (2 runs). Terrain at the corner is solid flat y=0 (ray scans; no seam, no void).
 - **Ruled out:** "placement over a drop / unsupported terrain" (terrain at the corner is flat y=0). A shared cause with [CMV3C-10](#cmv3c-10) / [CMV3C-26](#cmv3c-26) / [CMV3C-28](#cmv3c-28): none found (no overlap).
-- **Leading hypothesis:** the original coordinates were mislabelled. The recorded y -3.64 matches the west basin (z -14..16, the [CMV3C-26](#cmv3c-26) location), not z ~ -93, so the 2026-10-13 observation probably belonged to a different location or run. Not proven. Related but separate finding from this investigation: [CMV3C-33](#cmv3c-33) (sampler elevation includes props; the test's `_place` spawned the body ~18.5 m up at this corner and it free-fell 25 ticks).
+- **Leading hypothesis:** the original coordinates were mislabelled. The recorded y -3.64 matches the west basin (z -14..16, the [CMV3C-26](#cmv3c-26) location), not z ~ -93, so the 2026-10-13 observation probably belonged to a different location or run. Not proven. Related but separate finding from this investigation: CMV3C-33 (sampler elevation included props; the test's `_place` spawned the body ~18.5 m up at this corner and it free-fell 25 ticks), `done` 2026-10-16 (terrain-only elevation; see the [CLEANUP pointer](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md)).
 - **Next step:** none until a fresh corner-scenario fall appears (record the full position, scenario label and `sample_elevation` when it does).
 
 ### CMV3C-28
@@ -137,15 +137,14 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 - **Ruled out:** nothing.
 - **Leading hypothesis:** none. Related earlier silent-stall classes (tall-capsule arrival, hop-vs-ultimate) are documented fixed in [PHYSICS_SQUEEZE.md decision 46 E/F](Draft_Features/PHYSICS_SQUEEZE.md); check whether those paths apply.
 
-### CMV3C-33
+### CMV3C-34
 
-- **Status:** `open` (low priority) | **Scope:** outside-V3 (does not gate V3; the C9 test-side workaround is being done separately in `tests/`) | **Owner:** environment-world | **Updated:** 2026-10-16 | **Source:** pointer in [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) checklist (found while investigating [CMV3C-27](#cmv3c-27); no C section)
-- **Symptom:** `PlayfieldGroundSampler._bake` (`environment/playfield_ground_sampler.gd`) takes `surface_y` / `sample_elevation` from rays that do not exclude props. At the (-96.13, -96.13) corner `sample_elevation` reads ~16-17 m while true terrain is 0. The C9 test's `_place` (`sample_elevation + 1.2`) therefore spawned the body at ~18.5 m and it free-fell 25 ticks (11 short of the 36-tick airborne bailout). Sampler values also varied **between processes** (105 m at the rim vs 9-17 m); cause unknown.
-- **Repro:** `tests/test_c9_flee_edge_pingpong.gd` corner scenario, observed during the 2026-10-16 CMV3C-27 investigation; no isolated sampler repro command or rate recorded.
-- **Ruled out:** nothing tested beyond the ray observation (terrain itself is flat y=0 at the corner).
-- **Leading hypothesis:** the elevation rays hit props (e.g. plants / boulders / rim geometry), and prop placement differs per process, which would also explain the between-process variation. Not verified.
-- **Fix decision:** pending consumer audit. Options: a terrain-only elevation channel, or exclude props from the elevation rays. Needs an audit of `MotorPlane` and other consumers of `sample_elevation` / `surface_y` first (some may want prop-inclusive height).
-- **Test-side workaround:** test-harness is changing `_place` in the C9 test to raycast terrain (tracked separately in `tests/`; does not close this item).
+- **Status:** `pending_recurrence` | **Scope:** V3 (the C9 edge test is V3 verification) | **Owner:** test-harness (tentative; may instead be the west-edge body family, creature-entity, see [CMV3C-26](#cmv3c-26)) | **Updated:** 2026-10-16 | **Source:** pointer in [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) (no C section)
+- **Symptom:** `tests/test_c9_flee_edge_pingpong.gd` `_test_placement_lands_on_floor` (the new placement assert) failed once during CMV3C-33 verification: `minus_x_edge: rabbit not on floor within 10 ticks after _place at (-95.25, 40.0) (y=-1.73)`. `_place` drops the body `_SPAWN_CLEARANCE_M` above the terrain-only ground ray (`raycast_ground_surface` with `_walkable_mask_exclude_rids()`); the final y -1.73 is below that start, so the body was still descending or sliding on sloped terrain, not hovering.
+- **Repro:** `godot --path . --headless -s res://tests/test_c9_flee_edge_pingpong.gd`. 1 failure; 0 in 4 reruns after the fix; 0 on the pre-fix baseline (which lacked the assert). Rate unknown.
+- **Ruled out:** nothing tested beyond the reruns.
+- **Leading hypothesis:** none confirmed. Candidates: slope or drop at that west-edge spot (the west basin around z -14..16 sits near y -3.9; z 40 is nearby terrain, unverified); `_PLACE_FLOOR_MAX_TICKS` = 10 too tight for a settle on a slope; per-process prop or layout variation changing the ground under the point.
+- **Next step if it recurs:** record the full printed line, the terrain `surface_y` at the point, the layout, and `floor_tick` for the three scenarios; check whether the rabbit reaches the floor given more ticks (tick budget) or keeps falling (CMV3C-10 / CMV3C-26 family).
 
 ### CMV3D-1
 
