@@ -33,6 +33,11 @@ const _MIN_STANDOFF_M := 6.0
 const _NOTE_AIRBORNE_TICKS := 60
 ## Walkable-mask query margin for "never leaves walkable" / "waypoint is walkable" (m).
 const _WALK_MARGIN_M := 0.0
+## Clearance above the real ground surface at which a body is dropped by [method _place] (m). Body
+## origin rests ~0.06 m above the surface; gravity ramps slowly so 1.2 m took ~26 ticks to land.
+const _SPAWN_CLEARANCE_M := 0.15
+## Ticks within which a freshly placed rabbit must report is_on_floor() (regression: sampler-height spawn).
+const _PLACE_FLOOR_MAX_TICKS := 10
 
 var _failures: int = 0
 var _main: Node3D
@@ -61,6 +66,9 @@ func _run() -> void:
     await _test_flee_along_edge("minus_x_edge", Vector2(-1.0, 0.0), 40.0)
     await _test_flee_along_edge("plus_z_edge", Vector2(0.0, 1.0), 0.0)
     await _test_flee_along_edge("minus_x_minus_z_corner", Vector2(-1.0, -1.0).normalized(), 0.0)
+    await _test_placement_lands_on_floor("minus_x_edge", Vector2(-1.0, 0.0), 40.0)
+    await _test_placement_lands_on_floor("plus_z_edge", Vector2(0.0, 1.0), 0.0)
+    await _test_placement_lands_on_floor("minus_x_minus_z_corner", Vector2(-1.0, -1.0).normalized(), 0.0)
   if _failures > 0:
     push_error("test_c9_flee_edge_pingpong.gd: %d assertion(s) failed." % _failures)
   quit(0 if _failures == 0 else 1)
@@ -263,8 +271,42 @@ func _run_attempt(label: String, outward: Vector2, lateral: float, standoff_m: f
   }
 
 
-## Teleports [param body] to [param xz] on the terrain surface and clears its velocity.
+## Teleports [param body] to [param xz] just above the REAL ground and clears its velocity.
+## Ground comes from a terrain-only raycast (props and perimeter boulders excluded via main's
+## walkable-mask exclude RIDs), not [method PlayfieldGroundSampler.sample_elevation], whose elevation
+## rays include props and can report a boulder top (~16 m) over y=0 terrain at the corner.
 func _place(body: CharacterBody3D, xz: Vector2) -> void:
-  var y: float = _sampler.sample_elevation(xz, 0.0) + 1.2
+  var space: PhysicsDirectSpaceState3D = _main.get_world_3d().direct_space_state
+  var exclude: Array = _main.call("_walkable_mask_exclude_rids")
+  var hint_y := float(_main.get("_playfield_bounds").get("floor_y", 0.0))
+  var ground: Dictionary = PlayfieldBounds3D.raycast_ground_surface(
+    space, xz, hint_y, PlayfieldBounds3D.WORLD_STATIC_COLLISION_MASK, exclude
+  )
+  var y: float = float(ground.get("surface_y", hint_y)) + _SPAWN_CLEARANCE_M
   body.global_position = Vector3(xz.x, y, xz.y)
   body.velocity = Vector3.ZERO
+
+
+## Regression: after [method _place] at a scenario start the rabbit must be on the floor within
+## [constant _PLACE_FLOOR_MAX_TICKS] ticks (previously spawned ~18 m up at the corner and free-fell).
+func _test_placement_lands_on_floor(label: String, outward: Vector2, lateral: float) -> void:
+  # Arrange
+  _main.call("new_game")
+  var rabbit: CharacterBody3D = _main.call("get_player_creature_body")
+  var rabbit_xz := _edge_point(outward, lateral) + (-outward.normalized()) * _EDGE_INSET_M
+  # Act
+  _place(rabbit, rabbit_xz)
+  var floor_tick := -1
+  for tick_i in _PLACE_FLOOR_MAX_TICKS:
+    await physics_frame
+    if rabbit.is_on_floor():
+      floor_tick = tick_i
+      break
+  # Assert
+  _assert(
+    floor_tick >= 0,
+    "%s: rabbit not on floor within %d ticks after _place at %s (y=%.2f)" % [
+      label, _PLACE_FLOOR_MAX_TICKS, str(rabbit_xz), rabbit.global_position.y,
+    ],
+  )
+  print("C9_EDGE_PLACE %s: floor_tick=%d y=%.2f" % [label, floor_tick, rabbit.global_position.y])
