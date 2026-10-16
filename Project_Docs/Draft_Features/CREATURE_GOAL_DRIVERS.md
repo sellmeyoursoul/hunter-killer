@@ -436,7 +436,7 @@ When **`try_salient_write`** would fire on **jeopardy clear** ([CREATURE_MEMORY.
 **Suppress** if starvation override **reversed the escape** and the creature returned to **any acute danger** (not only the first mob — supports **trailing hostile trains**):
 
 1. During escape episode (`tactic_jeopardy_egress` was true), **`calorie_ratio < starvation_override_food_ceiling`** caused **Avoid → Find food** dominance flip, **and**
-2. Before jeopardy-clear evaluation, creature re-entered **any** imminent threat (`food_seek_imminent_mob_radius_px` or equivalent acute-danger test) within **`escape_reversal_window_sec`** (default **1 s** — tune in play).
+2. Before jeopardy-clear evaluation, creature re-entered **any** imminent threat (`food_seek_imminent_mob_radius_px` or equivalent acute-danger test) within **`escape_reversal_window_sec`** (V2 default **1 s**; **key dropped** — no V3 default or reader, superseded by `flee_reacquire_window_sec`; see V3 status above).
 
 **If suppressed:** **no write** for that clear event; **retry on next clean escape** (jeopardy clears without reversal conditions).
 

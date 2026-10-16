@@ -30,7 +30,7 @@
 | `creature_size` / `CreatureDefinition.creature_size` | Longest body dimension in **sim units** (px in 2D). In 3D with authored `body_length` / `body_width` / `body_height`, the live value is `max(live L, W, H)` (re-derived on runtime size change); the authored `creature_size` is a deprecated legacy fallback while any dimension is unset ([CREATURE_BODY_DIMENSIONS.md](../Draft_Features/CREATURE_BODY_DIMENSIONS.md) B11) | `stat_fit`; env `fit_size` (max body size that may **enter** a cell) |
 | `fit_size` (environment) | Authoring gate for squeeze / shrub slowdown ([OBJECT_AVOIDANCE_PLAN.md](../Completed_Features/OBJECT_AVOIDANCE_PLAN.md) §3) | `stat_fit` pools |
 | `estimated_squeeze_capability` | Skill-bounded **belief** about passing squeezes ([CREATURE_MEMORY.md](../Draft_Features/CREATURE_MEMORY.md) §7) | `stat_dexterity` or `stat_fit` — docs say “parameterized elsewhere; improves with progression” but **no stat pool link yet** |
-| `awareness_radius`, `awareness_cone_*` (`creature_motor`) | Live **motor perception** disk + cone ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §4) | `stat_observation` pools — parallel concern; today scaled via `CreatureDefinition.perception_radius_scale` / `awareness_cone_half_angle_scale`, not observation points |
+| `awareness_radius`, `awareness_cone_*` (`creature_motor_v3`) | Live **motor perception** disk + cone ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §4) | `stat_observation` pools — parallel concern; today scaled via `CreatureDefinition.perception_radius_scale` / `awareness_cone_half_angle_scale`, not observation points |
 | “Observation” in memory TTL copy | Last **live sensory** contact with a remembered entity | Spending `curr_point_observ` |
 
 ---
@@ -44,7 +44,7 @@ Status key: **Live** = affects shipped logic today via another field; **Specifie
 | Aspect | Detail |
 |--------|--------|
 | **Semantic** | General physical fitness / strength ([EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC)). |
-| **Documented mechanics** | Future **`spend_fit`** API for exertion ([CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) §4). Indirect **future** coupling: **movement-based calorie burn** and **Preserve calories** locomotion thrift ([PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md) §3, [CREATURE_MOVEMENT_V2.md (archived V2 snapshot)](../Completed_Features/CREATURE_MOVEMENT_V2.md) §A.3.1, [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)) — docs cite vitals / `creature_motor`, **not** explicit `curr_point_fit` spend yet. |
+| **Documented mechanics** | Future **`spend_fit`** API for exertion ([CREATURE_MODEL_PLAN.md](../Draft_Features/CREATURE_MODEL_PLAN.md) §4). Indirect **future** coupling: **movement-based calorie burn** and **Preserve calories** locomotion thrift ([PLANTS_PLAN.md](../Draft_Features/PLANTS_PLAN.md) §3, [CREATURE_MOVEMENT_V2.md (archived V2 snapshot)](../Completed_Features/CREATURE_MOVEMENT_V2.md) §A.3.1, [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md)) — docs cite vitals / the motor (`creature_motor_v3`), **not** explicit `curr_point_fit` spend yet. |
 | **Status** | **Semantic only** (+ reserved spend API). |
 | **Related live fields** | `CreatureDefinition.calorie_movement_cost_multiplier`; base `speed` on bodies — **not** tied to `stat_fit` in docs. |
 
@@ -69,7 +69,7 @@ Status key: **Live** = affects shipped logic today via another field; **Specifie
 | Aspect | Detail |
 |--------|--------|
 | **Semantic** | Keep clear judgment under stress ([EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC)). |
-| **Documented mechanics** | Pool sizing via `stat_to_point(stat_composure)` ([SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md)) — **implemented**, [`res://creature/stat_math.gd`](../../creature/stat_math.gd). **Live (2026-09-12; curve migrated 2026-09-15):** `Action.WAIT`'s calorie discount ([CREATURE_MOVEMENT_V3.md §6.4](../Draft_Features/CREATURE_MOVEMENT_V3.md) concealment-rest) reads `stat_composure` through `StatMath.peg_curve` (pegged at stat 1/10/25 → 0.9353/0.625/0.5156, same file as the point-pool table), lerped by `curr_point_comp/max_point_comp` between the stat-1 peg (full-cost, pool spent) and the pegged value (pool full) for `wait_calorie_multiplier`. **Stub caveat:** `curr_point_comp` is always full — nothing spends composure yet, so only the stat-baseline half of the formula is currently live. **No** link yet to **`jeopardy_forced_turn`**, flee panic, or **`scripted_intent_hold`** — those still use fixed `creature_motor` ticks ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5). |
+| **Documented mechanics** | Pool sizing via `stat_to_point(stat_composure)` ([SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md)) — **implemented**, [`res://creature/stat_math.gd`](../../creature/stat_math.gd). **Live (2026-09-12; curve migrated 2026-09-15):** `Action.WAIT`'s calorie discount ([CREATURE_MOVEMENT_V3.md §6.4](../Draft_Features/CREATURE_MOVEMENT_V3.md) concealment-rest) reads `stat_composure` through `StatMath.peg_curve` (pegged at stat 1/10/25 → 0.9353/0.625/0.5156, same file as the point-pool table), lerped by `curr_point_comp/max_point_comp` between the stat-1 peg (full-cost, pool spent) and the pegged value (pool full) for `wait_calorie_multiplier`. **Stub caveat:** `curr_point_comp` is always full — nothing spends composure yet, so only the stat-baseline half of the formula is currently live. **No** link yet to **`jeopardy_forced_turn`**, flee panic, or **`scripted_intent_hold`** — those still use fixed `creature_motor_v3` ticks ([CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5). |
 | **Status** | **Live** (WAIT calorie discount, stat-baseline only) / **Reserved** (point-pool spend — natural future hook: stress events under **Avoid hostiles**). |
 
 ### 3.5 Observation — `stat_observation`, `curr_point_observ`, `max_point_observ`
@@ -93,7 +93,7 @@ Status key: **Live** = affects shipped logic today via another field; **Specifie
 | Aspect | Detail |
 |--------|--------|
 | **Semantic** | Fast thinking; unpredictability in conversation and combat ([EARLY_SPEC_DOC](../Completed_Features/EARLY_SPEC_DOC)). |
-| **Documented mechanics** | Pool sizing via `stat_to_point(stat_wit)` ([SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md)). **No** motor or memory doc ties wit to **`motor_intent_cost_chaos`**, jeopardy reaction, or dialogue — those remain **`creature_motor`** / AI-scope concerns without stat pools. |
+| **Documented mechanics** | Pool sizing via `stat_to_point(stat_wit)` ([SHARED_STATTOPOINT_PLAN.md](../Completed_Features/SHARED_STATTOPOINT_PLAN.md)). **No** motor or memory doc ties wit to **`motor_intent_cost_chaos`**, jeopardy reaction, or dialogue — those remain **`creature_motor_v3`** / AI-scope concerns without stat pools. |
 | **Status** | **Semantic only** / **Reserved**. |
 
 ### 3.8 Dexterity — `stat_dexterity`, `curr_point_dex`, `max_point_dex`

@@ -66,8 +66,8 @@ Slot A uses **eight global pole ids** on each `LocalePriorMap` row (`pole_facet_
 | **Salient write metadata** | Passed through on outcome hooks (poles validated at write) | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_goal_memory_meta_for_body` → `try_salient_write` |
 | **Believed goal pull** | Same as consult replay when `context_hash` matches | [`ai_driver.gd`](../../AI_int_lib/ai_driver.gd) — `_apply_believed_goal_bias_to_ctx` |
 | **Tier-2 urgency channels** | **Stub — zero delta** | [`trait_tier2_mapper.gd`](../../creature/motor/trait_tier2_mapper.gd) — `apply_trait_urgency_channels` returns base only |
-| **Preserve / Find food bands** | **Not** trait-driven | [`tier2_dominance.gd`](../../creature/motor/tier2_dominance.gd) — `preserve_find_food_seek_scale(calorie_ratio, motor_p)` |
-| **Cardinal flee / jeopardy** | **Not** trait-driven (fixed ticks; legacy `creature_motor` retired 2026-10-16) | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5 |
+| **Preserve / Find food bands** | **Not** trait-driven | [`motor_goal_hub.gd`](../../creature/motor/motor_goal_hub.gd) — `urgency_eat(calorie_ratio, motor_v3)` (preserve band smoothstep), `effective_urgency_find_food(...)`; keys in `creature_motor_v3` |
+| **Cardinal flee / jeopardy** | **Not** trait-driven (fixed ticks in `creature_motor_v3`; legacy `creature_motor` config surface retired 2026-10-16) | [CREATURE_MOVEMENT.md](./CREATURE_MOVEMENT.md) §5 |
 | **Compassion / community motor** | **Not wired** | Deferred — see §4 |
 
 **`external_urgency`** (jeopardy + hunger subscores) caps how strong Slot A can be at replay — independent of trait sign; see [CREATURE_GOAL_DRIVERS.md §5.1.3](../Draft_Features/CREATURE_GOAL_DRIVERS.md).
@@ -84,7 +84,7 @@ Authoritative defaults (V3): [`game_config_merge.gd`](../../AI_int_lib/game_conf
 | `urgency_boost_linear_slope` | 25 | Slot A cap lift with `external_urgency` |
 | `replay_urgency_slot_b_min` | 90 | Gate for urgency boost |
 | `preserve_bias_food_floor` / `seek_priority_food_ceiling` | 0.90 / 0.80 | **Calorie bands only** — not trait-driven |
-| `weight_believed_goal_pull` | *(none)* | Legacy-only key (6.4 in the deleted spine); not in `default_creature_motor_v3_params()` and no V3 reader exists - row kept as a marker, do not rely on it |
+| `weight_believed_goal_pull` | *(none)* | **Planned, unbuilt:** V3 §14.1 adapter-consult scalar ([CREATURE_MOVEMENT_V3.md](../Draft_Features/CREATURE_MOVEMENT_V3.md) ~2761, ~2817); no V3 default or reader yet. Not in `default_creature_motor_v3_params()`; the V2 value (6.4) is retired - do not rely on it |
 
 ---
 

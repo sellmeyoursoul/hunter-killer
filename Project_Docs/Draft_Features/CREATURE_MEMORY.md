@@ -515,7 +515,7 @@ Authoritative defaults (V3, updated 2026-10-15): **`default_creature_motor_v3_pa
 |-------------|-------------------|------|
 | `believed_goal_hotspot_near_radius_px` | **250** | **Hotspot** and **`locale_prior_projection_radius_px`** — one knob. Rows within radius feed centroid. |
 | `believed_goal_seek_escalate_radius_px` | **1000** | Outside hotspot, ≤ this radius → escalate dominant Tier-2 seek (**§14**). |
-| `weight_believed_goal_pull` | **6.4** | Scales habitual **vector** attraction (**§14.1**); **0.4×** **`weight_seek_ready_food`** (16). |
+| `weight_believed_goal_pull` | *(none in V3; V2 value was 6.4)* | **Planned, unbuilt:** V3 §14.1 adapter-consult scalar ([CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md) ~2761, ~2817); no V3 default or reader yet. The V2 role (habitual **vector** attraction, **0.4×** `weight_seek_ready_food`) is retired. |
 | `locale_prior_pull_w_norm` | **3.0** | Denominator for **`pull_mag`** centroid scaling (**§14.1**). |
 | `locale_prior_ewma_alpha` | **0.15** | Per-tick soft decay on in-row **`success_delta`** / **`stored_strength`**. |
 | `locale_prior_write_blend` | **0.35** | Per-write lerp for **`stored_strength`** toward **`success_rate`** (**§14.2**). **In V3 defaults since 2026-10-15** (`default_creature_motor_v3_params()` 0.35, read via `_Merge.v3_default`); the V2 ship-profile 0.32 is in the inert legacy `creature_motor` surface and is NOT applied on V3. |
@@ -546,7 +546,7 @@ Authoritative defaults (V3, updated 2026-10-15): **`default_creature_motor_v3_pa
 
 **Replay / Slot B formula keys** (authoritative V3 defaults in **`default_creature_motor_v3_params()`** since 2026-10-15 — **[CREATURE_GOAL_DRIVERS.md §5.1.2](CREATURE_GOAL_DRIVERS.md)**): `replay_bell_k`, `replay_w_fit`, `replay_w_store`, `replay_n_sat`, `replay_n_min`, `urgency_boost_linear_slope`, `replay_urgency_slot_b_min`. Omit from the pack `creature_motor_v3` block unless overriding.
 
-| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**), **`escape_reversal_window_sec`** (default **1.0** — AH-7 reversal window; **key retained but no V3 consumer since 2026-09-24 — AH-7 suppression dropped, §14.2**). The four Preserve/Find keys are in `default_creature_motor_v3_params()` (read by `motor_goal_hub.gd` / `motor_planner.gd` / the body's `_seek_priority_food_ceiling`); `escape_reversal_window_sec` has no default or reader left after the legacy `default_creature_motor_params()` was deleted 2026-10-16 (CBD-1 step 6).
+| **Preserve / Find blend** (**[CREATURE_MOVEMENT_V2.md §A.3.1](CREATURE_MOVEMENT_V2.md)**): `preserve_bias_food_floor`, `seek_priority_food_ceiling`, `preserve_seek_blend_smoothness` (default **0.5**), **`starvation_override_food_ceiling`** (default **0.10**). The four Preserve/Find keys are in `default_creature_motor_v3_params()` (read by `motor_goal_hub.gd` / `motor_planner.gd` / the body's `_seek_priority_food_ceiling`). **Dropped:** `escape_reversal_window_sec` (V2 AH-7 reversal window, was 1.0) was retired — AH-7 suppression was dropped 2026-09-24 (§14.2) and superseded by V3 re-acquisition (`flee_reacquire_window_sec`); it has no default or reader and is not a live knob.
 
 ---
 
@@ -733,7 +733,7 @@ for s in 0..7:
 
 **`align(d, sector_s)` (resolved — sector-arc membership):** weight **1.0** if step **`d`** falls in egocentric sector **`s`**'s **45°** arc (**N…NW**, **`+Y = N`**), else **0** — not a continuous dot product.
 
-**Implementation hooks:** `goal_source_memory.project_believed_goal_bias(...)`; [`cardinal_avoidance.gd`](../../creature/motor/cardinal_avoidance.gd) reads **`believed_goal_source_bias`** + **`weight_believed_goal_pull`** from **`MotorContext`**.
+**Implementation hooks:** `goal_source_memory.project_believed_goal_bias(...)` produces **`believed_goal_source_bias`**. The V2 consumer (`cardinal_avoidance.gd` reading it plus **`weight_believed_goal_pull`** from **`MotorContext`**) is **retired**. **Planned, unbuilt:** under V3 the scalar **`weight_believed_goal_pull`** is an adapter-consult input ([CREATURE_MOVEMENT_V3.md](CREATURE_MOVEMENT_V3.md) ~2761, ~2817); no V3 default or reader yet. The additive per-step cost formula above is V2 design context.
 
 #### 14.2 `LocalePriorMap` row schema (phase-1 resolved)
 
@@ -807,7 +807,7 @@ for s in 0..7:
   - ~~**Side effect, accepted:** a `safety_met` flicker (exit, then immediate re-entry) counts as re-acquisition.~~ **Resolved 2026-09-29 (decision 46 H):** a re-entry within `flight_exit_confirm_sec` cancels the pending exit and writes nothing.
 - **Cornered-during-episode proxy — not implemented.** This option would write `FAILURE` when the flee boxed-in / give-up escalation fires mid-Flight. Only re-acquisition was approved this pass. Tracked in [ENHANCEMENT_BACKLOG_PLAN.md](../ENHANCEMENT_BACKLOG_PLAN.md) (**`avoid_hostiles` locale memory** row, item 1; combat half also on **Combat: `fight` vs `flee_retreat` dominance**).
 
-**Reversal detection (AH-7) — dropped under V3 (2026-09-24).** The V2 design (suppress the write when dominance flipped **Avoid → Find food** mid-episode and the creature re-enters a threat) has nothing to detect: during Flight `MotorGoalHub.build_eligible_goals` returns an empty list when `flight_fast_path_active` and `_run_consideration` clears the incumbent each consideration, so no Avoid → Find-food flip can occur mid-episode, and re-entry of another threat stays inside the same latched episode. The `escape_reversal_window_sec` / `starvation_override_food_ceiling` keys are not consumed by the writer. (Legacy V2 text: [GOAL_DRIVERS §5.1.5](CREATURE_GOAL_DRIVERS.md).)
+**Reversal detection (AH-7) — dropped under V3 (2026-09-24).** The V2 design (suppress the write when dominance flipped **Avoid → Find food** mid-episode and the creature re-enters a threat) has nothing to detect: during Flight `MotorGoalHub.build_eligible_goals` returns an empty list when `flight_fast_path_active` and `_run_consideration` clears the incumbent each consideration, so no Avoid → Find-food flip can occur mid-episode, and re-entry of another threat stays inside the same latched episode. `escape_reversal_window_sec` is retired (dropped; superseded by `flee_reacquire_window_sec`) and `starvation_override_food_ceiling` is not consumed by the writer. (Legacy V2 text: [GOAL_DRIVERS §5.1.5](CREATURE_GOAL_DRIVERS.md).)
 
 #### 14.3 Threat-response pass (phase-1 scope — resolved)
 
