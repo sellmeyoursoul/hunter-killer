@@ -38,6 +38,16 @@ const _WALK_MARGIN_M := 0.0
 const _SPAWN_CLEARANCE_M := 0.15
 ## Ticks within which a freshly placed rabbit must report is_on_floor() (regression: sampler-height spawn).
 const _PLACE_FLOOR_MAX_TICKS := 10
+## Ticks a placed body is watched after placement; it must never fall below [constant _PLACE_MIN_Y].
+const _PLACE_WATCH_TICKS := 60
+const _PLACE_MIN_Y := -0.5
+## Process seeds whose random interior-boulder layout covers a scenario start (CMV3C-34).
+const _OVERLAP_SEEDS := [19, 29]
+## Footprint probed for a physical prop overlap at a placement point (m); slightly larger than a creature body.
+const _GUARD_CAPSULE_RADIUS_M := 0.6
+const _GUARD_CAPSULE_HEIGHT_M := 1.8
+## A prop root found overlapping a start is moved this far along +X, far outside the playfield (m).
+const _GUARD_MOVE_AWAY_M := 1000.0
 
 var _failures: int = 0
 var _main: Node3D
@@ -49,16 +59,11 @@ func _init() -> void:
 
 
 func _run() -> void:
-  var scene: PackedScene = load("res://main_3d.tscn") as PackedScene
-  _main = scene.instantiate() as Node3D
-  root.add_child(_main)
-  await process_frame
-  await process_frame
-  var waited := 0
-  while not bool(_main.call("is_navigation_ready")) and waited < 600:
-    await process_frame
-    waited += 1
-  _sampler = _main.call("get_ground_sampler")
+  var forced_seed := _seed_from_args()
+  if forced_seed >= 0:
+    await _run_seeded_placement(forced_seed)
+    return
+  await _boot_main()
   _assert(_sampler != null and _sampler.is_valid() and _sampler.has_walkable_mask(), "walkable mask baked")
   var driver: Node = _main.call("_ai_driver")
   _assert(driver != null and bool(driver.call("begin_engine_player_round")), "AI driver round starts")
@@ -69,9 +74,81 @@ func _run() -> void:
     await _test_placement_lands_on_floor("minus_x_edge", Vector2(-1.0, 0.0), 40.0)
     await _test_placement_lands_on_floor("plus_z_edge", Vector2(0.0, 1.0), 0.0)
     await _test_placement_lands_on_floor("minus_x_minus_z_corner", Vector2(-1.0, -1.0).normalized(), 0.0)
+    await _test_guard_resolves_moved_interior_boulder()
+    # Seeds 19 and 29 (of 1..32) put an interior boulder over the minus_x_edge start (CMV3C-34). Each
+    # runs in a child Godot process: re-instantiating main_3d in-process leaves the AI driver holding
+    # freed creature roots (log noise), and the seed must be set before main is instantiated.
+    for overlap_seed in _OVERLAP_SEEDS:
+      _test_seeded_placement_subprocess(overlap_seed)
   if _failures > 0:
     push_error("test_c9_flee_edge_pingpong.gd: %d assertion(s) failed." % _failures)
   quit(0 if _failures == 0 else 1)
+
+
+## Seed from a `-- --seed=N` user arg, or -1 when absent.
+func _seed_from_args() -> int:
+  for arg in OS.get_cmdline_user_args():
+    if arg.begins_with("--seed="):
+      return int(arg.substr(7))
+  return -1
+
+
+## Child-process mode: boots main with `playfield_spawn.seed` forced and runs only the placement
+## regression at all three scenario starts. Exit code 0 = pass.
+func _run_seeded_placement(forced_seed: int) -> void:
+  await _boot_main(forced_seed)
+  await _test_placement_lands_on_floor("seed%d_minus_x_edge" % forced_seed, Vector2(-1.0, 0.0), 40.0)
+  await _test_placement_lands_on_floor("seed%d_plus_z_edge" % forced_seed, Vector2(0.0, 1.0), 0.0)
+  await _test_placement_lands_on_floor(
+    "seed%d_minus_x_minus_z_corner" % forced_seed, Vector2(-1.0, -1.0).normalized(), 0.0
+  )
+  if _failures > 0:
+    push_error("test_c9_flee_edge_pingpong.gd (seed %d): %d assertion(s) failed." % [forced_seed, _failures])
+  quit(0 if _failures == 0 else 1)
+
+
+## Spawns this script in a child Godot process with [param forced_seed] and asserts it exits 0.
+func _test_seeded_placement_subprocess(forced_seed: int) -> void:
+  var output: Array = []
+  var args := PackedStringArray([
+    "--path", ProjectSettings.globalize_path("res://"), "--headless",
+    "-s", "res://tests/test_c9_flee_edge_pingpong.gd", "--", "--seed=%d" % forced_seed,
+  ])
+  var rc := OS.execute(OS.get_executable_path(), args, output, true)
+  for chunk in output:
+    for line in str(chunk).split("
+"):
+      if line.begins_with("C9_EDGE_PLACE") or line.begins_with("NOTE (overlap guard)") or line.contains("ASSERT"):
+        print("  [seed %d] %s" % [forced_seed, line])
+  _assert(rc == 0, "seed %d: child placement run failed (rc=%d)" % [forced_seed, rc])
+
+
+## (Re)boots main_3d.tscn and waits for navigation. Frees any previous instance first.
+## [param forced_seed] >= 0 overrides `playfield_spawn.seed` in GameConfig's merged config before
+## instantiating (0 = random per process, the shipped default); -1 leaves the config untouched.
+func _boot_main(forced_seed: int = -1) -> void:
+  if _main != null and is_instance_valid(_main):
+    root.remove_child(_main)
+    _main.queue_free()
+    await process_frame
+    await process_frame
+  if forced_seed >= 0:
+    var cfg: Node = root.get_node("GameConfig")
+    var merged: Dictionary = cfg.get("_merged")
+    var spawn_cfg: Dictionary = merged.get("playfield_spawn", {})
+    spawn_cfg["seed"] = forced_seed
+    merged["playfield_spawn"] = spawn_cfg
+    cfg.set("_merged", merged)
+  var scene: PackedScene = load("res://main_3d.tscn") as PackedScene
+  _main = scene.instantiate() as Node3D
+  root.add_child(_main)
+  await process_frame
+  await process_frame
+  var waited := 0
+  while not bool(_main.call("is_navigation_ready")) and waited < 600:
+    await process_frame
+    waited += 1
+  _sampler = _main.call("get_ground_sampler")
 
 
 func _assert(cond: bool, msg: String) -> void:
@@ -182,6 +259,8 @@ func _run_attempt(label: String, outward: Vector2, lateral: float, standoff_m: f
         others.append(body)
   var other_airborne: Dictionary = {}
   var noted: Dictionary = {}
+  await _clear_props_at(rabbit_xz)
+  await _clear_props_at(fox_xz)
   _place(rabbit, rabbit_xz)
   _place(fox, fox_xz)
   await physics_frame
@@ -277,37 +356,151 @@ func _run_attempt(label: String, outward: Vector2, lateral: float, standoff_m: f
 ## since CMV3C-33; this test used to avoid it because its rays included props and could report a
 ## boulder top (~16 m) over y=0 terrain at the corner.
 func _place(body: CharacterBody3D, xz: Vector2) -> void:
+  body.global_position = Vector3(xz.x, _ground_y(xz) + _SPAWN_CLEARANCE_M, xz.y)
+  body.velocity = Vector3.ZERO
+
+
+## Terrain-only ground height at [param xz] (props and perimeter boulders excluded; see [method _place]).
+func _ground_y(xz: Vector2) -> float:
   var space: PhysicsDirectSpaceState3D = _main.get_world_3d().direct_space_state
   var exclude: Array = _main.call("_walkable_mask_exclude_rids")
   var hint_y := float(_main.get("_playfield_bounds").get("floor_y", 0.0))
   var ground: Dictionary = PlayfieldBounds3D.raycast_ground_surface(
     space, xz, hint_y, PlayfieldBounds3D.WORLD_STATIC_COLLISION_MASK, exclude
   )
-  var y: float = float(ground.get("surface_y", hint_y)) + _SPAWN_CLEARANCE_M
-  body.global_position = Vector3(xz.x, y, xz.y)
-  body.velocity = Vector3.ZERO
+  return float(ground.get("surface_y", hint_y))
 
 
-## Regression: after [method _place] at a scenario start the rabbit must be on the floor within
-## [constant _PLACE_FLOOR_MAX_TICKS] ticks (previously spawned ~18 m up at the corner and free-fell).
+## Prop roots (direct children of Obstacles3D / the food root) whose layer-1 colliders overlap a
+## creature-sized capsule standing on the terrain at [param xz]. A body placed inside one is
+## depenetrated under the one-sided terrain grid and falls (CMV3C-34; interior boulders are random
+## per process). Returns an Array of Node3D.
+func _prop_roots_overlapping(xz: Vector2) -> Array:
+  var space: PhysicsDirectSpaceState3D = _main.get_world_3d().direct_space_state
+  var shape := CapsuleShape3D.new()
+  shape.radius = _GUARD_CAPSULE_RADIUS_M
+  shape.height = _GUARD_CAPSULE_HEIGHT_M
+  var q := PhysicsShapeQueryParameters3D.new()
+  q.shape = shape
+  var centre_y := _ground_y(xz) + _SPAWN_CLEARANCE_M + _GUARD_CAPSULE_HEIGHT_M * 0.5
+  q.transform = Transform3D(Basis.IDENTITY, Vector3(xz.x, centre_y, xz.y))
+  q.collision_mask = PlayfieldBounds3D.WORLD_STATIC_COLLISION_MASK
+  var roots: Array = []
+  var hits: Array[Dictionary] = space.intersect_shape(q, 32)
+  for prop_root in [_main.get("_obstacles_root"), _main.get("_food_root")]:
+    if prop_root == null or not is_instance_valid(prop_root):
+      continue
+    for hit in hits:
+      var collider := hit.get("collider") as Node
+      if collider == null or not (prop_root as Node).is_ancestor_of(collider):
+        continue
+      var top: Node = collider
+      while top.get_parent() != prop_root:
+        top = top.get_parent()
+      # Interior boulders only: perimeter boulders are the playfield wall and must stay put.
+      if top is Node3D and _is_interior_boulder(top as Node3D) and not roots.has(top):
+        roots.append(top)
+  return roots
+
+
+## True for a randomly placed interior boulder (group `obstacles`, interior visual scale).
+func _is_interior_boulder(node: Node3D) -> bool:
+  return node.is_in_group(&"obstacles") and absf(node.scale.x - PlayfieldBounds3D.INTERIOR_BOULDER_VISUAL_SCALE) < 0.01
+
+
+## Overlap guard: if any prop overlaps the start at [param xz], moves that prop root far outside the
+## playfield (deterministic; the start itself is unchanged) and waits two physics frames so the move
+## reaches the physics broadphase. Never place a body into a collider. Returns the number of props moved.
+func _clear_props_at(xz: Vector2) -> int:
+  var overlapping := _prop_roots_overlapping(xz)
+  if overlapping.is_empty():
+    return 0
+  for prop in overlapping:
+    var node := prop as Node3D
+    print("NOTE (overlap guard): moving prop %s off start %s (was at %s)" % [node.name, str(xz), str(node.global_position)])
+    node.global_position += Vector3(_GUARD_MOVE_AWAY_M, 0.0, 0.0)
+  await physics_frame
+  await physics_frame
+  _assert(_prop_roots_overlapping(xz).is_empty(), "overlap guard: start %s still overlaps a prop after moving it" % str(xz))
+  return overlapping.size()
+
+
+## Regression: after [method _place] at a scenario start the rabbit AND the fox (at the standoff)
+## must be on the floor within [constant _PLACE_FLOOR_MAX_TICKS] ticks (previously spawned ~18 m up
+## at the corner and free-fell) and must stay above [constant _PLACE_MIN_Y] for
+## [constant _PLACE_WATCH_TICKS] ticks (CMV3C-34: placed inside a boulder, then fell through).
 func _test_placement_lands_on_floor(label: String, outward: Vector2, lateral: float) -> void:
   # Arrange
   _main.call("new_game")
   var rabbit: CharacterBody3D = _main.call("get_player_creature_body")
+  var fox_root: Node3D = (_main.call("get_carnivore_creature_roots") as Array)[0]
+  var fox: CharacterBody3D = fox_root.get_node("Body")
   var rabbit_xz := _edge_point(outward, lateral) + (-outward.normalized()) * _EDGE_INSET_M
+  var fox_xz := rabbit_xz + (-outward.normalized()) * _FOX_STANDOFF_M
   # Act
+  await _clear_props_at(rabbit_xz)
+  await _clear_props_at(fox_xz)
   _place(rabbit, rabbit_xz)
-  var floor_tick := -1
-  for tick_i in _PLACE_FLOOR_MAX_TICKS:
+  _place(fox, fox_xz)
+  var bodies: Array[CharacterBody3D] = [rabbit, fox]
+  var floor_ticks: Array[int] = [-1, -1]
+  var min_ys: Array[float] = [999.0, 999.0]
+  for tick_i in _PLACE_WATCH_TICKS:
     await physics_frame
-    if rabbit.is_on_floor():
-      floor_tick = tick_i
-      break
+    for i in bodies.size():
+      if floor_ticks[i] < 0 and bodies[i].is_on_floor():
+        floor_ticks[i] = tick_i
+      min_ys[i] = minf(min_ys[i], bodies[i].global_position.y)
   # Assert
-  _assert(
-    floor_tick >= 0,
-    "%s: rabbit not on floor within %d ticks after _place at %s (y=%.2f)" % [
-      label, _PLACE_FLOOR_MAX_TICKS, str(rabbit_xz), rabbit.global_position.y,
-    ],
-  )
-  print("C9_EDGE_PLACE %s: floor_tick=%d y=%.2f" % [label, floor_tick, rabbit.global_position.y])
+  var names: Array[String] = ["rabbit", "fox"]
+  var starts: Array[Vector2] = [rabbit_xz, fox_xz]
+  for i in bodies.size():
+    _assert(
+      floor_ticks[i] >= 0 and floor_ticks[i] < _PLACE_FLOOR_MAX_TICKS,
+      "%s: %s not on floor within %d ticks after _place at %s (floor_tick=%d, y=%.2f)" % [
+        label, names[i], _PLACE_FLOOR_MAX_TICKS, str(starts[i]), floor_ticks[i], bodies[i].global_position.y,
+      ],
+    )
+    _assert(
+      min_ys[i] > _PLACE_MIN_Y,
+      "%s: %s fell below y=%.1f after _place at %s (min y=%.2f)" % [label, names[i], _PLACE_MIN_Y, str(starts[i]), min_ys[i]],
+    )
+    print("C9_EDGE_PLACE %s %s: floor_tick=%d min_y=%.2f" % [label, names[i], floor_ticks[i], min_ys[i]])
+
+
+## Regression (CMV3C-34): an interior boulder moved to sit on a start is detected by the overlap
+## guard and resolved, after which the body lands on the floor and stays up.
+func _test_guard_resolves_moved_interior_boulder() -> void:
+  # Arrange
+  _main.call("new_game")
+  var rabbit: CharacterBody3D = _main.call("get_player_creature_body")
+  var xz := _edge_point(Vector2(-1.0, 0.0), 40.0) + Vector2(_EDGE_INSET_M, 0.0)
+  var boulder: Node3D = null
+  for ch in (_main.get("_obstacles_root") as Node3D).get_children():
+    var n3 := ch as Node3D
+    if n3 != null and _is_interior_boulder(n3):
+      boulder = n3
+      break
+  _assert(boulder != null, "guard test: an interior boulder exists to move")
+  if boulder == null:
+    return
+  boulder.global_position = Vector3(xz.x, boulder.global_position.y, xz.y)
+  await physics_frame
+  await physics_frame
+  _assert(not _prop_roots_overlapping(xz).is_empty(), "guard test: moved boulder is detected overlapping start %s" % str(xz))
+  # Act
+  var moved: int = await _clear_props_at(xz)
+  _place(rabbit, xz)
+  var floor_tick := -1
+  var min_y := 999.0
+  for tick_i in _PLACE_WATCH_TICKS:
+    await physics_frame
+    min_y = minf(min_y, rabbit.global_position.y)
+    if floor_tick < 0 and rabbit.is_on_floor():
+      floor_tick = tick_i
+  # Assert
+  _assert(moved >= 1, "guard test: guard moved at least one prop (moved %d)" % moved)
+  _assert(_prop_roots_overlapping(xz).is_empty(), "guard test: start %s clear after guard" % str(xz))
+  _assert(floor_tick >= 0 and floor_tick < _PLACE_FLOOR_MAX_TICKS, "guard test: rabbit on floor after guard (floor_tick=%d)" % floor_tick)
+  _assert(min_y > _PLACE_MIN_Y, "guard test: rabbit stayed above y=%.1f (min y=%.2f)" % [_PLACE_MIN_Y, min_y])
+  print("C9_EDGE_GUARD moved=%d floor_tick=%d min_y=%.2f" % [moved, floor_tick, min_y])

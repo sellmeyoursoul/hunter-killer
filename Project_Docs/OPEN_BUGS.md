@@ -8,7 +8,7 @@
 >
 > **Tier:** root / tracking (see [PROJECT_DOC_INDEX.md](PROJECT_DOC_INDEX.md)); not a feature plan and not a contract. Rules for maintainers: [Project_Docs/CLAUDE.md](CLAUDE.md) "Bug register (OPEN_BUGS.md)".
 >
-> **Last full sweep:** 2026-10-16 (CBD-1 step 6 legacy `creature_motor` retirement recorded; CMV3C-33 closed and CMV3C-34 added; other entries last swept 2026-10-14 / 2026-10-15).
+> **Last full sweep:** 2026-10-16 (CBD-1 step 6 legacy `creature_motor` retirement recorded; CMV3C-33 closed; CMV3C-34 closed `done` (test placement guard verified) and removed; CMV3C-35 / CMV3C-36 added (outside-V3); CMV3C-28 / CMV3C-10 notes updated; other entries last swept 2026-10-14 / 2026-10-15).
 
 ---
 
@@ -20,7 +20,7 @@
 
 | Prefix | Source doc | Source-doc numbering | Next unused |
 |--------|------------|----------------------|-------------|
-| `CMV3C` | [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | `C#` (C1-C24 exist; 25-29, 30-32, 33 and 34 were assigned here without a C section; 33 is `done` 2026-10-16, number not reused) | 35 |
+| `CMV3C` | [CREATURE_MOVEMENT_V3_CLEANUP.md](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md) | `C#` (C1-C24 exist; 25-29, 30-32, 33-36 were assigned here without a C section; 33 and 34 are `done` 2026-10-16, numbers not reused; 35 and 36 are `open`, outside-V3) | 37 |
 | `CMV3R` | [CREATURE_MOVEMENT_V3_RANDOMTESTS.md](Draft_Features/CREATURE_MOVEMENT_V3_RANDOMTESTS.md) | `RT#` (RT4 is a feature slice, not a bug; see its section) | 5 |
 | `CMV3D` | [CREATURE_MOVEMENT_V3_DESIGNREVIEW.md](Draft_Features/CREATURE_MOVEMENT_V3_DESIGNREVIEW.md) | none: findings are unnumbered prose, so IDs are sequential | 3 |
 | `CMV3` | [CREATURE_MOVEMENT_V3.md](Draft_Features/CREATURE_MOVEMENT_V3.md) (hub; reserved) | — | 1 |
@@ -47,7 +47,8 @@
 | [CMV3C-27](#cmv3c-27) | `pending_recurrence` | V3 | environment-world | Corner scenario of `test_c9_flee_edge_pingpong.gd` fell at tick 35 near (-95,-93); does not reproduce at HEAD, original coordinates look mislabelled |
 | [CMV3C-28](#cmv3c-28) | `open` | V3 | creature-entity | Instances of CMV3C-10: airborne-invariant trips for rabbit/fox/wolf in the C9 edge test; falling bodies, not flee |
 | [CMV3C-29](#cmv3c-29) | `open` | V3 | creature-motor | Silent-stall `MOTOR_INVARIANT` for a rabbit near (90.5, 81.9), seen once in a nav-cost run; uninvestigated |
-| [CMV3C-34](#cmv3c-34) | `pending_recurrence` | V3 | test-harness (tentative) | C9 test `_test_placement_lands_on_floor` failed once: rabbit not on floor within 10 ticks after `_place` at (-95.25, 40.0), y -1.73; not reproduced in 4 reruns or on baseline |
+| [CMV3C-35](#cmv3c-35) | `open` | outside-V3 | environment-world / app-shell (tentative) | Production creature spawns (`_spawn_existing_points`) can land inside an interior boulder collider (~6% of random layouts at the C9 test starts); low priority |
+| [CMV3C-36](#cmv3c-36) | `open` | outside-V3 | ai-runtime | `AIDriver._scripted_motor_roots` keeps freed creature roots after `main_3d` is freed; ~100 "previously freed instance" SCRIPT ERRORs on re-instantiation in one process; low priority |
 | [CMV3D-1](#cmv3d-1) | `open` | V3 | creature-motor (tentative) | `is_on_floor=false` at spawn warning for both creatures on the C9 rig; recurrence not confirmed |
 | [CMV3D-2](#cmv3d-2) | `open` | V3 | creature-motor (tentative) | Explore walks the whole way to a wall: explore waypoints minted well past the playfield boundary; recurrence not confirmed |
 | [EBP-1](#ebp-1) | `open` | outside-V3 | assets-pack | `open_shrub_3d` depleted visual appears to jump position after being eaten |
@@ -86,11 +87,12 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 
 ### CMV3C-10
 
-- **Status:** `in_progress` (reopened 2026-10-14 by maintainer; the source doc previously logged the non-vocabulary `fixed`) | **Scope:** V3 | **Owner:** creature-entity (the original fixes touched creature templates and obstacle collision) | **Updated:** 2026-10-14 | **Source:** [CLEANUP C10](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05)
+- **Status:** `in_progress` (reopened 2026-10-14 by maintainer; the source doc previously logged the non-vocabulary `fixed`) | **Scope:** V3 | **Owner:** creature-entity (the original fixes touched creature templates and obstacle collision) | **Updated:** 2026-10-16 (cross-ref only) | **Source:** [CLEANUP C10](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05)
 - **Symptom:** a creature ends up under / inside the geography or airborne, tripping the fail-fast airborne / off-floor invariant ("airborne/off-floor for 45+ ticks (stuck-under-geometry, C10)", `creature_motor_stack.gd` `_trip_invariant`; the threshold is terrain-scaled via `FallPhysics`, PHYSICS_SQUEEZE decision 30). The original report was a fox under the terrain after close contact with prey (contact disproven as the cause).
 - **Repro:** recurring in `tests/test_c9_flee_edge_pingpong.gd` (instances and rates: [CMV3C-28](#cmv3c-28)); historically 1/6 `smoke_ai_player.gd` runs (2026-08-07, fox, tick 731).
 - **Ruled out (history):** terrain-mesh seam / hole and `floor_max_angle` rejection (raycast-grid probes, 25.6-30.2 deg continuous slope); boulder proximity for the terrain-only trips. Fixed causes: boulder-seam tunnelling (convex hulls for obstacle props, 2026-08-06); thin `safe_margin` (0.001 -> 0.06 -> 0.15, 2026-08-06/07); boulder climb-then-fall (additive climb-guard cylinder, 2026-09-05); flat 45-tick threshold on a real cliff fall (terrain-scaled, 2026-09-21).
 - **Leading hypothesis:** none for the current instances; the old fixes were verified on favourable samples (10/10 twice) and the family has recurred each time. [CMV3C-27](#cmv3c-27) (corner fall) was investigated 2026-10-16 and does not overlap (not reproducible; its y -3.64 matched the west basin, not a falling body in the corner).
+- **2026-10-16 note:** the teleport-into-boulder test-placement cause (CMV3C-34, `done`) is fixed in the C9 test; re-triage the remaining CMV3C-28 trips on the next C9 / smoke runs (trips that persist are the genuine instances).
 - **Next step:** work the instances under CMV3C-28; the full 2026-08 history stays in the source doc. Merge decision: kept separate from CMV3C-28 (this is the family and its fix history; CMV3C-28 is the current instance set with its own repro command); cross-linked both ways.
 
 ### CMV3C-25
@@ -123,11 +125,12 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 
 ### CMV3C-28
 
-- **Status:** `open` | **Scope:** V3 | **Owner:** creature-entity | **Updated:** 2026-10-14 | **Source:** [CLEANUP C10](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) (family, tracked as [CMV3C-10](#cmv3c-10)) and the C9 residual checklist item
+- **Status:** `open` | **Scope:** V3 | **Owner:** creature-entity | **Updated:** 2026-10-16 (CMV3C-34 test-placement cause fixed; re-triage pending; status unchanged) | **Source:** [CLEANUP C10](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c10-fox-ends-up-under-the-geography-after-close-contact-with-prey-new-2026-08-05) (family, tracked as [CMV3C-10](#cmv3c-10)) and the C9 residual checklist item
 - **Symptom:** the instances of CMV3C-10: rabbit / fox / wolf trip the airborne / off-floor invariant in `test_c9_flee_edge_pingpong.gd` runs (falling bodies, pos y 8.9, 12, -13.7). Not flee-related.
 - **Repro:** among the ~6 failures in 50 earlier untightened `test_c9_flee_edge_pingpong.gd` runs (mixed with the west-edge notch leak); also 1/6 `smoke_ai_player.gd` runs on 2026-08-07 (fox at tick 731). Current rate in the tightened test not recorded.
 - **Ruled out:** nothing tested for these trips. The original C10 causes (boulder-seam tunnelling, thin `safe_margin`) were fixed 2026-08-06/07; whether they apply to these bodies is not established.
-- **Leading hypothesis:** none for these bodies; [CMV3C-27](#cmv3c-27) (corner fall) was investigated 2026-10-16 and does not overlap with these trips (no shared cause with CMV3C-10/26/28).
+- **Leading hypothesis:** none confirmed for these bodies; [CMV3C-27](#cmv3c-27) (corner fall) was investigated 2026-10-16 and does not overlap with these trips.
+- **Overlap resolved in the test (2026-10-16):** CMV3C-34 (`done`; number not reused) found that the test's `_place` (terrain-only ray, props excluded) could teleport a body into a random interior boulder's collider; depenetration then pushed it under the one-sided `AutoCollision_Grid` and it fell (the same signature). It is fixed in `tests/test_c9_flee_edge_pingpong.gd` (overlap guard `_clear_props_at`, see the [CLEANUP pointer](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md)), so some earlier test-edge instances here were likely that bug. **Next step:** re-triage the remaining trips on the next C9 / smoke runs (multi-process loop); only trips that persist are genuine CMV3C-28 / CMV3C-10 instances. Production-side counterpart: [CMV3C-35](#cmv3c-35) (outside-V3). [CMV3C-26](#cmv3c-26) (west basin, z 0..2.5) stays separate.
 
 ### CMV3C-29
 
@@ -137,14 +140,23 @@ Tech debt / doc hygiene items (not bugs) are in [their own section](#tech-debt--
 - **Ruled out:** nothing.
 - **Leading hypothesis:** none. Related earlier silent-stall classes (tall-capsule arrival, hop-vs-ultimate) are documented fixed in [PHYSICS_SQUEEZE.md decision 46 E/F](Draft_Features/PHYSICS_SQUEEZE.md); check whether those paths apply.
 
-### CMV3C-34
+### CMV3C-35
 
-- **Status:** `pending_recurrence` | **Scope:** V3 (the C9 edge test is V3 verification) | **Owner:** test-harness (tentative; may instead be the west-edge body family, creature-entity, see [CMV3C-26](#cmv3c-26)) | **Updated:** 2026-10-16 | **Source:** pointer in [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) (no C section)
-- **Symptom:** `tests/test_c9_flee_edge_pingpong.gd` `_test_placement_lands_on_floor` (the new placement assert) failed once during CMV3C-33 verification: `minus_x_edge: rabbit not on floor within 10 ticks after _place at (-95.25, 40.0) (y=-1.73)`. `_place` drops the body `_SPAWN_CLEARANCE_M` above the terrain-only ground ray (`raycast_ground_surface` with `_walkable_mask_exclude_rids()`); the final y -1.73 is below that start, so the body was still descending or sliding on sloped terrain, not hovering.
-- **Repro:** `godot --path . --headless -s res://tests/test_c9_flee_edge_pingpong.gd`. 1 failure; 0 in 4 reruns after the fix; 0 on the pre-fix baseline (which lacked the assert). Rate unknown.
-- **Ruled out:** nothing tested beyond the reruns.
-- **Leading hypothesis:** none confirmed. Candidates: slope or drop at that west-edge spot (the west basin around z -14..16 sits near y -3.9; z 40 is nearby terrain, unverified); `_PLACE_FLOOR_MAX_TICKS` = 10 too tight for a settle on a slope; per-process prop or layout variation changing the ground under the point.
-- **Next step if it recurs:** record the full printed line, the terrain `surface_y` at the point, the layout, and `floor_tick` for the three scenarios; check whether the rabbit reaches the floor given more ticks (tick budget) or keeps falling (CMV3C-10 / CMV3C-26 family).
+- **Status:** `open` (low priority) | **Scope:** outside-V3 (not V3 scope, must be addressed eventually) | **Owner:** environment-world / app-shell (tentative; the spawn code is `main_3d.gd`, the collider/grid side is environment) | **Updated:** 2026-10-16 | **Source:** pointer in [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) (no C section); split out of the closed CMV3C-34 (test-side cause, `done`)
+- **Symptom:** production creature spawns (`_spawn_existing_points` in `main_3d.gd`) can land inside an interior boulder's collider (`Obstacles3D/.../AutoConvexCollision`, layer 1). Depenetration can then push the body under the one-sided `AutoCollision_Grid` terrain collider and it falls.
+- **Repro:** interior boulders are random per process (`playfield_spawn.seed` 0 with no `interior_boulders` in the locked layout). About 6% of random layouts overlap at the C9 test starts (of seeds 1..32, seeds 19 and 29 deterministic at `minus_x_edge` (-95.25, 40.0); seed 29 gave y=-1.73). Probe in the test: boulder centred on the point -> body fell to y=-6.4; 3 m offset -> still off floor; 5 m offset -> fine. Production-spawn rate not measured separately.
+- **Ruled out:** bake / snap race; `queue_free`'d rim boulders; a real terrain depression at (-95.25, 40); stale exclude list; the CMV3C-33 sampler fix.
+- **Leading hypothesis:** spawn placement uses a terrain-only ray (props excluded) with no prop-overlap check. The `Main3D: Body not on floor after spawn` warning also appears in passing runs, so it is **not diagnostic** of this bug. The C10 airborne invariant ([CMV3C-10](#cmv3c-10)) already catches the fall at runtime; the C9 test's `_clear_props_at` guard now masks it in the test (do not read a green C9 test as evidence production is clean).
+- **Next step (undecided):** overlap check / shift in the spawn path, and/or stop depenetration pushing a body under the one-sided grid. Not scheduled.
+
+### CMV3C-36
+
+- **Status:** `open` (low priority) | **Scope:** outside-V3 (not V3 scope, must be addressed eventually) | **Owner:** ai-runtime | **Updated:** 2026-10-16 | **Source:** pointer in [CLEANUP C9](Draft_Features/CREATURE_MOVEMENT_V3_CLEANUP.md#c9-flee-waypoint-latch-corrupted-by-reactive-backtrack-deflection-rabbit-stuck-at-playfield-edge) (no C section; found while hardening the C9 test)
+- **Symptom:** `AI_int_lib/ai_driver.gd:131` (`_scripted_motor_roots`) keeps freed creature roots after the previous `main_3d` is freed. Re-instantiating `main_3d` in the same process logs ~100 "Left operand of 'is' is a previously freed instance" SCRIPT ERRORs.
+- **Repro:** instantiate, free and re-instantiate `main_3d` repeatedly in one process (the C9 test did this per seed before the workaround).
+- **Ruled out:** nothing tested.
+- **Leading hypothesis:** the driver is not reset or detached when main is freed, so the stale array is iterated. Fix direction: reset/detach the driver on main's free (or prune freed instances via `is_instance_valid`).
+- **Workaround:** `tests/test_c9_flee_edge_pingpong.gd` runs seeds 19 and 29 in child Godot processes (`-- --seed=N`) instead of re-instantiating main in one process.
 
 ### CMV3D-1
 
